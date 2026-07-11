@@ -1,0 +1,29 @@
+name: libre_notes
+description: Local-first Markdown notes app prototype.
+publish_to: "none"
+version: 0.1.2+3
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cryptography: ^2.9.0
+  cross_file: ^0.3.4+2
+  file_picker: ^10.3.10
+  flutter_colorpicker: ^1.1.0
+  flutter_markdown_plus: ^1.0.7
+  pdf: ^3.12.0
+  printing: ^5.14.3
+  share_plus: ^12.0.2
+  shared_preferences: ^2.5.5
+  syncfusion_flutter_pdfviewer: ^33.2.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
