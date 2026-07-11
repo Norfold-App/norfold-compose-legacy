@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark-theme launcher background: deep indigo squircle surface, matching the reference art. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0 h108 v108 h-108 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="10" android:startY="6"
+                android:endX="98" android:endY="104">
+                <item android:offset="0.0" android:color="#FF2A1D5A" />
+                <item android:offset="0.55" android:color="#FF160F3A" />
+                <item android:offset="1.0" android:color="#FF0A0720" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- soft violet corner glow, top-left -->
+    <path android:pathData="M0,0 h108 v60 h-108 z" android:fillAlpha="0.5">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="30" android:centerY="24"
+                android:gradientRadius="70">
+                <item android:offset="0.0" android:color="#405B3FB0" />
+                <item android:offset="1.0" android:color="#005B3FB0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

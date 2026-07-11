@@ -1,0 +1,37 @@
+project_id = "norfold"
+
+[api]
+enabled = true
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+major_version = 17
+
+[realtime]
+enabled = true
+
+[auth]
+enabled = true
+site_url = "norfold://auth/callback"
+additional_redirect_urls = ["norfold://auth/callback"]
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = true
+
+[storage]
+enabled = true
+file_size_limit = "100MiB"
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.calendar-callback]
+verify_jwt = false
+
+[functions.play-rtdn]
+verify_jwt = false
