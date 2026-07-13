@@ -152,7 +152,7 @@ private fun buildHtml(
     val d = "$" // literal dollar for math delimiters, kept out of Kotlin templating
     val needsMermaid = markdown.contains("```mermaid", ignoreCase = true)
     val needsChart = Regex("```(?:vega-lite|vegalite|vega)\\b", RegexOption.IGNORE_CASE).containsMatchIn(markdown)
-    val needsMath = Regex("(?:\\$\\$|\\\\\\[|\\\\\\(|\\\\(?:frac|sum|int|begin|mathbb|vec|tag|newcommand)\\b)").containsMatchIn(markdown)
+    val needsMath = markdownNeedsMath(markdown)
     return """
 <!DOCTYPE html><html><head>
 <meta charset="utf-8">
