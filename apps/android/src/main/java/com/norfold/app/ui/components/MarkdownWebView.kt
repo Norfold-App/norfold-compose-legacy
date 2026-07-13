@@ -180,8 +180,8 @@ private fun buildHtml(
  input[type=checkbox]{margin-right:.45em;vertical-align:middle}
  mjx-container{overflow-x:auto;overflow-y:hidden;max-width:100%}
  .mermaid{margin:.8em 0;padding:12px;border:1px solid $border;border-radius:12px;overflow-x:auto;text-align:center;background:$codeBg}
- .vega-chart{margin:.8em 0;padding:12px;border:1px solid $border;border-radius:12px;overflow-x:auto;background:$codeBg;min-height:260px}
- .vega-chart .vega-embed{width:max-content;min-width:100%}
+ .vega-chart{margin:.8em 0;padding:12px;border:1px solid $border;border-radius:12px;overflow-x:auto;background:$codeBg;min-height:260px;width:100%;max-width:100%;box-sizing:border-box}
+ .vega-chart.vega-embed,.vega-chart .vega-embed{width:100%;min-width:0}
  .vega-chart .vega-embed summary{color:$muted}
  .footnotes{margin-top:1.4em;padding-top:.7em;border-top:1px solid $border;color:$muted;font-size:.9em}
  .footnotes ol{padding-left:1.35em}.footnote-backref{margin-left:.35em}
@@ -325,11 +325,15 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
        }
        spec.mark=mark;
        spec.background=null;
-       var itemCount=spec.data&&Array.isArray(spec.data.values)?spec.data.values.length:4;
-       spec.width=spec.width||Math.max(300,Math.min(960,itemCount*76));
+       var hasExplicitWidth=spec.width!==undefined&&spec.width!==null;
+       if(!hasExplicitWidth){
+         spec.width=Math.max(180,Math.floor(chart.clientWidth-24));
+         spec.autosize={type:'fit',contains:'padding',resize:true};
+       }else{
+         spec.autosize=spec.autosize||{type:'pad',contains:'padding',resize:true};
+       }
        spec.height=spec.height||280;
        spec.padding=spec.padding||{left:8,right:14,top:12,bottom:8};
-       spec.autosize=spec.autosize||{type:'pad',contains:'padding'};
        spec.config=Object.assign({},existingConfig,{
          axis:Object.assign({},existingConfig.axis||{}, {
            domainColor:'$muted',domainWidth:1,tickColor:'$border',tickWidth:1,
