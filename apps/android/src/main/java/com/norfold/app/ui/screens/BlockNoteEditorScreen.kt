@@ -50,11 +50,11 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.automirrored.outlined.Redo
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Add
@@ -67,7 +67,6 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Fullscreen
-import androidx.compose.material.icons.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.FormatListNumbered
 import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.HorizontalRule
@@ -128,16 +127,18 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -635,7 +636,7 @@ private fun FloatingFormattingToolbar(
             item("strike") { ToolbarTextButton("S", "Strikethrough", textDecoration = TextDecoration.LineThrough) { onInlineFormat(InlineFormatAction.Strike) } }
             item("code") { ToolbarTextButton("</>", "Inline code", fontFamily = FontFamily.Monospace) { onInlineFormat(InlineFormatAction.Code) } }
             item("link") { ToolbarIconButton(Icons.Outlined.Link, "Link", onLink) }
-            item("bullet") { ToolbarIconButton(Icons.Outlined.FormatListBulleted, "Bullet list") { onTurnInto(TextBlockTarget.Bullet) } }
+            item("bullet") { ToolbarIconButton(Icons.AutoMirrored.Outlined.FormatListBulleted, "Bullet list") { onTurnInto(TextBlockTarget.Bullet) } }
             item("numbered") { ToolbarIconButton(Icons.Outlined.FormatListNumbered, "Numbered list") { onTurnInto(TextBlockTarget.Numbered) } }
             item("checklist") { ToolbarIconButton(Icons.Outlined.CheckBox, "Checklist") { onTurnInto(TextBlockTarget.Checklist) } }
             item("more") {
@@ -899,15 +900,26 @@ private fun BlockEditorHeader(
     onPin: () -> Unit,
     onLock: () -> Unit,
 ) {
+    var titleValue by remember { mutableStateOf(TextFieldValue(title)) }
+    var titleFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(title, titleFocused) {
+        if (!titleFocused && titleValue.composition == null && titleValue.text != title) {
+            titleValue = titleValue.copy(
+                text = title,
+                selection = TextRange(titleValue.selection.start.coerceAtMost(title.length), titleValue.selection.end.coerceAtMost(title.length)),
+                composition = null,
+            )
+        }
+    }
     Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
             IconButton(onClick = onMenu) { Icon(Icons.Outlined.Menu, "Workspace") }
             if (editMode) {
                 BasicTextField(
-                    title,
-                    onTitleChange,
-                    Modifier.weight(1f).padding(horizontal = 4.dp),
+                    value = titleValue,
+                    onValueChange = { changed -> titleValue = changed; onTitleChange(changed.text) },
+                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp).onFocusChanged { titleFocused = it.isFocused },
                     singleLine = true,
                     textStyle = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -1104,13 +1116,25 @@ private fun SharedBlockRow(
                     }
                     DropdownMenuItem({ Text("Duplicate") }, onClick = { menu = false; onDuplicate() })
                     if (rangeSelectable) DropdownMenuItem({ Text("Select block range") }, onClick = { menu = false; onStartRangeSelection() })
-                    DropdownMenuItem({ Text("Turn into text") }, onClick = { menu = false; onReplace(ParagraphBlock(id = block.id, content = listOf(InlineText(block.plainText())))) })
-                    DropdownMenuItem({ Text("Turn into heading") }, onClick = { menu = false; onReplace(HeadingBlock(id = block.id, level = 2, content = listOf(InlineText(block.plainText())))) })
+                    if (block.isTextFamily()) {
+                        TextBlockTarget.entries.forEach { target ->
+                            DropdownMenuItem(
+                                text = { Text("Turn into ${target.label.lowercase()}") },
+                                onClick = { menu = false; onReplace(block.convertTo(target)) },
+                            )
+                        }
+                    }
                     DropdownMenuItem({ Text("Delete") }, onClick = { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Outlined.Delete, null) })
                 }
             }
         }
     }
+}
+
+private fun DocumentBlock.isTextFamily(): Boolean = when (this) {
+    is ParagraphBlock, is HeadingBlock, is BulletListBlock, is NumberedListBlock,
+    is TodoListBlock, is QuoteBlock, is CodeBlock, is DividerBlock -> true
+    else -> false
 }
 
 @Composable
@@ -1745,11 +1769,20 @@ private fun SimpleBlockTextField(
     fontWeight: FontWeight = FontWeight.Normal,
 ) {
     var value by remember { mutableStateOf(TextFieldValue(text)) }
-    LaunchedEffect(text) { if (text != value.text) value = value.copy(text = text, selection = TextRange(value.selection.start.coerceAtMost(text.length))) }
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(text, focused) {
+        if (!focused && value.composition == null && text != value.text) {
+            value = value.copy(
+                text = text,
+                selection = TextRange(value.selection.start.coerceAtMost(text.length), value.selection.end.coerceAtMost(text.length)),
+                composition = null,
+            )
+        }
+    }
     BasicTextField(
         value = value,
         onValueChange = { value = it; onChange(it.text) },
-        modifier = modifier,
+        modifier = modifier.onFocusChanged { focused = it.isFocused },
         textStyle = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, fontWeight = fontWeight, color = MaterialTheme.colorScheme.onSurface),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
     )
@@ -2210,11 +2243,20 @@ private fun TableCellSurface(
     ) {
         if (mode == BlockSurfaceMode.Edit) {
             var value by remember(tableId, row, column) { mutableStateOf(TextFieldValue(plain)) }
-            LaunchedEffect(plain) { if (plain != value.text) value = value.copy(text = plain, selection = TextRange(value.selection.start.coerceAtMost(plain.length))) }
+            var focused by remember(tableId, row, column) { mutableStateOf(false) }
+            LaunchedEffect(plain, focused) {
+                if (!focused && value.composition == null && plain != value.text) {
+                    value = value.copy(
+                        text = plain,
+                        selection = TextRange(value.selection.start.coerceAtMost(plain.length), value.selection.end.coerceAtMost(plain.length)),
+                        composition = null,
+                    )
+                }
+            }
             BasicTextField(
                 value = value,
                 onValueChange = { changed -> value = changed; onChange(listOf(InlineText(changed.text))) },
-                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                modifier = Modifier.fillMaxWidth().padding(10.dp).onFocusChanged { focused = it.isFocused },
                 textStyle = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = if (header) FontWeight.Bold else FontWeight.Normal, color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             )
@@ -2568,17 +2610,10 @@ private fun InlineRichText(
         )
     } else {
         val annotated = rememberInlineAnnotated(nodes)
-        val uriHandler = LocalUriHandler.current
-        ClickableText(
+        Text(
             text = annotated,
             modifier = modifier,
             style = TextStyle(color = colors.onSurface).merge(style),
-            onClick = { offset ->
-                annotated.getStringAnnotations(tag = "URL", start = offset, end = offset)
-                    .firstOrNull()
-                    ?.item
-                    ?.let { url -> runCatching { uriHandler.openUri(url) } }
-            },
         )
     }
 }
@@ -2634,11 +2669,16 @@ private fun inlineAnnotated(
             is StrikethroughInline -> appendNodes(node.children, inherited.merge(SpanStyle(textDecoration = TextDecoration.LineThrough)))
             is CodeInline -> withStyle(inherited.merge(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground.copy(alpha = .55f)))) { append(node.value) }
             is LinkInline -> {
-                pushStringAnnotation(tag = "URL", annotation = node.url)
-                withStyle(inherited.merge(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))) {
+                withLink(
+                    LinkAnnotation.Url(
+                        url = node.url,
+                        styles = TextLinkStyles(
+                            style = inherited.merge(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                        ),
+                    ),
+                ) {
                     appendNodes(node.children, inherited)
                 }
-                pop()
             }
             is MathInline -> withStyle(inherited.merge(SpanStyle(fontFamily = FontFamily.Serif))) { append(node.tex) }
             is EmojiInline -> withStyle(inherited) { append(node.unicode) }
