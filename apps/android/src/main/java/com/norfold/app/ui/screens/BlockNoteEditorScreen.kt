@@ -1335,7 +1335,7 @@ private fun InlineTextBlock(
         LaunchedEffect(value.text, value.selection, textLayout, focused) {
             if (!focused) return@LaunchedEffect
             val layout = textLayout ?: return@LaunchedEffect
-            val cursor = value.selection.end.coerceIn(0, value.text.length)
+            val cursor = value.selection.end.coerceIn(0, layout.layoutInput.text.length)
             val rect = layout.getCursorRect(cursor)
             bringIntoView.bringIntoView(
                 Rect(
@@ -1597,7 +1597,7 @@ private fun EditableListItem(
     LaunchedEffect(value.text, value.selection, textLayout, focused) {
         if (!focused) return@LaunchedEffect
         val layout = textLayout ?: return@LaunchedEffect
-        val rect = layout.getCursorRect(value.selection.end.coerceIn(0, value.text.length))
+        val rect = layout.getCursorRect(value.selection.end.coerceIn(0, layout.layoutInput.text.length))
         bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + 48f))
     }
     Row(verticalAlignment = Alignment.Top) {
@@ -1733,7 +1733,7 @@ private fun TodoItemTextField(
     LaunchedEffect(value.text, value.selection, textLayout, focused) {
         if (!focused) return@LaunchedEffect
         val layout = textLayout ?: return@LaunchedEffect
-        val rect = layout.getCursorRect(value.selection.end.coerceIn(0, value.text.length))
+        val rect = layout.getCursorRect(value.selection.end.coerceIn(0, layout.layoutInput.text.length))
         bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + 48f))
     }
     BasicTextField(
