@@ -2,6 +2,7 @@ package com.norfold.app.data
 
 import androidx.room.Entity
 import androidx.room.Embedded
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.Junction
@@ -9,10 +10,14 @@ import androidx.room.PrimaryKey
 import androidx.room.Relation
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Attachment
+import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.CanvasEdgeItem
 import com.norfold.app.domain.CanvasNodeItem
 import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
+import com.norfold.app.domain.ContextualMenuColor
+import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
 import com.norfold.app.domain.Note
@@ -77,11 +82,19 @@ data class NotebookEntity(
     val workspaceId: Long = 1,
 )
 
-@Entity(tableName = "tags", indices = [Index(value = ["name"], unique = true)])
+@Entity(
+    tableName = "tags",
+    indices = [
+        Index(value = ["scope", "normalizedName"], unique = true),
+        Index(value = ["scope"]),
+    ],
+)
 data class TagEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val color: Long,
+    @ColumnInfo(defaultValue = "'notes'") val scope: String = "notes",
+    @ColumnInfo(defaultValue = "''") val normalizedName: String = name.trim().trimStart('#').replace(Regex("\\s+"), " ").lowercase(),
 )
 
 @Entity(
@@ -99,7 +112,7 @@ data class TagEntity(
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
-    val bodyMarkdown: String,
+    val searchText: String,
     val notebookId: Long?,
     val coverUri: String? = null,
     val coverMimeType: String? = null,
@@ -110,6 +123,21 @@ data class NoteEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val workspaceId: Long = 1,
+)
+
+@Entity(
+    tableName = "note_blocks",
+    foreignKeys = [
+        ForeignKey(entity = NoteEntity::class, parentColumns = ["id"], childColumns = ["noteId"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [Index("noteId"), Index(value = ["noteId", "position"])],
+)
+data class NoteBlockEntity(
+    @PrimaryKey val id: String,
+    val noteId: Long,
+    val position: Int,
+    val payloadJson: String,
+    val updatedAt: Long,
 )
 
 @Entity(
@@ -484,7 +512,7 @@ data class AppSettingsEntity(
     @PrimaryKey val id: Int = 1,
     val themeMode: String = ThemeMode.System.name,
     val themeProfile: String = ThemeProfile.Neon.name,
-    val accentColor: Long = 0xFF8B5CF6,
+    val accentColor: Long = 0xFF6F36FF,
     val activeWorkspaceId: Long = 1,
     val backupFolderUri: String? = null,
     val vaultLockEnabled: Boolean = false,
@@ -509,7 +537,7 @@ data class AppSettingsEntity(
     val adminsControlWorkspaceVisuals: Boolean = true,
     val allowMembersCreateNotes: Boolean = true,
     val allowMembersInvite: Boolean = false,
-    val uiScale: Float = 0.88f,
+    val uiScale: Float = 1f,
     val editorLineWidth: String = EditorLineWidth.Comfortable.name,
     val editorFontFamily: String = EditorFontFamily.Sans.name,
     val showMarkdownSyntax: Boolean = true,
@@ -528,6 +556,8 @@ data class AppSettingsEntity(
     val autoPairBrackets: Boolean = true,
     val syntaxColorful: Boolean = true,
     val autoConvertOnPaste: Boolean = true,
+    val contextualMenuStyle: String = ContextualMenuStyle.Pill.name,
+    val contextualMenuColor: String = ContextualMenuColor.FollowTheme.name,
     val appLockOnExit: Boolean = false,
     val autoLockMinutes: Int = 5,
     val autoBackup: Boolean = false,
@@ -577,7 +607,7 @@ fun WorkspaceEntity.toDomain() = com.norfold.app.domain.Workspace(
     permManageTasks = permManageTasks,
 )
 fun NotebookEntity.toDomain() = Notebook(id = id, name = name, parentId = parentId, color = color, sortOrder = sortOrder)
-fun TagEntity.toDomain() = Tag(id = id, name = name, color = color)
+fun TagEntity.toDomain() = Tag(id = id, name = name, color = color, scope = scope)
 fun AttachmentEntity.toDomain() = Attachment(id = id, noteId = noteId, displayName = displayName, mimeType = mimeType, uri = uri, sizeBytes = sizeBytes)
 fun NoteEmbedEntity.toDomain() = NoteEmbedItem(
     id = id,
@@ -832,6 +862,8 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     autoPairBrackets = autoPairBrackets,
     syntaxColorful = syntaxColorful,
     autoConvertOnPaste = autoConvertOnPaste,
+    contextualMenuStyle = ContextualMenuStyle.entries.firstOrNull { it.name == contextualMenuStyle } ?: ContextualMenuStyle.Pill,
+    contextualMenuColor = ContextualMenuColor.entries.firstOrNull { it.name == contextualMenuColor } ?: ContextualMenuColor.FollowTheme,
     appLockOnExit = appLockOnExit,
     autoLockMinutes = autoLockMinutes,
     autoBackup = autoBackup,
@@ -863,10 +895,16 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     subscriptionTier = SubscriptionTier.entries.firstOrNull { it.name == subscriptionTier } ?: SubscriptionTier.Free,
 )
 
-fun NoteEntity.toDomain(tags: List<Tag> = emptyList(), attachments: List<Attachment> = emptyList()) = Note(
+fun NoteEntity.toDomain(
+    blocks: List<NoteBlockEntity> = emptyList(),
+    tags: List<Tag> = emptyList(),
+    attachments: List<Attachment> = emptyList(),
+) = Note(
     id = id,
     title = title,
-    bodyMarkdown = bodyMarkdown,
+    document = BlockDocument(
+        blocks.sortedBy(NoteBlockEntity::position).mapNotNull { runCatching { BlockDocumentJson.decodeBlock(it.payloadJson) }.getOrNull() },
+    ).normalized(),
     notebookId = notebookId,
     coverUri = coverUri,
     coverMimeType = coverMimeType,
@@ -882,6 +920,8 @@ fun NoteEntity.toDomain(tags: List<Tag> = emptyList(), attachments: List<Attachm
 
 data class NoteWithRelations(
     @Embedded val note: NoteEntity,
+    @Relation(parentColumn = "id", entityColumn = "noteId")
+    val blocks: List<NoteBlockEntity>,
     @Relation(
         parentColumn = "id",
         entityColumn = "id",
@@ -893,5 +933,9 @@ data class NoteWithRelations(
     @Relation(parentColumn = "id", entityColumn = "noteId")
     val embeds: List<NoteEmbedEntity>,
 ) {
-    fun toDomain(): Note = note.toDomain(tags.map { it.toDomain() }, attachments.map { it.toDomain() }).copy(embeds = embeds.map { it.toDomain() })
+    fun toDomain(): Note = note.toDomain(
+        blocks = blocks,
+        tags = tags.map { it.toDomain() },
+        attachments = attachments.map { it.toDomain() },
+    ).copy(embeds = embeds.map { it.toDomain() })
 }

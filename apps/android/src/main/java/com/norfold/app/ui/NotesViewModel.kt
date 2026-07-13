@@ -21,12 +21,12 @@ import com.norfold.app.domain.CanvasNodeItem
 import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.Destination
-import com.norfold.app.domain.EditorMode
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
 import com.norfold.app.domain.HomeTab
 import com.norfold.app.domain.Note
 import com.norfold.app.domain.NoteEmbedType
+import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.NoteGestureAction
 import com.norfold.app.domain.Notebook
 import com.norfold.app.domain.ParsedSyncConflictReport
@@ -58,6 +58,7 @@ import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.domain.VaultCrypto
 import com.norfold.app.branding.palette
+import com.norfold.app.cloud.NorfoldSupabase
 import androidx.compose.ui.graphics.toArgb
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,7 +97,6 @@ data class NotesUiState(
     val selectedObject: WorkspaceObject? = null,
     val destination: Destination = Destination.WorkspaceHub,
     val tab: HomeTab = HomeTab.AllNotes,
-    val editorMode: EditorMode = EditorMode.Page,
     val searchQuery: String = "",
     val selectedNotebookId: Long? = null,
     val locked: Boolean = false,
@@ -113,7 +113,6 @@ private data class NavigationState(
     val selectedObjectId: Long?,
     val destination: Destination,
     val tab: HomeTab,
-    val editorMode: EditorMode,
     val searchQuery: String,
     val selectedNotebookId: Long?,
     val locked: Boolean,
@@ -162,7 +161,6 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private val diagnosticsStore = DiagnosticsStore(application)
     private val destination = MutableStateFlow(Destination.WorkspaceHub)
     private val tab = MutableStateFlow(HomeTab.AllNotes)
-    private val editorMode = MutableStateFlow(EditorMode.Page)
     private val searchQuery = MutableStateFlow("")
     private val selectedNotebookFilterId = MutableStateFlow<Long?>(null)
     private val selectedNoteId = MutableStateFlow<Long?>(null)
@@ -183,21 +181,19 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private val notes = repository.activeNotes
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val primaryNavigation = combine<Any?, NavigationState>(selectedNoteId, selectedObjectId, destination, tab, editorMode, searchQuery, selectedNotebookFilterId) { values ->
+    private val primaryNavigation = combine<Any?, NavigationState>(selectedNoteId, selectedObjectId, destination, tab, searchQuery, selectedNotebookFilterId) { values ->
         @Suppress("UNCHECKED_CAST")
         val selectedId = values[0] as Long?
         val selectedObjId = values[1] as Long?
         val currentDestination = values[2] as Destination
         val currentTab = values[3] as HomeTab
-        val currentEditorMode = values[4] as EditorMode
-        val query = values[5] as String
-        val currentNotebookFilter = values[6] as Long?
+        val query = values[4] as String
+        val currentNotebookFilter = values[5] as Long?
         NavigationState(
             selectedNoteId = selectedId,
             selectedObjectId = selectedObjId,
             destination = currentDestination,
             tab = currentTab,
-            editorMode = currentEditorMode,
             searchQuery = query,
             selectedNotebookId = currentNotebookFilter,
             locked = false,
@@ -292,7 +288,6 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             selectedObject = workspace.workspaceObjects.firstOrNull { it.id == base.navigation.selectedObjectId },
             destination = base.navigation.destination,
             tab = base.navigation.tab,
-            editorMode = base.navigation.editorMode,
             searchQuery = base.navigation.searchQuery,
             selectedNotebookId = base.navigation.selectedNotebookId,
             locked = base.navigation.locked,
@@ -312,26 +307,62 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun go(next: Destination) { destination.value = next; sidebarOpen.value = false }
+    private val navigationHistory = ArrayDeque<Destination>()
+
+    private fun navigateTo(next: Destination, recordHistory: Boolean = true) {
+        val current = destination.value
+        if (current == next) {
+            sidebarOpen.value = false
+            return
+        }
+        if (recordHistory) {
+            if (navigationHistory.lastOrNull() != current) navigationHistory.addLast(current)
+            while (navigationHistory.size > 32) navigationHistory.removeFirst()
+        }
+        destination.value = next
+        sidebarOpen.value = false
+    }
+
+    private fun resetNavigation(next: Destination) {
+        navigationHistory.clear()
+        destination.value = next
+        sidebarOpen.value = false
+    }
+
+    fun go(next: Destination) = navigateTo(next)
 
     fun goToProfile() { _pendingSettingsSection.value = "Profile"; go(Destination.Settings) }
     fun consumeSettingsSection() { _pendingSettingsSection.value = null }
     fun toggleSidebar() { sidebarOpen.value = !sidebarOpen.value }
     fun closeSidebar() { sidebarOpen.value = false }
     fun selectTab(next: HomeTab) { tab.value = next }
-    fun setEditorMode(next: EditorMode) { editorMode.value = next }
     fun search(query: String) { searchQuery.value = query }
     fun filterByNotebook(notebookId: Long?) {
         selectedNotebookFilterId.value = notebookId
         tab.value = HomeTab.AllNotes
-        destination.value = Destination.NotesHome
-        sidebarOpen.value = false
+        navigateTo(Destination.NotesHome)
     }
-    fun select(note: Note) { selectedNoteId.value = note.id; selectedObjectId.value = state.value.workspaceObjects.firstOrNull { it.objectType == WorkspaceObjectType.Note && it.sourceId == note.id }?.id; destination.value = Destination.NoteEditor }
+    fun select(note: Note) {
+        selectedNoteId.value = note.id
+        selectedObjectId.value = state.value.workspaceObjects.firstOrNull {
+            it.objectType == WorkspaceObjectType.Note && it.sourceId == note.id
+        }?.id
+        navigateTo(Destination.NoteEditor)
+    }
     fun clearMessage() { message.value = null }
     fun showMessage(value: String) { message.value = value }
 
-    fun finishOnboarding(workspaceName: String, purpose: String, themeMode: ThemeMode) = viewModelScope.launch {
+    fun finishOnboarding(
+        workspaceName: String,
+        purpose: String,
+        themeMode: ThemeMode,
+        fullName: String = "",
+        displayName: String = "",
+        template: String = "Start empty",
+        emailUpdates: Boolean = false,
+        reminders: Boolean = true,
+        avatarUri: String = "",
+    ) = viewModelScope.launch {
         val cleanName = workspaceName.trim().ifBlank { "My Workspace" }
         val active = state.value.workspaces.firstOrNull { it.id == state.value.settings.activeWorkspaceId }
         if (active != null) repository.updateWorkspace(active.id, cleanName, cleanName.take(1).uppercase(), state.value.settings.themeProfile)
@@ -340,11 +371,32 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
                 workspaceName = cleanName,
                 workspaceIcon = cleanName.take(1).uppercase(),
                 workspacePurpose = purpose,
+                syncUserName = displayName.trim().ifBlank { fullName.trim().substringBefore(' ').lowercase().ifBlank { "owner" } },
+                syncPublicName = fullName.trim().ifBlank { displayName.trim() },
                 themeMode = themeMode,
+                notificationEmail = emailUpdates,
+                notificationPush = reminders,
+                profileImageUri = avatarUri.takeIf { it.isNotBlank() },
                 onboardingComplete = true,
             ),
         )
-        destination.value = Destination.WorkspaceHub
+        repository.applyWorkspaceTemplate(template)
+        resetNavigation(Destination.WorkspaceHub)
+    }
+
+    fun authenticateWithEmail(email: String, password: String, signUp: Boolean) = viewModelScope.launch {
+        if (email.isBlank() || password.length < 8) {
+            message.value = "Enter a valid email and a password with at least 8 characters"
+            return@launch
+        }
+        runCatching {
+            if (signUp) NorfoldSupabase.signUpWithEmail(email, password)
+            else NorfoldSupabase.signInWithEmail(email, password)
+        }.onSuccess {
+            message.value = if (signUp) "Check your email to confirm the account" else "Signed in"
+        }.onFailure {
+            message.value = it.message ?: "Email authentication failed"
+        }
     }
 
     fun createGoal(title: String) = viewModelScope.launch {
@@ -390,8 +442,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openWorkspaceObject(obj: WorkspaceObject) {
         selectedObjectId.value = obj.id
-        destination.value = Destination.ObjectDetail
-        sidebarOpen.value = false
+        navigateTo(Destination.ObjectDetail)
     }
 
     fun openWorkspaceObjectSource(obj: WorkspaceObject) {
@@ -433,22 +484,26 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createNote() = viewModelScope.launch {
-        selectedNoteId.value = repository.createNote(title = "Untitled note", body = "# Untitled note\n\nStart writing...")
-        destination.value = Destination.NoteEditor
+        selectedNoteId.value = repository.createNote(title = "Untitled note", body = "")
+        navigateTo(Destination.NoteEditor)
     }
 
     fun createTaskAndOpen() = viewModelScope.launch {
         repository.addTask("New task", assignee = state.value.settings.syncUserName.ifBlank { "@owner" })
-        destination.value = Destination.Tasks
+        navigateTo(Destination.Tasks)
     }
 
     fun createCanvasAndOpen() = viewModelScope.launch {
         addCanvasNode(CanvasNodeType.Text)
-        destination.value = Destination.Canvas
+        navigateTo(Destination.Canvas)
     }
 
     fun updateNote(note: Note, title: String, body: String) = viewModelScope.launch {
         repository.updateNote(note, title, body)
+    }
+
+    fun updateNoteDocument(note: Note, title: String, document: BlockDocument, dirtyBlockIds: Set<String>) = viewModelScope.launch {
+        repository.updateNote(note, title, document, dirtyBlockIds)
     }
 
     fun togglePin(note: Note) = viewModelScope.launch { repository.setPinned(note) }
@@ -459,6 +514,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addNotebook(name: String) = viewModelScope.launch { repository.addNotebook(name) }
     fun addTag(name: String) = viewModelScope.launch { repository.addTag(name) }
+    fun addTaskTag(boardId: Long, name: String) = viewModelScope.launch { repository.addTaskTag(boardId, name) }
     fun addTask(title: String, assignee: String = state.value.settings.syncUserName) = viewModelScope.launch { repository.addTask(title, assignee = assignee.ifBlank { "@owner" }) }
     fun addTaskToStatus(title: String, status: TaskStatus) = viewModelScope.launch {
         repository.addTask(
@@ -711,7 +767,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
                 require(body.isNotBlank()) { "Markdown file is empty" }
                 val title = displayName(uri).substringBeforeLast('.').ifBlank { "Imported Markdown" }
                 selectedNoteId.value = repository.createNote(title = title, body = body, tagNames = listOf("Imported"))
-                destination.value = Destination.NoteEditor
+                navigateTo(Destination.NoteEditor)
                 "Markdown imported"
             }.onSuccess {
                 message.value = it
@@ -840,15 +896,14 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
                 workspaceBackgroundUri = backgroundUri,
             ),
         )
-        destination.value = Destination.WorkspaceHub
+        resetNavigation(Destination.WorkspaceHub)
         message.value = "Workspace \"${name.trim()}\" created"
     }
 
     fun switchWorkspace(id: Long) = viewModelScope.launch {
         repository.setActiveWorkspace(id)
         selectedNoteId.value = null
-        destination.value = Destination.WorkspaceHub
-        sidebarOpen.value = false
+        resetNavigation(Destination.WorkspaceHub)
     }
 
     fun renameWorkspace(id: Long, name: String, palette: ThemeProfile) = viewModelScope.launch {
@@ -1248,7 +1303,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         )
         conflictReport.value = null
         message.value = "Local copy will be uploaded on next sync"
-        destination.value = Destination.SyncMonitor
+        navigateTo(Destination.SyncMonitor)
     }
 
     private suspend fun readConflictReportFrom(settings: AppSettings): ParsedSyncConflictReport? {
@@ -1263,6 +1318,19 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun autoSyncIfPossible() {
         val secret = sessionSyncSecret?.takeIf { it.isNotBlank() } ?: return
+        if (!syncing.value) syncNow(secret)
+    }
+
+    fun syncConfiguredNow() {
+        val secret = sessionSyncSecret?.takeIf { it.isNotBlank() }
+        if (secret == null) {
+            message.value = if (state.value.settings.syncProvider == SyncProvider.None) {
+                "Sync is not configured yet"
+            } else {
+                "Restore or reconnect this sync session before syncing"
+            }
+            return
+        }
         if (!syncing.value) syncNow(secret)
     }
 
@@ -1296,10 +1364,9 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         when {
             locked.value -> locked.value = false
             sidebarOpen.value -> sidebarOpen.value = false
-            editorMode.value == EditorMode.Preview -> editorMode.value = EditorMode.Page
-            editorMode.value == EditorMode.Edit -> editorMode.value = EditorMode.Page
             searchQuery.value.isNotBlank() -> searchQuery.value = ""
-            destination.value != Destination.WorkspaceHub -> destination.value = Destination.WorkspaceHub
+            navigationHistory.isNotEmpty() -> navigateTo(navigationHistory.removeLast(), recordHistory = false)
+            destination.value != Destination.WorkspaceHub -> resetNavigation(Destination.WorkspaceHub)
             else -> message.value = "Already at home"
         }
     }

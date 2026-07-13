@@ -1,5 +1,6 @@
 package com.norfold.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -96,6 +97,8 @@ import com.norfold.app.branding.palette
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
+import com.norfold.app.domain.ContextualMenuColor
+import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.domain.NoteGestureAction
 import com.norfold.app.domain.SyncFolderAction
 import com.norfold.app.domain.SyncFolderRequest
@@ -158,6 +161,10 @@ fun SettingsScreen(
     var showWorkspaceDialog by remember { mutableStateOf(false) }
     var workspaceDialogTab by remember { mutableStateOf(WorkspaceVisualTab.Identity) }
     if (showWorkspaceDialog) WorkspaceVisualDialog(state, viewModel, workspaceDialogTab) { showWorkspaceDialog = false }
+
+    BackHandler(enabled = section != null || showWorkspaceDialog) {
+        if (showWorkspaceDialog) showWorkspaceDialog = false else section = null
+    }
 
     val pendingSection by viewModel.pendingSettingsSection.collectAsState()
     LaunchedEffect(pendingSection) {
@@ -421,7 +428,7 @@ private fun ProfileBannerCard(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Brush.linearGradient(listOf(Color(0xFF20124A), Color(0xFF081426), MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)))),
+                        .background(Brush.linearGradient(listOf(Color(0xFF1B1E28), Color(0xFF10131B), MaterialTheme.colorScheme.primary.copy(alpha = 0.60f)))),
                 )
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.58f)))))
@@ -459,7 +466,7 @@ private fun WorkspaceBannerCard(name: String, icon: String, backgroundUri: Strin
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Brush.linearGradient(listOf(Color(0xFF0C1430), Color(0xFF20124A), Color(0xFF4F2DB8)))),
+                        .background(Brush.linearGradient(listOf(Color(0xFF14161F), Color(0xFF1B1E28), MaterialTheme.colorScheme.primary.copy(alpha = 0.70f)))),
                 )
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.62f)))))
@@ -497,16 +504,31 @@ private fun AppearanceSettings(state: NotesUiState, viewModel: NotesViewModel) {
                 ThemeTile("Dark", Icons.Outlined.DarkMode, state.settings.themeMode == ThemeMode.Dark, Modifier.weight(1f)) { viewModel.setTheme(ThemeMode.Dark) }
             }
         }
-        // Accent color dots (wired to palette)
+        // Accent color dots (wired to palette). Graphite (the neutral default) is shown first.
         Column {
             SettingsSectionLabel("Accent color")
+            var showAllPalettes by remember { mutableStateOf(false) }
+            val accentProfiles = listOf(ThemeProfile.Graphite) + ThemeProfile.entries.filter { it != ThemeProfile.Graphite }
             SettingsGroup {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ThemeProfile.entries.take(6).forEach { profile ->
-                        AccentDot(profile.palette().accent, profile == state.settings.themeProfile) { viewModel.setThemeProfile(profile) }
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        accentProfiles.take(6).forEach { profile ->
+                            AccentDot(profile.palette().accent, profile == state.settings.themeProfile) { viewModel.setThemeProfile(profile) }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (showAllPalettes) "Less" else "More",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { showAllPalettes = !showAllPalettes },
+                        )
                     }
-                    Spacer(Modifier.weight(1f))
-                    Text("More", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    if (showAllPalettes) {
+                        Box(Modifier.padding(horizontal = 14.dp).padding(bottom = 14.dp)) {
+                            PaletteGrid(state.settings.themeProfile) { viewModel.setThemeProfile(it) }
+                        }
+                    }
                 }
             }
         }
@@ -557,16 +579,22 @@ private fun ThemeTile(label: String, icon: ImageVector, selected: Boolean, modif
 private fun EditorSettings(state: NotesUiState, viewModel: NotesViewModel) {
     val s = state.settings
     val lineWidths = EditorLineWidth.entries
-    var showModePicker by remember { mutableStateOf(false) }
     var showLinePicker by remember { mutableStateOf(false) }
     var showFontPicker by remember { mutableStateOf(false) }
-    if (showModePicker) OptionPickerDialog("Default mode", listOf("Edit", "Preview"), if (s.defaultEditMode) "Edit" else "Preview", { showModePicker = false }) { p -> viewModel.patchSettings { it.copy(defaultEditMode = p == "Edit") } }
+    var showMenuStylePicker by remember { mutableStateOf(false) }
+    var showMenuColorPicker by remember { mutableStateOf(false) }
     if (showLinePicker) OptionPickerDialog("Line width", lineWidths.map { it.name }, s.editorLineWidth.name, { showLinePicker = false }) { p -> viewModel.setEditorLineWidth(EditorLineWidth.valueOf(p)) }
     if (showFontPicker) OptionPickerDialog("Editor font", EditorFontFamily.entries.map { it.name }, s.editorFontFamily.name, { showFontPicker = false }) { p -> viewModel.setEditorFontFamily(EditorFontFamily.valueOf(p)) }
+    if (showMenuStylePicker) OptionPickerDialog("Contextual menu", ContextualMenuStyle.entries.map { it.name }, s.contextualMenuStyle.name, { showMenuStylePicker = false }) { p -> viewModel.patchSettings { it.copy(contextualMenuStyle = ContextualMenuStyle.valueOf(p)) } }
+    if (showMenuColorPicker) OptionPickerDialog("Menu color", listOf("Follow theme", "App accent"), if (s.contextualMenuColor == ContextualMenuColor.AppAccent) "App accent" else "Follow theme", { showMenuColorPicker = false }) { p -> viewModel.patchSettings { it.copy(contextualMenuColor = if (p == "App accent") ContextualMenuColor.AppAccent else ContextualMenuColor.FollowTheme) } }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Editor") {
-            SettingsRow("Default mode", trailing = { RowChevron(if (s.defaultEditMode) "Edit" else "Preview") }, onClick = { showModePicker = true })
+            SettingsRow(
+                "Document surface",
+                subtitle = "Rendered by default; double-tap a block to edit",
+                trailing = { RowValue("View + Edit", accent = true) },
+            )
             RowDivider(inset = false)
             SettingsRow("Line width", trailing = { RowChevron(s.editorLineWidth.name) }, onClick = { showLinePicker = true })
             RowDivider(inset = false)
@@ -581,7 +609,7 @@ private fun EditorSettings(state: NotesUiState, viewModel: NotesViewModel) {
             SettingsRow("Auto pair brackets", trailing = { RowSwitch(s.autoPairBrackets) { v -> viewModel.patchSettings { it.copy(autoPairBrackets = v) } } })
         }
         SettingsGroup(header = "Markdown") {
-            SettingsRow("Live preview", trailing = { RowSwitch(s.showMarkdownSyntax) { viewModel.setShowMarkdownSyntax(it) } })
+            SettingsRow("Inline rendering", subtitle = "Markdown, math, diagrams and embeds render in place", trailing = { RowValue("Always on", accent = true) })
             RowDivider(inset = false)
             SettingsRow("Syntax highlight", trailing = { RowValue(if (s.syntaxColorful) "Colorful" else "Minimal", accent = true) }, onClick = { viewModel.patchSettings { it.copy(syntaxColorful = !it.syntaxColorful) } })
             RowDivider(inset = false)
@@ -593,6 +621,11 @@ private fun EditorSettings(state: NotesUiState, viewModel: NotesViewModel) {
             GestureRow("Swipe right", state.settings.noteSwipeStartAction) { viewModel.setNoteGestureActions(swipeStart = it) }
             RowDivider(inset = false)
             GestureRow("Swipe left", state.settings.noteSwipeEndAction) { viewModel.setNoteGestureActions(swipeEnd = it) }
+        }
+        SettingsGroup(header = "Contextual menus") {
+            SettingsRow("Menu treatment", subtitle = "Pill is the compact default", trailing = { RowChevron(s.contextualMenuStyle.name) }, onClick = { showMenuStylePicker = true })
+            RowDivider(inset = false)
+            SettingsRow("Color behavior", subtitle = "System light/dark or the app accent", trailing = { RowChevron(if (s.contextualMenuColor == ContextualMenuColor.AppAccent) "App accent" else "Follow theme") }, onClick = { showMenuColorPicker = true })
         }
     }
 }
@@ -686,39 +719,30 @@ private fun SyncSettings(
     onPickBackupFile: (String) -> Unit,
     onNavigate: (SettingsSection) -> Unit,
 ) {
-    var showManual by remember { mutableStateOf(false) }
-    val googleDriveEnabled = ExternalServiceConfig.capabilities.googleDrive
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Account") {
             SettingsRow(
                 state.settings.syncUserName.ifBlank { "Local owner" },
-                subtitle = if (googleDriveEnabled) "Local workspace with optional cloud restore" else "Local workspace",
+                subtitle = "Local workspace",
                 icon = Icons.Outlined.Person,
             )
         }
-        if (googleDriveEnabled) {
-            SettingsGroup {
-                SettingsRow(
-                    "Google Drive app data",
-                    subtitle = if (state.googleDriveConnected) "Connected · Hidden sync file · Last sync: ${relativeSyncStatus(state)}" else "Not connected",
-                    icon = Icons.Outlined.CloudSync,
-                    onClick = onConnectGoogleDrive,
-                    trailing = { RowChevron() },
-                )
-                RowDivider()
-                SettingsRow("Create or restore chain", subtitle = "Use encrypted norfold-sync.json in appDataFolder", icon = Icons.Outlined.CloudSync, trailing = { RowChevron() }, onClick = { showManual = true })
+        SettingsGroup(header = "Sync") {
+            SettingsRow(
+                "Last synced",
+                subtitle = state.settings.lastSyncAt?.let { relativeSettingsTime(it) + " ago" } ?: "Never",
+                icon = Icons.Outlined.CloudSync,
+            )
+            RowDivider()
+            Button(
+                onClick = viewModel::syncConfiguredNow,
+                enabled = !state.syncing,
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+            ) {
+                Icon(Icons.Outlined.CloudSync, null)
+                Spacer(Modifier.size(8.dp))
+                Text(if (state.syncing) "Syncing…" else "Sync now")
             }
-        }
-        SettingsGroup(header = "Restore & Sync") {
-            SettingsRow("Restore from backup", icon = Icons.Outlined.Backup, trailing = { RowChevron() }, onClick = { showManual = true })
-            RowDivider()
-            SettingsRow("Sync settings", icon = Icons.Outlined.CloudSync, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.SyncEngine) })
-            RowDivider()
-            SettingsRow("Conflict resolution", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.Conflicts) })
-        }
-        if (showManual) {
-            SettingsSectionLabel("Manual sync & restore")
-            ManualSyncCard(state, viewModel, onPickSyncFolder, onConnectGoogleDrive)
         }
         BackupImportSettings(state, viewModel, onPickMarkdown, onPickBackupFolder, onPickBackupFile)
     }
@@ -1017,11 +1041,15 @@ private fun DiagnosticsSettings(state: NotesUiState, viewModel: NotesViewModel) 
 private fun AppInfoSettings() {
     var showChangelog by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val changelog = remember(context) {
+        context.resources.openRawResource(com.norfold.app.R.raw.changelog).bufferedReader().use { it.readText() }
+    }
     if (showChangelog) {
         AlertDialog(
             onDismissRequest = { showChangelog = false },
             title = { Text("Changelog") },
-            text = { Text("Norfold alpha\n\n• Rebuilt workspace settings\n• Adaptive task table and Kanban workspace\n• Local-first encrypted backup and sync\n• Improved note page and preview editing") },
+            text = { Text(changelog) },
             confirmButton = { TextButton(onClick = { showChangelog = false }) { Text("Close") } },
         )
     }

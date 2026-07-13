@@ -47,6 +47,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +65,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.norfold.app.branding.palette
 import com.norfold.app.data.GoogleDriveOAuth
+import com.norfold.app.cloud.GoogleIdentityClient
+import com.norfold.app.cloud.NorfoldSupabase
 import com.google.android.gms.auth.api.identity.Identity
 import com.norfold.app.domain.CanvasNodeItem
 import com.norfold.app.domain.Destination
@@ -73,7 +76,7 @@ import com.norfold.app.ui.components.AnimatedFab
 import com.norfold.app.ui.components.ComposeLoadingScreen
 import com.norfold.app.ui.components.MobileBottomBar
 import com.norfold.app.ui.screens.LockScreen
-import com.norfold.app.ui.screens.NoteEditorScreen
+import com.norfold.app.ui.screens.BlockNoteEditorScreen
 import com.norfold.app.ui.screens.NotebookScreen
 import com.norfold.app.ui.screens.NotesHome
 import com.norfold.app.ui.screens.ObjectDetailScreen
@@ -98,6 +101,7 @@ import com.norfold.app.ui.screens.CalendarWorkspaceScreen
 import com.norfold.app.ui.screens.GoalsScreen
 import com.norfold.app.ui.screens.NorfoldOnboardingScreen
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
@@ -106,6 +110,8 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
     val view = LocalView.current
     val context = view.context
     val googleAuthorizationClient = remember(context) { Identity.getAuthorizationClient(context) }
+    val googleIdentityClient = remember { GoogleIdentityClient() }
+    val coroutineScope = rememberCoroutineScope()
     var loading by remember { mutableStateOf(true) }
     var pendingSyncRequest by remember { mutableStateOf<SyncFolderRequest?>(null) }
     val syncFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -237,7 +243,26 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
                     onUnlock = viewModel::unlock,
                     onBiometricUnlock = ::authenticateBiometric,
                 )
-                !state.settings.onboardingComplete -> NorfoldOnboardingScreen(state, viewModel)
+                !state.settings.onboardingComplete -> NorfoldOnboardingScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    onRestoreBackup = { secret ->
+                        pendingBackupImportSecret = secret
+                        backupImportLauncher.launch(arrayOf("application/octet-stream", "text/*", "*/*"))
+                    },
+                    onGoogleSignIn = {
+                        val activity = context.findFragmentActivity()
+                        if (activity == null) viewModel.showMessage("Google sign-in is unavailable")
+                        else coroutineScope.launch {
+                            runCatching {
+                                val identity = googleIdentityClient.signIn(activity)
+                                NorfoldSupabase.signInWithGoogle(identity.idToken, identity.rawNonce)
+                            }.onSuccess { viewModel.showMessage("Signed in with Google") }
+                                .onFailure { viewModel.showMessage(it.message ?: "Google sign-in failed") }
+                        }
+                    },
+                    onEmailSignIn = viewModel::authenticateWithEmail,
+                )
                 else -> NotesApp(
                     state = state,
                     viewModel = viewModel,
@@ -315,7 +340,11 @@ private fun NotesApp(
     onConnectGoogleDrive: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
-    BackHandler { viewModel.handleBack() }
+    var taskDetailOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(state.destination) { if (state.destination != Destination.Tasks) taskDetailOpen = false }
+    val canHandleBack = state.locked || state.sidebarOpen || state.searchQuery.isNotBlank() ||
+        state.destination != Destination.WorkspaceHub
+    BackHandler(enabled = canHandleBack) { viewModel.handleBack() }
     LaunchedEffect(state.message) {
         state.message?.let {
             snackbar.showSnackbar(it)
@@ -379,11 +408,11 @@ private fun NotesApp(
                     .background(MaterialTheme.colorScheme.background),
             ) {
                 when {
-                    compact -> CompactContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive)
-                    medium -> MediumContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive)
-                    else -> ExpandedContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive)
+                    compact -> CompactContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive) { taskDetailOpen = it }
+                    medium -> MediumContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive) { taskDetailOpen = it }
+                    else -> ExpandedContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive) { taskDetailOpen = it }
                 }
-                if (compact && !state.sidebarOpen && !imeVisible && state.destination.showCompactSidebarButton) {
+                if (compact && !state.sidebarOpen && !imeVisible && !taskDetailOpen && state.destination.showCompactSidebarButton) {
                     CompactSidebarButton(viewModel)
                 }
                 if (compact && state.sidebarOpen) {
@@ -435,8 +464,9 @@ private fun CompactContent(
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
-    DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive)
+    DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onTaskDetailOpenChange)
 }
 
 @Composable
@@ -456,6 +486,7 @@ private fun DestinationContent(
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
     Box(modifier) {
         Crossfade(
@@ -464,7 +495,7 @@ private fun DestinationContent(
             label = "destination-crossfade",
         ) { destination ->
             when (destination) {
-                Destination.NoteEditor -> NoteEditorScreen(state, viewModel, Modifier.fillMaxSize(), onPickAttachment, onPickEmbed, onPickCover, viewModel::toggleSidebar)
+                Destination.NoteEditor -> BlockNoteEditorScreen(state, viewModel, Modifier.fillMaxSize(), viewModel::toggleSidebar)
                 Destination.WorkspaceHub -> WorkspaceHubScreen(state, viewModel)
                 Destination.Inbox -> WorkspaceHubScreen(state, viewModel, inboxMode = true)
                 Destination.Calendar -> CalendarWorkspaceScreen(state, viewModel)
@@ -479,7 +510,7 @@ private fun DestinationContent(
                 Destination.Notebooks -> NotebookScreen(state, viewModel)
                 Destination.Tags -> TagsScreen(state, viewModel)
                 Destination.Search -> SearchScreen(state, viewModel)
-                Destination.Tasks -> TasksBoardScreen(state, viewModel, onPickTaskAttachment)
+                Destination.Tasks -> TasksBoardScreen(state, viewModel, onPickTaskAttachment, onTaskDetailOpenChange)
                 Destination.Canvas -> CanvasBoardScreen(state, viewModel, onPickCanvasTarget)
                 Destination.Chat -> ChatScreen(state, viewModel, onPickChatAttachment)
                 Destination.ConflictReview -> ConflictReviewScreen(state, viewModel)
@@ -507,16 +538,17 @@ private fun MediumContent(
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
     if (state.destination == Destination.NotesHome) {
         Row(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             NotesHome(state, viewModel, Modifier.weight(0.42f).fillMaxHeight(), showHeader = false)
-            NoteEditorScreen(state, viewModel, Modifier.weight(0.58f).fillMaxHeight(), onPickAttachment, onPickEmbed, onPickCover, viewModel::toggleSidebar)
+            BlockNoteEditorScreen(state, viewModel, Modifier.weight(0.58f).fillMaxHeight(), viewModel::toggleSidebar)
         }
     } else if (state.destination == Destination.NoteEditor) {
-        NoteEditorScreen(state, viewModel, Modifier.fillMaxSize(), onPickAttachment, onPickEmbed, onPickCover, viewModel::toggleSidebar)
+        BlockNoteEditorScreen(state, viewModel, Modifier.fillMaxSize(), viewModel::toggleSidebar)
     } else {
-        DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive)
+        DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onTaskDetailOpenChange)
     }
 }
 
@@ -536,16 +568,17 @@ private fun ExpandedContent(
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
     Row(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 6.dp)) {
         Sidebar(state, viewModel, Modifier.width(228.dp).fillMaxHeight())
         if (state.destination == Destination.NotesHome) {
             NotesHome(state, viewModel, Modifier.width(370.dp).fillMaxHeight(), showHeader = false)
-            NoteEditorScreen(state, viewModel, Modifier.weight(1f).fillMaxHeight(), onPickAttachment, onPickEmbed, onPickCover, viewModel::toggleSidebar)
+            BlockNoteEditorScreen(state, viewModel, Modifier.weight(1f).fillMaxHeight(), viewModel::toggleSidebar)
         } else if (state.destination == Destination.NoteEditor) {
-            NoteEditorScreen(state, viewModel, Modifier.weight(1f).fillMaxHeight(), onPickAttachment, onPickEmbed, onPickCover, viewModel::toggleSidebar)
+            BlockNoteEditorScreen(state, viewModel, Modifier.weight(1f).fillMaxHeight(), viewModel::toggleSidebar)
         } else {
-            DestinationContent(state, viewModel, Modifier.weight(1f).fillMaxHeight(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive)
+            DestinationContent(state, viewModel, Modifier.weight(1f).fillMaxHeight(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onTaskDetailOpenChange)
         }
     }
 }

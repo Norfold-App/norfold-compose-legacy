@@ -205,7 +205,7 @@ private fun SourcePreview(obj: WorkspaceObject, state: NotesUiState, viewModel: 
             WorkspaceObjectType.Note -> {
                 val note = state.notes.firstOrNull { it.id == obj.sourceId }
                 if (note == null) MutedText("Source note is not in the active list.") else {
-                    Text(note.bodyMarkdown.take(700), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 10, overflow = TextOverflow.Ellipsis)
+                    Text(note.document.plainText().take(700), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 10, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = { viewModel.select(note) }) { Text("Edit note") }
                 }

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Lock
@@ -134,7 +135,7 @@ fun MobileBottomBar(state: NotesUiState, viewModel: NotesViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 NavBarItem("Home", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub, Modifier.weight(1f)) { viewModel.go(Destination.WorkspaceHub) }
-                NavBarItem("Tasks", Icons.Outlined.Checklist, state.destination in setOf(Destination.Tasks, Destination.Calendar, Destination.Goals), Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
+                NavBarItem("Notes", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor, Destination.Notebooks, Destination.Tags), Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     Surface(
                         modifier = Modifier.size(48.dp),
@@ -144,21 +145,18 @@ fun MobileBottomBar(state: NotesUiState, viewModel: NotesViewModel) {
                         onClick = {
                             when (state.destination) {
                                 Destination.Tasks -> viewModel.createTaskAndOpen()
-                                Destination.Goals -> viewModel.createGoal("Untitled goal")
                                 Destination.Calendar -> {
                                     val start = System.currentTimeMillis() + 3_600_000L
                                     viewModel.createCalendarEvent("New event", start, start + 3_600_000L)
                                 }
-                                Destination.Canvas -> viewModel.createCanvasAndOpen()
-                                Destination.Chat -> viewModel.go(Destination.Chat)
                                 else -> viewModel.createNote()
                             }
                         },
                     ) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Add, "Create", tint = MaterialTheme.colorScheme.onPrimary) } }
                     Text("Create", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                NavBarItem("Tasks", Icons.Outlined.Checklist, state.destination in setOf(Destination.Tasks, Destination.Calendar), Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
                 NavBarItem("Chat", Icons.Outlined.ChatBubbleOutline, state.destination == Destination.Chat, Modifier.weight(1f)) { viewModel.go(Destination.Chat) }
-                NavBarItem("Profile", Icons.Outlined.Person, state.destination == Destination.Settings, Modifier.weight(1f)) { viewModel.goToProfile() }
             }
         }
     }

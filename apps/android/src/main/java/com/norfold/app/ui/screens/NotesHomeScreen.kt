@@ -285,7 +285,7 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, viewModel: No
                         if (note.starred) Icon(Icons.Outlined.Star, null, tint = accent, modifier = Modifier.size(18.dp))
                         if (note.locked) Icon(Icons.Outlined.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                     }
-                    Text(note.bodyMarkdown.replace(Regex("[#*`>]"), "").replace("\n", " ").trim().take(116), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                    Text(note.document.plainText().replace("\n", " ").trim().take(116), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         note.tags.take(2).forEach { MiniTag(it.name, accent) }
                         Spacer(Modifier.weight(1f))
@@ -378,14 +378,8 @@ private fun MiniTag(label: String, accent: Color) {
 
 @Composable
 private fun noteAccent(note: Note): Color {
-    val primary = MaterialTheme.colorScheme.primary
-    return when {
-        note.tags.any { it.name.equals("Personal", true) } -> Color(0xFF35A853)
-        note.tags.any { it.name.equals("Study", true) } -> Color(0xFF42A5F5)
-        note.tags.any { it.name.equals("Ideas", true) } -> Color(0xFFF5B942)
-        note.tags.any { it.name.equals("Work", true) } -> primary
-        else -> primary
-    }
+    // Neutralized: notes no longer carry per-tag hues; the single accent drives the app.
+    return MaterialTheme.colorScheme.primary
 }
 
 @Composable

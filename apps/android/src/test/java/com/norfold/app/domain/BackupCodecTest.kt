@@ -16,7 +16,10 @@ class BackupCodecTest {
                 kanbanEngine = "BoardPointer",
             ),
             notebooks = listOf(Notebook(1, "Work", null, 0xFF8B5CF6, 0)),
-            tags = listOf(Tag(1, "sync", 0xFF8B5CF6)),
+            tags = listOf(
+                Tag(1, "sync", 0xFF8B5CF6),
+                Tag(2, "Planning", 0xFF8B5CF6, scope = "board:3"),
+            ),
             notes = listOf(
                 Note(
                     id = 1,
@@ -127,7 +130,8 @@ class BackupCodecTest {
 
         assertEquals("Project", restored.notes.single().title)
         assertEquals("Work", restored.notebooks.single().name)
-        assertEquals("sync", restored.tags.single().name)
+        assertEquals("sync", restored.tags.first { it.scope == "notes" }.name)
+        assertEquals("Planning", restored.tags.first { it.scope == "board:3" }.name)
         assertEquals("image.png", restored.attachments.single().displayName)
         assertEquals("planning,review", restored.tasks.single().labels)
         assertEquals("brief.pdf", restored.tasks.single().attachmentName)

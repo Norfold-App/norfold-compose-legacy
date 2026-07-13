@@ -108,7 +108,7 @@ interface NotesDao {
         LEFT JOIN tags ON tags.id = note_tags.tagId
         WHERE notes.archived = 0 AND notes.workspaceId = :ws AND (
             notes.title LIKE '%' || :query || '%' OR
-            notes.bodyMarkdown LIKE '%' || :query || '%' OR
+            notes.searchText LIKE '%' || :query || '%' OR
             tags.name LIKE '%' || :query || '%'
         )
         ORDER BY notes.pinned DESC, notes.updatedAt DESC
@@ -317,6 +317,18 @@ interface NotesDao {
     suspend fun insertNote(entity: NoteEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertNoteBlocks(entities: List<NoteBlockEntity>)
+
+    @Query("DELETE FROM note_blocks WHERE id IN (:ids)")
+    suspend fun deleteNoteBlocks(ids: List<String>)
+
+    @Query("DELETE FROM note_blocks WHERE noteId = :noteId")
+    suspend fun deleteBlocksForNote(noteId: Long)
+
+    @Query("SELECT * FROM note_blocks WHERE noteId = :noteId ORDER BY position ASC")
+    suspend fun blocksForNote(noteId: Long): List<NoteBlockEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAttachment(entity: AttachmentEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -430,8 +442,8 @@ interface NotesDao {
     @Update
     suspend fun updateNote(entity: NoteEntity)
 
-    @Query("UPDATE notes SET title = :title, bodyMarkdown = :body, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateNoteContent(id: Long, title: String, body: String, updatedAt: Long)
+    @Query("UPDATE notes SET title = :title, searchText = :searchText, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateNoteContent(id: Long, title: String, searchText: String, updatedAt: Long)
 
     @Query("UPDATE notes SET coverUri = :coverUri, coverMimeType = :coverMimeType, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateNoteCover(id: Long, coverUri: String?, coverMimeType: String?, updatedAt: Long)
@@ -454,8 +466,8 @@ interface NotesDao {
     @Query("DELETE FROM note_tags WHERE noteId = :noteId")
     suspend fun clearTagsForNote(noteId: Long)
 
-    @Query("SELECT * FROM tags WHERE name = :name LIMIT 1")
-    suspend fun tagByName(name: String): TagEntity?
+    @Query("SELECT * FROM tags WHERE scope = :scope AND normalizedName = :normalizedName LIMIT 1")
+    suspend fun tagByScopeAndNormalizedName(scope: String, normalizedName: String): TagEntity?
 
     @Query("DELETE FROM notes")
     suspend fun clearNotes()

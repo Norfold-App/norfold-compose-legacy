@@ -3,15 +3,27 @@ package com.norfold.app.data
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Attachment
 import com.norfold.app.domain.BackupSnapshot
+import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.CanvasEdgeItem
 import com.norfold.app.domain.CanvasNodeItem
 import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
+import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.EmbedBlock
+import com.norfold.app.domain.EmbedMetadata
+import com.norfold.app.domain.FileBlock
+import com.norfold.app.domain.MathBlock
+import com.norfold.app.domain.MermaidBlock
+import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.Note
+import com.norfold.app.domain.MarkdownBlockCodec
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.Notebook
 import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.GoalStatus
+import com.norfold.app.domain.HeadingBlock
+import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.CalendarEventItem
 import com.norfold.app.domain.CalendarEventSource
 import com.norfold.app.domain.Tag
@@ -24,6 +36,7 @@ import com.norfold.app.domain.TaskMoveRow
 import com.norfold.app.domain.TaskPriority
 import com.norfold.app.domain.TaskPropertyDefinition
 import com.norfold.app.domain.TaskPropertyType
+import com.norfold.app.domain.TaskDateRange
 import com.norfold.app.domain.TaskDateRangeCodec
 import com.norfold.app.domain.TaskPropertyValue
 import com.norfold.app.domain.TaskStatus
@@ -92,46 +105,171 @@ class NotesRepository(private val database: NorfoldDatabase) {
         if (dao.allWorkspaces().isNotEmpty()) {
             if (dao.settings() == null) dao.upsertSettings(AppSettingsEntity())
             ensureDefaultTaskBoard(activeWs())
+            applyWorkspaceTemplate("Norfold Guide")
             return
         }
         val wsId = dao.insertWorkspace(WorkspaceEntity(name = "Personal", icon = "N", iconKind = WorkspaceIconKind.Text.name, palette = ThemeProfile.Neon.name, createdAt = System.currentTimeMillis()))
         val existing = dao.settings()
         dao.upsertSettings((existing ?: AppSettingsEntity()).copy(activeWorkspaceId = wsId, workspaceName = "Personal"))
         ensureDefaultTaskBoard(wsId)
-        val guide = dao.insertNotebook(NotebookEntity(name = "Guide", color = 0xFF7E57FF, sortOrder = 0))
-        val work = dao.insertNotebook(NotebookEntity(name = "Work", color = 0xFF8B5CF6, sortOrder = 1))
-        val personal = dao.insertNotebook(NotebookEntity(name = "Personal", color = 0xFF35A853, sortOrder = 2))
-        val study = dao.insertNotebook(NotebookEntity(name = "Study", color = 0xFF42A5F5, sortOrder = 3))
-        seedGuideNotes(guide)
-        // A couple of light, realistic notes so Home feels lived-in.
-        createNote("Daily Thoughts", "Gratitude turns what we have into enough.\n\nA quick scratch note — try pinning it, adding a #tag, or swiping it to see the gesture actions.", personal, listOf("Personal"), pinned = true)
-        createNote(
-            "Shopping List 🛒",
-            "- [ ] Oats\n- [ ] Almond milk\n- [ ] Blueberries\n- [ ] Coffee\n- [ ] Olive oil\n\nChecklists like this render as tappable items in the editor.",
-            personal,
-            listOf("Personal"),
-        )
-        addTask("Draft project roadmap", "Outline milestones, owners, and launch notes", "@owner", TaskStatus.Todo)
-        addTask("Polish Android workspace", "Review notes, tasks, canvas, and chat screens", "@owner", TaskStatus.Doing)
-        addTask("Encrypted backup check", "Verify app data round-trip", "@team", TaskStatus.Done)
-        createGoal("Finish the product redesign", target = 100.0, progress = 36.0, unit = "%")
-        val eventStart = System.currentTimeMillis() + 86_400_000L
-        createCalendarEvent("Design review", eventStart, eventStart + 3_600_000L, color = 0xFFE54CBD)
-        sendChat("nadia", "Nadia", "Can we convert this message into a task?", 0xFF7E57FF)
-        sendChat("you", "You", "Yes. Link it to the workspace note.", 0xFF4AADFF)
-        sendChat("system", "System", "Task created: Polish mobile onboarding", 0xFF56CC98, system = true)
-        val research = addCanvasNode("Research", "Embedded note", CanvasNodeType.Note, 0.12f, 0.14f, 0xFF7E57FF)
-        val brief = addCanvasNode("PDF brief", "File block", CanvasNodeType.File, 0.58f, 0.12f, 0xFF4AADFF)
-        val tasks = addCanvasNode("Task board", "Linked tasks", CanvasNodeType.Shape, 0.34f, 0.40f, 0xFF56CC98)
-        val map = addCanvasNode("Mind map", "Shape group", CanvasNodeType.Shape, 0.66f, 0.58f, 0xFFF276E2)
-        addCanvasEdge(research, tasks, "feeds")
-        addCanvasEdge(tasks, map, "maps")
-        addCanvasEdge(brief, map, "references")
+        applyWorkspaceTemplate("Norfold Guide")
         rebuildWorkspaceIndex()
+    }
+
+    suspend fun applyWorkspaceTemplate(template: String) {
+        if (template == "Start empty") return
+        val workspaceId = activeWs()
+        val workspaceHasNotes = dao.allNotesSnapshot().any { it.note.workspaceId == workspaceId }
+        val workspaceHasTasks = dao.allTasks().any { it.workspaceId == workspaceId }
+        when (template) {
+            "Norfold Guide" -> {
+                if (!workspaceHasNotes) {
+                    val guide = dao.insertNotebook(NotebookEntity(name = "Norfold Guide", color = 0xFF6F36FF, sortOrder = 0, workspaceId = workspaceId))
+                    seedGuideNotes(guide)
+                } else repairGuideDocuments(workspaceId)
+                if (!workspaceHasTasks) seedGuideTasks()
+            }
+            "Study planner" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Study", color = 0xFF42A5F5, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Study dashboard", "# Study dashboard\n\nKeep lecture notes, readings, and revision plans together.", notebook, listOf("Study"), pinned = true)
+                addTask("Review lecture notes", "Summarize the key definitions", "@me", TaskStatus.Todo)
+                addTask("Practice problems", "Complete the current problem set", "@me", TaskStatus.Doing)
+            }
+            "Personal organizer" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Personal", color = 0xFF35A853, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Daily notes", "# Daily notes\n\nWrite down what matters today.", notebook, listOf("Personal"), pinned = true)
+                addTask("Plan the week", "Choose the three most important outcomes", "@me", TaskStatus.Todo)
+            }
+            "Team workspace" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Team", color = 0xFF8B5CF6, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Team brief", "# Team brief\n\nShared context, decisions, and next actions.", notebook, listOf("Team"), pinned = true)
+                addTask("Prepare team stand-up", "Collect updates and blockers", "@owner", TaskStatus.Todo)
+                sendChat("system", "Workspace", "Collaboration chat is ready for workspace members.", 0xFF7E57FF, system = true)
+            }
+        }
+        rebuildWorkspaceIndex()
+    }
+
+    private suspend fun repairGuideDocuments(workspaceId: Long) {
+        val guideNotes = dao.allNotesSnapshot().filter { it.note.workspaceId == workspaceId }
+        guideNotes.firstOrNull { it.note.title == "Rich blocks playground" }?.toDomain()?.let { playground ->
+            val seenMath = linkedSetOf<String>()
+            val repaired = buildList {
+                playground.document.blocks.forEach { block ->
+                    val candidate = if (block is ParagraphBlock) {
+                        val raw = block.plainText().trim()
+                        if (raw.startsWith("$$") && raw.endsWith("$$") && raw.length >= 4) {
+                            MathBlock(id = block.id, tex = raw.removePrefix("$$").removeSuffix("$$").trim())
+                        } else block
+                    } else block
+                    if (candidate !is MathBlock || seenMath.add(candidate.tex.trim())) add(candidate)
+                }
+            }
+            if (repaired != playground.document.blocks) {
+                val dirtyIds = (playground.document.blocks.map { it.id } + repaired.map { it.id }).toSet()
+                updateNote(playground, playground.title, playground.document.copy(blocks = repaired), dirtyIds)
+            }
+        }
+        if (guideNotes.none { it.note.title == "Long document performance demo" }) {
+            dao.allNotebooks().firstOrNull { it.workspaceId == workspaceId && it.name == "Norfold Guide" }?.let { guide ->
+                seedGuideStressNote(guide.id)
+            }
+        }
     }
 
     /** In-depth, built-in reference notes that teach the app's features. Seeded once on first run. */
     private suspend fun seedGuideNotes(guide: Long) {
+        val playgroundId = createNote(
+            "Rich blocks playground",
+            """
+            # Rich blocks playground :sparkles:
+
+            This note deliberately exercises the complete Norfold document renderer. Double-tap a block to edit it, use `/` to insert another block, and long-press for its type-specific actions.
+
+            ## Inline formatting
+
+            **Bold**, *italic*, `inline code`, [Norfold support](https://sheikhti1205.github.io/Norfold/support.html), #Guide, :white_check_mark:, and inline math ${'$'}E = mc^2${'$'} all share one paragraph.
+
+            ## Checklist
+
+            - [x] Open the rendered document surface
+            - [x] Render rich inline content
+            - [ ] Reorder this item with its six-dot handle
+
+            ## Table
+
+            | Block | What to verify | Status |
+            |---|---|---|
+            | Math | KaTeX/MathJax layout | Ready |
+            | Mermaid | Diagram fallback | Ready |
+            | Chart | Editable Vega-Lite | Ready |
+
+            ## Display math
+
+            ${'$'}${'$'}
+            \int_0^1 x^2\,dx = \frac{1}{3}
+            ${'$'}${'$'}
+
+            ```mermaid
+            flowchart LR
+              Paste --> Parse
+              Parse --> Blocks
+              Blocks --> Render
+            ```
+
+            ```vega-lite
+            {"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Notes","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}
+            ```
+
+            ```kotlin
+            val workspace = Norfold.localFirst()
+            println(workspace.isPrivate)
+            ```
+
+            > Smart-paste this entire note into a blank page to verify one atomic, structured paste and one-step undo.
+            """.trimIndent(),
+            guide,
+            listOf("Guide", "Blocks", "Demo"),
+            pinned = true,
+        )
+        dao.noteById(playgroundId)?.toDomain()?.let { playground ->
+            val current = playground.document.blocks
+            val richBlocks = buildList {
+                if (current.none { it is MathBlock }) add(MathBlock(tex = "\\int_0^1 x^2\\,dx = \\frac{1}{3}"))
+                if (current.none { it is MermaidBlock }) add(MermaidBlock(code = "flowchart LR\n  Paste --> Parse\n  Parse --> Blocks\n  Blocks --> Render"))
+                if (current.none { it is ChartBlock }) add(
+                    ChartBlock(
+                        vegaLiteSpec = """{"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Notes","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}""",
+                    ),
+                )
+                if (current.none { it is EmbedBlock }) add(
+                    EmbedBlock(
+                        url = "https://sheikhti1205.github.io/Norfold/",
+                        metadata = EmbedMetadata(
+                            title = "Norfold product guide",
+                            description = "Privacy, support, changelog, and testing information.",
+                        ),
+                    ),
+                )
+                if (current.none { it is FileBlock }) add(
+                    FileBlock(
+                        name = "smart-paste-example.md",
+                        mimeType = "text/markdown",
+                        sizeBytes = 2_048,
+                        uri = "https://sheikhti1205.github.io/Norfold/changelog.html",
+                    ),
+                )
+            }
+            updateNote(
+                playground,
+                playground.title,
+                playground.document.copy(blocks = playground.document.blocks + richBlocks),
+                richBlocks.mapTo(linkedSetOf()) { it.id },
+            )
+        }
         createNote(
             "Welcome to Norfold",
             """
@@ -166,7 +304,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             """
             # Notes & the Editor
 
-            Notes are written in **Markdown**, so formatting is just text.
+            Notes use structured blocks with Markdown-compatible import and export.
 
             **Formatting basics**
             - `# Heading`, `## Subheading`
@@ -291,6 +429,110 @@ class NotesRepository(private val database: NorfoldDatabase) {
             guide,
             listOf("Guide", "Organize"),
         )
+        seedGuideStressNote(guide)
+    }
+
+    private suspend fun seedGuideStressNote(guide: Long) {
+        val noteId = createNote(
+            title = "Long document performance demo",
+            body = "# Long document performance demo",
+            notebookId = guide,
+            tagNames = listOf("Guide", "Performance"),
+        )
+        val note = dao.noteById(noteId)?.toDomain() ?: return
+        val blocks = buildList {
+            add(HeadingBlock(level = 1, content = listOf(InlineText("Long document performance demo"))))
+            repeat(220) { index ->
+                when {
+                    index % 70 == 0 -> add(ChartBlock(vegaLiteSpec = """{"mark":{"type":"bar"},"data":{"values":[{"x":"A","y":${index + 1}},{"x":"B","y":${index + 2}}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"""))
+                    index % 50 == 0 -> add(MermaidBlock(code = "flowchart LR\n  Block$index --> Block${index + 1}"))
+                    index % 40 == 0 -> add(MathBlock(tex = "x_{$index}^2 + \\sum_{i=1}^{n} i"))
+                    else -> add(ParagraphBlock(content = listOf(InlineText("Block ${index + 1}: lazy document rendering remains responsive while scrolling."))))
+                }
+            }
+        }
+        val document = BlockDocument(blocks)
+        updateNote(note, note.title, document, blocks.mapTo(linkedSetOf()) { it.id })
+    }
+
+    private suspend fun seedGuideTasks() {
+        val now = System.currentTimeMillis()
+        val day = 86_400_000L
+        val taskIds = listOf(
+            addTask(
+                title = "Polish Android workspace",
+                description = "Review notes, tasks, calendar, and chat screens for Android consistency.",
+                assignee = "@owner",
+                status = TaskStatus.Todo,
+                priority = TaskPriority.High,
+                dueAt = now + day * 4,
+            ),
+            addTask(
+                title = "Implement offline sync",
+                description = "Add durable outbox processing and conflict recovery for mobile.",
+                assignee = "@alex",
+                status = TaskStatus.Doing,
+                priority = TaskPriority.Urgent,
+                dueAt = now + day * 2,
+            ),
+            addTask(
+                title = "Create onboarding",
+                description = "Build the complete private-workspace onboarding flow with real persisted choices.",
+                assignee = "@nina",
+                status = TaskStatus.Done,
+                priority = TaskPriority.Low,
+                dueAt = now - day,
+            ),
+            addTask(
+                title = "Draft project roadmap",
+                description = "Outline milestones, owners, launch plan, dependencies, and delivery dates.",
+                assignee = "@product",
+                status = TaskStatus.Todo,
+                priority = TaskPriority.Normal,
+                dueAt = now + day * 10,
+            ),
+        )
+        val boardId = dao.taskById(taskIds.first())?.taskBoardId ?: return
+        val properties = dao.taskPropertyDefinitionsForBoard(boardId).map { it.toDomain() }
+        val text = properties.firstOrNull { it.type == TaskPropertyType.Text }
+        val labels = properties.firstOrNull { it.type == TaskPropertyType.Labels }
+        val date = properties.firstOrNull { it.type == TaskPropertyType.DueDate }
+        val checklist = properties.firstOrNull { it.type == TaskPropertyType.Checklist }
+        val taskLabels = listOf("Android,UI/UX", "Sync,Backend,Blocked", "Onboarding,UI/UX", "Roadmap,Planning")
+        val checklistText = listOf(
+            listOf("Review notes", "Review tasks", "Review canvas", "Review charts", "Document results"),
+            listOf("Design conflict model", "Build delta sync", "Integration tests"),
+            listOf("Welcome screen", "Workspace setup", "Completion state"),
+            listOf("Define goals and scope", "Gather stakeholder input", "Outline milestones", "Identify dependencies", "Draft timeline"),
+        )
+        taskIds.forEachIndexed { index, taskId ->
+            val task = dao.taskById(taskId)?.toDomain() ?: return@forEachIndexed
+            text?.let { setTaskPropertyValue(task, it, task.description) }
+            labels?.let { property ->
+                taskLabels[index].split(',').forEach { addTaskTag(boardId, it) }
+                setTaskPropertyValue(task, property, taskLabels[index])
+            }
+            date?.let { property ->
+                setTaskPropertyValue(
+                    task,
+                    property,
+                    TaskDateRangeCodec.encode(
+                        TaskDateRange(
+                            startAt = task.dueAt?.minus(day),
+                            endAt = task.dueAt,
+                            allDay = true,
+                            reminderMinutesBefore = if (task.status == TaskStatus.Done) null else 30,
+                        ),
+                    ),
+                )
+            }
+            checklist?.let { property ->
+                checklistText[index].forEach { item -> addChecklistItem(task, property, item) }
+                dao.checklistItemsForProperty(task.id, property.id).take(2).forEach { item ->
+                    dao.updateTaskChecklistItem(item.id, item.text, true, System.currentTimeMillis())
+                }
+            }
+        }
     }
 
     fun search(query: String): Flow<List<Note>> =
@@ -391,10 +633,11 @@ class NotesRepository(private val database: NorfoldDatabase) {
         starred: Boolean = false,
     ): Long {
         val now = System.currentTimeMillis()
+        val document = MarkdownBlockCodec.import(body)
         val id = dao.insertNote(
             NoteEntity(
                 title = title.ifBlank { "Untitled note" },
-                bodyMarkdown = body,
+                searchText = document.plainText(),
                 notebookId = notebookId,
                 coverUri = null,
                 coverMimeType = null,
@@ -407,6 +650,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
                 workspaceId = activeWs(),
             ),
         )
+        dao.upsertNoteBlocks(document.blocks.mapIndexed { position, block ->
+            NoteBlockEntity(block.id, id, position, BlockDocumentJson.encodeBlock(block), now)
+        })
         setTags(id, tagNames)
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled note" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
         recordActivity(WorkspaceActivityType.Created, "You", "Created note", title.ifBlank { "Untitled note" }, objectType = WorkspaceObjectType.Note, sourceId = id)
@@ -415,18 +661,40 @@ class NotesRepository(private val database: NorfoldDatabase) {
     }
 
     suspend fun updateNote(note: Note, title: String, body: String) {
-        // Targeted update preserves workspaceId, flags, etc.
-        dao.updateNoteContent(note.id, title.ifBlank { "Untitled note" }, body, System.currentTimeMillis())
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled note" }, body.take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
+        updateNote(note, title, MarkdownBlockCodec.import(body))
+    }
+
+    suspend fun updateNote(
+        note: Note,
+        title: String,
+        document: BlockDocument,
+        dirtyBlockIds: Set<String> = document.blocks.mapTo(linkedSetOf()) { it.id },
+    ) {
+        val normalized = document.normalized()
+        val now = System.currentTimeMillis()
+        val existing = dao.blocksForNote(note.id).associateBy(NoteBlockEntity::id)
+        val next = normalized.blocks.mapIndexed { position, block ->
+            NoteBlockEntity(block.id, note.id, position, BlockDocumentJson.encodeBlock(block), now)
+        }
+        val changed = next.filter { candidate ->
+            val old = existing[candidate.id]
+            candidate.id in dirtyBlockIds || old == null || old.position != candidate.position || old.payloadJson != candidate.payloadJson
+        }
+        if (changed.isNotEmpty()) dao.upsertNoteBlocks(changed)
+        val removed = existing.keys - next.mapTo(hashSetOf(), NoteBlockEntity::id)
+        if (removed.isNotEmpty()) dao.deleteNoteBlocks(removed.toList())
+        dao.updateNoteContent(note.id, title.ifBlank { "Untitled note" }, normalized.plainText(), now)
+        val markdown = MarkdownBlockCodec.export(normalized)
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled note" }, normalized.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
         recordActivity(WorkspaceActivityType.Updated, "You", "Updated note", title.ifBlank { "Untitled note" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
-        if (note.title != title || note.bodyMarkdown != body) {
+        if (note.title != title || note.document != normalized) {
             recordHistory(
                 WorkspaceHistoryType.Updated,
                 objectId,
                 "You",
                 "Updated note",
                 beforeValue = note.bodyMarkdown.take(500),
-                afterValue = body.take(500),
+                afterValue = markdown.take(500),
             )
         }
     }
@@ -440,7 +708,13 @@ class NotesRepository(private val database: NorfoldDatabase) {
         return dao.insertNotebook(NotebookEntity(name = name.ifBlank { "New notebook" }, color = 0xFF8B5CF6, sortOrder = order, workspaceId = activeWs()))
     }
 
-    suspend fun addTag(name: String): Long = getOrCreateTag(name.trim().removePrefix("#")).id
+    suspend fun addTag(name: String): Long = getOrCreateTag(name.trim().removePrefix("#"), scope = "notes").id
+
+    suspend fun addTaskTag(boardId: Long, name: String): Long {
+        val displayName = name.trim().trimStart('#').replace(Regex("\\s+"), " ")
+        require(displayName.isNotBlank()) { "Tag name cannot be blank" }
+        return getOrCreateTag(displayName, scope = "board:$boardId").id
+    }
 
     suspend fun addAttachment(noteId: Long, displayName: String, mimeType: String, uri: String, sizeBytes: Long) {
         dao.insertAttachment(AttachmentEntity(noteId = noteId, displayName = displayName, mimeType = mimeType, uri = uri, sizeBytes = sizeBytes))
@@ -650,9 +924,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val ws = activeWs()
         val now = System.currentTimeMillis()
         val boardId = dao.insertTaskBoard(TaskBoardEntity(name = name.trim().ifBlank { "New board" }, workspaceId = ws, createdAt = now, updatedAt = now))
-        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0xFF9D7BFF, 0)
-        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0xFF4FACFE, 1)
-        createTaskColumn(boardId, "Done", TaskStatus.Done, 0xFF56CC98, 2)
+        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0L, 0)
+        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0L, 1)
+        createTaskColumn(boardId, "Done", TaskStatus.Done, 0L, 2)
         ensureDefaultTaskProperties(boardId)
         recordActivity(WorkspaceActivityType.Created, "You", "Created task board", name.trim().ifBlank { "New board" })
         return boardId
@@ -663,7 +937,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         dao.updateTaskBoardName(boardId, nextName, System.currentTimeMillis())
         recordActivity(WorkspaceActivityType.Updated, "You", "Renamed task board", nextName)
     }
-    suspend fun createTaskColumn(boardId: Long, name: String, status: TaskStatus? = null, color: Long = 0xFF9D7BFF, sortOrder: Int? = null): Long {
+    suspend fun createTaskColumn(boardId: Long, name: String, status: TaskStatus? = null, color: Long = 0L, sortOrder: Int? = null): Long {
         val now = System.currentTimeMillis()
         val order = sortOrder ?: dao.taskColumnsForBoard(boardId).size
         return dao.insertTaskColumn(TaskColumnEntity(boardId = boardId, name = name.trim().ifBlank { "New column" }, status = status?.name, color = color, sortOrder = order, createdAt = now, updatedAt = now))
@@ -728,9 +1002,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
 
     private suspend fun ensureDefaultTaskColumns(boardId: Long) {
         if (dao.taskColumnsForBoard(boardId).isNotEmpty()) return
-        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0xFF9D7BFF, 0)
-        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0xFF4FACFE, 1)
-        createTaskColumn(boardId, "Done", TaskStatus.Done, 0xFF56CC98, 2)
+        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0L, 0)
+        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0L, 1)
+        createTaskColumn(boardId, "Done", TaskStatus.Done, 0L, 2)
     }
 
     private suspend fun ensureDefaultTaskProperties(boardId: Long) {
@@ -754,11 +1028,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
 
     private suspend fun ensureTaskColumnForStatus(boardId: Long, status: TaskStatus): Long {
         dao.taskColumnForStatus(boardId, status.name)?.let { return it.id }
-        return createTaskColumn(boardId, status.name, status, when (status) {
-            TaskStatus.Todo -> 0xFF9D7BFF
-            TaskStatus.Doing -> 0xFF4FACFE
-            TaskStatus.Done -> 0xFF56CC98
-        })
+        return createTaskColumn(boardId, status.name, status, 0L)
     }
     suspend fun updateTaskMeta(task: TaskItem, priority: TaskPriority, dueAt: Long?, assignee: String) =
         dao.updateTaskMeta(task.id, priority.name, dueAt, assignee, System.currentTimeMillis())
@@ -1328,6 +1598,8 @@ class NotesRepository(private val database: NorfoldDatabase) {
             autoPairBrackets = settings.autoPairBrackets,
             syntaxColorful = settings.syntaxColorful,
             autoConvertOnPaste = settings.autoConvertOnPaste,
+            contextualMenuStyle = settings.contextualMenuStyle.name,
+            contextualMenuColor = settings.contextualMenuColor.name,
             appLockOnExit = settings.appLockOnExit,
             autoLockMinutes = settings.autoLockMinutes,
             autoBackup = settings.autoBackup,
@@ -1446,13 +1718,23 @@ class NotesRepository(private val database: NorfoldDatabase) {
             )
         }
         snapshot.notebooks.forEach { dao.insertNotebook(NotebookEntity(it.id, it.name, it.parentId, it.color, it.sortOrder)) }
-        snapshot.tags.forEach { dao.insertTag(TagEntity(it.id, it.name, it.color)) }
+        snapshot.tags.forEach {
+            dao.insertTag(
+                TagEntity(
+                    id = it.id,
+                    name = it.name,
+                    color = it.color,
+                    scope = it.scope,
+                    normalizedName = normalizeTagName(it.name),
+                ),
+            )
+        }
         snapshot.notes.forEach { note ->
             dao.insertNote(
                 NoteEntity(
                     id = note.id,
                     title = note.title,
-                    bodyMarkdown = note.bodyMarkdown,
+                    searchText = note.document.plainText(),
                     notebookId = note.notebookId,
                     coverUri = note.coverUri,
                     coverMimeType = note.coverMimeType,
@@ -1464,6 +1746,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
                     updatedAt = note.updatedAt,
                 ),
             )
+            dao.upsertNoteBlocks(note.document.blocks.mapIndexed { position, block ->
+                NoteBlockEntity(block.id, note.id, position, BlockDocumentJson.encodeBlock(block), note.updatedAt)
+            })
             setTags(note.id, note.tags.map { it.name })
         }
         snapshot.attachments.forEach { dao.insertAttachment(AttachmentEntity(it.id, it.noteId, it.displayName, it.mimeType, it.uri, it.sizeBytes)) }
@@ -1607,7 +1892,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val ws = activeWs()
         dao.allNotesSnapshot().filter { it.note.workspaceId == ws }.forEach { row ->
             val note = row.toDomain()
-            upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, note.title, note.bodyMarkdown.take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned, note.archived)
+            upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, note.title, note.document.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned, note.archived)
         }
         dao.allTasks().filter { it.workspaceId == ws }.forEach {
             upsertWorkspaceObject(WorkspaceObjectType.Task, it.id, it.title, it.description, it.labels, "task", 0xFF56CC98, archived = it.status == TaskStatus.Done.name)
@@ -1759,12 +2044,26 @@ class NotesRepository(private val database: NorfoldDatabase) {
     private suspend fun setTags(noteId: Long, names: List<String>) {
         dao.clearTagsForNote(noteId)
         names.map { it.trim().removePrefix("#") }.filter { it.isNotBlank() }.distinct().forEach { name ->
-            dao.insertNoteTag(NoteTagCrossRef(noteId, getOrCreateTag(name).id))
+            dao.insertNoteTag(NoteTagCrossRef(noteId, getOrCreateTag(name, scope = "notes").id))
         }
     }
 
-    private suspend fun getOrCreateTag(name: String): TagEntity =
-        dao.tagByName(name) ?: TagEntity(id = dao.insertTag(TagEntity(name = name, color = 0xFF8B5CF6)), name = name, color = 0xFF8B5CF6)
+    private suspend fun getOrCreateTag(name: String, scope: String): TagEntity {
+        val displayName = name.trim().trimStart('#').replace(Regex("\\s+"), " ")
+        val normalized = normalizeTagName(displayName)
+        require(normalized.isNotBlank()) { "Tag name cannot be blank" }
+        return dao.tagByScopeAndNormalizedName(scope, normalized)
+            ?: TagEntity(
+                id = dao.insertTag(TagEntity(name = displayName, color = 0xFF8B5CF6, scope = scope, normalizedName = normalized)),
+                name = displayName,
+                color = 0xFF8B5CF6,
+                scope = scope,
+                normalizedName = normalized,
+            )
+    }
+
+    private fun normalizeTagName(name: String): String =
+        name.trim().trimStart('#').replace(Regex("\\s+"), " ").lowercase()
 
     companion object {
         private const val CanvasMinWorld = -10f
@@ -1813,7 +2112,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val defaultSettings = AppSettings(
             themeMode = ThemeMode.System,
             themeProfile = ThemeProfile.Neon,
-            accentColor = 0xFF9D50BB,
+            accentColor = 0xFF6F36FF,
             activeWorkspaceId = 1,
             backupFolderUri = null,
             vaultLockEnabled = false,
@@ -1838,7 +2137,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             adminsControlWorkspaceVisuals = true,
             allowMembersCreateNotes = true,
             allowMembersInvite = false,
-            uiScale = 0.88f,
+            uiScale = 1f,
             showMarkdownSyntax = true,
             noteLongPressAction = com.norfold.app.domain.NoteGestureAction.Actions,
             noteSwipeStartAction = com.norfold.app.domain.NoteGestureAction.Pin,

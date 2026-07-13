@@ -11,6 +11,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         WorkspaceEntity::class,
         NoteEntity::class,
+        NoteBlockEntity::class,
         NotebookEntity::class,
         TagEntity::class,
         AttachmentEntity::class,
@@ -38,7 +39,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 25,
+    version = 28,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -74,6 +75,9 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_22_23,
                     MIGRATION_23_24,
                     MIGRATION_24_25,
+                    MIGRATION_25_26,
+                    MIGRATION_26_27,
+                    MIGRATION_27_28,
                 )
                 .build()
                 .also { instance = it }
@@ -176,6 +180,88 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE tasks ADD COLUMN allDay INTEGER NOT NULL DEFAULT 1")
                 db.execSQL("ALTER TABLE tasks ADD COLUMN reminderMinutesBefore INTEGER")
                 db.execSQL("UPDATE tasks SET startAt = dueAt WHERE dueAt IS NOT NULL")
+            }
+        }
+
+        internal val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val legacyNotes = buildList {
+                    db.query("SELECT id, bodyMarkdown FROM notes").use { cursor ->
+                        val idIndex = cursor.getColumnIndexOrThrow("id")
+                        val bodyIndex = cursor.getColumnIndexOrThrow("bodyMarkdown")
+                        while (cursor.moveToNext()) add(cursor.getLong(idIndex) to cursor.getString(bodyIndex).orEmpty())
+                    }
+                }
+                db.execSQL("ALTER TABLE notes RENAME COLUMN bodyMarkdown TO searchText")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS note_blocks (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        noteId INTEGER NOT NULL,
+                        position INTEGER NOT NULL,
+                        payloadJson TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        FOREIGN KEY(noteId) REFERENCES notes(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_note_blocks_noteId ON note_blocks(noteId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_note_blocks_noteId_position ON note_blocks(noteId, position)")
+                val now = System.currentTimeMillis()
+                legacyNotes.forEach { (noteId, markdown) ->
+                    val document = com.norfold.app.domain.MarkdownBlockCodec.import(markdown)
+                    db.execSQL("UPDATE notes SET searchText = ? WHERE id = ?", arrayOf<Any?>(document.plainText(), noteId))
+                    document.blocks.forEachIndexed { position, block ->
+                        db.execSQL(
+                            "INSERT INTO note_blocks(id, noteId, position, payloadJson, updatedAt) VALUES(?, ?, ?, ?, ?)",
+                            arrayOf<Any?>(block.id, noteId, position, com.norfold.app.domain.BlockDocumentJson.encodeBlock(block), now),
+                        )
+                    }
+                }
+            }
+        }
+
+        internal val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN contextualMenuStyle TEXT NOT NULL DEFAULT 'Pill'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN contextualMenuColor TEXT NOT NULL DEFAULT 'FollowTheme'")
+            }
+        }
+
+        internal val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tags ADD COLUMN scope TEXT NOT NULL DEFAULT 'notes'")
+                db.execSQL("ALTER TABLE tags ADD COLUMN normalizedName TEXT NOT NULL DEFAULT ''")
+
+                // Development builds briefly stored board scope in the tag name. Preserve those tags.
+                db.execSQL(
+                    """
+                    UPDATE tags
+                    SET scope = 'board:' || substr(name, 6, instr(substr(name, 6), ':') - 1),
+                        normalizedName = lower(ltrim(trim(substr(name, 6 + instr(substr(name, 6), ':'))), '#')),
+                        name = ltrim(trim(substr(name, 6 + instr(substr(name, 6), ':'))), '#')
+                    WHERE name LIKE 'task:%:%' AND instr(substr(name, 6), ':') > 0
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "UPDATE tags SET normalizedName = lower(ltrim(trim(name), '#')) WHERE normalizedName = ''",
+                )
+
+                // Merge old case-only duplicates before enforcing the scoped unique key.
+                db.execSQL(
+                    """
+                    UPDATE OR IGNORE note_tags
+                    SET tagId = (
+                        SELECT MIN(canonical.id) FROM tags canonical
+                        WHERE canonical.scope = (SELECT source.scope FROM tags source WHERE source.id = note_tags.tagId)
+                          AND canonical.normalizedName = (SELECT source.normalizedName FROM tags source WHERE source.id = note_tags.tagId)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("DELETE FROM tags WHERE id NOT IN (SELECT MIN(id) FROM tags GROUP BY scope, normalizedName)")
+                db.execSQL("DROP INDEX IF EXISTS index_tags_name")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_tags_scope_normalizedName ON tags(scope, normalizedName)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_tags_scope ON tags(scope)")
             }
         }
 
@@ -604,8 +690,8 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 CREATE TABLE IF NOT EXISTS settings (
                     id INTEGER NOT NULL,
                     themeMode TEXT NOT NULL DEFAULT 'System',
-                    themeProfile TEXT NOT NULL DEFAULT 'Neon',
-                    accentColor INTEGER NOT NULL DEFAULT 4287327478,
+                    themeProfile TEXT NOT NULL DEFAULT 'Graphite',
+                    accentColor INTEGER NOT NULL DEFAULT 4281546570,
                     activeWorkspaceId INTEGER NOT NULL DEFAULT 1,
                     backupFolderUri TEXT,
                     vaultLockEnabled INTEGER NOT NULL DEFAULT 0,

@@ -40,12 +40,14 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
@@ -65,7 +67,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.norfold.app.branding.palette
-import com.norfold.app.branding.NorfoldLogo
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -165,6 +166,9 @@ private fun WorkspaceSwitcher(state: NotesUiState, viewModel: NotesViewModel) {
                 Text(active?.name ?: state.settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("${state.notes.size} notes · ${state.workspaces.size} workspaces", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            IconButton(onClick = { viewModel.go(Destination.Inbox) }, modifier = Modifier.size(30.dp)) {
+                Icon(Icons.Outlined.NotificationsNone, "Inbox", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            }
             Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
         }
 
@@ -205,129 +209,154 @@ private fun WorkspaceSwitcher(state: NotesUiState, viewModel: NotesViewModel) {
 
 @Composable
 private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modifier: Modifier) {
+    var plannerExpanded by remember { mutableStateOf(state.destination in setOf(Destination.Tasks, Destination.Calendar, Destination.NotesHome, Destination.NoteEditor, Destination.Files)) }
+    var subjectsExpanded by remember { mutableStateOf(true) }
+    val publicName = state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Local owner" } }
     Column(
-        modifier
-            .fillMaxHeight()
-            .verticalScroll(rememberScrollState()),
+        modifier.fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            NorfoldLogo(34.dp)
-            Text("Norfold", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-        }
         WorkspaceSwitcher(state, viewModel)
 
-        Spacer(Modifier.height(4.dp))
-
-        Button(onClick = { viewModel.go(Destination.CommandPalette) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-            Icon(Icons.Outlined.Add, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Command / New")
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clickable { viewModel.go(Destination.Search) },
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+        ) {
+            Row(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Search, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(9.dp))
+                Text("Search", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                Text("Ctrl K", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+            }
         }
 
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        SideNavItem("Home", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
-        SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
-        SideNavItem("Calendar", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar) { viewModel.go(Destination.Calendar) }
-        SideNavItem("Notes", Icons.Outlined.Folder, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
-        SideNavItem("Tasks", Icons.Outlined.Check, state.destination == Destination.Tasks) { viewModel.go(Destination.Tasks) }
-        SideNavItem("Goals", Icons.Outlined.TrackChanges, state.destination == Destination.Goals) { viewModel.go(Destination.Goals) }
-        SideNavItem("Canvas", Icons.Outlined.GridView, state.destination == Destination.Canvas) { viewModel.go(Destination.Canvas) }
-        SideNavItem("Files", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
-        SideNavItem("Chat", Icons.Outlined.ChatBubbleOutline, state.destination == Destination.Chat) { viewModel.go(Destination.Chat) }
-        SideNavItem("Database", Icons.Outlined.GridView, state.destination == Destination.Database) { viewModel.go(Destination.Database) }
-        SideNavItem("Graph", Icons.Outlined.Difference, state.destination == Destination.Graph) { viewModel.go(Destination.Graph) }
-        SideNavItem("Activity", Icons.Outlined.Star, state.destination == Destination.Activity) { viewModel.go(Destination.Activity) }
-        SideNavItem("Templates", Icons.Outlined.Tag, state.destination == Destination.Templates) { viewModel.go(Destination.Templates) }
-
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        // Animated section content
-        AnimatedContent(
-            targetState = state.destination,
-            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
-            label = "section",
-        ) { dest ->
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    sectionTitle(dest),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp),
-                )
-                sectionItems(dest).forEach { item ->
-                    SideNavItem(item.label, item.icon, false) { viewModel.go(item.destination) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(
+                onClick = viewModel::createNote,
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = RoundedCornerShape(9.dp),
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Note", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Surface(
+                onClick = viewModel::createTaskAndOpen,
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = RoundedCornerShape(9.dp),
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Task", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
 
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        Text(
-            "Library",
-            fontWeight = FontWeight.Bold,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp),
-        )
-        SideNavItem("Notebooks", Icons.Outlined.Folder, state.destination == Destination.Notebooks) { viewModel.go(Destination.Notebooks) }
-        SideNavItem("Tags", Icons.Outlined.Tag, state.destination == Destination.Tags) { viewModel.go(Destination.Tags) }
-        SideNavItem("Search", Icons.Outlined.Search, state.destination == Destination.Search) { viewModel.go(Destination.Search) }
-
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        SideNavItem("Sync", Icons.Outlined.CloudSync, state.destination == Destination.SyncMonitor) { viewModel.go(Destination.SyncMonitor) }
-        SideNavItem("Conflicts", Icons.Outlined.Difference, state.destination == Destination.ConflictReview) { viewModel.go(Destination.ConflictReview) }
-        SideNavItem("Vault", Icons.Outlined.Lock, state.destination == Destination.Vault) { viewModel.go(Destination.Vault) }
-        SideNavItem("Settings", Icons.Outlined.Settings, state.destination == Destination.Settings) { viewModel.go(Destination.Settings) }
-
-        if (state.notebooks.isNotEmpty()) {
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
             Spacer(Modifier.height(4.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Notebooks",
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp),
-            )
-            state.notebooks.forEach { notebook ->
-                val selected = state.selectedNotebookId == notebook.id
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                        .clickable { viewModel.filterByNotebook(notebook.id) }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Outlined.Folder, null, tint = Color(notebook.color), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        notebook.name,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 14.sp,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    )
-                    if (selected) {
-                        Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
+            SideNavItem("Today", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar && state.settings.calendarDefaultView == "Day") {
+                viewModel.patchSettings { it.copy(calendarDefaultView = "Day") }
+                viewModel.go(Destination.Calendar)
+            }
+            SideNavItem("Upcoming", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar && state.settings.calendarDefaultView == "Agenda") {
+                viewModel.patchSettings { it.copy(calendarDefaultView = "Agenda") }
+                viewModel.go(Destination.Calendar)
+            }
+            SideNavItem("Favorites", Icons.Outlined.Star, false) { viewModel.go(Destination.NotesHome) }
+
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Workspace",
+                    Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                IconButton(onClick = viewModel::createNote, modifier = Modifier.size(30.dp)) {
+                    Icon(Icons.Outlined.Add, "Create page", Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            SideNavItem("Dashboard", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
+
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { plannerExpanded = !plannerExpanded }.padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.GridView, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(12.dp))
+                Text("Study Planner", Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Icon(if (plannerExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            AnimatedVisibility(plannerExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    SideNavItem("Tasks", Icons.Outlined.Check, state.destination == Destination.Tasks && state.settings.taskViewMode == "Table") {
+                        viewModel.patchSettings { it.copy(taskViewMode = "Table") }; viewModel.go(Destination.Tasks)
+                    }
+                    SideNavItem("Board", Icons.Outlined.GridView, state.destination == Destination.Tasks && state.settings.taskViewMode == "Board") {
+                        viewModel.patchSettings { it.copy(taskViewMode = "Board") }; viewModel.go(Destination.Tasks)
+                    }
+                    SideNavItem("Calendar", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar) { viewModel.go(Destination.Calendar) }
+                    SideNavItem("Notes", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) { viewModel.go(Destination.NotesHome) }
+                    SideNavItem("Resources", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { subjectsExpanded = !subjectsExpanded }.padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Folder, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(12.dp))
+                Text("Subjects", Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Icon(if (subjectsExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            AnimatedVisibility(subjectsExpanded) {
+                Column(Modifier.padding(start = 34.dp)) {
+                    listOf("Data Structures", "Operating Systems", "Algorithms", "Database Systems", "Computer Networks").forEach { subject ->
+                        SideNavItem(subject, Icons.Outlined.Folder, false) { viewModel.go(Destination.NotesHome) }
                     }
                 }
             }
+            SideNavItem("Notes", Icons.Outlined.Description, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
+            SideNavItem("Books", Icons.Outlined.Folder, false) { viewModel.go(Destination.Files) }
+
+            Spacer(Modifier.height(6.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+            SideNavItem("Archive", Icons.Outlined.Archive, false) { viewModel.go(Destination.NotesHome) }
+            SideNavItem("Trash", Icons.Outlined.Delete, false) { viewModel.go(Destination.NotesHome) }
+            SideNavItem("Settings", Icons.Outlined.Settings, state.destination == Destination.Settings) { viewModel.go(Destination.Settings) }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { viewModel.go(Destination.Settings) }.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
+                Text(publicName.take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(publicName, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("@${state.settings.syncUserName.ifBlank { "owner" }}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1)
+            }
+            Icon(Icons.Outlined.UnfoldMore, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

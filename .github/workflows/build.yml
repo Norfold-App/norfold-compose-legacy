@@ -1,4 +1,4 @@
-name: Notes’nync build
+name: Norfold build
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
       - name: Upload web artifact
         uses: actions/upload-artifact@v6
         with:
-          name: notesnync-web-preview
+          name: norfold-web-preview
           path: apps/web/dist
 
   android:
@@ -53,19 +53,22 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set up Gradle
+      - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.10.2
 
       - name: Run Android unit tests
-        run: gradle :apps:android:testDebugUnitTest
+        run: ./gradlew :apps:android:testDebugUnitTest
+
+      - name: Run Android lint
+        run: ./gradlew :apps:android:lintDebug
 
       - name: Build Android debug APK
-        run: gradle :apps:android:assembleDebug
+        run: ./gradlew :apps:android:assembleDebug :apps:android:bundleRelease
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v6
         with:
-          name: notesnync-android-debug-apk
-          path: apps/android/build/outputs/apk/debug/*.apk
+          name: norfold-android-builds
+          path: |
+            apps/android/build/outputs/apk/debug/*.apk
+            apps/android/build/outputs/bundle/release/*.aab

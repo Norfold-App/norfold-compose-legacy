@@ -96,7 +96,7 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
                 action = { viewModel.openWorkspaceObject(obj) },
             )
         }
-    val tagResults = state.tags
+    val tagResults = state.tags.filter { it.scope == "notes" }
         .filter { matches(it.name, "tag") }
         .map {
             SearchResult(
@@ -139,8 +139,7 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
         Triple("Profile", Destination.Settings, "Your identity and workspace name"),
         Triple("Editor", Destination.Settings, "Writing and note behavior"),
         Triple("Security & Vault", Destination.Settings, "Lock, encryption and privacy"),
-        Triple("Sync settings", Destination.Settings, "Google Drive and folders"),
-        Triple("Backup & Import", Destination.ImportExport, "Export, restore and backups"),
+        Triple("Account & Restore", Destination.Settings, "Sync, export, restore and backups"),
         Triple("Diagnostics", Destination.Settings, "Logs and app health"),
     ).filter { matches(it.first, it.third, "settings") }
         .map {
@@ -154,9 +153,7 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
             )
         }
     val commandResults = listOf(
-        Triple("Command Palette", Destination.CommandPalette, Icons.Outlined.Code),
         Triple("Knowledge Graph", Destination.Graph, Icons.Outlined.GridView),
-        Triple("Canvas", Destination.Canvas, Icons.Outlined.GridView),
         Triple("Chat", Destination.Chat, Icons.Outlined.ChatBubbleOutline),
         Triple("Tasks", Destination.Tasks, Icons.Outlined.Check),
         Triple("Notebooks", Destination.Notebooks, Icons.Outlined.Folder),

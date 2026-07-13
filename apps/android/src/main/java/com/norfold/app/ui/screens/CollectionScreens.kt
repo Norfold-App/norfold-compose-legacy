@@ -67,7 +67,7 @@ fun TagsScreen(state: NotesUiState, viewModel: NotesViewModel) {
                 Button(onClick = { viewModel.addTag(name); name = "" }) { Text("Add") }
             }
         }
-        items(state.tags, key = { it.id }) {
+        items(state.tags.filter { it.scope == "notes" }, key = { it.id }) {
             AssistChip(onClick = {}, modifier = Modifier.animateItem(), label = { Text("#${it.name}") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Label, null, tint = Color(it.color)) })
         }
     }

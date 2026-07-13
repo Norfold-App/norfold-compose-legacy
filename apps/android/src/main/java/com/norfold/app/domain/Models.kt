@@ -3,7 +3,7 @@ package com.norfold.app.domain
 data class Note(
     val id: Long,
     val title: String,
-    val bodyMarkdown: String,
+    val document: BlockDocument,
     val notebookId: Long?,
     val pinned: Boolean,
     val starred: Boolean,
@@ -16,7 +16,43 @@ data class Note(
     val embeds: List<NoteEmbedItem> = emptyList(),
     val coverUri: String? = null,
     val coverMimeType: String? = null,
-)
+) {
+    val bodyMarkdown: String get() = MarkdownBlockCodec.export(document)
+
+    constructor(
+        id: Long,
+        title: String,
+        bodyMarkdown: String,
+        notebookId: Long?,
+        pinned: Boolean,
+        starred: Boolean,
+        archived: Boolean,
+        locked: Boolean,
+        createdAt: Long,
+        updatedAt: Long,
+        tags: List<Tag> = emptyList(),
+        attachments: List<Attachment> = emptyList(),
+        embeds: List<NoteEmbedItem> = emptyList(),
+        coverUri: String? = null,
+        coverMimeType: String? = null,
+    ) : this(
+        id = id,
+        title = title,
+        document = MarkdownBlockCodec.import(bodyMarkdown),
+        notebookId = notebookId,
+        pinned = pinned,
+        starred = starred,
+        archived = archived,
+        locked = locked,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        tags = tags,
+        attachments = attachments,
+        embeds = embeds,
+        coverUri = coverUri,
+        coverMimeType = coverMimeType,
+    )
+}
 
 data class Notebook(
     val id: Long,
@@ -30,6 +66,7 @@ data class Tag(
     val id: Long,
     val name: String,
     val color: Long,
+    val scope: String = "notes",
 )
 
 data class Attachment(
@@ -343,7 +380,7 @@ data class Workspace(
 
 enum class WorkspaceIconKind { Text, Emoji, Image, Gif }
 enum class ThemeMode { System, Light, Dark }
-enum class ThemeProfile { Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Gold }
+enum class ThemeProfile { Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Gold, Graphite }
 enum class EditorLineWidth { Narrow, Comfortable, Wide }
 enum class EditorFontFamily { Sans, Serif }
 enum class NoteGestureAction { Actions, Pin, Star, Lock, Archive, Delete, None }
@@ -386,7 +423,7 @@ data class AppSettings(
     val adminsControlWorkspaceVisuals: Boolean = true,
     val allowMembersCreateNotes: Boolean = true,
     val allowMembersInvite: Boolean = false,
-    val uiScale: Float = 0.88f,
+    val uiScale: Float = 1f,
     val editorLineWidth: EditorLineWidth = EditorLineWidth.Comfortable,
     val editorFontFamily: EditorFontFamily = EditorFontFamily.Sans,
     val showMarkdownSyntax: Boolean = true,
@@ -407,6 +444,8 @@ data class AppSettings(
     val autoPairBrackets: Boolean = true,
     val syntaxColorful: Boolean = true,
     val autoConvertOnPaste: Boolean = true,
+    val contextualMenuStyle: ContextualMenuStyle = ContextualMenuStyle.Pill,
+    val contextualMenuColor: ContextualMenuColor = ContextualMenuColor.FollowTheme,
     // Security (persisted)
     val appLockOnExit: Boolean = false,
     val autoLockMinutes: Int = 5,
@@ -441,6 +480,9 @@ data class AppSettings(
     val notificationPush: Boolean = true,
     val subscriptionTier: SubscriptionTier = SubscriptionTier.Free,
 )
+
+enum class ContextualMenuStyle { Pill, Block, Minimal }
+enum class ContextualMenuColor { FollowTheme, AppAccent }
 
 enum class SubscriptionTier { Free, Pro, Team }
 
@@ -480,7 +522,6 @@ enum class Destination {
     Settings,
     ImportExport,
 }
-enum class EditorMode { Page, Edit, Preview }
 
 data class NoteDocument(
     val title: String,
