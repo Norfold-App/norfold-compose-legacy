@@ -88,6 +88,25 @@ class DiagramBuilderCodecTest {
     }
 
     @Test
+    fun `legacy semicolon separated diagrams reseed guided forms`() {
+        val flowchart = MermaidDiagramCodec.decodeOrNull(
+            "graph TD; A[Start] --> B{Choose}; B -->|Yes| C((Done)); style B fill:#ABCDEF,stroke:#ABCDEF;",
+            fallbackColor,
+        )
+        val sequence = MermaidDiagramCodec.decodeOrNull(
+            "sequenceDiagram; participant App as Mobile app; participant Vault as Vault; " +
+                "App->>Vault: Save; Vault-->>App: Stored;",
+            fallbackColor,
+        )
+
+        assertEquals(listOf("A", "B", "C"), flowchart?.nodes?.map { it.id })
+        assertEquals(DiagramNodeShape.Diamond, flowchart?.nodes?.first { it.id == "B" }?.shape)
+        assertEquals("#ABCDEF", flowchart?.nodes?.first { it.id == "B" }?.color)
+        assertEquals(listOf("App", "Vault"), sequence?.participants?.map { it.id })
+        assertEquals(listOf(false, true), sequence?.messages?.map { it.dashed })
+    }
+
+    @Test
     fun `advanced source detects every offered starter type`() {
         DiagramKind.entries.forEach { kind ->
             val templates = MermaidDiagramCodec.templateCatalog(kind, fallbackColor)

@@ -117,8 +117,9 @@ internal data class DiagramTemplate(
 internal object MermaidDiagramCodec {
     private val validId = Regex("[A-Za-z][A-Za-z0-9_]*")
     private val validColor = Regex("#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?")
-    private val header = Regex("(?im)^\\s*(flowchart|graph)\\s+(TD|TB|LR|RL|BT)\\s*$")
-    private val sequenceHeader = Regex("(?im)^\\s*sequenceDiagram\\s*$")
+    private val flowHeader = Regex("(?im)^\\s*(flowchart|graph)\\s+(TD|TB|LR|RL|BT)(?=\\s*(?:;|$))")
+    private val flowHeaderStatement = Regex("(?i)^\\s*(flowchart|graph)\\s+(TD|TB|LR|RL|BT)\\s*$")
+    private val sequenceHeader = Regex("(?im)^\\s*sequenceDiagram(?=\\s*(?:;|$))")
     private val classDef = Regex(
         """(?im)^\s*classDef\s+([A-Za-z][A-Za-z0-9_]*)\s+[^\n]*?fill\s*:\s*(#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?)[^\n]*$""",
     )
@@ -163,7 +164,7 @@ internal object MermaidDiagramCodec {
     }
 
     fun detectKind(source: String): DiagramKind? = when {
-        header.containsMatchIn(source) -> DiagramKind.Flowchart
+        flowHeader.containsMatchIn(source) -> DiagramKind.Flowchart
         sequenceHeader.containsMatchIn(source) -> DiagramKind.Sequence
         Regex("(?im)^\\s*classDiagram\\b").containsMatchIn(source) -> DiagramKind.Class
         Regex("(?im)^\\s*stateDiagram(?:-v2)?\\b").containsMatchIn(source) -> DiagramKind.State
@@ -384,30 +385,32 @@ internal object MermaidDiagramCodec {
     }.trimEnd()
 
     private fun decodeFlowchart(source: String, defaultColor: String): DiagramBuilderModel {
-        val direction = when (header.find(source)?.groupValues?.getOrNull(2)?.uppercase(Locale.ROOT)) {
+        val statements = sourceStatements(source)
+        val normalizedSource = statements.joinToString("\n")
+        val direction = when (flowHeader.find(source)?.groupValues?.getOrNull(2)?.uppercase(Locale.ROOT)) {
             "LR", "RL" -> FlowDirection.LR
             else -> FlowDirection.TD
         }
-        val colorsByClass = classDef.findAll(source).associate { match ->
+        val colorsByClass = classDef.findAll(normalizedSource).associate { match ->
             match.groupValues[1] to normalizeColor(match.groupValues[2], defaultColor)
         }
         val classByNode = buildMap {
-            classAssignment.findAll(source).forEach { match ->
+            classAssignment.findAll(normalizedSource).forEach { match ->
                 match.groupValues[1].split(',').map(String::trim).filter(String::isNotBlank).forEach { id ->
                     put(id, match.groupValues[2])
                 }
             }
         }
-        val directColors = directStyle.findAll(source).associate { match ->
+        val directColors = directStyle.findAll(normalizedSource).associate { match ->
             match.groupValues[1] to normalizeColor(match.groupValues[2], defaultColor)
         }
         val nodes = linkedMapOf<String, DiagramNodeInput>()
         val edges = mutableListOf<DiagramEdgeInput>()
 
-        source.lineSequence().forEach { rawLine ->
+        statements.forEach { rawLine ->
             val line = rawLine.trim().removeSuffix(";")
             if (
-                line.isBlank() || line.startsWith("%%") || header.matches(line) ||
+                line.isBlank() || line.startsWith("%%") || flowHeaderStatement.matches(line) ||
                 line.startsWith("classDef ") || line.startsWith("class ") || line.startsWith("style ") ||
                 line.startsWith("subgraph ") || line == "end"
             ) return@forEach
@@ -443,13 +446,14 @@ internal object MermaidDiagramCodec {
     }
 
     private fun decodeSequence(source: String): DiagramBuilderModel {
+        val normalizedSource = sourceStatements(source).joinToString("\n")
         val participants = linkedMapOf<String, DiagramParticipantInput>()
-        participant.findAll(source).forEach { match ->
+        participant.findAll(normalizedSource).forEach { match ->
             val id = match.groupValues[1]
             val label = match.groupValues[2].trim().ifBlank { id }
             participants[id] = DiagramParticipantInput(id, decodeLabel(label))
         }
-        val messages = message.findAll(source).map { match ->
+        val messages = message.findAll(normalizedSource).map { match ->
             val from = match.groupValues[1]
             val to = match.groupValues[3]
             participants.putIfAbsent(from, DiagramParticipantInput(from, from))
@@ -511,6 +515,64 @@ internal object MermaidDiagramCodec {
             label = node.label.ifBlank { existing?.label ?: node.id },
             color = normalizeColor(existing?.color.orEmpty().ifBlank { node.color }, defaultColor),
         )
+    }
+
+    /** Splits legacy one-line Mermaid without breaking quoted/bracketed labels or HTML entities. */
+    private fun sourceStatements(source: String): List<String> {
+        val statements = mutableListOf<String>()
+        val current = StringBuilder()
+        var quoted = false
+        var pipeLabel = false
+        var entity = false
+        var delimiterDepth = 0
+
+        fun flush() {
+            current.toString().trim().takeIf(String::isNotBlank)?.let(statements::add)
+            current.clear()
+        }
+
+        source.forEach { character ->
+            when {
+                character == '&' && !quoted -> {
+                    entity = true
+                    current.append(character)
+                }
+
+                character == ';' && entity -> {
+                    entity = false
+                    current.append(character)
+                }
+
+                character == '"' && !entity -> {
+                    quoted = !quoted
+                    current.append(character)
+                }
+
+                character == '|' && !quoted && delimiterDepth == 0 -> {
+                    pipeLabel = !pipeLabel
+                    current.append(character)
+                }
+
+                character in "([{"
+                    && !quoted && !pipeLabel && !entity -> {
+                    delimiterDepth++
+                    current.append(character)
+                }
+
+                character in ")]}"
+                    && !quoted && !pipeLabel && !entity -> {
+                    delimiterDepth = (delimiterDepth - 1).coerceAtLeast(0)
+                    current.append(character)
+                }
+
+                (character == ';' || character == '\n' || character == '\r') &&
+                    !quoted && !pipeLabel && !entity && delimiterDepth == 0 -> flush()
+
+                else -> current.append(character)
+            }
+        }
+        flush()
+        return statements
     }
 
     private fun normalizedId(value: String, fallback: String): String {
