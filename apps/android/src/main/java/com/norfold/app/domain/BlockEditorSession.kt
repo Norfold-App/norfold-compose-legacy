@@ -58,6 +58,17 @@ class BlockEditorSession(initial: BlockDocument) {
         return BlockCursor(blockId, changedCursorOffset(oldText, newText), itemId)
     }
 
+    fun editTodoItem(blockId: String, itemId: String, oldText: String, newText: String): BlockCursor {
+        val block = document.blocks.firstOrNull { it.id == blockId } as? TodoListBlock
+            ?: return BlockCursor(blockId, 0, itemId)
+        val index = block.items.indexOfFirst { it.id == itemId }
+        if (index < 0 || oldText == newText) return BlockCursor(blockId, newText.length, itemId)
+        val updated = block.items.toMutableList()
+        updated[index] = updated[index].copy(content = editInline(updated[index].content, oldText, newText))
+        replaceBlock(block.copy(items = updated))
+        return BlockCursor(blockId, changedCursorOffset(oldText, newText), itemId)
+    }
+
     fun splitListItem(blockId: String, itemId: String, offset: Int): BlockCursor {
         val block = document.blocks.firstOrNull { it.id == blockId } ?: return BlockCursor(blockId, offset, itemId)
         val items = block.listItems() ?: return BlockCursor(blockId, offset, itemId)
@@ -195,9 +206,41 @@ class BlockEditorSession(initial: BlockDocument) {
     fun replaceSelectionWithInline(start: BlockCursor, end: BlockCursor, replacement: InlineNode): BlockCursor {
         if (start.blockId != end.blockId) return firstCursor()
         val block = document.blocks.firstOrNull { it.id == start.blockId } ?: return firstCursor()
+        val selectionStart = minOf(start.offset, end.offset)
+        val selectionEnd = maxOf(start.offset, end.offset)
+        if (start.itemId != null || end.itemId != null) {
+            if (start.itemId == null || start.itemId != end.itemId) return firstCursor()
+            val itemId = start.itemId
+            when (block) {
+                is BulletListBlock, is NumberedListBlock -> {
+                    val items = block.listItems() ?: return firstCursor()
+                    val index = items.indexOfFirst { it.id == itemId }
+                    if (index < 0) return firstCursor()
+                    val item = items[index]
+                    val before = splitInline(item.content, selectionStart.coerceIn(0, item.content.plainText().length)).first
+                    val after = splitInline(item.content, selectionEnd.coerceIn(0, item.content.plainText().length)).second
+                    val updated = items.toMutableList()
+                    updated[index] = item.copy(content = (before + replacement + after).mergeAdjacentText())
+                    replaceListItems(block, updated)
+                    return BlockCursor(block.id, before.plainText().length + replacement.plainText().length, itemId)
+                }
+                is TodoListBlock -> {
+                    val index = block.items.indexOfFirst { it.id == itemId }
+                    if (index < 0) return firstCursor()
+                    val item = block.items[index]
+                    val before = splitInline(item.content, selectionStart.coerceIn(0, item.content.plainText().length)).first
+                    val after = splitInline(item.content, selectionEnd.coerceIn(0, item.content.plainText().length)).second
+                    val updated = block.items.toMutableList()
+                    updated[index] = item.copy(content = (before + replacement + after).mergeAdjacentText())
+                    replaceBlock(block.copy(items = updated))
+                    return BlockCursor(block.id, before.plainText().length + replacement.plainText().length, itemId)
+                }
+                else -> return firstCursor()
+            }
+        }
         val inline = block.editableInline() ?: return firstCursor()
-        val before = splitInline(inline, start.offset.coerceIn(0, inline.plainText().length)).first
-        val after = splitInline(inline, end.offset.coerceIn(start.offset, inline.plainText().length)).second
+        val before = splitInline(inline, selectionStart.coerceIn(0, inline.plainText().length)).first
+        val after = splitInline(inline, selectionEnd.coerceIn(0, inline.plainText().length)).second
         val updated = block.withInline((before + replacement + after).mergeAdjacentText())
         replaceBlock(updated)
         return BlockCursor(block.id, before.plainText().length + replacement.plainText().length)
@@ -334,12 +377,23 @@ private fun List<InlineNode>.mergeAdjacentText(): List<InlineNode> = fold(mutabl
 private fun DocumentBlock.editableInline(): List<InlineNode>? = when (this) {
     is ParagraphBlock -> content
     is HeadingBlock -> content
+    is QuoteBlock -> children.firstOrNull()?.let { child ->
+        when (child) {
+            is ParagraphBlock -> child.content
+            is HeadingBlock -> child.content
+            else -> null
+        }
+    } ?: emptyList()
     else -> null
 }
 
 private fun DocumentBlock.withInline(content: List<InlineNode>, newId: Boolean = false): DocumentBlock = when (this) {
     is ParagraphBlock -> copy(id = if (newId) ParagraphBlock().id else id, content = content)
     is HeadingBlock -> copy(id = if (newId) HeadingBlock().id else id, content = content)
+    is QuoteBlock -> copy(
+        id = if (newId) QuoteBlock().id else id,
+        children = listOf(ParagraphBlock(content = content)) + children.drop(1),
+    )
     else -> this
 }
 

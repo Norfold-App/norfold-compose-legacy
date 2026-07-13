@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
@@ -27,17 +28,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -45,6 +50,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -61,7 +67,12 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FormatListBulleted
+import androidx.compose.material.icons.outlined.FormatListNumbered
+import androidx.compose.material.icons.outlined.FormatQuote
+import androidx.compose.material.icons.outlined.HorizontalRule
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Menu
@@ -70,6 +81,8 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.TableChart
+import androidx.compose.material.icons.outlined.Title
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -77,6 +90,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -89,6 +103,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -97,7 +112,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -110,9 +128,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
@@ -121,6 +143,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -135,6 +160,7 @@ import coil.compose.AsyncImage
 import com.norfold.app.domain.BlockCursor
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockEditorSession
+import com.norfold.app.domain.BlockRenderMode
 import com.norfold.app.domain.BoldInline
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
@@ -154,6 +180,7 @@ import com.norfold.app.domain.InlineNode
 import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.ItalicInline
 import com.norfold.app.domain.LinkInline
+import com.norfold.app.domain.ListItem
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MathInline
 import com.norfold.app.domain.MarkdownBlockCodec
@@ -169,6 +196,7 @@ import com.norfold.app.domain.TableAlignment
 import com.norfold.app.domain.TableCell
 import com.norfold.app.domain.TagInline
 import com.norfold.app.domain.TodoListBlock
+import com.norfold.app.domain.TodoItem
 import com.norfold.app.ui.NotesUiState
 import com.norfold.app.ui.NotesViewModel
 import com.norfold.app.ui.LocalContextualMenuColor
@@ -180,6 +208,7 @@ import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.ChartBuilderSheet
 import java.io.File
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -204,6 +233,8 @@ fun BlockNoteEditorScreen(
     var rangeAnchorId by remember(note.id) { mutableStateOf<String?>(null) }
     var rangeExtentId by remember(note.id) { mutableStateOf<String?>(null) }
     var chartBuilderRequest by remember(note.id) { mutableStateOf<ChartBuilderRequest?>(null) }
+    var activeSelection by remember(note.id) { mutableStateOf<EditorSelection?>(null) }
+    var linkEditorRequest by remember(note.id) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
     val listScrolling by remember { derivedStateOf { listState.isScrollInProgress } }
     val rangeBounds = remember(renderedDocument, rangeAnchorId, rangeExtentId) {
@@ -218,11 +249,52 @@ fun BlockNoteEditorScreen(
         focusTarget = cursor
     }
 
+    fun replaceActiveSelection(factory: (String) -> InlineNode) {
+        var selection = activeSelection ?: return
+        if (selection.text.isBlank()) {
+            val block = session.document.blocks.firstOrNull { it.id == selection.start.blockId } ?: return
+            val plain = block.inlineContent(selection.start.itemId)?.joinToString("") { it.plainText() } ?: return
+            val caret = selection.start.offset.coerceIn(0, plain.length)
+            var start = caret
+            var end = caret
+            while (start > 0 && !plain[start - 1].isWhitespace()) start--
+            while (end < plain.length && !plain[end].isWhitespace()) end++
+            if (start == end) return
+            selection = EditorSelection(
+                BlockCursor(block.id, start, selection.start.itemId),
+                BlockCursor(block.id, end, selection.start.itemId),
+                plain.substring(start, end),
+            )
+        }
+        val selectedText = selection.text
+        val replacement = factory(selectedText)
+        val cursor = session.replaceSelectionWithInline(selection.start, selection.end, replacement)
+        changed(cursor)
+        activeSelection = EditorSelection(
+            start = cursor.copy(offset = (cursor.offset - replacement.plainText().length).coerceAtLeast(0)),
+            end = cursor,
+            text = replacement.plainText(),
+        )
+    }
+
+    fun transformActiveBlock(target: TextBlockTarget) {
+        val selection = activeSelection ?: return
+        val block = session.document.blocks.firstOrNull { it.id == selection.start.blockId } ?: return
+        val transformed = block.convertTo(target)
+        session.replaceBlock(transformed)
+        val offset = selection.end.offset.coerceAtMost(transformed.plainText().length)
+        changed(BlockCursor(transformed.id, offset))
+        activeSelection = EditorSelection(BlockCursor(transformed.id, offset), BlockCursor(transformed.id, offset), "")
+    }
+
     BackHandler(enabled = editMode) {
         if (rangeAnchorId != null) {
             rangeAnchorId = null
             rangeExtentId = null
-        } else editMode = false
+        } else {
+            editMode = false
+            activeSelection = null
+        }
     }
     LaunchedEffect(revision, title) {
         if (revision == 0 && title == note.title) return@LaunchedEffect
@@ -259,7 +331,8 @@ fun BlockNoteEditorScreen(
     }
 
     CompositionLocalProvider(LocalEmojiShortcodes provides emojiShortcodes) {
-    Column(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
         BlockEditorHeader(
             title = title,
             saveLabel = if (savedRevision == revision) "Saved · ${renderedDocument.plainText().split(Regex("\\s+")).count(String::isNotBlank)} words" else "Saving…",
@@ -270,9 +343,17 @@ fun BlockNoteEditorScreen(
             canUndo = session.canUndo(),
             canRedo = session.canRedo(),
             onTitleChange = { title = it; revision++ },
-            onBack = { if (editMode) editMode = false else viewModel.handleBack() },
+            onBack = {
+                if (editMode) {
+                    editMode = false
+                    activeSelection = null
+                } else viewModel.handleBack()
+            },
             onMenu = onOpenSidebar,
-            onToggleEdit = { editMode = !editMode },
+            onToggleEdit = {
+                editMode = !editMode
+                if (!editMode) activeSelection = null
+            },
             onUndo = { if (session.undo()) changed() },
             onRedo = { if (session.redo()) changed() },
             onStar = { viewModel.toggleStar(note) },
@@ -303,11 +384,11 @@ fun BlockNoteEditorScreen(
         LazyColumn(
             Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally).imePadding().pointerInput(editMode) {
                 detectTapGestures(
-                    onTap = { if (editMode) editMode = false },
+                    onTap = { if (editMode) { editMode = false; activeSelection = null } },
                     onDoubleTap = { if (!editMode) editMode = true },
                 )
             },
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 120.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 184.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             state = listState,
         ) {
@@ -333,6 +414,7 @@ fun BlockNoteEditorScreen(
                         changed()
                     },
                     onEditListItem = { itemId, old, new -> session.editListItem(block.id, itemId, old, new); changed() },
+                    onEditTodoItem = { itemId, old, new -> session.editTodoItem(block.id, itemId, old, new); changed() },
                     onSplitListItem = { itemId, offset -> changed(session.splitListItem(block.id, itemId, offset)) },
                     onExitListItem = { itemId -> changed(session.exitEmptyListItem(block.id, itemId)) },
                     onMergeListItem = { itemId -> changed(session.mergeListItemWithPrevious(block.id, itemId)) },
@@ -365,6 +447,7 @@ fun BlockNoteEditorScreen(
                     onExtendRangeSelection = { rangeExtentId = block.id },
                     scrolling = listScrolling,
                     onEditChart = { chart -> chartBuilderRequest = ChartBuilderRequest(editingId = chart.id, initialSpec = chart.vegaLiteSpec) },
+                    onSelectionChange = { activeSelection = it },
                 )
             }
             if (editMode) {
@@ -377,6 +460,47 @@ fun BlockNoteEditorScreen(
                 }
             }
         }
+    }
+    if (editMode && activeSelection != null) {
+        FloatingFormattingToolbar(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 8.dp, vertical = 10.dp)
+                .zIndex(12f),
+            onInlineFormat = { action ->
+                when (action) {
+                    InlineFormatAction.Bold -> replaceActiveSelection { BoldInline(listOf(InlineText(it))) }
+                    InlineFormatAction.Italic -> replaceActiveSelection { ItalicInline(listOf(InlineText(it))) }
+                    InlineFormatAction.Strike -> replaceActiveSelection { StrikethroughInline(listOf(InlineText(it))) }
+                    InlineFormatAction.Code -> replaceActiveSelection(::CodeInline)
+                }
+            },
+            onLink = {
+                activeSelection?.let { selection ->
+                    linkEditorRequest = renderedDocument.linkEditorRequest(selection)
+                        ?: LinkEditorRequest(selection.start, selection.end, selection.text.ifBlank { "Link text" }, "https://")
+                }
+            },
+            onTurnInto = ::transformActiveBlock,
+            onInsert = { type ->
+                val anchor = activeSelection?.start?.blockId
+                if (type == InsertBlockType.Chart) chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
+                else changed(session.insertAfter(anchor, newDocumentBlock(type)))
+            },
+            onMove = { delta ->
+                val blockId = activeSelection?.start?.blockId
+                if (blockId != null) {
+                    val from = session.document.blocks.indexOfFirst { it.id == blockId }
+                    if (from >= 0) {
+                        session.move(blockId, (from + delta).coerceIn(0, session.document.blocks.lastIndex))
+                        changed(BlockCursor(blockId, activeSelection?.end?.offset ?: 0))
+                    }
+                }
+            },
+        )
+    }
     }
     chartBuilderRequest?.let { request ->
         ChartBuilderSheet(
@@ -393,6 +517,21 @@ fun BlockNoteEditorScreen(
             },
         )
     }
+    linkEditorRequest?.let { request ->
+        LinkEditorDialog(
+            request = request,
+            onDismiss = { linkEditorRequest = null },
+            onSave = { text, url ->
+                val cursor = session.replaceSelectionWithInline(
+                    request.start,
+                    request.end,
+                    LinkInline(url.trim(), listOf(InlineText(text.ifBlank { url.trim() }))),
+                )
+                changed(cursor)
+                linkEditorRequest = null
+            },
+        )
+    }
     }
 }
 
@@ -401,6 +540,284 @@ private data class ChartBuilderRequest(
     val editingId: String? = null,
     val initialSpec: String? = null,
 )
+
+private data class EditorSelection(
+    val start: BlockCursor,
+    val end: BlockCursor,
+    val text: String,
+)
+
+private data class LinkEditorRequest(
+    val start: BlockCursor,
+    val end: BlockCursor,
+    val text: String,
+    val url: String,
+)
+
+private enum class InlineFormatAction { Bold, Italic, Strike, Code }
+
+private enum class TextBlockTarget(val label: String) {
+    Paragraph("Paragraph"),
+    Heading1("Heading 1"),
+    Heading2("Heading 2"),
+    Heading3("Heading 3"),
+    Heading4("Heading 4"),
+    Heading5("Heading 5"),
+    Heading6("Heading 6"),
+    Bullet("Bullet list"),
+    Numbered("Numbered list"),
+    Checklist("Checklist"),
+    Quote("Quote"),
+    Code("Code block"),
+    Divider("Divider"),
+}
+
+@Composable
+private fun FloatingFormattingToolbar(
+    modifier: Modifier,
+    onInlineFormat: (InlineFormatAction) -> Unit,
+    onLink: () -> Unit,
+    onTurnInto: (TextBlockTarget) -> Unit,
+    onInsert: (InsertBlockType) -> Unit,
+    onMove: (Int) -> Unit,
+) {
+    var turnIntoOpen by remember { mutableStateOf(false) }
+    var overflowOpen by remember { mutableStateOf(false) }
+    var dragY by remember { mutableStateOf(0f) }
+    Surface(
+        modifier = modifier.fillMaxWidth().widthIn(max = 720.dp).focusProperties { canFocus = false },
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 8.dp,
+        shadowElevation = 10.dp,
+    ) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            item("drag") {
+                Icon(
+                    Icons.Outlined.DragIndicator,
+                    "Drag focused block up or down",
+                    Modifier
+                        .size(44.dp)
+                        .padding(10.dp)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = { dragY = 0f },
+                                onDragCancel = { dragY = 0f },
+                                onDragEnd = {
+                                    if (kotlin.math.abs(dragY) > 18f) onMove(if (dragY < 0f) -1 else 1)
+                                    dragY = 0f
+                                },
+                                onDrag = { change, amount -> change.consume(); dragY += amount.y },
+                            )
+                        },
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            item("turn-into") {
+                Box {
+                    ToolbarTextButton("T", "Turn into") { turnIntoOpen = true }
+                    DropdownMenu(expanded = turnIntoOpen, onDismissRequest = { turnIntoOpen = false }) {
+                        TextBlockTarget.entries.forEach { target ->
+                            DropdownMenuItem(
+                                text = { Text(target.label) },
+                                onClick = { turnIntoOpen = false; onTurnInto(target) },
+                            )
+                        }
+                    }
+                }
+            }
+            item("bold") { ToolbarTextButton("B", "Bold", FontWeight.Black) { onInlineFormat(InlineFormatAction.Bold) } }
+            item("italic") { ToolbarTextButton("I", "Italic", fontStyle = FontStyle.Italic) { onInlineFormat(InlineFormatAction.Italic) } }
+            item("strike") { ToolbarTextButton("S", "Strikethrough", textDecoration = TextDecoration.LineThrough) { onInlineFormat(InlineFormatAction.Strike) } }
+            item("code") { ToolbarTextButton("</>", "Inline code", fontFamily = FontFamily.Monospace) { onInlineFormat(InlineFormatAction.Code) } }
+            item("link") { ToolbarIconButton(Icons.Outlined.Link, "Link", onLink) }
+            item("bullet") { ToolbarIconButton(Icons.Outlined.FormatListBulleted, "Bullet list") { onTurnInto(TextBlockTarget.Bullet) } }
+            item("numbered") { ToolbarIconButton(Icons.Outlined.FormatListNumbered, "Numbered list") { onTurnInto(TextBlockTarget.Numbered) } }
+            item("checklist") { ToolbarIconButton(Icons.Outlined.CheckBox, "Checklist") { onTurnInto(TextBlockTarget.Checklist) } }
+            item("more") {
+                Box {
+                    ToolbarIconButton(Icons.Outlined.MoreVert, "More formatting") { overflowOpen = true }
+                    DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                        DropdownMenuItem(text = { Text("Quote") }, leadingIcon = { Icon(Icons.Outlined.FormatQuote, null) }, onClick = { overflowOpen = false; onTurnInto(TextBlockTarget.Quote) })
+                        DropdownMenuItem(text = { Text("Divider") }, leadingIcon = { Icon(Icons.Outlined.HorizontalRule, null) }, onClick = { overflowOpen = false; onTurnInto(TextBlockTarget.Divider) })
+                        DropdownMenuItem(text = { Text("Code block") }, leadingIcon = { Icon(Icons.Outlined.Code, null) }, onClick = { overflowOpen = false; onTurnInto(TextBlockTarget.Code) })
+                        DropdownMenuItem(text = { Text("Insert table") }, leadingIcon = { Icon(Icons.Outlined.TableChart, null) }, onClick = { overflowOpen = false; onInsert(InsertBlockType.Table) })
+                        DropdownMenuItem(text = { Text("Insert image") }, leadingIcon = { Icon(Icons.Outlined.Image, null) }, onClick = { overflowOpen = false; onInsert(InsertBlockType.Image) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolbarTextButton(
+    label: String,
+    description: String,
+    fontWeight: FontWeight = FontWeight.SemiBold,
+    fontStyle: FontStyle = FontStyle.Normal,
+    textDecoration: TextDecoration = TextDecoration.None,
+    fontFamily: FontFamily? = null,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.size(width = 44.dp, height = 40.dp).semantics { contentDescription = description },
+        shape = RoundedCornerShape(10.dp),
+        color = Color.Transparent,
+        onClick = onClick,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, fontWeight = fontWeight, fontStyle = fontStyle, textDecoration = textDecoration, fontFamily = fontFamily, fontSize = 14.sp)
+        }
+    }
+}
+
+@Composable
+private fun ToolbarIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
+        Icon(icon, description, Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun LinkEditorDialog(
+    request: LinkEditorRequest,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var text by remember(request) { mutableStateOf(request.text) }
+    var url by remember(request) { mutableStateOf(request.url) }
+    val valid = remember(url) { runCatching { Uri.parse(url.trim()) }.getOrNull()?.scheme in setOf("http", "https", "mailto") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit link") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Text") })
+                OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("URL") }, supportingText = { if (!valid) Text("Use http, https, or mailto") })
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { Button(onClick = { onSave(text, url) }, enabled = valid) { Text("Apply") } },
+    )
+}
+
+private fun DocumentBlock.convertTo(target: TextBlockTarget): DocumentBlock {
+    val inline = when (this) {
+        is ParagraphBlock -> content
+        is HeadingBlock -> content
+        is BulletListBlock -> items.joinListItemsToInlineLines()
+        is NumberedListBlock -> items.joinListItemsToInlineLines()
+        is TodoListBlock -> items.joinTodoItemsToInlineLines()
+        is QuoteBlock -> children.firstOrNull()?.editableInlineContent() ?: listOf(InlineText(plainText()))
+        is CodeBlock -> listOf(InlineText(code))
+        is DividerBlock -> emptyList()
+        else -> listOf(InlineText(plainText()))
+    }
+    val listItems = when (this) {
+        is BulletListBlock -> items
+        is NumberedListBlock -> items
+        is TodoListBlock -> items.map { ListItem(id = it.id, content = it.content) }
+        else -> listOf(ListItem(content = inline))
+    }.ifEmpty { listOf(ListItem()) }
+    val todoItems = when (this) {
+        is TodoListBlock -> items
+        is BulletListBlock -> items.map { TodoItem(id = it.id, content = it.content) }
+        is NumberedListBlock -> items.map { TodoItem(id = it.id, content = it.content) }
+        else -> listOf(TodoItem(content = inline))
+    }.ifEmpty { listOf(TodoItem()) }
+    return when (target) {
+        TextBlockTarget.Paragraph -> ParagraphBlock(id = id, content = inline)
+        TextBlockTarget.Heading1 -> HeadingBlock(id = id, level = 1, content = inline)
+        TextBlockTarget.Heading2 -> HeadingBlock(id = id, level = 2, content = inline)
+        TextBlockTarget.Heading3 -> HeadingBlock(id = id, level = 3, content = inline)
+        TextBlockTarget.Heading4 -> HeadingBlock(id = id, level = 4, content = inline)
+        TextBlockTarget.Heading5 -> HeadingBlock(id = id, level = 5, content = inline)
+        TextBlockTarget.Heading6 -> HeadingBlock(id = id, level = 6, content = inline)
+        TextBlockTarget.Bullet -> BulletListBlock(id = id, items = listItems)
+        TextBlockTarget.Numbered -> NumberedListBlock(id = id, items = listItems)
+        TextBlockTarget.Checklist -> TodoListBlock(id = id, items = todoItems)
+        TextBlockTarget.Quote -> QuoteBlock(id = id, children = listOf(ParagraphBlock(content = inline)))
+        TextBlockTarget.Code -> CodeBlock(id = id, code = inline.joinToString("") { it.plainText() })
+        TextBlockTarget.Divider -> DividerBlock(id = id)
+    }
+}
+
+private fun DocumentBlock.editableInlineContent(): List<InlineNode>? = when (this) {
+    is ParagraphBlock -> content
+    is HeadingBlock -> content
+    else -> null
+}
+
+private fun List<ListItem>.joinListItemsToInlineLines(): List<InlineNode> = buildList {
+    this@joinListItemsToInlineLines.forEachIndexed { index, item ->
+        if (index > 0) add(InlineText("\n"))
+        addAll(item.content)
+    }
+}
+
+private fun List<TodoItem>.joinTodoItemsToInlineLines(): List<InlineNode> = buildList {
+    this@joinTodoItemsToInlineLines.forEachIndexed { index, item ->
+        if (index > 0) add(InlineText("\n"))
+        addAll(item.content)
+    }
+}
+
+private fun BlockDocument.linkEditorRequest(selection: EditorSelection): LinkEditorRequest? {
+    if (selection.start.blockId != selection.end.blockId || selection.start.itemId != selection.end.itemId) return null
+    val block = blocks.firstOrNull { it.id == selection.start.blockId } ?: return null
+    val nodes = block.inlineContent(selection.start.itemId) ?: return null
+    val cursorStart = minOf(selection.start.offset, selection.end.offset)
+    val cursorEnd = maxOf(selection.start.offset, selection.end.offset)
+    return nodes.linkRanges().firstOrNull { range ->
+        if (cursorStart == cursorEnd) cursorStart in range.start..range.end else cursorStart < range.end && cursorEnd > range.start
+    }?.let { range ->
+        LinkEditorRequest(
+            start = BlockCursor(block.id, range.start, selection.start.itemId),
+            end = BlockCursor(block.id, range.end, selection.start.itemId),
+            text = range.link.children.joinToString("") { it.plainText() },
+            url = range.link.url,
+        )
+    }
+}
+
+private fun DocumentBlock.inlineContent(itemId: String?): List<InlineNode>? = when (this) {
+    is ParagraphBlock -> content.takeIf { itemId == null }
+    is HeadingBlock -> content.takeIf { itemId == null }
+    is BulletListBlock -> items.firstOrNull { it.id == itemId }?.content
+    is NumberedListBlock -> items.firstOrNull { it.id == itemId }?.content
+    is TodoListBlock -> items.firstOrNull { it.id == itemId }?.content
+    is QuoteBlock -> children.firstOrNull()?.editableInlineContent()?.takeIf { itemId == null }
+    else -> null
+}
+
+private data class LinkRange(val start: Int, val end: Int, val link: LinkInline)
+
+private fun List<InlineNode>.linkRanges(): List<LinkRange> {
+    val result = mutableListOf<LinkRange>()
+    var offset = 0
+    fun visit(nodes: List<InlineNode>) {
+        nodes.forEach { node ->
+            val start = offset
+            when (node) {
+                is BoldInline -> visit(node.children)
+                is ItalicInline -> visit(node.children)
+                is StrikethroughInline -> visit(node.children)
+                is LinkInline -> {
+                    visit(node.children)
+                    result += LinkRange(start, offset, node)
+                }
+                else -> offset += node.plainText().length
+            }
+        }
+    }
+    visit(this)
+    return result
+}
 
 @Composable
 private fun DocumentRangeToolbar(
@@ -444,6 +861,24 @@ private fun DocumentRangeToolbar(
 private enum class BlockSurfaceMode { View, Edit }
 private enum class InsertBlockType { Text, Heading, BulletList, NumberedList, TodoList, Quote, Callout, Divider, Code, Table, Image, File, Embed, Chart, Math, Mermaid }
 
+private fun DocumentBlock.renderModeOrNull(): BlockRenderMode? = when (this) {
+    is CodeBlock -> renderMode
+    is TableBlock -> renderMode
+    is ChartBlock -> renderMode
+    is MathBlock -> renderMode
+    is MermaidBlock -> renderMode
+    else -> null
+}
+
+private fun DocumentBlock.withRenderMode(mode: BlockRenderMode): DocumentBlock = when (this) {
+    is CodeBlock -> copy(renderMode = mode)
+    is TableBlock -> copy(renderMode = mode)
+    is ChartBlock -> copy(renderMode = mode)
+    is MathBlock -> copy(renderMode = mode)
+    is MermaidBlock -> copy(renderMode = mode)
+    else -> this
+}
+
 @Composable
 private fun BlockEditorHeader(
     title: String,
@@ -464,26 +899,53 @@ private fun BlockEditorHeader(
     onPin: () -> Unit,
     onLock: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
-        IconButton(onClick = onMenu) { Icon(Icons.Outlined.Menu, "Workspace") }
-        Column(Modifier.weight(1f)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+            IconButton(onClick = onMenu) { Icon(Icons.Outlined.Menu, "Workspace") }
             if (editMode) {
-                BasicTextField(title, onTitleChange, Modifier.fillMaxWidth(), singleLine = true, textStyle = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface), cursorBrush = SolidColor(MaterialTheme.colorScheme.primary))
+                BasicTextField(
+                    title,
+                    onTitleChange,
+                    Modifier.weight(1f).padding(horizontal = 4.dp),
+                    singleLine = true,
+                    textStyle = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                )
             } else {
-                Text(title, Modifier.fillMaxWidth(), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(title, Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2)
             }
-            Text(saveLabel, fontSize = 11.sp, color = if (saveLabel.startsWith("Saved")) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary)
         }
-        AnimatedContent(editMode, label = "editor-mode") { editing ->
-            if (editing) Row {
-                IconButton(onClick = onUndo, enabled = canUndo) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") }
-                IconButton(onClick = onRedo, enabled = canRedo) { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") }
-            } else IconButton(onClick = onToggleEdit) { Icon(Icons.Outlined.Edit, "Edit document") }
+        Box(Modifier.fillMaxWidth().height(48.dp)) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(end = 112.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AnimatedContent(editMode, label = "editor-mode") { editing ->
+                    if (editing) Row {
+                        IconButton(onClick = onUndo, enabled = canUndo) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") }
+                        IconButton(onClick = onRedo, enabled = canRedo) { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") }
+                    } else IconButton(onClick = onToggleEdit) { Icon(Icons.Outlined.Edit, "Edit document") }
+                }
+                IconButton(onClick = onStar) { Icon(Icons.Outlined.Star, "Star", tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                IconButton(onClick = onPin) { Icon(Icons.Outlined.PushPin, "Pin", tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                IconButton(onClick = onLock) { Icon(if (locked) Icons.Outlined.Lock else Icons.Outlined.LockOpen, "Lock") }
+            }
+            Surface(
+                modifier = Modifier.align(Alignment.CenterEnd).width(108.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = .96f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Text(
+                    saveLabel,
+                    Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    color = if (saveLabel.startsWith("Saved")) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                )
+            }
         }
-        IconButton(onClick = onStar) { Icon(Icons.Outlined.Star, "Star", tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
-        IconButton(onClick = onPin) { Icon(Icons.Outlined.PushPin, "Pin", tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
-        IconButton(onClick = onLock) { Icon(if (locked) Icons.Outlined.Lock else Icons.Outlined.LockOpen, "Lock") }
     }
 }
 
@@ -499,6 +961,7 @@ private fun SharedBlockRow(
     onEditText: (String, String) -> Unit,
     onReplaceInline: (Int, Int, InlineNode) -> Unit,
     onEditListItem: (String, String, String) -> Unit,
+    onEditTodoItem: (String, String, String) -> Unit,
     onSplitListItem: (String, Int) -> Unit,
     onExitListItem: (String) -> Unit,
     onMergeListItem: (String) -> Unit,
@@ -515,6 +978,7 @@ private fun SharedBlockRow(
     onExtendRangeSelection: () -> Unit,
     scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
+    onSelectionChange: (EditorSelection) -> Unit,
 ) {
     var menu by remember(block.id) { mutableStateOf(false) }
     var insertMenu by remember(block.id) { mutableStateOf(false) }
@@ -570,7 +1034,26 @@ private fun SharedBlockRow(
                 if (mode == BlockSurfaceMode.View) Modifier.combinedClickable(onClick = {}, onLongClick = { menu = true }) else Modifier,
             ),
         ) {
-            RenderBlock(block, mode, focus, onFocusConsumed, onReplace, onEditText, onReplaceInline, onEditListItem, onSplitListItem, onExitListItem, onMergeListItem, onSplit, onMerge, onInsert, scrolling, onEditChart)
+            RenderBlock(
+                block = block,
+                mode = mode,
+                focus = focus,
+                onFocusConsumed = onFocusConsumed,
+                onReplace = onReplace,
+                onEditText = onEditText,
+                onReplaceInline = onReplaceInline,
+                onEditListItem = onEditListItem,
+                onEditTodoItem = onEditTodoItem,
+                onSplitListItem = onSplitListItem,
+                onExitListItem = onExitListItem,
+                onMergeListItem = onMergeListItem,
+                onSplit = onSplit,
+                onMerge = onMerge,
+                onInsert = onInsert,
+                scrolling = scrolling,
+                onEditChart = onEditChart,
+                onSelectionChange = onSelectionChange,
+            )
             if (rangeSelectionActive && rangeSelectable) {
                 Box(Modifier.matchParentSize().clickable(onClick = onExtendRangeSelection))
             }
@@ -587,6 +1070,15 @@ private fun SharedBlockRow(
                     containerColor = menuContainer,
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
+                    block.renderModeOrNull()?.let { renderMode ->
+                        DropdownMenuItem(
+                            text = { Text(if (renderMode == BlockRenderMode.Render) "Show source" else "Render") },
+                            onClick = {
+                                menu = false
+                                onReplace(block.withRenderMode(if (renderMode == BlockRenderMode.Render) BlockRenderMode.Source else BlockRenderMode.Render))
+                            },
+                        )
+                    }
                     when (block) {
                         is ChartBlock -> DropdownMenuItem({ Text("Edit chart") }, onClick = { menu = false; onEditChart(block) })
                         is ImageBlock -> DropdownMenuItem({ Text("Cycle image layout") }, onClick = {
@@ -631,6 +1123,7 @@ private fun RenderBlock(
     onEditText: (String, String) -> Unit,
     onReplaceInline: (Int, Int, InlineNode) -> Unit,
     onEditListItem: (String, String, String) -> Unit,
+    onEditTodoItem: (String, String, String) -> Unit,
     onSplitListItem: (String, Int) -> Unit,
     onExitListItem: (String) -> Unit,
     onMergeListItem: (String) -> Unit,
@@ -639,10 +1132,11 @@ private fun RenderBlock(
     onInsert: (InsertBlockType) -> Unit,
     scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
+    onSelectionChange: (EditorSelection) -> Unit,
 ) {
     when (block) {
-        is ParagraphBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface))
-        is HeadingBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, TextStyle(fontSize = when (block.level) { 1 -> 30.sp; 2 -> 24.sp; else -> 20.sp }, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface))
+        is ParagraphBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface))
+        is HeadingBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = when (block.level) { 1 -> 30.sp; 2 -> 24.sp; else -> 20.sp }, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface))
         is BulletListBlock -> if (mode == BlockSurfaceMode.View) ListBlock(block.items.map { it.content }, "•") else EditableList(
             items = block.items,
             marker = { "•" },
@@ -652,6 +1146,8 @@ private fun RenderBlock(
             onSplit = onSplitListItem,
             onExit = onExitListItem,
             onMerge = onMergeListItem,
+            blockId = block.id,
+            onSelectionChange = onSelectionChange,
         )
         is NumberedListBlock -> if (mode == BlockSurfaceMode.View) ListBlock(block.items.map { it.content }, "1.") else EditableList(
             items = block.items,
@@ -662,11 +1158,33 @@ private fun RenderBlock(
             onSplit = onSplitListItem,
             onExit = onExitListItem,
             onMerge = onMergeListItem,
+            blockId = block.id,
+            onSelectionChange = onSelectionChange,
         )
-        is TodoListBlock -> if (mode == BlockSurfaceMode.View) Column { block.items.forEach { item -> Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(item.checked, {}); Text(rememberInlineAnnotated(item.content), Modifier.padding(vertical = 5.dp)) } } } else EditableTodos(block, onReplace, onInsert)
+        is TodoListBlock -> if (mode == BlockSurfaceMode.View) Column {
+            block.items.forEachIndexed { index, item ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(item.checked, { checked -> onReplace(block.copy(items = block.items.toMutableList().apply { this[index] = item.copy(checked = checked) })) })
+                    InlineRichText(item.content, Modifier.padding(vertical = 5.dp))
+                }
+            }
+        } else EditableTodos(block, onReplace, onInsert, onEditTodoItem, onSelectionChange)
         is QuoteBlock -> Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f), shape = RoundedCornerShape(8.dp)) {
-            if (mode == BlockSurfaceMode.Edit) SimpleBlockTextField(block.plainText(), { onReplace(block.copy(children = listOf(ParagraphBlock(content = listOf(InlineText(it)))))) }, Modifier.fillMaxWidth().border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)).padding(12.dp))
-            else Text(block.plainText(), Modifier.fillMaxWidth().border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)).padding(12.dp))
+            val content = block.children.firstOrNull()?.editableInlineContent() ?: listOf(InlineText(block.plainText()))
+            InlineTextBlock(
+                content = content,
+                id = block.id,
+                mode = mode,
+                focus = focus,
+                onFocusConsumed = onFocusConsumed,
+                onText = onEditText,
+                onReplaceInline = onReplaceInline,
+                onSplit = onSplit,
+                onMerge = onMerge,
+                onInsert = onInsert,
+                onSelectionChange = onSelectionChange,
+                style = TextStyle(fontSize = 16.sp, lineHeight = 25.sp, fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurface),
+            )
         }
         is CalloutBlock -> Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f), shape = RoundedCornerShape(10.dp)) { Column(Modifier.padding(12.dp)) {
             if (mode == BlockSurfaceMode.Edit) {
@@ -678,6 +1196,7 @@ private fun RenderBlock(
         is CodeBlock -> Column {
             if (mode == BlockSurfaceMode.Edit) SimpleLabeledBlockField("Language", block.language) { onReplace(block.copy(language = it.trim())) }
             EditableEngineCard(
+                blockId = block.id,
                 label = "Code${block.language.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()}",
                 source = block.code,
                 markdown = "```${block.language}\n${block.code}\n```",
@@ -687,15 +1206,38 @@ private fun RenderBlock(
                 onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
                 scrolling = scrolling,
                 nativeCode = true,
+                showSource = block.renderMode == BlockRenderMode.Source,
             )
         }
-        is TableBlock -> NativeTable(block, mode, onReplace)
+        is TableBlock -> if (block.renderMode == BlockRenderMode.Source) TableSourceBlock(block, mode, onReplace) else NativeTable(block, mode, onReplace)
         is ImageBlock -> EditableImageBlock(block, mode, onReplace)
         is FileBlock -> EditableFileBlock(block, mode, onReplace)
         is EmbedBlock -> EditableEmbedBlock(block, mode, onReplace)
         is ChartBlock -> EditableChartBlock(block, mode, scrolling, onReplace, onEditChart)
-        is MathBlock -> EditableEngineCard("Math", block.tex, "$$\n${block.tex}\n$$", mode, block.editorHeightDp, { onReplace(block.copy(tex = it)) }, { onReplace(block.copy(editorHeightDp = it)) }, scrolling)
-        is MermaidBlock -> EditableEngineCard("Diagram", block.code, "```mermaid\n${block.code}\n```", mode, block.editorHeightDp, { onReplace(block.copy(code = it)) }, { onReplace(block.copy(editorHeightDp = it)) }, scrolling)
+        is MathBlock -> EditableEngineCard(
+            blockId = block.id,
+            label = "Math",
+            source = block.tex,
+            markdown = "$$\n${block.tex}\n$$",
+            mode = mode,
+            editorHeightDp = block.editorHeightDp,
+            onSourceChange = { onReplace(block.copy(tex = it)) },
+            onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
+            scrolling = scrolling,
+            showSource = block.renderMode == BlockRenderMode.Source,
+        )
+        is MermaidBlock -> EditableEngineCard(
+            blockId = block.id,
+            label = "Diagram",
+            source = block.code,
+            markdown = "```mermaid\n${block.code}\n```",
+            mode = mode,
+            editorHeightDp = block.editorHeightDp,
+            onSourceChange = { onReplace(block.copy(code = it)) },
+            onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
+            scrolling = scrolling,
+            showSource = block.renderMode == BlockRenderMode.Source,
+        )
     }
 }
 
@@ -711,41 +1253,73 @@ private fun InlineTextBlock(
     onSplit: (Int) -> Unit,
     onMerge: () -> Unit,
     onInsert: (InsertBlockType) -> Unit,
+    onSelectionChange: (EditorSelection) -> Unit,
     style: TextStyle,
 ) {
     val plain = content.joinToString("") { it.plainText() }
     val emojiMap = LocalEmojiShortcodes.current
     if (mode == BlockSurfaceMode.View) {
-        val singlePlainText = (content.singleOrNull() as? InlineText)?.value
-        if (singlePlainText != null) {
-            val displayText = remember(singlePlainText, emojiMap) { expandEmojiShortcodes(singlePlainText, emojiMap) }
-            Text(displayText, Modifier.fillMaxWidth().padding(vertical = 7.dp), style = style)
-        } else {
-            val annotated = rememberInlineAnnotated(content)
-            Text(annotated, Modifier.fillMaxWidth().padding(vertical = 7.dp), style = style)
-        }
+        InlineRichText(content, Modifier.fillMaxWidth().padding(vertical = 7.dp), style)
     } else {
         var value by remember(id) { mutableStateOf(TextFieldValue(plain)) }
         var slashMenu by remember(id) { mutableStateOf(false) }
         var slashOffset by remember(id) { mutableIntStateOf(-1) }
         var slashQuery by remember(id) { mutableStateOf("") }
+        var focused by remember(id) { mutableStateOf(false) }
+        var textLayout by remember(id) { mutableStateOf<TextLayoutResult?>(null) }
         val requester = remember(id) { FocusRequester() }
         val bringIntoView = remember(id) { BringIntoViewRequester() }
-        LaunchedEffect(plain) {
-            if (plain != value.text) {
+        val editingVisual = rememberInlineEditingTransformation(content)
+
+        fun publishSelection(field: TextFieldValue = value) {
+            val start = minOf(field.selection.start, field.selection.end).coerceIn(0, field.text.length)
+            val end = maxOf(field.selection.start, field.selection.end).coerceIn(start, field.text.length)
+            onSelectionChange(
+                EditorSelection(
+                    start = BlockCursor(id, start),
+                    end = BlockCursor(id, end),
+                    text = field.text.substring(start, end),
+                ),
+            )
+        }
+
+        LaunchedEffect(plain, focused) {
+            if (!focused && value.composition == null && plain != value.text) {
                 value = value.copy(
                     text = plain,
-                    selection = TextRange(value.selection.start.coerceAtMost(plain.length)),
+                    selection = TextRange(
+                        value.selection.start.coerceAtMost(plain.length),
+                        value.selection.end.coerceAtMost(plain.length),
+                    ),
+                    composition = null,
                 )
             }
         }
         LaunchedEffect(focus) {
             focus ?: return@LaunchedEffect
+            if (plain != value.text && value.composition == null) {
+                value = TextFieldValue(plain, selection = TextRange(focus.offset.coerceIn(0, plain.length)))
+            }
             value = value.copy(selection = TextRange(focus.offset.coerceIn(0, value.text.length)))
             requester.requestFocus()
             delay(60)
             bringIntoView.bringIntoView()
+            publishSelection()
             onFocusConsumed()
+        }
+        LaunchedEffect(value.text, value.selection, textLayout, focused) {
+            if (!focused) return@LaunchedEffect
+            val layout = textLayout ?: return@LaunchedEffect
+            val cursor = value.selection.end.coerceIn(0, value.text.length)
+            val rect = layout.getCursorRect(cursor)
+            bringIntoView.bringIntoView(
+                Rect(
+                    left = (rect.left - 12f).coerceAtLeast(0f),
+                    top = (rect.top - 20f).coerceAtLeast(0f),
+                    right = rect.right + 12f,
+                    bottom = rect.bottom + 48f,
+                ),
+            )
         }
         Box {
             BasicTextField(
@@ -753,17 +1327,29 @@ private fun InlineTextBlock(
                 onValueChange = { changed ->
                     val previous = value
                     val emoji = detectLiveEmoji(previous, changed, emojiMap)
+                    val pastedLink = detectUrlPaste(previous, changed)
                     val insertion = if (changed.text.length == previous.text.length + 1) {
                         previous.text.indices.firstOrNull { previous.text[it] != changed.text[it] } ?: previous.text.length
                     } else -1
                     val newline = insertion.takeIf { it >= 0 && changed.text.getOrNull(it) == '\n' }
                     when {
+                        pastedLink != null -> {
+                            val selectedText = previous.text.substring(pastedLink.start, pastedLink.end)
+                            value = previous.copy(selection = TextRange(pastedLink.end))
+                            onReplaceInline(
+                                pastedLink.start,
+                                pastedLink.end,
+                                LinkInline(pastedLink.url, listOf(InlineText(selectedText))),
+                            )
+                            publishSelection(value)
+                        }
                         emoji != null -> {
                             value = emoji.value
                             slashMenu = false
                             slashOffset = -1
                             slashQuery = ""
                             onReplaceInline(emoji.start, emoji.oldEnd, EmojiInline(emoji.source, emoji.unicode))
+                            publishSelection(value)
                         }
                         newline != null -> onSplit(newline)
                         insertion >= 0 && changed.text.getOrNull(insertion) == '/' -> {
@@ -771,11 +1357,13 @@ private fun InlineTextBlock(
                             slashQuery = ""
                             value = changed
                             onText(previous.text, changed.text)
+                            publishSelection(changed)
                             slashMenu = true
                         }
                         else -> {
                             value = changed
                             onText(previous.text, changed.text)
+                            publishSelection(changed)
                             if (slashMenu && slashOffset >= 0) {
                                 val commandStart = (slashOffset + 1).coerceAtMost(changed.text.length)
                                 val end = changed.selection.start.coerceIn(commandStart, changed.text.length)
@@ -790,8 +1378,19 @@ private fun InlineTextBlock(
                     }
                 },
                 textStyle = style,
+                visualTransformation = editingVisual,
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp).focusRequester(requester).bringIntoViewRequester(bringIntoView).onPreviewKeyEvent { event ->
+                onTextLayout = { textLayout = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 7.dp)
+                    .focusRequester(requester)
+                    .bringIntoViewRequester(bringIntoView)
+                    .onFocusChanged {
+                        focused = it.isFocused
+                        if (it.isFocused) publishSelection()
+                    }
+                    .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.Backspace && value.selection.collapsed) {
                         val emoji = findEmojiEndingAt(content, value.selection.start)
                         when {
@@ -800,6 +1399,7 @@ private fun InlineTextBlock(
                                 val restored = previous.text.replaceRange(emoji.start, emoji.end, emoji.node.shortcode)
                                 value = TextFieldValue(restored, selection = TextRange(emoji.start + emoji.node.shortcode.length))
                                 onText(previous.text, restored)
+                                publishSelection(value)
                                 true
                             }
                             value.selection.start == 0 -> { onMerge(); true }
@@ -833,8 +1433,32 @@ private fun InlineTextBlock(
     }
 }
 
-@Composable private fun ListBlock(items: List<List<InlineNode>>, marker: String) {
-    Column { items.forEachIndexed { index, item -> Row(Modifier.padding(vertical = 4.dp)) { Text(if (marker == "1.") "${index + 1}." else marker, Modifier.width(28.dp), color = MaterialTheme.colorScheme.primary); Text(rememberInlineAnnotated(item)) } } }
+private data class UrlPaste(val start: Int, val end: Int, val url: String)
+
+private fun detectUrlPaste(previous: TextFieldValue, changed: TextFieldValue): UrlPaste? {
+    if (previous.selection.collapsed) return null
+    val start = minOf(previous.selection.start, previous.selection.end).coerceIn(0, previous.text.length)
+    val end = maxOf(previous.selection.start, previous.selection.end).coerceIn(start, previous.text.length)
+    val prefix = previous.text.substring(0, start)
+    val suffix = previous.text.substring(end)
+    if (!changed.text.startsWith(prefix) || !changed.text.endsWith(suffix)) return null
+    val insertedEnd = changed.text.length - suffix.length
+    if (insertedEnd < start) return null
+    val candidate = changed.text.substring(start, insertedEnd).trim()
+    val uri = runCatching { Uri.parse(candidate) }.getOrNull() ?: return null
+    return if (uri.scheme in setOf("http", "https") && !uri.host.isNullOrBlank()) UrlPaste(start, end, candidate) else null
+}
+
+@Composable
+private fun ListBlock(items: List<List<InlineNode>>, marker: String) {
+    Column {
+        items.forEachIndexed { index, item ->
+            Row(Modifier.padding(vertical = 4.dp)) {
+                Text(if (marker == "1.") "${index + 1}." else marker, Modifier.width(28.dp), color = MaterialTheme.colorScheme.primary)
+                InlineRichText(item)
+            }
+        }
+    }
 }
 
 @Composable
@@ -845,29 +1469,33 @@ private fun EditableChartBlock(
     onReplace: (DocumentBlock) -> Unit,
     onEditChart: (ChartBlock) -> Unit,
 ) {
-    var advanced by remember(block.id) { mutableStateOf(false) }
     Column {
         if (mode == BlockSurfaceMode.Edit) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Button(onClick = { onEditChart(block) }) { Text("Edit chart") }
-                TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide advanced" else "Advanced source") }
+                TextButton(onClick = {
+                    onReplace(block.copy(renderMode = if (block.renderMode == BlockRenderMode.Source) BlockRenderMode.Render else BlockRenderMode.Source))
+                }) { Text(if (block.renderMode == BlockRenderMode.Source) "Render" else "Advanced") }
             }
         }
         EditableEngineCard(
+            blockId = block.id,
             label = "Chart",
             source = block.vegaLiteSpec,
             markdown = "```vega-lite\n${block.vegaLiteSpec}\n```",
-            mode = if (mode == BlockSurfaceMode.Edit && advanced) BlockSurfaceMode.Edit else BlockSurfaceMode.View,
+            mode = mode,
             editorHeightDp = block.editorHeightDp,
             onSourceChange = { onReplace(block.copy(vegaLiteSpec = it)) },
             onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
             scrolling = scrolling,
+            showSource = block.renderMode == BlockRenderMode.Source,
         )
     }
 }
 
 @Composable
 private fun EditableList(
+    blockId: String,
     items: List<com.norfold.app.domain.ListItem>,
     marker: (Int) -> String,
     focus: BlockCursor?,
@@ -876,11 +1504,13 @@ private fun EditableList(
     onSplit: (String, Int) -> Unit,
     onExit: (String) -> Unit,
     onMerge: (String) -> Unit,
+    onSelectionChange: (EditorSelection) -> Unit,
 ) {
     Column {
         items.forEachIndexed { index, item ->
             EditableListItem(
                 item = item,
+                blockId = blockId,
                 marker = marker(index),
                 focus = focus?.takeIf { it.itemId == item.id },
                 onFocusConsumed = onFocusConsumed,
@@ -888,6 +1518,7 @@ private fun EditableList(
                 onSplit = { offset -> onSplit(item.id, offset) },
                 onExit = { onExit(item.id) },
                 onMerge = { onMerge(item.id) },
+                onSelectionChange = onSelectionChange,
             )
         }
     }
@@ -896,6 +1527,7 @@ private fun EditableList(
 @Composable
 private fun EditableListItem(
     item: com.norfold.app.domain.ListItem,
+    blockId: String,
     marker: String,
     focus: BlockCursor?,
     onFocusConsumed: () -> Unit,
@@ -903,13 +1535,30 @@ private fun EditableListItem(
     onSplit: (Int) -> Unit,
     onExit: () -> Unit,
     onMerge: () -> Unit,
+    onSelectionChange: (EditorSelection) -> Unit,
 ) {
     val plain = item.content.joinToString("") { it.plainText() }
     var value by remember(item.id) { mutableStateOf(TextFieldValue(plain)) }
+    var focused by remember(item.id) { mutableStateOf(false) }
+    var textLayout by remember(item.id) { mutableStateOf<TextLayoutResult?>(null) }
     val requester = remember(item.id) { FocusRequester() }
     val bringIntoView = remember(item.id) { BringIntoViewRequester() }
-    LaunchedEffect(plain) {
-        if (plain != value.text) value = value.copy(text = plain, selection = TextRange(value.selection.start.coerceAtMost(plain.length)))
+    val editingVisual = rememberInlineEditingTransformation(item.content)
+
+    fun publishSelection(field: TextFieldValue = value) {
+        val start = minOf(field.selection.start, field.selection.end).coerceIn(0, field.text.length)
+        val end = maxOf(field.selection.start, field.selection.end).coerceIn(start, field.text.length)
+        onSelectionChange(EditorSelection(BlockCursor(blockId, start, item.id), BlockCursor(blockId, end, item.id), field.text.substring(start, end)))
+    }
+
+    LaunchedEffect(plain, focused) {
+        if (!focused && value.composition == null && plain != value.text) {
+            value = value.copy(
+                text = plain,
+                selection = TextRange(value.selection.start.coerceAtMost(plain.length), value.selection.end.coerceAtMost(plain.length)),
+                composition = null,
+            )
+        }
     }
     LaunchedEffect(focus) {
         focus ?: return@LaunchedEffect
@@ -917,7 +1566,14 @@ private fun EditableListItem(
         requester.requestFocus()
         delay(60)
         bringIntoView.bringIntoView()
+        publishSelection()
         onFocusConsumed()
+    }
+    LaunchedEffect(value.text, value.selection, textLayout, focused) {
+        if (!focused) return@LaunchedEffect
+        val layout = textLayout ?: return@LaunchedEffect
+        val rect = layout.getCursorRect(value.selection.end.coerceIn(0, value.text.length))
+        bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + 48f))
     }
     Row(verticalAlignment = Alignment.Top) {
         Text(marker, Modifier.width(28.dp).padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
@@ -932,12 +1588,21 @@ private fun EditableListItem(
                     else -> {
                         value = changed
                         onChange(previous.text, changed.text)
+                        publishSelection(changed)
                     }
                 }
             },
             textStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, color = MaterialTheme.colorScheme.onSurface),
+            visualTransformation = editingVisual,
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.weight(1f).padding(vertical = 7.dp).focusRequester(requester).bringIntoViewRequester(bringIntoView).onPreviewKeyEvent { event ->
+            onTextLayout = { textLayout = it },
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 7.dp)
+                .focusRequester(requester)
+                .bringIntoViewRequester(bringIntoView)
+                .onFocusChanged { focused = it.isFocused; if (it.isFocused) publishSelection() }
+                .onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Backspace && value.selection.collapsed && value.selection.start == 0) {
                     if (value.text.isBlank()) onExit() else onMerge()
                     true
@@ -948,7 +1613,13 @@ private fun EditableListItem(
 }
 
 @Composable
-private fun EditableTodos(block: TodoListBlock, onReplace: (DocumentBlock) -> Unit, onInsert: (InsertBlockType) -> Unit) {
+private fun EditableTodos(
+    block: TodoListBlock,
+    onReplace: (DocumentBlock) -> Unit,
+    onInsert: (InsertBlockType) -> Unit,
+    onEditTodoItem: (String, String, String) -> Unit,
+    onSelectionChange: (EditorSelection) -> Unit,
+) {
     var focusItemId by remember(block.id) { mutableStateOf<String?>(null) }
     Column {
         block.items.forEachIndexed { index, item ->
@@ -957,10 +1628,14 @@ private fun EditableTodos(block: TodoListBlock, onReplace: (DocumentBlock) -> Un
                 Checkbox(item.checked, { checked -> onReplace(block.copy(items = block.items.toMutableList().apply { this[index] = item.copy(checked = checked) })) })
                 TodoItemTextField(
                     modifier = Modifier.weight(1f),
+                    blockId = block.id,
+                    itemId = item.id,
+                    content = item.content,
                     text = text,
                     requestFocus = focusItemId == item.id,
                     onFocusConsumed = { focusItemId = null },
-                    onChange = { changed -> onReplace(block.copy(items = block.items.toMutableList().apply { this[index] = item.copy(content = listOf(InlineText(changed))) })) },
+                    onChange = { old, changed -> onEditTodoItem(item.id, old, changed) },
+                    onSelectionChange = onSelectionChange,
                     onEnter = { offset ->
                         if (text.isBlank()) {
                             if (block.items.size == 1) onReplace(ParagraphBlock(id = block.id))
@@ -996,31 +1671,67 @@ private fun EditableTodos(block: TodoListBlock, onReplace: (DocumentBlock) -> Un
 @Composable
 private fun TodoItemTextField(
     modifier: Modifier,
+    blockId: String,
+    itemId: String,
+    content: List<InlineNode>,
     text: String,
     requestFocus: Boolean,
     onFocusConsumed: () -> Unit,
-    onChange: (String) -> Unit,
+    onChange: (String, String) -> Unit,
+    onSelectionChange: (EditorSelection) -> Unit,
     onEnter: (Int) -> Unit,
     onBackspaceAtStart: () -> Unit,
 ) {
     var value by remember { mutableStateOf(TextFieldValue(text)) }
+    var focused by remember(itemId) { mutableStateOf(false) }
+    var textLayout by remember(itemId) { mutableStateOf<TextLayoutResult?>(null) }
     val requester = remember { FocusRequester() }
     val bringIntoView = remember { BringIntoViewRequester() }
-    LaunchedEffect(text) { if (text != value.text) value = value.copy(text = text, selection = TextRange(value.selection.start.coerceAtMost(text.length))) }
+    val editingVisual = rememberInlineEditingTransformation(content)
+
+    fun publishSelection(field: TextFieldValue = value) {
+        val start = minOf(field.selection.start, field.selection.end).coerceIn(0, field.text.length)
+        val end = maxOf(field.selection.start, field.selection.end).coerceIn(start, field.text.length)
+        onSelectionChange(EditorSelection(BlockCursor(blockId, start, itemId), BlockCursor(blockId, end, itemId), field.text.substring(start, end)))
+    }
+
+    LaunchedEffect(text, focused) {
+        if (!focused && value.composition == null && text != value.text) {
+            value = value.copy(text = text, selection = TextRange(value.selection.start.coerceAtMost(text.length), value.selection.end.coerceAtMost(text.length)), composition = null)
+        }
+    }
     LaunchedEffect(requestFocus) {
         if (requestFocus) {
-            requester.requestFocus(); delay(60); bringIntoView.bringIntoView(); onFocusConsumed()
+            requester.requestFocus(); delay(60); bringIntoView.bringIntoView(); publishSelection(); onFocusConsumed()
         }
+    }
+    LaunchedEffect(value.text, value.selection, textLayout, focused) {
+        if (!focused) return@LaunchedEffect
+        val layout = textLayout ?: return@LaunchedEffect
+        val rect = layout.getCursorRect(value.selection.end.coerceIn(0, value.text.length))
+        bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + 48f))
     }
     BasicTextField(
         value = value,
         onValueChange = { changed ->
             val newline = changed.text.indexOf('\n')
-            if (newline >= 0) onEnter(newline) else { value = changed; onChange(changed.text) }
+            if (newline >= 0) onEnter(newline) else {
+                val previous = value
+                value = changed
+                onChange(previous.text, changed.text)
+                publishSelection(changed)
+            }
         },
         textStyle = TextStyle(fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface),
+        visualTransformation = editingVisual,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        modifier = modifier.padding(vertical = 7.dp).focusRequester(requester).bringIntoViewRequester(bringIntoView).onPreviewKeyEvent { event ->
+        onTextLayout = { textLayout = it },
+        modifier = modifier
+            .padding(vertical = 7.dp)
+            .focusRequester(requester)
+            .bringIntoViewRequester(bringIntoView)
+            .onFocusChanged { focused = it.isFocused; if (it.isFocused) publishSelection() }
+            .onPreviewKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.key == Key.Backspace && value.selection.collapsed && value.selection.start == 0) { onBackspaceAtStart(); true } else false
         },
     )
@@ -1056,6 +1767,7 @@ private fun SimpleLabeledBlockField(label: String, text: String, onChange: (Stri
 
 @Composable
 private fun EditableEngineCard(
+    blockId: String,
     label: String,
     source: String,
     markdown: String,
@@ -1065,12 +1777,13 @@ private fun EditableEngineCard(
     onHeightChange: (Float) -> Unit,
     scrolling: Boolean,
     nativeCode: Boolean = false,
+    showSource: Boolean = false,
 ) {
-    var hidden by remember(label) { mutableStateOf(false) }
-    var fullScreen by rememberSaveable(label) { mutableStateOf(false) }
-    var landscape by rememberSaveable(label) { mutableStateOf(false) }
-    var liveHeight by remember(label) { mutableStateOf(editorHeightDp.coerceIn(96f, 420f)) }
-    var resizing by remember(label) { mutableStateOf(false) }
+    var hidden by remember(blockId) { mutableStateOf(false) }
+    var fullScreen by rememberSaveable(blockId) { mutableStateOf(false) }
+    var landscape by rememberSaveable(blockId) { mutableStateOf(false) }
+    var liveHeight by remember(blockId) { mutableStateOf(editorHeightDp.coerceIn(96f, 420f)) }
+    var resizing by remember(blockId) { mutableStateOf(false) }
     val density = LocalDensity.current
     val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
     val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
@@ -1084,33 +1797,56 @@ private fun EditableEngineCard(
                 IconButton(onClick = { landscape = true; fullScreen = true }) { Icon(Icons.Outlined.ScreenRotation, "Landscape") }
             }
             if (!hidden) {
-                if (mode == BlockSurfaceMode.Edit) {
-                    Box {
-                        var value by remember(label) { mutableStateOf(TextFieldValue(source)) }
-                        LaunchedEffect(source) { if (source != value.text) value = value.copy(text = source, selection = TextRange(value.selection.start.coerceAtMost(source.length))) }
+                if (showSource) {
+                    Column {
+                        var value by remember(blockId) { mutableStateOf(TextFieldValue(source)) }
+                        var focused by remember(blockId) { mutableStateOf(false) }
+                        LaunchedEffect(source, focused) {
+                            if (!focused && value.composition == null && source != value.text) {
+                                value = value.copy(text = source, selection = TextRange(value.selection.start.coerceAtMost(source.length), value.selection.end.coerceAtMost(source.length)), composition = null)
+                            }
+                        }
                         BasicTextField(
                             value = value,
-                            onValueChange = { value = it; onSourceChange(it.text) },
-                            modifier = Modifier.fillMaxWidth().height(liveHeight.dp).verticalScroll(rememberScrollState()).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f)).padding(12.dp),
+                            onValueChange = { changed -> if (mode == BlockSurfaceMode.Edit) { value = changed; onSourceChange(changed.text) } },
+                            readOnly = mode == BlockSurfaceMode.View,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(liveHeight.dp)
+                                .verticalScroll(rememberScrollState())
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f))
+                                .padding(12.dp)
+                                .onFocusChanged { focused = it.isFocused },
                             textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurface),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         )
-                        Icon(
-                            Icons.Outlined.DragIndicator,
-                            "Resize block",
-                            Modifier.align(Alignment.BottomEnd).size(28.dp).pointerInput(label) {
-                                detectDragGestures(
-                                    onDragStart = { resizing = true },
-                                    onDragCancel = { resizing = false; liveHeight = editorHeightDp.coerceIn(96f, 420f) },
-                                    onDragEnd = { resizing = false; onHeightChange(liveHeight) },
-                                    onDrag = { change, amount ->
-                                        change.consume()
-                                        liveHeight = (liveHeight + with(density) { amount.y.toDp().value }).coerceIn(96f, 420f)
+                        if (mode == BlockSurfaceMode.Edit) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(30.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .22f)),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.DragIndicator,
+                                    "Resize block",
+                                    Modifier.size(30.dp).padding(3.dp).pointerInput(blockId) {
+                                        detectDragGestures(
+                                            onDragStart = { resizing = true },
+                                            onDragCancel = { resizing = false; liveHeight = editorHeightDp.coerceIn(96f, 420f) },
+                                            onDragEnd = { resizing = false; onHeightChange(liveHeight) },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                liveHeight = (liveHeight + with(density) { amount.y.toDp().value }).coerceIn(96f, 420f)
+                                            },
+                                        )
                                     },
+                                    tint = MaterialTheme.colorScheme.primary,
                                 )
-                            },
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
+                            }
+                        }
                     }
                 } else if (nativeCode) {
                     NativeCodeSurface(source)
@@ -1161,13 +1897,7 @@ private fun EngineFullscreenDialog(
     nativeCode: String? = null,
     onDismiss: () -> Unit,
 ) {
-    val activity = LocalContext.current.findActivity()
-    DisposableEffect(activity, landscape) {
-        if (landscape) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        onDispose {
-            if (landscape) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
-    }
+    StableLandscapeOrientationEffect(landscape)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -1212,6 +1942,62 @@ private fun DeferredEnginePreview(markdown: String, accentHex: String, scrolling
         Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) {
             Text("Rendering…", Modifier.padding(horizontal = 12.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun TableSourceBlock(
+    table: TableBlock,
+    mode: BlockSurfaceMode,
+    onReplace: (DocumentBlock) -> Unit,
+) {
+    val source = remember(table.headers, table.rows, table.columnAlignments) {
+        MarkdownBlockCodec.export(BlockDocument(listOf(table)))
+    }
+    var value by remember(table.id) { mutableStateOf(TextFieldValue(source)) }
+    var focused by remember(table.id) { mutableStateOf(false) }
+    LaunchedEffect(source, focused) {
+        if (!focused && value.composition == null && source != value.text) {
+            value = value.copy(
+                text = source,
+                selection = TextRange(value.selection.start.coerceAtMost(source.length), value.selection.end.coerceAtMost(source.length)),
+                composition = null,
+            )
+        }
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .35f),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = { changed ->
+                if (mode != BlockSurfaceMode.Edit) return@BasicTextField
+                value = changed
+                val parsed = runCatching { MarkdownBlockCodec.import(changed.text).blocks.singleOrNull() as? TableBlock }.getOrNull()
+                if (parsed != null) {
+                    onReplace(
+                        parsed.copy(
+                            id = table.id,
+                            columnWidthsDp = table.columnWidthsDp,
+                            columnAlignments = table.columnAlignments,
+                            renderMode = BlockRenderMode.Source,
+                        ),
+                    )
+                }
+            },
+            readOnly = mode == BlockSurfaceMode.View,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 120.dp, max = 360.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp)
+                .onFocusChanged { focused = it.isFocused },
+            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        )
     }
 }
 
@@ -1514,13 +2300,7 @@ private fun MediaFullscreenDialog(
     landscape: Boolean,
     onDismiss: () -> Unit,
 ) {
-    val activity = LocalContext.current.findActivity()
-    DisposableEffect(activity, landscape) {
-        if (landscape) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        onDispose {
-            if (landscape) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
-    }
+    StableLandscapeOrientationEffect(landscape)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -1573,6 +2353,12 @@ private fun EditableEmbedBlock(block: EmbedBlock, mode: BlockSurfaceMode, onRepl
     var fullScreen by rememberSaveable(block.id) { mutableStateOf(false) }
     var landscape by rememberSaveable(block.id) { mutableStateOf(false) }
     var attemptedUrl by remember(block.id) { mutableStateOf("") }
+    var liveHeight by remember(block.id) { mutableStateOf(block.displayHeightDp.coerceIn(88f, 420f)) }
+    var resizing by remember(block.id) { mutableStateOf(false) }
+    val density = LocalDensity.current
+    LaunchedEffect(block.displayHeightDp) {
+        if (!resizing) liveHeight = block.displayHeightDp.coerceIn(88f, 420f)
+    }
     LaunchedEffect(block.url) {
         if (block.url.startsWith("http") && attemptedUrl != block.url) {
             attemptedUrl = block.url
@@ -1588,7 +2374,37 @@ private fun EditableEmbedBlock(block: EmbedBlock, mode: BlockSurfaceMode, onRepl
             IconButton(onClick = { landscape = true; fullScreen = true }, enabled = block.url.isNotBlank()) { Icon(Icons.Outlined.ScreenRotation, "Landscape embed") }
         }
         if (mode == BlockSurfaceMode.Edit) SimpleLabeledBlockField("Embed URL", block.url) { onReplace(block.copy(url = it, metadata = if (it == block.url) block.metadata else com.norfold.app.domain.EmbedMetadata())) }
-        if (!hidden && block.url.isNotBlank()) EmbedCard(block)
+        if (!hidden && block.url.isNotBlank()) {
+            Column {
+                Box(Modifier.fillMaxWidth().height(liveHeight.dp)) {
+                    EmbedCard(block, Modifier.fillMaxSize())
+                }
+                if (mode == BlockSurfaceMode.Edit) {
+                    Row(
+                        Modifier.fillMaxWidth().height(30.dp).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .22f)),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Outlined.DragIndicator,
+                            "Resize embed",
+                            Modifier.size(30.dp).padding(3.dp).pointerInput(block.id) {
+                                detectDragGestures(
+                                    onDragStart = { resizing = true },
+                                    onDragCancel = { resizing = false; liveHeight = block.displayHeightDp.coerceIn(88f, 420f) },
+                                    onDragEnd = { resizing = false; onReplace(block.copy(displayHeightDp = liveHeight)) },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        liveHeight = (liveHeight + with(density) { amount.y.toDp().value }).coerceIn(88f, 420f)
+                                    },
+                                )
+                            },
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        }
     }
     if (fullScreen && block.url.isNotBlank()) {
         EmbedFullscreenDialog(block, landscape) { fullScreen = false; landscape = false }
@@ -1597,13 +2413,7 @@ private fun EditableEmbedBlock(block: EmbedBlock, mode: BlockSurfaceMode, onRepl
 
 @Composable
 private fun EmbedFullscreenDialog(embed: EmbedBlock, landscape: Boolean, onDismiss: () -> Unit) {
-    val activity = LocalContext.current.findActivity()
-    DisposableEffect(activity, landscape) {
-        if (landscape) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        onDispose {
-            if (landscape) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
-    }
+    StableLandscapeOrientationEffect(landscape)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -1619,10 +2429,29 @@ private fun EmbedFullscreenDialog(embed: EmbedBlock, landscape: Boolean, onDismi
     }
 }
 
-@Composable private fun EmbedCard(embed: EmbedBlock) {
+@Composable
+private fun StableLandscapeOrientationEffect(enabled: Boolean) {
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(activity, enabled) {
+        if (enabled && activity?.requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+        }
+        onDispose {
+            if (
+                enabled &&
+                activity?.isChangingConfigurations == false &&
+                activity.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+            ) {
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
+}
+
+@Composable private fun EmbedCard(embed: EmbedBlock, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    Surface(Modifier.fillMaxWidth().clickable { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(embed.url))) } }, shape = RoundedCornerShape(9.dp), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Surface(modifier.fillMaxWidth().clickable { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(embed.url))) } }, shape = RoundedCornerShape(9.dp), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Row(Modifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             val favicon = embed.metadata.faviconPath?.let(::File)?.takeIf(File::isFile)
             Surface(Modifier.size(38.dp), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primaryContainer) {
                 Box(contentAlignment = Alignment.Center) {
@@ -1689,14 +2518,14 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is QuoteBlock -> QuoteBlock(children = block.children)
     is CalloutBlock -> CalloutBlock(tone = block.tone, title = block.title, children = block.children)
     is DividerBlock -> DividerBlock()
-    is CodeBlock -> CodeBlock(language = block.language, code = block.code, editorHeightDp = block.editorHeightDp)
-    is TableBlock -> TableBlock(headers = block.headers, rows = block.rows, columnWidthsDp = block.columnWidthsDp, columnAlignments = block.columnAlignments)
+    is CodeBlock -> CodeBlock(language = block.language, code = block.code, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
+    is TableBlock -> TableBlock(headers = block.headers, rows = block.rows, columnWidthsDp = block.columnWidthsDp, columnAlignments = block.columnAlignments, renderMode = block.renderMode)
     is ImageBlock -> ImageBlock(source = block.source, caption = block.caption, layout = block.layout, displayHeightDp = block.displayHeightDp)
     is FileBlock -> FileBlock(name = block.name, mimeType = block.mimeType, sizeBytes = block.sizeBytes, uri = block.uri)
-    is EmbedBlock -> EmbedBlock(url = block.url, metadata = block.metadata)
-    is ChartBlock -> ChartBlock(vegaLiteSpec = block.vegaLiteSpec, editorHeightDp = block.editorHeightDp)
-    is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp)
-    is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp)
+    is EmbedBlock -> EmbedBlock(url = block.url, metadata = block.metadata, displayHeightDp = block.displayHeightDp)
+    is ChartBlock -> ChartBlock(vegaLiteSpec = block.vegaLiteSpec, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
+    is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
+    is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
 }
 
 private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
@@ -1716,6 +2545,69 @@ private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
     is ChartBlock -> copy(id = id)
     is MathBlock -> copy(id = id)
     is MermaidBlock -> copy(id = id)
+}
+
+@Composable
+private fun InlineRichText(
+    nodes: List<InlineNode>,
+    modifier: Modifier = Modifier,
+    style: TextStyle = TextStyle.Default,
+) {
+    val colors = MaterialTheme.colorScheme
+    if (nodes.containsInlineMath()) {
+        val primaryArgb = colors.primary.toArgb()
+        val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
+        val markdown = remember(nodes) {
+            MarkdownBlockCodec.export(BlockDocument(listOf(ParagraphBlock(content = nodes))))
+        }
+        MarkdownPreview(
+            markdown = markdown,
+            dark = isSystemInDarkTheme(),
+            accentHex = accentHex,
+            modifier = modifier.fillMaxWidth(),
+        )
+    } else {
+        val annotated = rememberInlineAnnotated(nodes)
+        val uriHandler = LocalUriHandler.current
+        ClickableText(
+            text = annotated,
+            modifier = modifier,
+            style = TextStyle(color = colors.onSurface).merge(style),
+            onClick = { offset ->
+                annotated.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                    .firstOrNull()
+                    ?.item
+                    ?.let { url -> runCatching { uriHandler.openUri(url) } }
+            },
+        )
+    }
+}
+
+private fun List<InlineNode>.containsInlineMath(): Boolean = any { node ->
+    when (node) {
+        is MathInline -> true
+        is BoldInline -> node.children.containsInlineMath()
+        is ItalicInline -> node.children.containsInlineMath()
+        is StrikethroughInline -> node.children.containsInlineMath()
+        is LinkInline -> node.children.containsInlineMath()
+        else -> false
+    }
+}
+
+@Composable
+private fun rememberInlineEditingTransformation(nodes: List<InlineNode>): VisualTransformation {
+    val colors = MaterialTheme.colorScheme
+    val annotated = remember(nodes, colors.surfaceVariant, colors.primary, colors.tertiary) {
+        inlineAnnotated(nodes, emptyMap(), colors.surfaceVariant, colors.primary, colors.tertiary)
+    }
+    return remember(annotated) {
+        VisualTransformation { source ->
+            TransformedText(
+                text = annotated.takeIf { it.text == source.text } ?: AnnotatedString(source.text),
+                offsetMapping = OffsetMapping.Identity,
+            )
+        }
+    }
 }
 
 @Composable
@@ -1741,7 +2633,13 @@ private fun inlineAnnotated(
             is ItalicInline -> appendNodes(node.children, inherited.merge(SpanStyle(fontStyle = FontStyle.Italic)))
             is StrikethroughInline -> appendNodes(node.children, inherited.merge(SpanStyle(textDecoration = TextDecoration.LineThrough)))
             is CodeInline -> withStyle(inherited.merge(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground.copy(alpha = .55f)))) { append(node.value) }
-            is LinkInline -> withStyle(inherited.merge(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))) { appendNodes(node.children, inherited) }
+            is LinkInline -> {
+                pushStringAnnotation(tag = "URL", annotation = node.url)
+                withStyle(inherited.merge(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))) {
+                    appendNodes(node.children, inherited)
+                }
+                pop()
+            }
             is MathInline -> withStyle(inherited.merge(SpanStyle(fontFamily = FontFamily.Serif))) { append(node.tex) }
             is EmojiInline -> withStyle(inherited) { append(node.unicode) }
             is TagInline -> withStyle(inherited.merge(SpanStyle(color = tagColor, fontWeight = FontWeight.SemiBold))) { append("#${node.value}") }
