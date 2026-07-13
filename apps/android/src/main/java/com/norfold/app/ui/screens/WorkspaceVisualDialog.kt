@@ -134,7 +134,7 @@ fun WorkspaceVisualDialog(
                     BuiltInBackgroundStrip(backgroundUri) { backgroundUri = it }
                     Text("Permissions", fontWeight = FontWeight.Bold)
                     PermissionRow("Admins control visuals", adminsControlVisuals) { adminsControlVisuals = it }
-                    PermissionRow("Members create notes", membersCreateNotes) { membersCreateNotes = it }
+                    PermissionRow("Members create docs", membersCreateNotes) { membersCreateNotes = it }
                     PermissionRow("Members invite people", membersInvite) { membersInvite = it }
                 }
             }

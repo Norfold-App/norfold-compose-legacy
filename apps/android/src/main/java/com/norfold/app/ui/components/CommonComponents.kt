@@ -120,9 +120,9 @@ fun EmptyNotes(onCreate: () -> Unit) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             NorfoldLogo(72.dp)
-            Text("No notes yet", fontWeight = FontWeight.Black, fontSize = 22.sp, modifier = Modifier.padding(top = 12.dp))
+            Text("No docs yet", fontWeight = FontWeight.Black, fontSize = 22.sp, modifier = Modifier.padding(top = 12.dp))
             Text("Capture ideas before they fade away.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Button(onClick = onCreate, modifier = Modifier.padding(top = 12.dp)) { Text("Create note") }
+            Button(onClick = onCreate, modifier = Modifier.padding(top = 12.dp)) { Text("Create doc") }
         }
     }
 }
@@ -132,7 +132,7 @@ fun EmptyEditor(onCreate: () -> Unit, modifier: Modifier) {
     Column(modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(100.dp))
         NorfoldLogo(96.dp)
-        Text("Choose or create a note", fontWeight = FontWeight.Black, fontSize = 24.sp, modifier = Modifier.padding(top = 16.dp))
-        Button(onClick = onCreate, modifier = Modifier.padding(top = 12.dp)) { Text("New note") }
+        Text("Choose or create a doc", fontWeight = FontWeight.Black, fontSize = 24.sp, modifier = Modifier.padding(top = 16.dp))
+        Button(onClick = onCreate, modifier = Modifier.padding(top = 12.dp)) { Text("New doc") }
     }
 }

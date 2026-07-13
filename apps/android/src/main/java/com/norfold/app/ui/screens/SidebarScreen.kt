@@ -164,7 +164,7 @@ private fun WorkspaceSwitcher(state: NotesUiState, viewModel: NotesViewModel) {
             }
             Column(Modifier.weight(1f)) {
                 Text(active?.name ?: state.settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${state.notes.size} notes · ${state.workspaces.size} workspaces", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${state.notes.size} docs · ${state.workspaces.size} workspaces", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = { viewModel.go(Destination.Inbox) }, modifier = Modifier.size(30.dp)) {
                 Icon(Icons.Outlined.NotificationsNone, "Inbox", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
@@ -244,7 +244,7 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
                 Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Note", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Doc", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
             Surface(
@@ -314,7 +314,7 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
                         viewModel.patchSettings { it.copy(taskViewMode = "Board") }; viewModel.go(Destination.Tasks)
                     }
                     SideNavItem("Calendar", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar) { viewModel.go(Destination.Calendar) }
-                    SideNavItem("Notes", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) { viewModel.go(Destination.NotesHome) }
+                    SideNavItem("Docs", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) { viewModel.go(Destination.NotesHome) }
                     SideNavItem("Resources", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
                 }
             }
@@ -334,7 +334,7 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
                     }
                 }
             }
-            SideNavItem("Notes", Icons.Outlined.Description, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
+            SideNavItem("Docs", Icons.Outlined.Description, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
             SideNavItem("Books", Icons.Outlined.Folder, false) { viewModel.go(Destination.Files) }
 
             Spacer(Modifier.height(6.dp))
@@ -377,7 +377,7 @@ private fun sectionTitle(destination: Destination): String = when (destination) 
     Destination.Canvas -> "Canvas tools"
     Destination.Chat -> "Chat"
     Destination.Settings, Destination.SyncMonitor, Destination.ConflictReview -> "System"
-    else -> "Note views"
+    else -> "Doc views"
 }
 
 private fun sectionItems(destination: Destination): List<SidebarEntry> = when (destination) {
@@ -393,7 +393,7 @@ private fun sectionItems(destination: Destination): List<SidebarEntry> = when (d
     )
     Destination.Canvas -> listOf(
         SidebarEntry("Canvas board", Icons.Outlined.GridView, Destination.Canvas),
-        SidebarEntry("Linked notes", Icons.Outlined.Folder, Destination.NotesHome),
+        SidebarEntry("Linked docs", Icons.Outlined.Folder, Destination.NotesHome),
     )
     Destination.Chat -> listOf(
         SidebarEntry("Workspace chat", Icons.Outlined.ChatBubbleOutline, Destination.Chat),
@@ -424,7 +424,7 @@ private fun sectionItems(destination: Destination): List<SidebarEntry> = when (d
     )
     Destination.CommandPalette -> listOf(
         SidebarEntry("Search everything", Icons.Outlined.Search, Destination.Search),
-        SidebarEntry("New note", Icons.Outlined.Add, Destination.NotesHome),
+        SidebarEntry("New doc", Icons.Outlined.Add, Destination.NotesHome),
     )
     Destination.Settings, Destination.SyncMonitor, Destination.ConflictReview -> listOf(
         SidebarEntry("Settings", Icons.Outlined.Settings, Destination.Settings),

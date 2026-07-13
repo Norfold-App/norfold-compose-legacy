@@ -322,7 +322,7 @@ internal object MermaidDiagramCodec {
                     """mindmap
   root((Workspace))
     Docs
-      Notes
+      Pages
       Files
     Planning
       Tasks

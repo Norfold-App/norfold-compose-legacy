@@ -85,8 +85,8 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
         .map { obj ->
             SearchResult(
                 title = obj.title,
-                detail = "${obj.objectType.name} · ${obj.summary.ifBlank { obj.tags.ifBlank { "Workspace object" } }}",
-                type = obj.objectType.name,
+                detail = "${obj.objectType.searchLabel()} · ${obj.summary.ifBlank { obj.tags.ifBlank { "Workspace object" } }}",
+                type = obj.objectType.searchLabel(),
                 icon = iconFor(obj),
                 weight = when {
                     obj.pinned -> 0
@@ -101,7 +101,7 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
         .map {
             SearchResult(
                 title = "#${it.name}",
-                detail = "${state.notes.count { note -> note.tags.any { tag -> tag.name == it.name } }} notes",
+                detail = "${state.notes.count { note -> note.tags.any { tag -> tag.name == it.name } }} docs",
                 type = "Tag",
                 icon = Icons.Outlined.Tag,
                 weight = 4,
@@ -137,7 +137,7 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
     val settingsResults = listOf(
         Triple("Appearance", Destination.Settings, "Theme, colors and layout"),
         Triple("Profile", Destination.Settings, "Your identity and workspace name"),
-        Triple("Editor", Destination.Settings, "Writing and note behavior"),
+        Triple("Editor", Destination.Settings, "Writing and doc behavior"),
         Triple("Security & Vault", Destination.Settings, "Lock, encryption and privacy"),
         Triple("Account & Restore", Destination.Settings, "Sync, export, restore and backups"),
         Triple("Diagnostics", Destination.Settings, "Logs and app health"),
@@ -173,6 +173,8 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
         .sortedWith(compareBy<SearchResult> { it.weight }.thenByDescending { it.title.contains(query, ignoreCase = true) }.thenBy { it.title.lowercase() })
         .take(120)
 }
+
+private fun WorkspaceObjectType.searchLabel(): String = if (this == WorkspaceObjectType.Note) "Doc" else name
 
 @Composable
 private fun SearchResultRow(result: SearchResult, modifier: Modifier = Modifier) {

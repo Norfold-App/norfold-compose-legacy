@@ -105,7 +105,7 @@ private fun LegacyNorfoldOnboardingScreen(state: NotesUiState, viewModel: NotesV
                 0 -> {
                     Text("Norfold", style = MaterialTheme.typography.headlineLarge)
                     Text("Your own private workspace.", color = MaterialTheme.colorScheme.primary, fontSize = 15.sp)
-                    Text("Notes, tasks, projects, files, calendar, canvas and conversations stay organized in one local-first workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                    Text("Docs, tasks, projects, files, calendar, canvas and conversations stay organized in one local-first workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                     Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text("Get started") }
                     Text("Works offline. Connect an account only when you need sync or collaboration.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, textAlign = TextAlign.Center)
                 }
@@ -126,7 +126,7 @@ private fun LegacyNorfoldOnboardingScreen(state: NotesUiState, viewModel: NotesV
                     OutlinedTextField(workspaceName, { workspaceName = it.take(40) }, Modifier.fillMaxWidth(), label = { Text("Workspace name") }, singleLine = true, shape = RoundedCornerShape(10.dp))
                     Text("What will you use Norfold for?", Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("Personal" to "Notes, tasks and daily planning", "Work" to "Tasks, docs and collaboration", "Study" to "Research and assignments", "Creative" to "Ideas, drafts and inspiration").forEach { (name, detail) ->
+                        listOf("Personal" to "Docs, tasks and daily planning", "Work" to "Tasks, docs and collaboration", "Study" to "Research and assignments", "Creative" to "Ideas, drafts and inspiration").forEach { (name, detail) ->
                             Surface(
                                 Modifier.fillMaxWidth().clickable { purpose = name },
                                 shape = RoundedCornerShape(10.dp),

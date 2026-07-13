@@ -139,7 +139,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             "Personal organizer" -> {
                 if (workspaceHasNotes || workspaceHasTasks) return
                 val notebook = dao.insertNotebook(NotebookEntity(name = "Personal", color = 0xFF35A853, sortOrder = 0, workspaceId = workspaceId))
-                createNote("Daily notes", "# Daily notes\n\nWrite down what matters today.", notebook, listOf("Personal"), pinned = true)
+                createNote("Daily doc", "# Daily doc\n\nWrite down what matters today.", notebook, listOf("Personal"), pinned = true)
                 addTask("Plan the week", "Choose the three most important outcomes", "@me", TaskStatus.Todo)
             }
             "Team workspace" -> {
@@ -187,7 +187,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             """
             # Rich blocks playground :sparkles:
 
-            This note deliberately exercises the complete Norfold document renderer. Double-tap a block to edit it, use `/` to insert another block, and long-press for its type-specific actions.
+            This doc deliberately exercises the complete Norfold document renderer. Double-tap a block to edit it, use `/` to insert another block, and long-press for its type-specific actions.
 
             ## Inline formatting
 
@@ -221,7 +221,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             ```
 
             ```vega-lite
-            {"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Notes","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}
+            {"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Docs","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}
             ```
 
             ```kotlin
@@ -229,7 +229,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             println(workspace.isPrivate)
             ```
 
-            > Smart-paste this entire note into a blank page to verify one atomic, structured paste and one-step undo.
+            > Smart-paste this entire doc into a blank page to verify one atomic, structured paste and one-step undo.
             """.trimIndent(),
             guide,
             listOf("Guide", "Blocks", "Demo"),
@@ -242,7 +242,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
                 if (current.none { it is MermaidBlock }) add(MermaidBlock(code = "flowchart LR\n  Paste --> Parse\n  Parse --> Blocks\n  Blocks --> Render"))
                 if (current.none { it is ChartBlock }) add(
                     ChartBlock(
-                        vegaLiteSpec = """{"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Notes","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}""",
+                        vegaLiteSpec = """{"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Docs","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}""",
                     ),
                 )
                 if (current.none { it is EmbedBlock }) add(
@@ -275,12 +275,12 @@ class NotesRepository(private val database: NorfoldDatabase) {
             """
             # Welcome 👋
 
-            Norfold is your private, local-first workspace: notes, tasks, files, canvas and chat, all in one place and kept on your device.
+            Norfold is your private, local-first workspace: docs, tasks, files, canvas and chat, all in one place and kept on your device.
 
-            This **Guide** notebook is a set of real reference notes. Open any of them to learn a feature in depth, then delete them whenever you like.
+            This **Guide** notebook is a set of real reference docs. Open any of them to learn a feature in depth, then delete them whenever you like.
 
             **Start here**
-            - 📝 Notes & the Editor
+            - 📝 Docs & the Editor
             - ✓ Tasks & the Kanban board
             - 🎨 Canvas & linking
             - 🔍 Search everything
@@ -289,7 +289,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
 
             **Getting around**
             - Tap the ☰ button (top-left) or swipe from the left edge to open the sidebar.
-            - The bottom bar switches between Home, Notes, Tasks, Canvas and Chat.
+            - The bottom bar switches between Home, Docs, Tasks, Canvas and Chat.
             - The **Search everything** bar on every page opens one global search.
 
             Everything here is yours. Nothing leaves your device unless you turn on sync.
@@ -300,11 +300,11 @@ class NotesRepository(private val database: NorfoldDatabase) {
             starred = true,
         )
         createNote(
-            "📝 Notes & the Editor",
+            "📝 Docs & the Editor",
             """
-            # Notes & the Editor
+            # Docs & the Editor
 
-            Notes use structured blocks with Markdown-compatible import and export.
+            Docs use structured blocks with Markdown-compatible import and export.
 
             **Formatting basics**
             - `# Heading`, `## Subheading`
@@ -313,21 +313,21 @@ class NotesRepository(private val database: NorfoldDatabase) {
             - `- [ ] todo` and `- [x] done` checklists
             - `> quote` blocks and `---` dividers
 
-            **Organize a note**
+            **Organize a doc**
             - **Pin** it to keep it at the top of Home.
             - **Star** favorites for quick access.
-            - **Lock** a private note behind your vault.
+            - **Lock** a private doc behind your vault.
             - Add a **cover image**, attachments, and embeds.
             - File it into a **notebook** and add **#tags**.
 
             **Gestures**
-            - Swipe a note card left/right for quick actions (pin, star, archive, delete) — the actions are configurable in Settings › Editor.
+            - Swipe a doc card left/right for quick actions (pin, star, archive, delete) — the actions are configurable in Settings › Editor.
             - Long-press a card for the full action sheet.
 
-            Create a note anytime with the ➕ button.
+            Create a doc anytime with the ➕ button.
             """.trimIndent(),
             guide,
-            listOf("Guide", "Notes"),
+            listOf("Guide", "Docs"),
         )
         createNote(
             "✓ Tasks & the Kanban board",
@@ -361,7 +361,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             Canvas is a freeform space to think visually.
 
             **Nodes**
-            Drop **text**, **note**, **file**, **shape**, **link** and **media** nodes anywhere and drag them to arrange your ideas.
+            Drop **text**, **doc**, **file**, **shape**, **link** and **media** nodes anywhere and drag them to arrange your ideas.
 
             **Connections**
             Draw **edges** between nodes to show how things relate — feeds, references, maps to, and so on.
@@ -379,7 +379,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             There is **one** search for the whole app. Open it from the **Search everything** bar on any page, or the Search item in the sidebar.
 
             **It finds**
-            - 📝 Notes and their content
+            - 📝 Docs and their content
             - ✓ Tasks
             - 📁 Files
             - 🕘 Recent activity
@@ -387,7 +387,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             - 🏷 Tags
             - ⌘ Commands & destinations (Canvas, Graph, Chat, Notebooks…)
 
-            Tap any result to jump straight to it. Browsing your notes is never left in a filtered state — search lives on its own page.
+            Tap any result to jump straight to it. Browsing your docs is never left in a filtered state — search lives on its own page.
             """.trimIndent(),
             guide,
             listOf("Guide", "Search"),
@@ -400,13 +400,13 @@ class NotesRepository(private val database: NorfoldDatabase) {
             Your data is **local-first** — it lives on your device by default.
 
             **Vault & lock**
-            Lock private notes behind the vault. Manage security in Settings › Security.
+            Lock private docs behind the vault. Manage security in Settings › Security.
 
             **Sync (optional)**
             Connect **Google Drive** in Settings › Sync to back up and sync across devices. If two edits collide, the **Conflict review** screen lets you compare and choose.
 
             **Backup & import/export**
-            Export a full backup or individual notes as Markdown, and restore from a backup file in Settings › Backup & Import.
+            Export a full backup or individual docs as Markdown, and restore from a backup file in Settings › Backup & Import.
 
             You stay in control of where your data goes.
             """.trimIndent(),
@@ -420,9 +420,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
 
             Two simple ways to keep things tidy.
 
-            **Notebooks** are folders — a note lives in one notebook (like this **Guide** notebook).
+            **Notebooks** are folders — a doc lives in one notebook (like this **Guide** notebook).
 
-            **Tags** are flexible labels — a note can have many. Add `#tags` to connect notes across notebooks.
+            **Tags** are flexible labels — a doc can have many. Add `#tags` to connect docs across notebooks.
 
             Filter Home by notebook, browse everything under **Tags** in the sidebar, and find any tag through global search.
             """.trimIndent(),
@@ -461,7 +461,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val taskIds = listOf(
             addTask(
                 title = "Polish Android workspace",
-                description = "Review notes, tasks, calendar, and chat screens for Android consistency.",
+                description = "Review docs, tasks, calendar, and chat screens for Android consistency.",
                 assignee = "@owner",
                 status = TaskStatus.Todo,
                 priority = TaskPriority.High,
@@ -500,7 +500,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val checklist = properties.firstOrNull { it.type == TaskPropertyType.Checklist }
         val taskLabels = listOf("Android,UI/UX", "Sync,Backend,Blocked", "Onboarding,UI/UX", "Roadmap,Planning")
         val checklistText = listOf(
-            listOf("Review notes", "Review tasks", "Review canvas", "Review charts", "Document results"),
+            listOf("Review docs", "Review tasks", "Review canvas", "Review charts", "Document results"),
             listOf("Design conflict model", "Build delta sync", "Integration tests"),
             listOf("Welcome screen", "Workspace setup", "Completion state"),
             listOf("Define goals and scope", "Gather stakeholder input", "Outline milestones", "Identify dependencies", "Draft timeline"),
@@ -625,7 +625,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
     suspend fun noteById(id: Long): Note? = dao.noteById(id)?.toDomain()
 
     suspend fun createNote(
-        title: String = "Untitled note",
+        title: String = "Untitled doc",
         body: String = "",
         notebookId: Long? = null,
         tagNames: List<String> = emptyList(),
@@ -636,7 +636,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val document = MarkdownBlockCodec.import(body)
         val id = dao.insertNote(
             NoteEntity(
-                title = title.ifBlank { "Untitled note" },
+                title = title.ifBlank { "Untitled doc" },
                 searchText = document.plainText(),
                 notebookId = notebookId,
                 coverUri = null,
@@ -654,9 +654,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
             NoteBlockEntity(block.id, id, position, BlockDocumentJson.encodeBlock(block), now)
         })
         setTags(id, tagNames)
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled note" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
-        recordActivity(WorkspaceActivityType.Created, "You", "Created note", title.ifBlank { "Untitled note" }, objectType = WorkspaceObjectType.Note, sourceId = id)
-        recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created note", afterValue = title.ifBlank { "Untitled note" })
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled doc" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
+        recordActivity(WorkspaceActivityType.Created, "You", "Created doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = id)
+        recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created doc", afterValue = title.ifBlank { "Untitled doc" })
         return id
     }
 
@@ -683,16 +683,16 @@ class NotesRepository(private val database: NorfoldDatabase) {
         if (changed.isNotEmpty()) dao.upsertNoteBlocks(changed)
         val removed = existing.keys - next.mapTo(hashSetOf(), NoteBlockEntity::id)
         if (removed.isNotEmpty()) dao.deleteNoteBlocks(removed.toList())
-        dao.updateNoteContent(note.id, title.ifBlank { "Untitled note" }, normalized.plainText(), now)
+        dao.updateNoteContent(note.id, title.ifBlank { "Untitled doc" }, normalized.plainText(), now)
         val markdown = MarkdownBlockCodec.export(normalized)
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled note" }, normalized.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
-        recordActivity(WorkspaceActivityType.Updated, "You", "Updated note", title.ifBlank { "Untitled note" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled doc" }, normalized.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
+        recordActivity(WorkspaceActivityType.Updated, "You", "Updated doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
         if (note.title != title || note.document != normalized) {
             recordHistory(
                 WorkspaceHistoryType.Updated,
                 objectId,
                 "You",
-                "Updated note",
+                "Updated doc",
                 beforeValue = note.bodyMarkdown.take(500),
                 afterValue = markdown.take(500),
             )

@@ -168,7 +168,7 @@ object SyncConflictReport {
     ).max()
 
     private fun BackupSnapshot.recentObjectLabels(): List<String> = buildList {
-        addAll(notes.map { SnapshotObject("Note", it.id.toString(), it.title, it.updatedAt, it.bodyMarkdown.take(120)) })
+        addAll(notes.map { SnapshotObject("Doc", it.id.toString(), it.title, it.updatedAt, it.bodyMarkdown.take(120)) })
         addAll(taskBoards.map { SnapshotObject("Task board", it.id.toString(), it.name, it.updatedAt, "") })
         addAll(taskColumns.map { SnapshotObject("Task column", it.id.toString(), it.name, it.updatedAt, it.status?.name.orEmpty()) })
         addAll(tasks.map { SnapshotObject("Task", it.id.toString(), it.title, it.updatedAt, it.description.take(120)) })
@@ -178,7 +178,7 @@ object SyncConflictReport {
         addAll(calendarEvents.map { SnapshotObject("Calendar event", it.syncId, it.title, it.updatedAt, it.description.take(120)) })
         addAll(canvasNodes.map { SnapshotObject("Canvas", it.id.toString(), it.title, it.updatedAt, it.subtitle.take(120)) })
         addAll(workspaceFiles.map { SnapshotObject("File", it.id.toString(), it.displayName, it.updatedAt, it.mimeType) })
-        addAll(workspaceObjects.map { SnapshotObject(it.objectType.name, it.sourceId?.toString() ?: "object-${it.id}", it.title, it.updatedAt, it.summary.take(120)) })
+        addAll(workspaceObjects.map { SnapshotObject(if (it.objectType == WorkspaceObjectType.Note) "Doc" else it.objectType.name, it.sourceId?.toString() ?: "object-${it.id}", it.title, it.updatedAt, it.summary.take(120)) })
     }
         .sortedByDescending { it.updatedAt }
         .distinctBy { "${it.type}:${it.key}" }
@@ -204,7 +204,7 @@ object SyncConflictReport {
     }
 
     private fun BackupSnapshot.snapshotObjects(): List<SnapshotObject> = buildList {
-        addAll(notes.map { SnapshotObject("Note", it.id.toString(), it.title, it.updatedAt, "${it.title}\n${it.bodyMarkdown}\n${it.tags.joinToString { tag -> tag.name }}") })
+        addAll(notes.map { SnapshotObject("Doc", it.id.toString(), it.title, it.updatedAt, "${it.title}\n${it.bodyMarkdown}\n${it.tags.joinToString { tag -> tag.name }}") })
         addAll(taskBoards.map { SnapshotObject("Task board", it.id.toString(), it.name, it.updatedAt, "${it.name}\n${it.workspaceId}") })
         addAll(taskColumns.map { SnapshotObject("Task column", it.id.toString(), it.name, it.updatedAt, "${it.boardId}\n${it.name}\n${it.status}\n${it.sortOrder}") })
         addAll(tasks.map { SnapshotObject("Task", it.id.toString(), it.title, it.updatedAt, "${it.title}\n${it.description}\n${it.status}\n${it.priority}\n${it.assignee}\n${it.labels}\n${it.taskBoardId}\n${it.taskColumnId}\n${it.sortOrder}\n${it.colorArgb}\n${it.startAt}\n${it.dueAt}\n${it.allDay}\n${it.reminderMinutesBefore}") })

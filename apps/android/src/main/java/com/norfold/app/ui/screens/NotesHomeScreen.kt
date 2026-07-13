@@ -146,7 +146,7 @@ private fun WorkspaceHomeHeader(state: NotesUiState, onEdit: () -> Unit) {
             // Centered workspace name + counts (icon and edit affordance flank it).
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                Text("${state.notes.size} notes · ${state.tasks.size} tasks · ${state.chatMessages.size} messages", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center)
+                Text("${state.notes.size} docs · ${state.tasks.size} tasks · ${state.chatMessages.size} messages", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center)
             }
             Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
         }
@@ -160,7 +160,7 @@ private fun HomeTabs(state: NotesUiState, viewModel: NotesViewModel) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FilterChip(state.tab == HomeTab.AllNotes, { viewModel.selectTab(HomeTab.AllNotes) }, label = { Text("All Notes") })
+        FilterChip(state.tab == HomeTab.AllNotes, { viewModel.selectTab(HomeTab.AllNotes) }, label = { Text("All Docs") })
         FilterChip(state.tab == HomeTab.Pinned, { viewModel.selectTab(HomeTab.Pinned) }, label = { Text("Pinned") })
         FilterChip(state.tab == HomeTab.Tags, { viewModel.selectTab(HomeTab.Tags) }, label = { Text("Tags") })
         Icon(Icons.Outlined.KeyboardArrowDown, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -182,7 +182,7 @@ private fun ActiveNotebookFilter(name: String, count: Int, onClear: () -> Unit) 
             Text("Notebook", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Text(name, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("$count notes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Text("$count docs", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         Icon(
             Icons.Outlined.Close,
             contentDescription = "Clear notebook filter",
@@ -311,7 +311,7 @@ private fun NoteQuickActionsDialog(note: Note, viewModel: NotesViewModel, onDism
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(note.title, fontWeight = FontWeight.Black, fontSize = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("Note actions", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Text("Doc actions", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = {
