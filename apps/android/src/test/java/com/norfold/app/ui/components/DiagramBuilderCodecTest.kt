@@ -107,6 +107,32 @@ class DiagramBuilderCodecTest {
     }
 
     @Test
+    fun `flowchart subgraphs reopen as a safe flattened visual form`() {
+        val source = """flowchart TD
+  subgraph Capture["Capture lane"]
+    Inbox("Inbox") --> Triage{"Keep it?"}
+  end
+  Triage --> Done(("Done"))
+  classDef highlight fill:#336699,stroke:#336699,color:#FFFFFF
+  class Triage highlight"""
+
+        val decoded = MermaidDiagramCodec.decodeOrNull(source, fallbackColor)
+
+        assertEquals(DiagramKind.Flowchart, decoded?.kind)
+        assertEquals(listOf("Inbox", "Triage", "Done"), decoded?.nodes?.map { it.id })
+        assertEquals(
+            listOf(DiagramNodeShape.Rounded, DiagramNodeShape.Diamond, DiagramNodeShape.Circle),
+            decoded?.nodes?.map { it.shape },
+        )
+        assertEquals("#336699", decoded?.nodes?.first { it.id == "Triage" }?.color)
+        assertEquals(
+            listOf(DiagramEdgeInput("Inbox", "Triage"), DiagramEdgeInput("Triage", "Done")),
+            decoded?.edges,
+        )
+        assertTrue(MermaidDiagramCodec.validate(requireNotNull(decoded)).isEmpty())
+    }
+
+    @Test
     fun `advanced source detects every offered starter type`() {
         DiagramKind.entries.forEach { kind ->
             val templates = MermaidDiagramCodec.templateCatalog(kind, fallbackColor)
