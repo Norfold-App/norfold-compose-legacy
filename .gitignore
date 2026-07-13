@@ -24,6 +24,8 @@ supabase/.env.*
 apps/android/build/
 apps/android/.gradle/
 
+# Parallel mission runtime state
+
 # Legacy Flutter prototype
 .dart_tool/
 .flutter-plugins
