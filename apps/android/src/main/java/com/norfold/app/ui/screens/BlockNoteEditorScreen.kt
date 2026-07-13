@@ -2464,7 +2464,9 @@ private fun EmbedFullscreenDialog(embed: EmbedBlock, landscape: Boolean, onDismi
                     TextButton(onClick = onDismiss) { Text("Close") }
                 }
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Box(Modifier.widthIn(max = 760.dp)) { EmbedCard(embed) }
+                    Box(Modifier.fillMaxWidth().widthIn(max = 760.dp).height(embed.displayHeightDp.coerceIn(88f, 420f).dp)) {
+                        EmbedCard(embed, Modifier.fillMaxSize())
+                    }
                 }
             }
         }
