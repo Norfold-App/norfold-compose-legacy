@@ -361,7 +361,7 @@ internal object MermaidDiagramCodec {
             val id = normalizedId(node.id, "Node${index + 1}")
             val className = "norfold_${id}_$index"
             val color = normalizeColor(node.color, defaultColor)
-            appendLine("  classDef $className fill:$color,stroke:$color")
+            appendLine("  classDef $className fill:$color,stroke:$color,color:${contrastTextColor(color)}")
             appendLine("  class $id $className")
         }
     }.trimEnd()
@@ -588,6 +588,20 @@ internal object MermaidDiagramCodec {
         validColor.matches(value.trim()) -> value.trim().uppercase(Locale.ROOT)
         validColor.matches(fallback.trim()) -> fallback.trim().uppercase(Locale.ROOT)
         else -> "#6750A4"
+    }
+
+    private fun contrastTextColor(background: String): String {
+        val rgb = background.removePrefix("#").take(6).toIntOrNull(16) ?: return "#FFFFFF"
+        fun linear(channel: Int): Double {
+            val normalized = channel / 255.0
+            return if (normalized <= 0.04045) normalized / 12.92 else Math.pow((normalized + 0.055) / 1.055, 2.4)
+        }
+        val luminance = 0.2126 * linear(rgb shr 16 and 0xFF) +
+            0.7152 * linear(rgb shr 8 and 0xFF) +
+            0.0722 * linear(rgb and 0xFF)
+        val blackContrast = (luminance + 0.05) / 0.05
+        val whiteContrast = 1.05 / (luminance + 0.05)
+        return if (blackContrast >= whiteContrast) "#000000" else "#FFFFFF"
     }
 
     private fun escapeLabel(value: String): String = value.trim()

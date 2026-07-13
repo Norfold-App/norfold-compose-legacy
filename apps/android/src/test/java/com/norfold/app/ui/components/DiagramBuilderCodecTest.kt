@@ -38,9 +38,9 @@ class DiagramBuilderCodecTest {
         assertTrue(encoded.contains("Start((\"Capture\"))"))
         assertTrue(encoded.contains("Choose{\"Keep it?\"}"))
         assertTrue(encoded.contains("Store(\"Save\")"))
-        assertTrue(encoded.contains("classDef norfold_Start_0 fill:#112233"))
-        assertTrue(encoded.contains("classDef norfold_Choose_1 fill:#445566"))
-        assertTrue(encoded.contains("classDef norfold_Store_2 fill:#778899"))
+        assertTrue(encoded.contains("classDef norfold_Start_0 fill:#112233,stroke:#112233,color:#FFFFFF"))
+        assertTrue(encoded.contains("classDef norfold_Choose_1 fill:#445566,stroke:#445566,color:#FFFFFF"))
+        assertTrue(encoded.contains("classDef norfold_Store_2 fill:#778899,stroke:#778899,color:#000000"))
     }
 
     @Test
