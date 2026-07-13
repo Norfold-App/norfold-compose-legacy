@@ -24,6 +24,11 @@ supabase/.env.*
 apps/android/build/
 apps/android/.gradle/
 
+# Parallel mission runtime state
+codex-handoffs/coordination/locks/
+codex-handoffs/coordination/keep-awake.out
+codex-handoffs/coordination/keep-awake.pid
+
 # Legacy Flutter prototype
 .dart_tool/
 .flutter-plugins
