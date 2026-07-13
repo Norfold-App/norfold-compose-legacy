@@ -920,12 +920,13 @@ private fun BlockEditorHeader(
                     value = titleValue,
                     onValueChange = { changed -> titleValue = changed; onTitleChange(changed.text) },
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp).onFocusChanged { titleFocused = it.isFocused },
-                    singleLine = true,
+                    singleLine = false,
+                    maxLines = 3,
                     textStyle = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 )
             } else {
-                Text(title, Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+                Text(title, Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 3)
             }
         }
         Box(Modifier.fillMaxWidth().height(48.dp)) {
