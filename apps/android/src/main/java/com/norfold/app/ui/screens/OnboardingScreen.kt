@@ -167,7 +167,7 @@ fun NorfoldOnboardingScreen(
                     0 -> WelcomeStep(onNext = { step = 1 }, onRestore = { step = 4 }, onGoogle = onGoogleSignIn, onOffline = { step = 5 })
                     1 -> ProductStep(
                         title = "Everything in one place",
-                        subtitle = "Notes, tasks, calendar, files, and chat - all connected to keep you in flow.",
+                        subtitle = "Docs, tasks, calendar, files, and chat - all connected to keep you in flow.",
                         preview = { WorkspacePreview() },
                         footerTitle = "Your data, your control",
                         footer = "Everything is private and secure. You're always in control.",
@@ -221,8 +221,8 @@ private fun WelcomeStep(onNext: () -> Unit, onRestore: () -> Unit, onGoogle: () 
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .35f), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Welcome to\nNorfold", fontSize = 34.sp, lineHeight = 38.sp, fontWeight = FontWeight.Black)
-            Text("A private place for notes, tasks, calendar, chat, and focused work.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 17.sp, lineHeight = 24.sp)
-            Text("NOTES  |  CALENDAR  |  CHAT  |  TASKS", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            Text("A private place for docs, tasks, calendar, chat, and focused work.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 17.sp, lineHeight = 24.sp)
+            Text("DOCS  |  CALENDAR  |  CHAT  |  TASKS", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
         }
     }
     OnboardingPrimaryButton("Get started", onNext)
@@ -233,7 +233,7 @@ private fun WelcomeStep(onNext: () -> Unit, onRestore: () -> Unit, onGoogle: () 
     Text("What you can do", Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold, fontSize = 18.sp)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FeatureCard(Icons.Outlined.Description, "Notes", "Capture ideas and keep them organized.", Modifier.weight(1f))
+            FeatureCard(Icons.Outlined.Description, "Docs", "Capture ideas and keep them organized.", Modifier.weight(1f))
             FeatureCard(Icons.Outlined.TaskAlt, "Tasks", "Plan your day and get things done.", Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -271,13 +271,13 @@ private fun WorkspacePreview() {
         Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(Modifier.widthIn(min = 92.dp).fillMaxSize().weight(.32f), verticalArrangement = Arrangement.spacedBy(15.dp)) {
                 Text("N  Norfold", fontWeight = FontWeight.Bold)
-                listOf("Home", "Notes", "Tasks", "Calendar", "Chat", "Files", "More").forEach { Text(it, color = if (it == "Home") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+                listOf("Home", "Docs", "Tasks", "Calendar", "Chat", "Files", "More").forEach { Text(it, color = if (it == "Home") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
             }
             Column(Modifier.weight(.68f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Text("Search everything", Modifier.padding(10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("Notes\n12", "Tasks\n8", "Events\n5", "Messages\n3").forEach { PreviewTile(it, Modifier.weight(1f)) } }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("Docs\n12", "Tasks\n8", "Events\n5", "Messages\n3").forEach { PreviewTile(it, Modifier.weight(1f)) } }
                 PreviewPanel("Today's tasks", listOf("Draft project roadmap", "Polish Android workspace"))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PreviewPanel("Upcoming events", listOf("Team sync", "Design review"), Modifier.weight(1f)); PreviewPanel("Recent notes", listOf("Welcome to Norfold", "Meeting notes"), Modifier.weight(1f)) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PreviewPanel("Upcoming events", listOf("Team sync", "Design review"), Modifier.weight(1f)); PreviewPanel("Recent docs", listOf("Welcome to Norfold", "Meeting notes"), Modifier.weight(1f)) }
             }
         }
     }
@@ -321,7 +321,7 @@ private fun RestoreStep(secret: String, onSecret: (String) -> Unit, onRestore: (
     Box(Modifier.size(150.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(progress = { .72f }, Modifier.fillMaxSize(), strokeWidth = 6.dp); Icon(Icons.Outlined.CloudDownload, null, Modifier.size(54.dp), tint = MaterialTheme.colorScheme.primary) }
     Text("72%", fontWeight = FontWeight.Bold)
     OutlinedTextField(secret, onSecret, Modifier.fillMaxWidth(), label = { Text("Backup password") }, visualTransformation = PasswordVisualTransformation())
-    listOf("Notes", "Tasks", "Calendar", "Files & media", "Settings").forEachIndexed { index, label -> Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Icon(if (index < 3) Icons.Outlined.CheckCircle else Icons.Outlined.Restore, null, tint = MaterialTheme.colorScheme.primary) } } }
+    listOf("Docs", "Tasks", "Calendar", "Files & media", "Settings").forEachIndexed { index, label -> Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Icon(if (index < 3) Icons.Outlined.CheckCircle else Icons.Outlined.Restore, null, tint = MaterialTheme.colorScheme.primary) } } }
     OnboardingPrimaryButton("Choose backup", onRestore)
 }
 
@@ -355,9 +355,9 @@ private fun WorkspaceStep(name: String, onName: (String) -> Unit, template: Stri
     Text("Starting point", Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold)
     listOf(
         "Start empty" to "A clean workspace with no demo content",
-        "Norfold Guide" to "A complete interactive tour of notes, tasks, tables, charts, and rich blocks",
-        "Personal organizer" to "A daily note and a weekly planning task",
-        "Study planner" to "Study notes and revision tasks",
+        "Norfold Guide" to "A complete interactive tour of docs, tasks, tables, charts, and rich blocks",
+        "Personal organizer" to "A daily doc and a weekly planning task",
+        "Study planner" to "Study docs and revision tasks",
         "Team workspace" to "A shared brief, task, and collaboration chat",
     ).forEach { (label, detail) ->
         Surface(

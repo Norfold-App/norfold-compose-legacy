@@ -77,7 +77,7 @@ private fun destinationTitle(d: Destination): String = when (d) {
     Destination.Activity -> "Activity"
     Destination.Templates -> "Templates"
     Destination.CommandPalette -> "Command"
-    Destination.NotesHome -> "Notes"
+    Destination.NotesHome -> "Docs"
     Destination.NoteEditor -> "Editor"
     Destination.Notebooks -> "Notebooks"
     Destination.Tags -> "Tags"
@@ -104,7 +104,7 @@ fun DesktopTopBar(state: NotesUiState, viewModel: NotesViewModel) {
         )
         Column(Modifier.weight(1f)) {
             Text("Norfold", fontWeight = FontWeight.Black, fontSize = 22.sp)
-            Text("${state.notes.size} notes · ${state.tasks.size} tasks · local vault", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            Text("${state.notes.size} docs · ${state.tasks.size} tasks · local vault", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
         SearchField(state.searchQuery, viewModel::search, Modifier.width(320.dp))
         IconButton(onClick = { viewModel.setTheme(if (state.settings.themeMode == ThemeMode.Dark) ThemeMode.Light else ThemeMode.Dark) }) {
@@ -135,7 +135,7 @@ fun MobileBottomBar(state: NotesUiState, viewModel: NotesViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 NavBarItem("Home", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub, Modifier.weight(1f)) { viewModel.go(Destination.WorkspaceHub) }
-                NavBarItem("Notes", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor, Destination.Notebooks, Destination.Tags), Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
+                NavBarItem("Docs", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor, Destination.Notebooks, Destination.Tags), Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     Surface(
                         modifier = Modifier.size(48.dp),

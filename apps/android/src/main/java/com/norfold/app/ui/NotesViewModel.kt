@@ -484,7 +484,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createNote() = viewModelScope.launch {
-        selectedNoteId.value = repository.createNote(title = "Untitled note", body = "")
+        selectedNoteId.value = repository.createNote(title = "Untitled doc", body = "")
         navigateTo(Destination.NoteEditor)
     }
 
@@ -694,7 +694,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         val newId = repository.addCanvasNode(
             title = when (type) {
                 CanvasNodeType.Text -> "Text block"
-                CanvasNodeType.Note -> "Linked note"
+                CanvasNodeType.Note -> "Linked doc"
                 CanvasNodeType.File -> "File block"
                 CanvasNodeType.Shape -> "Shape"
                 CanvasNodeType.Link -> "Link"
@@ -783,7 +783,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val note = state.value.selectedNote
             if (note == null) {
-                message.value = "Select a note first"
+                message.value = "Select a doc first"
                 return@launch
             }
             runCatching {
@@ -806,7 +806,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     fun addLinkEmbedToSelectedNote(target: String, title: String = target) = viewModelScope.launch {
         val note = state.value.selectedNote
         if (note == null) {
-            message.value = "Select a note first"
+            message.value = "Select a doc first"
             return@launch
         }
         if (target.isBlank()) {
@@ -823,7 +823,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val note = state.value.selectedNote
             if (note == null) {
-                message.value = "Select a note first"
+                message.value = "Select a doc first"
                 return@launch
             }
             runCatching {
@@ -857,7 +857,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val note = state.value.selectedNote
             if (note == null) {
-                message.value = "Select a note first"
+                message.value = "Select a doc first"
                 return@launch
             }
             runCatching {

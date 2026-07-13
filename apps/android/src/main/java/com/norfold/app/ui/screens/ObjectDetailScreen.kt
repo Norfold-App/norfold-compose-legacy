@@ -172,7 +172,7 @@ private fun ObjectHero(obj: WorkspaceObject, state: NotesUiState, viewModel: Not
                 }
                 Column(Modifier.weight(1f)) {
                     Text(obj.title, fontWeight = FontWeight.Black, fontSize = 24.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text("${obj.objectType.name} · updated ${relative(obj.updatedAt)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                    Text("${if (obj.objectType == WorkspaceObjectType.Note) "Doc" else obj.objectType.name} · updated ${relative(obj.updatedAt)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                 }
             }
             if (obj.summary.isNotBlank()) {
@@ -204,10 +204,10 @@ private fun SourcePreview(obj: WorkspaceObject, state: NotesUiState, viewModel: 
         when (obj.objectType) {
             WorkspaceObjectType.Note -> {
                 val note = state.notes.firstOrNull { it.id == obj.sourceId }
-                if (note == null) MutedText("Source note is not in the active list.") else {
+                if (note == null) MutedText("Source doc is not in the active list.") else {
                     Text(note.document.plainText().take(700), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 10, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { viewModel.select(note) }) { Text("Edit note") }
+                    TextButton(onClick = { viewModel.select(note) }) { Text("Edit doc") }
                 }
             }
             WorkspaceObjectType.Task -> {
@@ -239,7 +239,7 @@ private fun SourcePreview(obj: WorkspaceObject, state: NotesUiState, viewModel: 
             WorkspaceObjectType.Canvas -> {
                 val node = state.canvasNodes.firstOrNull { it.id == obj.sourceId }
                 if (node == null) MutedText("Source canvas block is unavailable.") else {
-                    Text("${node.type.name} · x ${"%.2f".format(node.x)} · y ${"%.2f".format(node.y)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                    Text("${if (node.type == com.norfold.app.domain.CanvasNodeType.Note) "Doc" else node.type.name} · x ${"%.2f".format(node.x)} · y ${"%.2f".format(node.y)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                     Text(node.subtitle.ifBlank { "No block text." }, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

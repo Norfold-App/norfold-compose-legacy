@@ -615,7 +615,7 @@ private fun EditorSettings(state: NotesUiState, viewModel: NotesViewModel) {
             RowDivider(inset = false)
             SettingsRow("Auto convert on paste", trailing = { RowSwitch(s.autoConvertOnPaste) { v -> viewModel.patchSettings { it.copy(autoConvertOnPaste = v) } } })
         }
-        SettingsGroup(header = "Note interactions") {
+        SettingsGroup(header = "Doc interactions") {
             GestureRow("Long press", state.settings.noteLongPressAction) { viewModel.setNoteGestureActions(longPress = it) }
             RowDivider(inset = false)
             GestureRow("Swipe right", state.settings.noteSwipeStartAction) { viewModel.setNoteGestureActions(swipeStart = it) }
@@ -878,9 +878,9 @@ private fun PermissionsSettings(state: NotesUiState, viewModel: NotesViewModel) 
                 RowDivider()
                 SettingsRow("Invite members", subtitle = "Members", icon = Icons.Outlined.Person, trailing = { RowSwitch(ws.permInviteMembers) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permInviteMembers = v) } } })
                 RowDivider()
-                SettingsRow("Delete notes", subtitle = "Members", icon = Icons.Outlined.Difference, trailing = { RowSwitch(ws.permDeleteNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permDeleteNotes = v) } } })
+                SettingsRow("Delete docs", subtitle = "Members", icon = Icons.Outlined.Difference, trailing = { RowSwitch(ws.permDeleteNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permDeleteNotes = v) } } })
                 RowDivider()
-                SettingsRow("Edit notes", subtitle = "Members", icon = Icons.Outlined.Code, trailing = { RowSwitch(ws.permEditNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permEditNotes = v) } } })
+                SettingsRow("Edit docs", subtitle = "Members", icon = Icons.Outlined.Code, trailing = { RowSwitch(ws.permEditNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permEditNotes = v) } } })
                 RowDivider()
                 SettingsRow("Create canvas boards", subtitle = "Members", icon = Icons.Outlined.Palette, trailing = { RowSwitch(ws.permCreateCanvas) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permCreateCanvas = v) } } })
                 RowDivider()

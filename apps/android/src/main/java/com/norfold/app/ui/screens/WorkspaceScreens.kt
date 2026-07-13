@@ -361,7 +361,7 @@ fun CanvasBoardScreen(state: NotesUiState, viewModel: NotesViewModel, onPickCanv
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Text("Canvas is ready", fontWeight = FontWeight.Black, fontSize = 20.sp)
-                            Text("Add notes, files, media, links, or shapes.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                            Text("Add docs, files, media, links, or shapes.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         }
                     }
 
@@ -381,7 +381,7 @@ fun CanvasBoardScreen(state: NotesUiState, viewModel: NotesViewModel, onPickCanv
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 CanvasTool(Icons.Outlined.TextFields, "Text") { viewModel.addCanvasNode(CanvasNodeType.Text) }
-                                CanvasTool(Icons.AutoMirrored.Outlined.Note, "Note") { viewModel.addCanvasNode(CanvasNodeType.Note) }
+                                CanvasTool(Icons.AutoMirrored.Outlined.Note, "Doc") { viewModel.addCanvasNode(CanvasNodeType.Note) }
                                 CanvasTool(Icons.Outlined.AttachFile, "File") { viewModel.addCanvasNode(CanvasNodeType.File) }
                                 CanvasTool(Icons.Outlined.Image, "Media") { viewModel.addCanvasNode(CanvasNodeType.Media) }
                                 CanvasTool(Icons.Outlined.Link, "Link") { viewModel.addCanvasNode(CanvasNodeType.Link) }
@@ -428,7 +428,7 @@ private fun CanvasNodeDetailDialog(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(Modifier.size(14.dp).clip(CircleShape).background(Color(node.color)))
                     Column(Modifier.weight(1f)) {
-                        Text("${node.type.name} block", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${node.type.displayLabel()} block", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("Canvas item", fontWeight = FontWeight.Black, fontSize = 22.sp)
                     }
                     TextButton(
@@ -510,7 +510,7 @@ private fun CanvasNodeDetailDialog(
                 linkedNote?.let { note ->
                     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)) {
                         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Linked note", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("Linked doc", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(note.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(
                                 note.document.plainText().replace("\n", " ").trim(),
@@ -519,7 +519,7 @@ private fun CanvasNodeDetailDialog(
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 fontSize = 12.sp,
                             )
-                            TextButton(onClick = { viewModel.select(note); onDismiss() }) { Text("Open note") }
+                            TextButton(onClick = { viewModel.select(note); onDismiss() }) { Text("Open doc") }
                         }
                     }
                 }
@@ -530,7 +530,7 @@ private fun CanvasNodeDetailDialog(
                     viewModel = viewModel,
                 )
                 Text(
-                    "Position ${(node.x * 100).roundToInt()}%, ${(node.y * 100).roundToInt()}% · ${node.type.name}",
+                    "Position ${(node.x * 100).roundToInt()}%, ${(node.y * 100).roundToInt()}% · ${node.type.displayLabel()}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp,
                 )
@@ -589,7 +589,7 @@ private fun CanvasConnectionSection(
                                 text = {
                                     Column {
                                         Text(target.title, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                        Text(target.type.name, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(target.type.displayLabel(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 },
                                 onClick = {
@@ -811,7 +811,7 @@ fun ConflictReviewScreen(state: NotesUiState, viewModel: NotesViewModel) {
                     ConflictSideStats(report.local)
                 } else {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ConflictStat("Notes", state.notes.size.toString(), Modifier.weight(1f))
+                        ConflictStat("Docs", state.notes.size.toString(), Modifier.weight(1f))
                         ConflictStat("Tasks", state.tasks.size.toString(), Modifier.weight(1f))
                         ConflictStat("Canvas", state.canvasNodes.size.toString(), Modifier.weight(1f))
                     }
@@ -883,7 +883,7 @@ private fun ConflictStat(label: String, value: String, modifier: Modifier = Modi
 @Composable
 private fun ColumnScope.ConflictSideStats(summary: ConflictSideSummary) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ConflictStat("Notes", summary.notes.toString(), Modifier.weight(1f))
+        ConflictStat("Docs", summary.notes.toString(), Modifier.weight(1f))
         ConflictStat("Tasks", summary.tasks.toString(), Modifier.weight(1f))
         ConflictStat("Canvas", summary.canvasNodes.toString(), Modifier.weight(1f))
     }
@@ -1409,6 +1409,8 @@ private fun relativeSyncTime(timestamp: Long): String {
         else -> "${minutes / 1440}d"
     }
 }
+
+private fun CanvasNodeType.displayLabel(): String = if (this == CanvasNodeType.Note) "Doc" else name
 
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

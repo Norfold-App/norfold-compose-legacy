@@ -114,8 +114,8 @@ fun WorkspaceHubScreen(state: NotesUiState, viewModel: NotesViewModel, inboxMode
                 HubSection("Inbox", "Capture now, process later.") {
                     EmptyActionCard(
                         title = "Inbox is ready",
-                        detail = "Quick notes, files, imports, links, screenshots, and voice captures land here.",
-                        action = "New note",
+                        detail = "Quick docs, files, imports, links, screenshots, and voice captures land here.",
+                        action = "New doc",
                         onAction = viewModel::createNote,
                     )
                 }
@@ -136,7 +136,7 @@ fun WorkspaceHubScreen(state: NotesUiState, viewModel: NotesViewModel, inboxMode
                 }
             }
             item {
-                HubSection("Continue writing", "Recent notes") {
+                HubSection("Continue writing", "Recent docs") {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(state.notes.take(8)) { note ->
                             Surface(
@@ -213,7 +213,7 @@ private fun HubSearchBar(viewModel: NotesViewModel) {
 @Composable
 private fun HubStats(state: NotesUiState, viewModel: NotesViewModel) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatCard("Notes", state.notes.size.toString(), Icons.Outlined.Description, Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
+        StatCard("Docs", state.notes.size.toString(), Icons.Outlined.Description, Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
         StatCard("Tasks", state.tasks.size.toString(), Icons.Outlined.TaskAlt, Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
     }
 }
@@ -281,7 +281,7 @@ private fun StatCard(label: String, value: String, icon: ImageVector, modifier: 
 @Composable
 private fun QuickCaptureRow(viewModel: NotesViewModel) {
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        QuickChip("Note", Icons.Outlined.Add, viewModel::createNote)
+        QuickChip("Doc", Icons.Outlined.Add, viewModel::createNote)
         QuickChip("Task", Icons.Outlined.Check, viewModel::createTaskAndOpen)
         QuickChip("Calendar", Icons.Outlined.CalendarMonth) { viewModel.go(Destination.Calendar) }
         QuickChip("Chat", Icons.Outlined.ChatBubbleOutline) { viewModel.go(Destination.Chat) }
@@ -400,7 +400,7 @@ fun DatabaseScreen(state: NotesUiState, viewModel: NotesViewModel) {
     LazyColumn(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Text("Database", fontWeight = FontWeight.Black, fontSize = 28.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            Text("Objects, relations, files, tasks, notes, and workspace records in one place.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text("Objects, relations, files, tasks, docs, and workspace records in one place.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
         item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }) }
         item {
@@ -619,6 +619,7 @@ private fun DatabaseGroupHeader(title: String, count: Int) {
 }
 
 private fun WorkspaceObjectType.label(): String = when (this) {
+    WorkspaceObjectType.Note -> "Doc"
     WorkspaceObjectType.ChatMessage -> "Chat"
     WorkspaceObjectType.DatabaseRow -> "Database"
     else -> name
@@ -755,7 +756,7 @@ fun TemplatesScreen(state: NotesUiState, viewModel: NotesViewModel) {
     LazyColumn(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Templates", fontWeight = FontWeight.Black, fontSize = 28.sp) }
         items(templates) { name ->
-            CompactHubRow(name, "Workspace structure with notes, tasks, files, and boards", Icons.Outlined.Tag) {
+            CompactHubRow(name, "Workspace structure with docs, tasks, files, and boards", Icons.Outlined.Tag) {
                 viewModel.createWorkspace(name)
             }
         }
@@ -766,7 +767,7 @@ fun TemplatesScreen(state: NotesUiState, viewModel: NotesViewModel) {
 fun CommandPaletteScreen(state: NotesUiState, viewModel: NotesViewModel) {
     var query by remember { mutableStateOf("") }
     val commands: List<Pair<String, () -> Unit>> = listOf(
-        "Create note" to { viewModel.createNote(); Unit },
+        "Create doc" to { viewModel.createNote(); Unit },
         "Create task" to { viewModel.createTaskAndOpen(); Unit },
         "Open files" to { viewModel.go(Destination.Files); Unit },
         "Open graph" to { viewModel.go(Destination.Graph); Unit },
@@ -784,7 +785,7 @@ fun CommandPaletteScreen(state: NotesUiState, viewModel: NotesViewModel) {
             CompactHubRow(label, "Command", Icons.Outlined.Search, onClick = action)
         }
         items(state.workspaceObjects.filter { it.title.contains(query, true) && query.isNotBlank() }.take(20)) { obj ->
-            CompactHubRow(obj.title, "${obj.objectType.name} · ${obj.summary}", Icons.Outlined.Folder) {
+            CompactHubRow(obj.title, "${obj.objectType.label()} · ${obj.summary}", Icons.Outlined.Folder) {
                 viewModel.openWorkspaceObject(obj)
             }
         }
@@ -803,7 +804,7 @@ private fun ObjectInspectorDialog(obj: WorkspaceObject, state: NotesUiState, vie
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 item {
-                    Text("${obj.objectType.name} · ${relative(obj.updatedAt)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                    Text("${obj.objectType.label()} · ${relative(obj.updatedAt)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                     Text(obj.summary.ifBlank { "No summary yet." }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                 }
                 item { Text("Links", fontWeight = FontWeight.Bold) }
