@@ -8,6 +8,7 @@ enum class TaskWorkspaceView(val key: String, val label: String) {
     Chart("Chart", "Chart"),
     Gallery("Gallery", "Gallery"),
     List("List", "List"),
+    Timeline("Timeline", "Timeline"),
     Matrix("Matrix", "Matrix");
 
     companion object {
@@ -16,6 +17,22 @@ enum class TaskWorkspaceView(val key: String, val label: String) {
             return entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: Table
         }
     }
+}
+
+enum class TaskEditorTarget {
+    Color,
+    Status,
+    Assignee,
+    Priority,
+    Labels,
+    Date,
+    Checklist,
+    Notes,
+    Files,
+    Comments,
+    NewProperty,
+    PropertySettings,
+    ReadOnlyDetails,
 }
 
 enum class TaskWorkspaceSort(val key: String, val label: String) {

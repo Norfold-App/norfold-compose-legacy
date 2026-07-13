@@ -60,9 +60,9 @@ import com.norfold.app.branding.palette
 import com.norfold.app.domain.ThemeProfile
 
 @Composable
-fun ComposeLoadingScreen(palette: BrandPalette = ThemeProfile.Neon.palette()) {
+fun ComposeLoadingScreen(palette: BrandPalette = ThemeProfile.Graphite.palette()) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val bgColors = if (dark) listOf(Color(0xFF070A12), Color(0xFF130D2A)) else listOf(Color(0xFFF7F8FC), Color(0xFFEEE8FF))
+    val bgColors = if (dark) listOf(Color(0xFF070A12), Color(0xFF12151F)) else listOf(Color(0xFFF7F8FC), Color(0xFFEEF0F5))
     val titleColor = if (dark) Color.White else Color(0xFF171725)
     val pulse = rememberInfiniteTransition(label = "loadingPulse").animateFloat(
         initialValue = 0.35f,

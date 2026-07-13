@@ -35,6 +35,17 @@ Never add client secrets to this file. The app disables cloud capabilities when 
 
 ## 1. Supabase Alpha
 
+### Local testing on this PC
+
+The Supabase CLI is already available. Install Docker Desktop, enable WSL 2 integration for Fedora, then run:
+
+```bash
+npx supabase start
+npx supabase db reset
+```
+
+Use the local API URL and anon key printed by `supabase start` in the uncommitted `norfold.properties`. Android emulators reach the host through `http://10.0.2.2:54321`; physical devices require the PC LAN address and an allowed firewall port. Local email sign-up is enabled for development and confirmation messages are available in the local Inbucket instance. This environment is for testing only; internet collaboration requires a hosted Supabase project.
+
 ### Create and link
 
 1. Create a project named **Norfold Alpha** in the Singapore region.
@@ -50,7 +61,7 @@ npx supabase db push
 
 4. Confirm the migration in `supabase/migrations` completes locally and remotely.
 5. In Authentication > URL Configuration, set Site URL and an exact additional redirect URL to `norfold://auth/callback`.
-6. Keep anonymous and email authentication disabled. Enable Google, Azure, and Apple only after their console credentials are ready.
+6. Keep anonymous authentication disabled. Enable email and Google for Alpha; Azure and Apple remain disabled until their credentials and end-to-end tests are complete.
 
 ### Function secrets
 
@@ -193,7 +204,7 @@ Reference: [Supabase Apple login](https://supabase.com/docs/guides/auth/social-l
 
 ### Email
 
-Resend, email sign-in, invitations by email, and email notifications remain disabled for Local Alpha. When an owned domain is available, verify a dedicated sending subdomain with SPF and DKIM before enabling email delivery. Reference: [Resend domain setup](https://resend.com/docs/dashboard/domains/introduction).
+Local Supabase email authentication uses Inbucket and does not require Resend. External email delivery, invitation mail, and email notifications remain disabled for Local Alpha. When an owned domain is available, verify a dedicated sending subdomain with SPF and DKIM before enabling delivery. Reference: [Resend domain setup](https://resend.com/docs/dashboard/domains/introduction).
 
 ## Credential Return Worksheet
 
@@ -228,7 +239,7 @@ STRIPE_TEAM_PRICE_ID=                      # Supabase secret
 ## Final Operator Checklist
 
 - [ ] Fresh Supabase, Google/Firebase, Entra, Apple, Stripe, and Play Alpha projects are used.
-- [ ] Email, anonymous auth, Resend, and production billing UI remain disabled.
+- [ ] Anonymous auth, Resend, Apple/Microsoft auth, and production billing UI remain disabled; local email auth is enabled only for development.
 - [ ] Every exposed Supabase table passes two-user RLS isolation.
 - [ ] No private credential appears in Git history, Gradle fields, resources, APK, or AAB.
 - [ ] `norfold.properties` contains public values only and remains gitignored.

@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -54,6 +55,9 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.automirrored.outlined.Note
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -244,18 +248,19 @@ fun CanvasBoardScreen(state: NotesUiState, viewModel: NotesViewModel, onPickCanv
                             )
                         }
 
+                        val gridColor = MaterialTheme.colorScheme.outlineVariant
                         Canvas(Modifier.fillMaxSize()) {
                             val grid = (72.dp.toPx() * viewportScale).coerceIn(36.dp.toPx(), 144.dp.toPx())
                             val startX = viewportOffset.x % grid - grid
                             val startY = viewportOffset.y % grid - grid
                             var x = startX
                             while (x <= size.width + grid) {
-                                drawLine(Color(0xFFE8ECF6).copy(alpha = 0.55f), Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
+                                drawLine(gridColor.copy(alpha = 0.55f), Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
                                 x += grid
                             }
                             var y = startY
                             while (y <= size.height + grid) {
-                                drawLine(Color(0xFFE8ECF6).copy(alpha = 0.55f), Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
+                                drawLine(gridColor.copy(alpha = 0.55f), Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
                                 y += grid
                             }
                         }
@@ -508,7 +513,7 @@ private fun CanvasNodeDetailDialog(
                             Text("Linked note", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(note.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(
-                                note.bodyMarkdown.replace(Regex("[#*`>]"), "").replace("\n", " ").trim(),
+                                note.document.plainText().replace("\n", " ").trim(),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 3,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -655,6 +660,7 @@ fun ChatScreen(state: NotesUiState, viewModel: NotesViewModel, onPickAttachment:
             .fillMaxSize()
             .imePadding(),
     ) {
+        ChatPersonaBar(onBack = viewModel::handleBack)
         // Message list grows to fill; input pinned at the bottom above the keyboard.
         val messages = state.chatMessages
         val listState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -667,6 +673,13 @@ fun ChatScreen(state: NotesUiState, viewModel: NotesViewModel, onPickAttachment:
             verticalArrangement = Arrangement.spacedBy(2.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 10.dp),
         ) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                    Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Text("Today", Modifier.padding(horizontal = 14.dp, vertical = 5.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
             itemsIndexed(messages, key = { _, it -> it.id }) { index, chat ->
                 val prev = messages.getOrNull(index - 1)
                 val next = messages.getOrNull(index + 1)
@@ -694,7 +707,7 @@ fun ChatScreen(state: NotesUiState, viewModel: NotesViewModel, onPickAttachment:
                     value = message,
                     onValueChange = { message = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message", fontSize = 14.sp) },
+                    placeholder = { Text("Message workspace…", fontSize = 14.sp) },
                     maxLines = 4,
                     shape = RoundedCornerShape(22.dp),
                 )
@@ -717,6 +730,34 @@ fun ChatScreen(state: NotesUiState, viewModel: NotesViewModel, onPickAttachment:
                         .background(if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant),
                 ) {
                     Icon(Icons.AutoMirrored.Outlined.Send, null, tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatPersonaBar(onBack: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.background) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface),
+            ) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", modifier = Modifier.size(20.dp))
+            }
+            Box(Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
+                Text("W", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+            Column(Modifier.weight(1f)) {
+                Text("Workspace chat", fontWeight = FontWeight.Black, fontSize = 18.sp, maxLines = 1)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF2FBF71)))
+                    Text("Local collaboration", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
             }
         }
@@ -939,6 +980,7 @@ fun SyncMonitorScreen(state: NotesUiState, viewModel: NotesViewModel) {
 
 @Composable
 private fun SyncStatusRing(syncing: Boolean, conflicts: Int) {
+    val accent = MaterialTheme.colorScheme.primary
     Box(Modifier.size(168.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val stroke = size.minDimension * 0.085f
@@ -954,7 +996,7 @@ private fun SyncStatusRing(syncing: Boolean, conflicts: Int) {
                 style = Stroke(stroke, cap = StrokeCap.Round),
             )
             drawArc(
-                Color(0xFF9D7BFF),
+                accent,
                 -90f,
                 if (syncing) 230f else 292f,
                 false,
@@ -1305,12 +1347,16 @@ private fun ChatBubble(chat: ChatMessageItem, firstOfGroup: Boolean, lastOfGroup
                             ChatAttachmentCard(chat, mine)
                         }
                     }
-                    Text(
-                        relativeSyncTime(chat.createdAt),
-                        fontSize = 9.sp,
-                        color = textColor.copy(alpha = 0.6f),
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        Text(
+                            relativeSyncTime(chat.createdAt),
+                            fontSize = 9.sp,
+                            color = textColor.copy(alpha = 0.6f),
+                        )
+                        if (mine) {
+                            Icon(Icons.Outlined.DoneAll, "Read", tint = textColor.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
+                        }
+                    }
                 }
             }
         }

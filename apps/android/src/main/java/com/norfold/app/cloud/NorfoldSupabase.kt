@@ -4,6 +4,7 @@ import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
+import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.auth.providers.builtin.IDToken
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.functions.Functions
@@ -35,6 +36,22 @@ object NorfoldSupabase {
             this.idToken = idToken
             provider = Google
             this.nonce = nonce
+        }
+    }
+
+    suspend fun signInWithEmail(email: String, password: String) {
+        ExternalServiceConfig.requireSupabase()
+        client.auth.signInWith(Email) {
+            this.email = email
+            this.password = password
+        }
+    }
+
+    suspend fun signUpWithEmail(email: String, password: String) {
+        ExternalServiceConfig.requireSupabase()
+        client.auth.signUpWith(Email) {
+            this.email = email
+            this.password = password
         }
     }
 }

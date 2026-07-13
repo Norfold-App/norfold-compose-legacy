@@ -32,6 +32,7 @@ val BrandPalettes: Map<ThemeProfile, BrandPalette> = mapOf(
     ThemeProfile.Candy to BrandPalette(ThemeProfile.Candy, "Candy", hex(0xFF9A9E), hex(0xFAB0D8), hex(0xA18CD1), hex(0xFBC2EB), accent = hex(0xB06AB3)),
     ThemeProfile.Midnight to BrandPalette(ThemeProfile.Midnight, "Midnight", hex(0x4CA1AF), hex(0x2C5364), hex(0x557C93), hex(0x203A43), accent = hex(0x3E8EA0)),
     ThemeProfile.Gold to BrandPalette(ThemeProfile.Gold, "Gold", hex(0xF7971E), hex(0xFFD200), hex(0xFFB86C), hex(0xFCB045), accent = hex(0xE08A12)),
+    ThemeProfile.Graphite to BrandPalette(ThemeProfile.Graphite, "Graphite", hex(0x4A4E63), hex(0x33374A), hex(0x6B6F82), hex(0x9195A6), accent = hex(0x33374A)),
 )
 
-fun ThemeProfile.palette(): BrandPalette = BrandPalettes[this] ?: BrandPalettes.getValue(ThemeProfile.Neon)
+fun ThemeProfile.palette(): BrandPalette = BrandPalettes[this] ?: BrandPalettes.getValue(ThemeProfile.Graphite)

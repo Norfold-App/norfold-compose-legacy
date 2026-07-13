@@ -63,7 +63,7 @@ object BackupCodec {
             appendLine(listOf("NOTEBOOK", it.id, b64(it.name), it.parentId ?: "", it.color, it.sortOrder).joinToString("|"))
         }
         snapshot.tags.sortedBy { it.name.lowercase() }.forEach {
-            appendLine(listOf("TAG", it.id, b64(it.name), it.color).joinToString("|"))
+            appendLine(listOf("TAG", it.id, b64(it.name), it.color, b64(it.scope)).joinToString("|"))
         }
         snapshot.notes.sortedByDescending { it.updatedAt }.forEach {
             appendLine(
@@ -260,11 +260,12 @@ object BackupCodec {
                     id = cells[1].toLong(),
                     name = unb64(cells[2]),
                     color = cells[3].toLong(),
+                    scope = unb64(cells.getOrElse(4) { "" }).ifBlank { "notes" },
                 )
                 "NOTE" -> notes += Note(
                     id = cells[1].toLong(),
                     title = unb64(cells[2]),
-                    bodyMarkdown = unb64(cells[3]),
+                    document = MarkdownBlockCodec.import(unb64(cells[3])),
                     notebookId = cells[4].takeIf { it.isNotBlank() }?.toLong(),
                     coverUri = unb64(cells.getOrElse(5) { "" }).takeIf { it.isNotBlank() },
                     coverMimeType = unb64(cells.getOrElse(6) { "" }).takeIf { it.isNotBlank() },

@@ -4,6 +4,7 @@ package com.norfold.app.ui.tasks
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -17,6 +18,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
@@ -26,7 +28,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,11 +38,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -58,12 +57,19 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Event
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
@@ -72,10 +78,12 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.TableRows
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -84,6 +92,7 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -93,6 +102,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -112,10 +122,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -124,14 +138,18 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import com.norfold.app.ui.components.MarkdownPreview
 import com.norfold.app.domain.TaskBoardItem
@@ -143,6 +161,7 @@ import com.norfold.app.domain.TaskPropertyDefinition
 import com.norfold.app.domain.TaskPropertyType
 import com.norfold.app.domain.TaskPropertyValue
 import com.norfold.app.domain.TaskStatus
+import com.norfold.app.domain.Tag
 import com.norfold.app.domain.TaskDateRange
 import com.norfold.app.domain.TaskDateRangeCodec
 import com.norfold.app.domain.WorkspaceComment
@@ -150,6 +169,11 @@ import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.WorkspaceFileItem
 import com.norfold.app.ui.NotesUiState
 import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.LocalContextualMenuColor
+import com.norfold.app.ui.LocalContextualMenuStyle
+import com.norfold.app.domain.ContextualMenuColor
+import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.domain.Destination
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -158,11 +182,36 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
+private data class TaskCardCounts(val files: Int = 0, val comments: Int = 0, val links: Int = 0)
+
+private enum class TaskTableColumn(val label: String, val width: Dp, val compactWidth: Dp) {
+    Name("Name", 238.dp, 116.dp),
+    StatusTags("Status / Tags", 190.dp, 92.dp),
+    Checklist("Checklist", 210.dp, 104.dp),
+    DueDate("Due Date", 170.dp, 88.dp),
+    Notes("Notes / Text", 260.dp, 150.dp),
+    Files("Files", 190.dp, 126.dp),
+    PriorityAssignee("Priority / Assignee", 210.dp, 140.dp),
+}
+
+private data class TaskCreationPayload(
+    val title: String,
+    val column: TaskColumnItem,
+    val propertyValues: Map<TaskPropertyType, String>,
+    val checklistItems: List<String>,
+)
+
+private data class PendingTaskCreation(
+    val existingTaskIds: Set<Long>,
+    val payload: TaskCreationPayload,
+)
+
 @Composable
 fun TasksBoardScreen(
     state: NotesUiState,
     viewModel: NotesViewModel,
     onPickTaskAttachment: (TaskItem) -> Unit = {},
+    onTaskDetailOpenChange: (Boolean) -> Unit = {},
 ) {
     val currentView = TaskWorkspaceView.fromKey(state.settings.taskViewMode)
     val sort = TaskWorkspaceSort.fromKey(state.settings.taskSortMode)
@@ -177,6 +226,13 @@ fun TasksBoardScreen(
     var newBoardName by remember { mutableStateOf("") }
     var newColumnName by remember { mutableStateOf("") }
     var interactionStatus by remember { mutableStateOf(TaskInteractionStatus(engine = kanbanEngine)) }
+    LaunchedEffect(editingTask?.id) { onTaskDetailOpenChange(editingTask != null) }
+    LaunchedEffect(currentView) {
+        if (currentView == TaskWorkspaceView.Calendar) {
+            viewModel.patchSettings { it.copy(taskViewMode = TaskWorkspaceView.Board.key) }
+            viewModel.go(Destination.Calendar)
+        }
+    }
 
     val selectedBoard = state.taskBoards.firstOrNull { it.id == state.settings.taskSelectedBoardId }
         ?: state.taskBoards.firstOrNull()
@@ -196,6 +252,26 @@ fun TasksBoardScreen(
         .sortedFor(sort)
     val assignees = state.tasks.map { it.assignee.ifBlank { "@owner" } }.distinct().sorted()
     val labels = state.tasks.flatMap { it.labels.split(",").map(String::trim) }.filter(String::isNotBlank).distinct().sorted()
+    val taskCardCounts = boardTasks.associate { task ->
+        val objectId = state.workspaceObjects.firstOrNull {
+            it.objectType == WorkspaceObjectType.Task && it.sourceId == task.id
+        }?.id
+        task.id to if (objectId == null) {
+            TaskCardCounts(files = if (task.attachmentName == null) 0 else 1)
+        } else {
+            TaskCardCounts(
+                files = state.workspaceFiles.count { it.objectId == objectId } + if (task.attachmentName == null) 0 else 1,
+                comments = state.workspaceComments.count { it.objectId == objectId && !it.resolved },
+                links = state.workspaceObjectLinks.count { it.fromObjectId == objectId || it.toObjectId == objectId },
+            )
+        }
+    }
+    val taskFilesByTask = boardTasks.associate { task ->
+        val objectId = state.workspaceObjects.firstOrNull {
+            it.objectType == WorkspaceObjectType.Task && it.sourceId == task.id
+        }?.id
+        task.id to if (objectId == null) emptyList() else state.workspaceFiles.filter { it.objectId == objectId }
+    }
 
     LaunchedEffect(selectedBoard?.id) {
         selectedBoard?.let { board ->
@@ -209,44 +285,42 @@ fun TasksBoardScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(taskBackground())
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+            .background(taskBackground()),
     ) {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(start = 18.dp, top = 70.dp, end = 18.dp, bottom = 160.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .widthIn(max = 1440.dp)
+                .align(Alignment.TopCenter),
         ) {
-            item {
-                TaskHeader(
-                    board = selectedBoard,
-                    currentView = currentView,
-                    query = query,
-                    onQueryChange = { query = it },
-                    activeAction = activeRailAction,
-                    onActionToggle = { action -> activeRailAction = if (activeRailAction == action) null else action },
-                    onViewChange = { next ->
+            TaskHeader(
+                board = selectedBoard,
+                currentView = currentView,
+                query = query,
+                onQueryChange = { query = it },
+                activeAction = activeRailAction,
+                onActionToggle = { action -> activeRailAction = if (activeRailAction == action) null else action },
+                onViewChange = { next ->
+                    if (next == TaskWorkspaceView.Calendar) {
+                        viewModel.go(Destination.Calendar)
+                    } else {
                         viewModel.patchSettings { it.copy(taskViewMode = next.key) }
-                    },
-                )
-            }
-            item {
-                when (currentView) {
-                    TaskWorkspaceView.Table -> TaskDatabaseTable(
-                        tasks = filteredTasks,
-                        columns = columns,
-                        properties = taskProperties,
-                        propertyValues = taskPropertyValues,
-                        checklistItems = taskChecklistItems,
-                        viewModel = viewModel,
-                        onPickAttachment = onPickTaskAttachment,
-                        onTaskClick = { editingTask = it },
-                    )
-                    TaskWorkspaceView.Board -> TaskKanbanBoard(
+                    }
+                },
+                modifier = Modifier.padding(start = 18.dp, top = 8.dp, end = 18.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp),
+            ) {
+                if (currentView == TaskWorkspaceView.Board) {
+                    TaskKanbanBoard(
                         columns = columns,
                         tasks = filteredTasks,
                         checklistItems = taskChecklistItems,
+                        cardCounts = taskCardCounts,
                         engine = kanbanEngine,
                         compact = state.settings.taskCompactLayout,
                         onTaskClick = { editingTask = it },
@@ -255,18 +329,62 @@ fun TasksBoardScreen(
                         onRenameColumn = { column, name -> viewModel.renameTaskColumn(column, name) },
                         onMoveColumn = { column, delta -> viewModel.moveTaskColumn(column, delta) },
                         onDeleteColumn = { column -> viewModel.deleteTaskColumn(column) },
+                        onCreateColumn = { name -> viewModel.createTaskColumn(selectedBoardId, name) },
                         onInteractionStatus = { interactionStatus = it },
                     )
-                    TaskWorkspaceView.Matrix -> TaskMatrixView(
-                        columns = columns,
+                } else if (currentView == TaskWorkspaceView.Table) {
+                    TaskDatabaseTable(
                         tasks = filteredTasks,
+                        allBoardTasks = boardTasks,
+                        columns = columns,
+                        properties = taskProperties,
+                        propertyValues = taskPropertyValues,
+                        checklistItems = taskChecklistItems,
+                        filesByTask = taskFilesByTask,
+                        tags = state.tags,
+                        viewModel = viewModel,
+                        onPickAttachment = onPickTaskAttachment,
                         onTaskClick = { editingTask = it },
+                        modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 112.dp),
                     )
-                    TaskWorkspaceView.List -> TaskListView(filteredTasks, columns, taskProperties, taskPropertyValues, taskChecklistItems, onTaskClick = { editingTask = it })
-                    TaskWorkspaceView.Feed -> TaskFeedView(filteredTasks, taskProperties, taskPropertyValues, taskChecklistItems, onTaskClick = { editingTask = it })
-                    TaskWorkspaceView.Calendar -> TaskCalendarView(filteredTasks, taskChecklistItems, onTaskClick = { editingTask = it })
-                    TaskWorkspaceView.Chart -> TaskChartView(filteredTasks)
-                    TaskWorkspaceView.Gallery -> TaskGalleryView(filteredTasks, taskChecklistItems, onTaskClick = { editingTask = it })
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(top = 14.dp, bottom = 140.dp),
+                    ) {
+                        when (currentView) {
+                            TaskWorkspaceView.Board -> Unit
+                            TaskWorkspaceView.Table -> Unit
+                            TaskWorkspaceView.Matrix -> TaskMatrixView(
+                                columns = columns,
+                                tasks = filteredTasks,
+                                onTaskClick = { editingTask = it },
+                            )
+                            TaskWorkspaceView.List -> BoxWithConstraints {
+                                if (maxWidth < 720.dp) {
+                                    CompactGroupedTaskTable(
+                                        tasks = filteredTasks,
+                                        columns = columns,
+                                        properties = taskProperties,
+                                        propertyValues = taskPropertyValues,
+                                        checklistItems = taskChecklistItems,
+                                        viewModel = viewModel,
+                                        onPropertyClick = { task, property -> editingTask = task },
+                                        onTaskClick = { editingTask = it },
+                                    )
+                                } else {
+                                    TaskListView(filteredTasks, columns, taskProperties, taskPropertyValues, taskChecklistItems, onTaskClick = { editingTask = it })
+                                }
+                            }
+                            TaskWorkspaceView.Timeline -> TaskTimelineView(filteredTasks, columns, onTaskClick = { editingTask = it })
+                            TaskWorkspaceView.Feed -> TaskFeedView(filteredTasks, taskProperties, taskPropertyValues, taskChecklistItems, onTaskClick = { editingTask = it })
+                            TaskWorkspaceView.Calendar -> Unit
+                            TaskWorkspaceView.Chart -> TaskChartView(filteredTasks)
+                            TaskWorkspaceView.Gallery -> TaskGalleryView(filteredTasks, taskChecklistItems, onTaskClick = { editingTask = it })
+                        }
+                    }
                 }
             }
         }
@@ -275,8 +393,9 @@ fun TasksBoardScreen(
             action = activeRailAction,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 116.dp, end = 18.dp, start = 18.dp)
-                .widthIn(max = 300.dp),
+                .padding(top = 190.dp, end = 18.dp, start = 18.dp)
+                .fillMaxWidth(0.78f)
+                .widthIn(max = 680.dp),
             query = query,
             onQueryChange = { query = it },
             assignees = assignees,
@@ -319,6 +438,8 @@ fun TasksBoardScreen(
                 propertyValues = taskPropertyValues,
                 checklistItems = taskChecklistItems,
                 columns = columns,
+                tags = state.tags,
+                boardName = selectedBoard?.name ?: "Default board",
                 taskObjectId = state.workspaceObjects.firstOrNull { it.objectType == WorkspaceObjectType.Task && it.sourceId == task.id }?.id,
                 comments = state.workspaceComments,
                 files = state.workspaceFiles,
@@ -343,18 +464,30 @@ private fun TaskHeader(
     activeAction: TaskRailAction?,
     onActionToggle: (TaskRailAction) -> Unit,
     onViewChange: (TaskWorkspaceView) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(
-            text = board?.name ?: "To-Do List",
-            color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = FontWeight.Black,
-            fontSize = 30.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = board?.name ?: "Default board",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Black,
+                fontSize = 30.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = "Capture, organize, and ship great work ✨",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         OutlinedTextField(
             value = query,
             onValueChange = onQueryChange,
@@ -362,19 +495,8 @@ private fun TaskHeader(
             singleLine = true,
             leadingIcon = { Icon(Icons.Outlined.Search, null) },
             trailingIcon = {
-                Row {
-                    IconButton(onClick = { onActionToggle(TaskRailAction.Filter) }) {
-                        Icon(Icons.Outlined.GridView, null, tint = if (activeAction == TaskRailAction.Filter) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { onActionToggle(TaskRailAction.Sort) }) {
-                        Icon(Icons.AutoMirrored.Outlined.Sort, null, tint = if (activeAction == TaskRailAction.Sort) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { onActionToggle(TaskRailAction.New) }) {
-                        Icon(Icons.Outlined.Add, null, tint = if (activeAction == TaskRailAction.New) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { onActionToggle(TaskRailAction.Settings) }) {
-                        Icon(Icons.Outlined.Settings, null, tint = if (activeAction == TaskRailAction.Settings) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                IconButton(onClick = { onActionToggle(TaskRailAction.Filter) }) {
+                    Icon(Icons.Outlined.Tune, "Task controls", tint = if (activeAction != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             placeholder = { Text("Search tasks, assignees, labels") },
@@ -406,6 +528,7 @@ private fun TaskKanbanBoard(
     columns: List<TaskColumnItem>,
     tasks: List<TaskItem>,
     checklistItems: List<TaskChecklistItem>,
+    cardCounts: Map<Long, TaskCardCounts>,
     engine: TaskKanbanEngine,
     compact: Boolean,
     onTaskClick: (TaskItem) -> Unit,
@@ -414,12 +537,14 @@ private fun TaskKanbanBoard(
     onRenameColumn: (TaskColumnItem, String) -> Unit,
     onMoveColumn: (TaskColumnItem, Int) -> Unit,
     onDeleteColumn: (TaskColumnItem) -> Unit,
+    onCreateColumn: (String) -> Unit,
     onInteractionStatus: (TaskInteractionStatus) -> Unit,
 ) {
     TaskPointerKanbanBoard(
         columns = columns,
         tasks = tasks,
         checklistItems = checklistItems,
+        cardCounts = cardCounts,
         engine = engine,
         compact = compact,
         onTaskClick = onTaskClick,
@@ -428,6 +553,7 @@ private fun TaskKanbanBoard(
         onRenameColumn = onRenameColumn,
         onMoveColumn = onMoveColumn,
         onDeleteColumn = onDeleteColumn,
+        onCreateColumn = onCreateColumn,
         onInteractionStatus = onInteractionStatus,
     )
 }
@@ -437,6 +563,7 @@ private fun TaskPointerKanbanBoard(
     columns: List<TaskColumnItem>,
     tasks: List<TaskItem>,
     checklistItems: List<TaskChecklistItem>,
+    cardCounts: Map<Long, TaskCardCounts>,
     engine: TaskKanbanEngine,
     compact: Boolean,
     onTaskClick: (TaskItem) -> Unit,
@@ -445,8 +572,11 @@ private fun TaskPointerKanbanBoard(
     onRenameColumn: (TaskColumnItem, String) -> Unit,
     onMoveColumn: (TaskColumnItem, Int) -> Unit,
     onDeleteColumn: (TaskColumnItem) -> Unit,
+    onCreateColumn: (String) -> Unit,
     onInteractionStatus: (TaskInteractionStatus) -> Unit,
 ) {
+    var showNewColumnDialog by remember { mutableStateOf(false) }
+    var newColumnName by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val dragState = remember { BoardDragState() }
     val density = LocalDensity.current
@@ -466,10 +596,9 @@ private fun TaskPointerKanbanBoard(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 530.dp)
+            .fillMaxSize()
             .onGloballyPositioned { dragState.boardBounds = it.boundsInRoot() }
             .pointerInput(columns, tasks, dragState.boardBounds) {
                 awaitEachGesture {
@@ -498,6 +627,7 @@ private fun TaskPointerKanbanBoard(
                 }
             },
     ) {
+        val boardViewportHeight = maxHeight
         LazyRow(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -509,6 +639,7 @@ private fun TaskPointerKanbanBoard(
                     column = column,
                     tasks = tasksByColumn[column.id].orEmpty(),
                     checklistItems = checklistItems,
+                    cardCounts = cardCounts,
                     compact = compact,
                     drag = dragState,
                     onTaskClick = onTaskClick,
@@ -519,15 +650,24 @@ private fun TaskPointerKanbanBoard(
                     onDragMove = {},
                     onDrop = {},
                     enableCardDrag = false,
+                    modifier = Modifier.height(boardViewportHeight),
                 )
             }
             item {
                 Surface(
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier.width(280.dp).heightIn(min = 170.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.width(280.dp).height(72.dp).clickable { showNewColumnDialog = true },
                 ) {
-                    Text("+ New group", modifier = Modifier.padding(22.dp), fontWeight = FontWeight.Black, fontSize = 20.sp)
+                    Row(
+                        Modifier.padding(horizontal = 18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(Icons.Outlined.Add, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text("New column", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -550,7 +690,9 @@ private fun TaskPointerKanbanBoard(
             val position = dragState.pointer - dragState.grabOffset
             TaskKanbanCard(
                 task = task,
+                statusName = columns.firstOrNull { it.id == task.taskColumnId }?.name ?: task.status.label(),
                 checklistItems = checklistItems,
+                counts = cardCounts[task.id] ?: TaskCardCounts(),
                 compact = compact,
                 dragging = true,
                 modifier = Modifier
@@ -564,6 +706,33 @@ private fun TaskPointerKanbanBoard(
             )
         }
     }
+    if (showNewColumnDialog) {
+        AlertDialog(
+            onDismissRequest = { showNewColumnDialog = false },
+            title = { Text("New column") },
+            text = {
+                OutlinedTextField(
+                    value = newColumnName,
+                    onValueChange = { newColumnName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Column name") },
+                    colors = taskTextFieldColors(),
+                )
+            },
+            dismissButton = { TextButton(onClick = { showNewColumnDialog = false }) { Text("Cancel") } },
+            confirmButton = {
+                Button(
+                    enabled = newColumnName.isNotBlank(),
+                    onClick = {
+                        onCreateColumn(newColumnName.trim())
+                        newColumnName = ""
+                        showNewColumnDialog = false
+                    },
+                ) { Text("Create") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -571,6 +740,7 @@ private fun TaskKanbanColumn(
     column: TaskColumnItem,
     tasks: List<TaskItem>,
     checklistItems: List<TaskChecklistItem>,
+    cardCounts: Map<Long, TaskCardCounts>,
     compact: Boolean,
     drag: BoardDragState,
     onTaskClick: (TaskItem) -> Unit,
@@ -581,23 +751,28 @@ private fun TaskKanbanColumn(
     onDragMove: (Offset) -> Unit,
     onDrop: () -> Unit,
     enableCardDrag: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     var newTitle by remember(column.id) { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var composerVisible by remember(column.id) { mutableStateOf(tasks.isEmpty()) }
     var renameValue by remember(column.id, column.name) { mutableStateOf(column.name) }
+    val columnColor = column.resolvedColor()
     val target = drag.currentTarget()
     Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(12.dp),
         tonalElevation = 2.dp,
-        modifier = Modifier
-            .width(292.dp)
-            .fillMaxHeight()
+        modifier = modifier
+            .width(304.dp)
             .onGloballyPositioned { drag.columnBounds[column.id] = TaskColumnBounds(column.id, drag.toBoardRect(it.boundsInRoot())) },
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -614,11 +789,13 @@ private fun TaskKanbanColumn(
                         renaming = false
                     }) { Text("Save") }
                 } else {
+                    Box(Modifier.size(12.dp).clip(CircleShape).background(columnColor))
+                    Spacer(Modifier.width(8.dp))
                     Text(column.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, fontSize = 18.sp)
                     StatusCount(tasks.size)
                     Box {
                         IconButton(onClick = { menuOpen = true }) { Icon(Icons.Outlined.MoreVert, null) }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        NorfoldTaskMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(text = { Text("Rename column") }, onClick = { menuOpen = false; renaming = true })
                             DropdownMenuItem(text = { Text("Move left") }, onClick = { menuOpen = false; onMoveColumn(-1) })
                             DropdownMenuItem(text = { Text("Move right") }, onClick = { menuOpen = false; onMoveColumn(1) })
@@ -642,7 +819,9 @@ private fun TaskKanbanColumn(
                 } else {
                     TaskKanbanCard(
                         task = task,
+                        statusName = column.name,
                         checklistItems = checklistItems,
+                        counts = cardCounts[task.id] ?: TaskCardCounts(),
                         compact = compact,
                         onClick = { onTaskClick(task) },
                         modifier = Modifier.fillMaxWidth(),
@@ -657,25 +836,41 @@ private fun TaskKanbanColumn(
                 }
             }
             if (target?.columnId == column.id && target.index >= tasks.size) DropIndicator()
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = newTitle,
-                    onValueChange = { newTitle = it },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    placeholder = { Text("New task") },
-                    colors = taskTextFieldColors(),
-                    shape = RoundedCornerShape(16.dp),
-                )
-                IconButton(
-                    onClick = {
-                        val title = newTitle.trim()
-                        if (title.isNotEmpty()) {
-                            onAddTask(title)
-                            newTitle = ""
-                        }
-                    },
-                ) { Icon(Icons.Outlined.Add, null) }
+            if (composerVisible) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = newTitle,
+                        onValueChange = { newTitle = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        placeholder = { Text("New task") },
+                        colors = taskTextFieldColors(),
+                        shape = RoundedCornerShape(10.dp),
+                    )
+                    IconButton(
+                        onClick = {
+                            val title = newTitle.trim()
+                            if (title.isNotEmpty()) {
+                                onAddTask(title)
+                                newTitle = ""
+                                composerVisible = false
+                            }
+                        },
+                    ) { Icon(Icons.Outlined.CheckCircle, "Create task") }
+                }
+            } else {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable { composerVisible = true },
+                    shape = RoundedCornerShape(9.dp),
+                    color = Color.Transparent,
+                    border = BorderStroke(1.dp, columnColor.copy(alpha = 0.55f)),
+                ) {
+                    Row(Modifier.padding(vertical = 9.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Add, null, Modifier.size(17.dp), tint = columnColor)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Add task", color = columnColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    }
+                }
             }
         }
     }
@@ -684,7 +879,9 @@ private fun TaskKanbanColumn(
 @Composable
 private fun TaskKanbanCard(
     task: TaskItem,
+    statusName: String,
     checklistItems: List<TaskChecklistItem>,
+    counts: TaskCardCounts = TaskCardCounts(),
     compact: Boolean,
     dragging: Boolean = false,
     modifier: Modifier = Modifier,
@@ -702,6 +899,7 @@ private fun TaskKanbanCard(
                 bounds = it.boundsInRoot()
                 if (!dragging) onBoundsChanged(bounds)
             }
+            .clickable(enabled = !dragging, onClick = onClick)
             .then(
                 if (!dragging && enableCardDrag) {
                     Modifier.pointerInput(task.id) {
@@ -717,12 +915,11 @@ private fun TaskKanbanCard(
                     }
                 } else Modifier
             )
-            .clickable(enabled = !dragging, onClick = onClick)
             .animateContentSize(),
         colors = CardDefaults.elevatedCardColors(
             containerColor = if (dragging) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
         ),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(10.dp),
     ) {
         Column(
             modifier = Modifier.padding(if (compact) 12.dp else 14.dp),
@@ -736,28 +933,47 @@ private fun TaskKanbanCard(
                 Text(task.description, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = if (compact) 2 else 4, overflow = TextOverflow.Ellipsis)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TinyMeta(task.status.label())
+                TinyMeta(statusName)
                 PriorityPill(task.priority)
             }
-            task.progressFromChecklist(checklistItems)?.let { progress ->
+            val taskChecks = checklistItems.filter { it.taskId == task.id }.sortedBy { it.sortOrder }
+            task.progressFromChecklist(taskChecks)?.let { progress ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.weight(1f))
-                    Text("$progress%", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    Icon(Icons.Outlined.CheckCircle, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${taskChecks.count { it.checked }} / ${taskChecks.size}", fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.weight(1f).height(4.dp))
                 }
             }
-            checklistItems.filter { it.taskId == task.id }.sortedBy { it.sortOrder }.take(if (compact) 1 else 2).forEach { item ->
-                Text("${if (item.checked) "x" else " "} ${item.text}", color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+            taskChecks.take(if (compact) 1 else 3).forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(if (item.checked) Icons.Outlined.CheckBox else Icons.Outlined.RadioButtonUnchecked, null, Modifier.size(14.dp), tint = if (item.checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(item.text, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, textDecoration = if (item.checked) TextDecoration.LineThrough else null)
+                }
             }
             if (task.labels.isNotBlank()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                     task.labels.split(',').map(String::trim).filter(String::isNotBlank).forEach { TinyMeta(it) }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (task.startAt != null || task.dueAt != null) TinyMeta(formatTaskTimeRange(task.startAt, task.dueAt, task.allDay))
-                if (task.assignee.isNotBlank()) TinyMeta(task.assignee)
+                Spacer(Modifier.weight(1f))
+                if (counts.files > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Icon(Icons.Outlined.AttachFile, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(counts.files.toString(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (counts.comments > 0) {
+                    Icon(Icons.Outlined.ChatBubbleOutline, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(counts.comments.toString(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (counts.links > 0) {
+                    Icon(Icons.Outlined.Link, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(counts.links.toString(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (task.assignee.isNotBlank()) AssigneeAvatar(task.assignee)
             }
-            if (task.attachmentName != null) TinyMeta("File · ${task.attachmentName}")
             Text("Updated ${shortTime(task.updatedAt)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
         }
     }
@@ -766,60 +982,166 @@ private fun TaskKanbanCard(
 @Composable
 private fun TaskDatabaseTable(
     tasks: List<TaskItem>,
+    allBoardTasks: List<TaskItem>,
     columns: List<TaskColumnItem>,
     properties: List<TaskPropertyDefinition>,
     propertyValues: List<TaskPropertyValue>,
     checklistItems: List<TaskChecklistItem>,
+    filesByTask: Map<Long, List<WorkspaceFileItem>>,
+    tags: List<Tag>,
     viewModel: NotesViewModel,
     onPickAttachment: (TaskItem) -> Unit,
     onTaskClick: (TaskItem) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var editor by remember { mutableStateOf<Pair<TaskItem, TaskPropertyDefinition>?>(null) }
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        if (maxWidth < 720.dp) {
-            CompactGroupedTaskTable(
-                tasks = tasks,
-                columns = columns,
-                properties = properties,
-                propertyValues = propertyValues,
-                checklistItems = checklistItems,
-                viewModel = viewModel,
-                onPropertyClick = { task, property -> editor = task to property },
-                onTaskClick = onTaskClick,
-            )
-        } else {
-            val scroll = rememberScrollState()
-            val border = MaterialTheme.colorScheme.outlineVariant
-            var selectedCell by remember { mutableStateOf<Pair<Long, Int>?>(null) }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 260.dp)
-                    .horizontalScroll(scroll)
-                    .border(1.6.dp, border, RoundedCornerShape(12.dp))
-                    .clip(RoundedCornerShape(12.dp)),
-            ) {
-                TaskTableRow(
-                    cells = properties.map { it.headerLabel() } + "+ property",
-                    header = true,
-                    onClick = { viewModel.createTaskProperty(columns.firstOrNull()?.boardId ?: 1L, "Text", TaskPropertyType.Text) },
-                )
-                tasks.forEach { task ->
-                    TaskTableRow(
-                        rowId = task.id,
-                        cells = properties.map { property -> task.propertyCell(property, columns, propertyValues, checklistItems) } + "Open",
-                        progressColumn = properties.indexOfFirst { it.type == TaskPropertyType.Checklist },
-                        progress = task.propertyProgress(properties, checklistItems),
-                        selectedCell = selectedCell,
-                        onCellClick = { index ->
-                            selectedCell = task.id to index
-                            properties.getOrNull(index)?.let { editor = task to it } ?: onTaskClick(task)
-                        },
-                        onClick = {},
-                    )
-                }
-                if (tasks.isEmpty()) TaskTableRow(cells = listOf("No tasks", "Create one from New", "", ""), onClick = {})
+    var editorAnchor by remember { mutableStateOf<Rect?>(null) }
+    var selectedCell by remember { mutableStateOf<Pair<Long, TaskTableColumn>?>(null) }
+    var showCreateTask by remember { mutableStateOf(false) }
+    var showPropertyPicker by remember { mutableStateOf(false) }
+    var pendingCreation by remember { mutableStateOf<PendingTaskCreation?>(null) }
+    val horizontal = rememberScrollState()
+    val border = MaterialTheme.colorScheme.outlineVariant
+    val taskIds = remember(tasks) { tasks.mapTo(mutableSetOf()) { it.id } }
+    val visibleColumns = remember(tasks, properties, propertyValues, checklistItems, filesByTask) {
+        TaskTableColumn.entries.filter { column ->
+            if (column == TaskTableColumn.Name) return@filter true
+            val property = properties.propertyFor(column)
+            val explicit = property?.hiddenWhenEmpty == false
+            val hasValue = property != null && propertyValues.any { value ->
+                value.propertyId == property.id && value.taskId in taskIds && value.valueJson.isNotBlank()
             }
+            val hasChecklist = column == TaskTableColumn.Checklist && property != null &&
+                checklistItems.any { it.propertyId == property.id && it.taskId in taskIds }
+            val hasFiles = column == TaskTableColumn.Files && tasks.any { task ->
+                task.attachmentName != null || filesByTask[task.id].orEmpty().isNotEmpty()
+            }
+            explicit || hasValue || hasChecklist || hasFiles
+        }
+    }
+
+    LaunchedEffect(allBoardTasks, properties, pendingCreation) {
+        val pending = pendingCreation ?: return@LaunchedEffect
+        val created = allBoardTasks
+            .asSequence()
+            .filter { it.id !in pending.existingTaskIds }
+            .filter { it.taskColumnId == pending.payload.column.id }
+            .filter { it.title == pending.payload.title }
+            .maxByOrNull { it.id }
+            ?: return@LaunchedEffect
+        pending.payload.propertyValues.forEach { (type, raw) ->
+            properties.firstOrNull { it.type == type }?.let { property ->
+                viewModel.setTaskPropertyValue(created, property, raw)
+            }
+        }
+        properties.firstOrNull { it.type == TaskPropertyType.Checklist }?.let { property ->
+            pending.payload.checklistItems.forEach { text -> viewModel.addChecklistItem(created, property, text) }
+        }
+        pendingCreation = null
+    }
+
+    BoxWithConstraints(modifier) {
+        val compact = maxWidth < 720.dp
+        val indexWidth = if (compact) 42.dp else 72.dp
+        val newPropertyWidth = if (compact) 128.dp else 164.dp
+        val tableWidth = visibleColumns.fold(indexWidth + newPropertyWidth) { total, column -> total + column.width(compact) }
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, border),
+        ) {
+            Box(Modifier.fillMaxSize().horizontalScroll(horizontal)) {
+            LazyColumn(
+                modifier = Modifier.width(tableWidth).fillMaxHeight(),
+                contentPadding = PaddingValues(bottom = 20.dp),
+            ) {
+                stickyHeader {
+                    Row(Modifier.background(MaterialTheme.colorScheme.surface)) {
+                        Box(Modifier.width(indexWidth).height(48.dp).border(0.5.dp, border), contentAlignment = Alignment.Center) {
+                            Text("#", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        visibleColumns.forEach { column ->
+                            TaskTableHeaderCell(column, compact)
+                        }
+                        Surface(
+                            modifier = Modifier.width(newPropertyWidth).height(48.dp).border(0.5.dp, border),
+                            color = MaterialTheme.colorScheme.surface,
+                            onClick = { showPropertyPicker = true },
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            ) {
+                                Icon(Icons.Outlined.Add, "Add property", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("New property", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+                itemsIndexed(tasks, key = { _, task -> task.id }) { index, task ->
+                    val taskChecks = checklistItems.filter { it.taskId == task.id }.sortedBy { it.sortOrder }
+                    val taskFiles = filesByTask[task.id].orEmpty()
+                    val rowHeight = taskTableRowHeight(task, taskChecks, taskFiles)
+                    Row(Modifier.animateItem()) {
+                        Box(Modifier.width(indexWidth).height(rowHeight).border(0.5.dp, border), contentAlignment = Alignment.Center) {
+                            Text((index + 1).toString(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        visibleColumns.forEach { column ->
+                            val property = properties.propertyFor(column)
+                            val alternateProperty = properties.alternatePropertyFor(column)
+                            TaskTableDataCell(
+                                task = task,
+                                column = column,
+                                compact = compact,
+                                rowHeight = rowHeight,
+                                selected = selectedCell == (task.id to column),
+                                boardColumns = columns,
+                                property = property,
+                                alternateProperty = alternateProperty,
+                                propertyValues = propertyValues,
+                                checklistItems = taskChecks,
+                                files = taskFiles,
+                                onSelect = { bounds ->
+                                    selectedCell = task.id to column
+                                    editorAnchor = bounds
+                                    property?.let { editor = task to it } ?: onTaskClick(task)
+                                },
+                                onAlternateSelect = { bounds ->
+                                    selectedCell = task.id to column
+                                    editorAnchor = bounds
+                                    alternateProperty?.let { editor = task to it }
+                                },
+                                onOpenTask = { onTaskClick(task) },
+                                onReorder = { delta ->
+                                    val sameColumn = tasks.filter { it.taskColumnId == task.taskColumnId }
+                                    val current = sameColumn.indexOfFirst { it.id == task.id }
+                                    if (current >= 0) {
+                                        val target = (current + delta).coerceIn(0, sameColumn.lastIndex)
+                                        task.taskColumnId?.let { viewModel.moveTaskToColumnAtIndex(task.id, it, target) }
+                                    }
+                                },
+                            )
+                        }
+                        Spacer(Modifier.width(newPropertyWidth).height(rowHeight).border(0.5.dp, border))
+                    }
+                }
+                item {
+                    Surface(
+                        modifier = Modifier.width(tableWidth).height(48.dp).border(1.dp, border),
+                        color = MaterialTheme.colorScheme.surface,
+                        onClick = { showCreateTask = true },
+                    ) {
+                        Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Outlined.Add, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                            Text("New task", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                            Text("COUNT ${tasks.size}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
         }
     }
     editor?.let { (task, property) ->
@@ -829,11 +1151,434 @@ private fun TaskDatabaseTable(
             value = propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id },
             checklistItems = checklistItems.filter { it.taskId == task.id && it.propertyId == property.id }.sortedBy { it.sortOrder },
             columns = columns,
+            tags = tags,
+            anchor = editorAnchor,
             viewModel = viewModel,
             onPickAttachment = { onPickAttachment(task) },
             onDismiss = { editor = null },
         )
     }
+    if (showCreateTask && columns.isNotEmpty()) {
+        CreateTaskDialog(
+            columns = columns,
+            properties = properties,
+            onAddProperty = { showPropertyPicker = true },
+            onDismiss = { showCreateTask = false },
+            onCreate = { payload ->
+                pendingCreation = PendingTaskCreation(allBoardTasks.mapTo(mutableSetOf()) { it.id }, payload)
+                viewModel.addTaskToColumn(payload.title, payload.column)
+                showCreateTask = false
+            },
+        )
+    }
+    if (showPropertyPicker) {
+        MultiPropertyPickerDialog(
+            activeTypes = properties.mapTo(mutableSetOf()) { it.type },
+            onDismiss = { showPropertyPicker = false },
+            onAdd = { selected ->
+                selected.forEach { type ->
+                    viewModel.createTaskProperty(columns.firstOrNull()?.boardId ?: 1L, type.defaultPropertyName(), type)
+                }
+                showPropertyPicker = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun CreateTaskDialog(
+    columns: List<TaskColumnItem>,
+    properties: List<TaskPropertyDefinition>,
+    onAddProperty: () -> Unit,
+    onDismiss: () -> Unit,
+    onCreate: (TaskCreationPayload) -> Unit,
+) {
+    var title by remember { mutableStateOf("") }
+    var start by remember { mutableStateOf("") }
+    var end by remember { mutableStateOf("") }
+    var due by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var checklist by remember { mutableStateOf("") }
+    var selectedColumn by remember(columns) { mutableStateOf(columns.first()) }
+    var priority by remember { mutableStateOf(TaskPriority.Normal) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().widthIn(max = 620.dp).heightIn(max = 720.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 16.dp,
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("New task", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Title") },
+                    colors = taskTextFieldColors(),
+                )
+                Text("Dates", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    CompactTaskDraftField("Start", start, { start = it }, Modifier.weight(1f))
+                    CompactTaskDraftField("End", end, { end = it }, Modifier.weight(1f))
+                    CompactTaskDraftField("Due", due, { due = it }, Modifier.weight(1f))
+                }
+                Text("Use YYYY-MM-DD", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 86.dp),
+                    label = { Text("Note") },
+                    colors = taskTextFieldColors(),
+                )
+                OutlinedTextField(
+                    value = checklist,
+                    onValueChange = { checklist = it },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 92.dp),
+                    label = { Text("Checklist") },
+                    supportingText = { Text("One item per line") },
+                    colors = taskTextFieldColors(),
+                )
+                Text("Status", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(columns, key = { it.id }) { column ->
+                        AssistChip(
+                            onClick = { selectedColumn = column },
+                            label = { Text(if (selectedColumn.id == column.id) "${column.name} ✓" else column.name) },
+                        )
+                    }
+                }
+                Text("Priority", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(TaskPriority.entries) { option ->
+                        AssistChip(
+                            onClick = { priority = option },
+                            label = { Text(if (priority == option) "${option.label()} ✓" else option.label()) },
+                        )
+                    }
+                }
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onAddProperty),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Outlined.Add, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text("Add property", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    Button(
+                        enabled = title.isNotBlank(),
+                        onClick = {
+                            val startAt = parseTaskDraftDate(start)
+                            val endAt = parseTaskDraftDate(end)
+                            val dueAt = parseTaskDraftDate(due)
+                            val values = buildMap {
+                                put(TaskPropertyType.Status, selectedColumn.name)
+                                put(TaskPropertyType.Priority, priority.name)
+                                if (note.isNotBlank()) put(TaskPropertyType.Text, note.trim())
+                                if (startAt != null || endAt != null) {
+                                    val type = if (properties.any { it.type == TaskPropertyType.Date }) TaskPropertyType.Date else TaskPropertyType.DueDate
+                                    put(type, TaskDateRangeCodec.encode(TaskDateRange(startAt, endAt, allDay = true)))
+                                }
+                                if (dueAt != null) {
+                                    put(TaskPropertyType.DueDate, TaskDateRangeCodec.encode(TaskDateRange(startAt ?: dueAt, dueAt, allDay = true)))
+                                }
+                            }
+                            onCreate(
+                                TaskCreationPayload(
+                                    title = title.trim(),
+                                    column = selectedColumn,
+                                    propertyValues = values,
+                                    checklistItems = checklist.lineSequence().map(String::trim).filter(String::isNotBlank).toList(),
+                                ),
+                            )
+                        },
+                    ) { Text("Create") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactTaskDraftField(label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        singleLine = true,
+        label = { Text(label) },
+        colors = taskTextFieldColors(),
+    )
+}
+
+@Composable
+private fun MultiPropertyPickerDialog(
+    activeTypes: Set<TaskPropertyType>,
+    onDismiss: () -> Unit,
+    onAdd: (Set<TaskPropertyType>) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var selected by remember { mutableStateOf(emptySet<TaskPropertyType>()) }
+    var confirming by remember { mutableStateOf(false) }
+    val available = remember(activeTypes, query) {
+        TaskPropertyType.entries
+            .filterNot { it == TaskPropertyType.Name || it in activeTypes }
+            .filter { query.isBlank() || it.defaultPropertyName().contains(query, ignoreCase = true) }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp).heightIn(max = 640.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 16.dp,
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(if (confirming) "Confirm properties" else "Add properties", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                if (!confirming) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        placeholder = { Text("Search property types") },
+                        colors = taskTextFieldColors(),
+                    )
+                    LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 430.dp)) {
+                        items(available, key = { it.name }) { type ->
+                            val checked = type in selected
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable {
+                                    selected = if (checked) selected - type else selected + type
+                                }.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Checkbox(checked = checked, onCheckedChange = { next -> selected = if (next) selected + type else selected - type })
+                                Icon(type.icon(), null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(type.defaultPropertyName(), modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+                        TextButton(onClick = onDismiss) { Text("Cancel") }
+                        Button(onClick = { confirming = true }, enabled = selected.isNotEmpty()) { Text("Continue") }
+                    }
+                } else {
+                    LazyColumn(Modifier.heightIn(max = 430.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(selected.toList(), key = { it.name }) { type ->
+                            Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)) {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(type.icon(), null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(type.defaultPropertyName(), Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                                    IconButton(onClick = { selected = selected - type }) { Icon(Icons.Outlined.Close, "Remove") }
+                                }
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+                        TextButton(onClick = onDismiss) { Text("Cancel") }
+                        Button(onClick = { onAdd(selected) }, enabled = selected.isNotEmpty()) { Text("Add") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun parseTaskDraftDate(value: String): Long? = runCatching {
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }.parse(value.trim())?.time
+}.getOrNull()
+
+@Composable
+private fun TaskTableHeaderCell(column: TaskTableColumn, compact: Boolean) {
+    val icon = when (column) {
+        TaskTableColumn.Name -> Icons.Outlined.Title
+        TaskTableColumn.StatusTags -> Icons.Outlined.RadioButtonUnchecked
+        TaskTableColumn.Checklist -> Icons.Outlined.CheckBox
+        TaskTableColumn.DueDate -> Icons.Outlined.Event
+        TaskTableColumn.Notes -> Icons.Outlined.TableRows
+        TaskTableColumn.Files -> Icons.Outlined.AttachFile
+        TaskTableColumn.PriorityAssignee -> Icons.Outlined.Person
+    }
+    Row(
+        modifier = Modifier
+            .width(column.width(compact))
+            .height(48.dp)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Icon(icon, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(column.label, fontSize = if (compact) 9.sp else 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+    }
+}
+
+@Composable
+private fun TaskTableDataCell(
+    task: TaskItem,
+    column: TaskTableColumn,
+    compact: Boolean,
+    rowHeight: Dp,
+    selected: Boolean,
+    boardColumns: List<TaskColumnItem>,
+    property: TaskPropertyDefinition?,
+    alternateProperty: TaskPropertyDefinition?,
+    propertyValues: List<TaskPropertyValue>,
+    checklistItems: List<TaskChecklistItem>,
+    files: List<WorkspaceFileItem>,
+    onSelect: (Rect) -> Unit,
+    onAlternateSelect: (Rect) -> Unit,
+    onOpenTask: () -> Unit,
+    onReorder: (Int) -> Unit,
+) {
+    val raw = property?.let { definition ->
+        propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == definition.id }?.valueJson.orEmpty()
+    }.orEmpty()
+    val cellBorder = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    val cellWidth = column.width(compact)
+    var bounds by remember(task.id, column) { mutableStateOf(Rect.Zero) }
+    Column(
+        modifier = Modifier
+            .width(cellWidth)
+            .height(rowHeight)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(if (selected) 2.dp else 0.5.dp, cellBorder)
+            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .clickable { onSelect(bounds) }
+            .padding(horizontal = if (compact) 6.dp else 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        when (column) {
+            TaskTableColumn.Name -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                VerticalReorderHandle(rowHeight = rowHeight, onStep = onReorder, size = if (compact) 18.dp else 28.dp)
+                if (!compact) Icon(Icons.Outlined.Title, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
+                Text(task.title.ifBlank { "Untitled task" }, Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = if (compact) 9.sp else 12.sp)
+                IconButton(onClick = onOpenTask, modifier = Modifier.size(if (compact) 20.dp else 28.dp)) {
+                    Icon(Icons.Outlined.MoreVert, "Open task", Modifier.size(if (compact) 13.dp else 16.dp))
+                }
+            }
+            TaskTableColumn.StatusTags -> {
+                val status = boardColumns.firstOrNull { it.id == task.taskColumnId }
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(status?.resolvedColor() ?: MaterialTheme.colorScheme.primary))
+                    TinyMeta(status?.name ?: task.status.label())
+                }
+                if (task.labels.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        task.labels.split(',').map(String::trim).filter(String::isNotBlank).forEach { label ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.clickable { onAlternateSelect(bounds) },
+                            ) { Text("#$label", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), fontSize = 9.sp, color = MaterialTheme.colorScheme.onSecondaryContainer) }
+                        }
+                    }
+                } else if (alternateProperty != null) {
+                    Text(
+                        "+ tag",
+                        modifier = Modifier.padding(top = 6.dp).clickable { onAlternateSelect(bounds) },
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            TaskTableColumn.Checklist -> {
+                val progress = checklistItems.progressPercent() ?: 0
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.weight(1f).height(4.dp))
+                    Text("$progress%", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+                checklistItems.take(4).forEach { item ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Checkbox(checked = item.checked, onCheckedChange = null, modifier = Modifier.size(22.dp))
+                        Text(item.text, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            TaskTableColumn.DueDate -> {
+                val range = TaskDateRangeCodec.decode(raw, task.dueAt)
+                Text(
+                    when {
+                        range.startAt == null && range.endAt == null -> "Add date"
+                        range.startAt == range.endAt -> formatTaskDue(range.endAt ?: range.startAt!!)
+                        else -> "${formatTaskDue(range.startAt!!)}\n→ ${formatTaskDue(range.endAt!!)}"
+                    },
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TaskTableColumn.Notes -> Text(raw.ifBlank { task.description }.ifBlank { "Type your notes…" }, maxLines = 7, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TaskTableColumn.Files -> {
+                val names = buildList {
+                    addAll(files.map { it.displayName })
+                    task.attachmentName?.takeIf { name -> none { it == name } }?.let(::add)
+                    if (isEmpty() && raw.isNotBlank()) addAll(raw.lineSequence().filter(String::isNotBlank).toList())
+                }
+                if (names.isEmpty()) Text("+ Add file", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                names.take(4).forEach { name ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Icon(Icons.Outlined.AttachFile, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp)
+                    }
+                }
+            }
+            TaskTableColumn.PriorityAssignee -> {
+                PriorityPill(task.priority)
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.clickable { onAlternateSelect(bounds) },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    AssigneeAvatar(task.assignee.ifBlank { "@owner" })
+                    Text(task.assignee.ifBlank { "@owner" }, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+private fun TaskTableColumn.width(compact: Boolean): Dp = if (compact) compactWidth else width
+
+private fun taskTableRowHeight(task: TaskItem, checklist: List<TaskChecklistItem>, files: List<WorkspaceFileItem>): Dp {
+    val noteLines = task.description.lineSequence().count().coerceAtMost(6)
+    val richRows = maxOf(noteLines, checklist.size.coerceAtMost(4), files.size.coerceAtMost(4))
+    return (80 + richRows * 18).coerceIn(80, 188).dp
+}
+
+private fun List<TaskPropertyDefinition>.propertyFor(column: TaskTableColumn): TaskPropertyDefinition? = when (column) {
+    TaskTableColumn.Name -> firstOrNull { it.type == TaskPropertyType.Name }
+    TaskTableColumn.StatusTags -> firstOrNull { it.type == TaskPropertyType.Status }
+        ?: firstOrNull { it.type == TaskPropertyType.Labels || it.type == TaskPropertyType.Multiselect }
+    TaskTableColumn.Checklist -> firstOrNull { it.type == TaskPropertyType.Checklist }
+    TaskTableColumn.DueDate -> firstOrNull { it.type == TaskPropertyType.DueDate || it.type == TaskPropertyType.Date }
+    TaskTableColumn.Notes -> firstOrNull { it.type == TaskPropertyType.Text }
+    TaskTableColumn.Files -> firstOrNull { it.type == TaskPropertyType.FilesMedia }
+    TaskTableColumn.PriorityAssignee -> firstOrNull { it.type == TaskPropertyType.Priority }
+        ?: firstOrNull { it.type == TaskPropertyType.Assignee || it.type == TaskPropertyType.Person }
+}
+
+private fun List<TaskPropertyDefinition>.alternatePropertyFor(column: TaskTableColumn): TaskPropertyDefinition? = when (column) {
+    TaskTableColumn.StatusTags -> firstOrNull { it.type == TaskPropertyType.Labels || it.type == TaskPropertyType.Multiselect }
+    TaskTableColumn.PriorityAssignee -> firstOrNull { it.type == TaskPropertyType.Assignee || it.type == TaskPropertyType.Person }
+    else -> null
 }
 
 @Composable
@@ -856,7 +1601,7 @@ private fun CompactGroupedTaskTable(
             Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(Modifier.size(14.dp).clip(CircleShape).background(Color(column.color)))
+                        Box(Modifier.size(14.dp).clip(CircleShape).background(column.resolvedColor()))
                         Text(column.name, fontWeight = FontWeight.Black, fontSize = 18.sp, modifier = Modifier.weight(1f))
                         StatusCount(columnTasks.size)
                         IconButton(onClick = { collapsed[column.id] = !(collapsed[column.id] ?: false) }) {
@@ -933,55 +1678,168 @@ private fun FocusedTaskPropertyDialog(
     value: TaskPropertyValue?,
     checklistItems: List<TaskChecklistItem>,
     columns: List<TaskColumnItem>,
+    tags: List<Tag>,
+    anchor: Rect?,
     viewModel: NotesViewModel,
     onPickAttachment: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var newStatus by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
+    val compact = LocalConfiguration.current.screenWidthDp < 720
+    val editorContent: @Composable () -> Unit = {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(property.type.icon(), null, tint = MaterialTheme.colorScheme.primary)
-                Text(property.name, fontWeight = FontWeight.Black)
+                Text(property.name, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close") }
             }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                when (property.type) {
-                    TaskPropertyType.Status -> {
-                        columns.forEach { column ->
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (column.id == task.taskColumnId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f),
-                                modifier = Modifier.fillMaxWidth().clickable { viewModel.moveTaskToColumn(task, column); onDismiss() },
-                            ) {
-                                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Box(Modifier.size(10.dp).clip(CircleShape).background(Color(column.color)))
-                                    Text(column.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                                    if (column.id == task.taskColumnId) Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-                                }
+            when (property.type) {
+                TaskPropertyType.Status -> {
+                    columns.forEach { column ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (column.id == task.taskColumnId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f),
+                            modifier = Modifier.fillMaxWidth().clickable { viewModel.moveTaskToColumn(task, column); onDismiss() },
+                        ) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Box(Modifier.size(10.dp).clip(CircleShape).background(column.resolvedColor()))
+                                Text(column.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                                if (column.id == task.taskColumnId) Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
                             }
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(newStatus, { newStatus = it }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("Create new status") }, colors = taskTextFieldColors())
-                            IconButton(onClick = { if (newStatus.isNotBlank()) { viewModel.createTaskColumn(task.taskBoardId, newStatus.trim()); newStatus = "" } }) { Icon(Icons.Outlined.Add, null) }
-                        }
                     }
-                    TaskPropertyType.Checklist -> ChecklistPropertyEditor(task, property, checklistItems, viewModel)
-                    TaskPropertyType.Checkbox -> CheckboxPropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
-                    TaskPropertyType.FilesMedia -> FilesPropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel, onPickAttachment)
-                    TaskPropertyType.CreatedAt -> ReadOnlyPropertyValue(shortTime(task.createdAt))
-                    TaskPropertyType.LastModified -> ReadOnlyPropertyValue(shortTime(task.updatedAt))
-                    TaskPropertyType.DueDate, TaskPropertyType.Date -> DatePropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
-                    TaskPropertyType.Priority -> ChoicePropertyEditor(task, property, task.priority.name, TaskPriority.entries.map { it.name }, viewModel)
-                    else -> TextPropertyEditor(task, property, property.displayValue(task, value?.valueJson.orEmpty()), viewModel)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(newStatus, { newStatus = it }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("Create new status") }, colors = taskTextFieldColors())
+                        IconButton(onClick = { if (newStatus.isNotBlank()) { viewModel.createTaskColumn(task.taskBoardId, newStatus.trim()); newStatus = "" } }) { Icon(Icons.Outlined.Add, null) }
+                    }
                 }
+                TaskPropertyType.Checklist -> ChecklistPropertyEditor(task, property, checklistItems, viewModel)
+                TaskPropertyType.Checkbox -> CheckboxPropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
+                TaskPropertyType.FilesMedia -> FilesPropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel, onPickAttachment)
+                TaskPropertyType.CreatedAt -> ReadOnlyPropertyValue(shortTime(task.createdAt))
+                TaskPropertyType.LastModified -> ReadOnlyPropertyValue(shortTime(task.updatedAt))
+                TaskPropertyType.DueDate, TaskPropertyType.Date -> DatePropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
+                TaskPropertyType.Priority -> ChoicePropertyEditor(task, property, task.priority.name, TaskPriority.entries.map { it.name }, viewModel)
+                TaskPropertyType.Labels, TaskPropertyType.Multiselect -> TaskLabelsPropertyEditor(task, property, value?.valueJson.orEmpty(), tags, viewModel)
+                else -> TextPropertyEditor(task, property, property.displayValue(task, value?.valueJson.orEmpty()), viewModel)
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-    )
+            Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+        }
+    }
+    if (compact) {
+        ModalBottomSheet(onDismissRequest = onDismiss) {
+            Box(Modifier.fillMaxWidth().heightIn(max = 680.dp).verticalScroll(rememberScrollState())) { editorContent() }
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    } else {
+        val density = LocalDensity.current
+        val configuration = LocalConfiguration.current
+        val popupWidth = 380.dp
+        val maxHeight = 620.dp
+        val offset = with(density) {
+            val screenWidth = configuration.screenWidthDp.dp.roundToPx()
+            val screenHeight = configuration.screenHeightDp.dp.roundToPx()
+            val width = popupWidth.roundToPx()
+            val height = maxHeight.roundToPx()
+            IntOffset(
+                x = (anchor?.left?.roundToInt() ?: (screenWidth - width) / 2).coerceIn(0, (screenWidth - width).coerceAtLeast(0)),
+                y = (anchor?.bottom?.roundToInt() ?: 80).coerceIn(0, (screenHeight - height).coerceAtLeast(0)),
+            )
+        }
+        Popup(alignment = Alignment.TopStart, offset = offset, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+            Surface(
+                modifier = Modifier.width(popupWidth).heightIn(max = maxHeight).verticalScroll(rememberScrollState()),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shadowElevation = 12.dp,
+            ) { editorContent() }
+        }
+    }
 }
+
+@Composable
+private fun TaskLabelsPropertyEditor(
+    task: TaskItem,
+    property: TaskPropertyDefinition,
+    raw: String,
+    tags: List<Tag>,
+    viewModel: NotesViewModel,
+) {
+    var query by remember(task.id, property.id) { mutableStateOf("") }
+    val initial = raw.ifBlank { task.labels }
+    var selected by remember(task.id, property.id, initial) {
+        mutableStateOf(initial.split(',').map(::normalizeTaskTag).filter(String::isNotBlank).distinctBy(String::lowercase))
+    }
+    val boardTagScope = remember(task.taskBoardId) { "board:${task.taskBoardId}" }
+    val boardTags = remember(tags, boardTagScope) {
+        tags.filter { it.scope == boardTagScope }
+    }
+    val available = remember(boardTags, selected, query) {
+        (boardTags.map(Tag::name) + selected)
+            .map(::normalizeTaskTag)
+            .filter(String::isNotBlank)
+            .distinctBy(String::lowercase)
+            .filter { query.isBlank() || it.contains(normalizeTaskTag(query), ignoreCase = true) }
+    }
+    fun persist(next: List<String>) {
+        selected = next.distinctBy(String::lowercase)
+        viewModel.setTaskPropertyValue(task, property, selected.joinToString(","))
+    }
+
+    OutlinedTextField(
+        value = query,
+        onValueChange = { query = it },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        leadingIcon = { Text("#", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black) },
+        placeholder = { Text("Search or create tag") },
+        colors = taskTextFieldColors(),
+    )
+    if (selected.isNotEmpty()) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            selected.forEach { name ->
+                AssistChip(
+                    onClick = { persist(selected.filterNot { it.equals(name, ignoreCase = true) }) },
+                    label = { Text("#$name") },
+                    trailingIcon = { Icon(Icons.Outlined.Close, "Remove", Modifier.size(14.dp)) },
+                )
+            }
+        }
+    }
+    available.take(12).forEach { name ->
+        val tag = boardTags.firstOrNull { it.name.equals(name, ignoreCase = true) }
+        val checked = selected.any { it.equals(name, ignoreCase = true) }
+        Surface(
+            modifier = Modifier.fillMaxWidth().clickable {
+                persist(if (checked) selected.filterNot { it.equals(name, ignoreCase = true) } else selected + name)
+            },
+            color = if (checked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(tag?.let { Color(it.color) } ?: MaterialTheme.colorScheme.primary))
+                Text("#$name", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                if (checked) Icon(Icons.Outlined.CheckCircle, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+    val candidate = normalizeTaskTag(query)
+    if (candidate.isNotBlank() && available.none { it.equals(candidate, ignoreCase = true) }) {
+        TextButton(
+            onClick = {
+                viewModel.addTaskTag(task.taskBoardId, candidate)
+                persist(selected + candidate)
+                query = ""
+            },
+        ) { Text("Create #$candidate") }
+    }
+}
+
+private fun normalizeTaskTag(value: String): String = value.trim().trimStart('#').replace(Regex("\\s+"), " ")
 
 @Composable
 private fun TaskTableRow(
@@ -1038,6 +1896,50 @@ private fun TaskTableRow(
                 if (index == progressColumn && progress != null) {
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(4.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskTimelineView(tasks: List<TaskItem>, columns: List<TaskColumnItem>, onTaskClick: (TaskItem) -> Unit) {
+    val dated = tasks.filter { it.startAt != null || it.dueAt != null }.sortedBy { it.startAt ?: it.dueAt }
+    val origin = dated.minOfOrNull { startOfDay(it.startAt ?: it.dueAt!!) } ?: startOfDay(System.currentTimeMillis())
+    val dayWidth = 112.dp
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Timeline", fontWeight = FontWeight.Black, fontSize = 22.sp)
+        Text("Drag tasks on the board or edit their date range to update this schedule.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        if (dated.isEmpty()) {
+            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                Text("Add a start or due date to place tasks on the timeline.", Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))) {
+                Row {
+                    Spacer(Modifier.width(190.dp))
+                    repeat(14) { day ->
+                        val time = origin + day * 86_400_000L
+                        Text(formatCalendarDate(time), Modifier.width(dayWidth).border(1.dp, MaterialTheme.colorScheme.outlineVariant).padding(10.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                }
+                dated.forEach { task ->
+                    val start = startOfDay(task.startAt ?: task.dueAt!!)
+                    val end = startOfDay(task.dueAt ?: task.startAt!!)
+                    val offsetDays = ((start - origin) / 86_400_000L).coerceAtLeast(0).toInt()
+                    val spanDays = (((end - start) / 86_400_000L).toInt() + 1).coerceAtLeast(1)
+                    val column = columns.firstOrNull { it.id == task.taskColumnId }
+                    Row(Modifier.height(IntrinsicSize.Min)) {
+                        Text(task.title, Modifier.width(190.dp).fillMaxHeight().border(1.dp, MaterialTheme.colorScheme.outlineVariant).clickable { onTaskClick(task) }.padding(12.dp), maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                        Box(Modifier.width(dayWidth * 14).heightIn(min = 58.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                            Surface(
+                                color = task.resolveAccent(column?.resolvedColor() ?: MaterialTheme.colorScheme.primary).copy(alpha = .22f),
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                shape = RoundedCornerShape(9.dp),
+                                modifier = Modifier.padding(top = 10.dp).width(dayWidth * spanDays).height(38.dp).offset(x = dayWidth * offsetDays).clickable { onTaskClick(task) },
+                            ) { Text(task.title, Modifier.padding(horizontal = 10.dp, vertical = 9.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                        }
+                    }
                 }
             }
         }
@@ -1186,273 +2088,6 @@ private fun TaskFeedView(
         }
     }
 }
-
-@Composable
-private fun TaskCalendarView(tasks: List<TaskItem>, checklistItems: List<TaskChecklistItem>, onTaskClick: (TaskItem) -> Unit) {
-    val now = remember { System.currentTimeMillis() }
-    var monthView by remember { mutableStateOf(false) }
-    // Sunday-based week containing today.
-    val week = remember(now) {
-        val start = Calendar.getInstance().apply {
-            timeInMillis = now
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-            add(Calendar.DAY_OF_YEAR, -(get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY))
-        }.timeInMillis
-        (0..6).map { i -> start + i * 86_400_000L }
-    }
-    val todayIndex = week.indexOfFirst { sameDay(it, now) }.coerceIn(0, 6)
-    var selected by remember { mutableStateOf(todayIndex) }
-    val monthLabel = remember(now) { SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date(now)) }
-    val dayNames = listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
-
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = RoundedCornerShape(20.dp),
-        tonalElevation = 3.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(14.dp).animateContentSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Event, null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text(monthLabel, fontWeight = FontWeight.Black, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)) {
-                    Row {
-                        CalendarToggleChip("Week", !monthView) { monthView = false }
-                        CalendarToggleChip("Month", monthView) { monthView = true }
-                    }
-                }
-            }
-            if (monthView) {
-                CalendarMonthGrid(now = now, tasks = tasks, onTaskClick = onTaskClick)
-            } else {
-                CalendarWeekView(
-                    week = week,
-                    dayNames = dayNames,
-                    selected = selected,
-                    todayIndex = todayIndex,
-                    tasks = tasks,
-                    onSelect = { selected = it },
-                    onTaskClick = onTaskClick,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CalendarToggleChip(label: String, active: Boolean, onClick: () -> Unit) {
-    Surface(
-        color = if (active) MaterialTheme.colorScheme.primary else Color.Transparent,
-        contentColor = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-        shape = RoundedCornerShape(50),
-        modifier = Modifier.clickable(onClick = onClick),
-    ) {
-        Text(label, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-    }
-}
-
-@Composable
-private fun CalendarWeekView(
-    week: List<Long>,
-    dayNames: List<String>,
-    selected: Int,
-    todayIndex: Int,
-    tasks: List<TaskItem>,
-    onSelect: (Int) -> Unit,
-    onTaskClick: (TaskItem) -> Unit,
-) {
-    Row(Modifier.fillMaxWidth()) {
-        week.forEachIndexed { i, dayMs ->
-            val isToday = i == todayIndex
-            val isSel = i == selected
-            val dayCount = tasks.count { it.dueAt?.let { d -> sameDay(d, dayMs) } == true }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(dayNames[i], fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(4.dp))
-                val dateNum = calField(dayMs, Calendar.DAY_OF_MONTH).toString()
-                if (isToday) {
-                    Surface(color = MaterialTheme.colorScheme.primary, shape = CircleShape, modifier = Modifier.size(30.dp)) {
-                        Box(contentAlignment = Alignment.Center) { Text(dateNum, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Black) }
-                    }
-                } else {
-                    Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
-                        Text(dateNum, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium)
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                if (dayCount > 0) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        repeat(dayCount.coerceAtMost(3)) {
-                            Box(Modifier.size(4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
-                        }
-                    }
-                }
-            }
-        }
-    }
-    val weekStart = startOfDay(week.first())
-    val weekEnd = startOfDay(week.last()) + 86_399_999L
-    val visibleTasks = tasks.filter { task ->
-        val start = task.startAt ?: task.dueAt ?: return@filter false
-        val end = task.dueAt ?: start
-        end >= weekStart && start <= weekEnd
-    }.sortedBy { it.startAt ?: it.dueAt }
-    BoxWithConstraints(
-        Modifier
-            .fillMaxWidth()
-            .height(360.dp)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-            .clip(RoundedCornerShape(14.dp)),
-    ) {
-        val dayWidth = maxWidth / 7
-        Row(Modifier.fillMaxSize()) {
-            repeat(7) { index ->
-                Box(
-                    Modifier
-                        .width(dayWidth)
-                        .fillMaxHeight()
-                        .background(if (index == selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
-                        .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                )
-            }
-        }
-        visibleTasks.forEachIndexed { eventIndex, task ->
-            val rawStart = startOfDay(task.startAt ?: task.dueAt ?: weekStart)
-            val rawEnd = startOfDay(task.dueAt ?: task.startAt ?: rawStart)
-            val startIndex = ((rawStart - weekStart) / 86_400_000L).toInt().coerceIn(0, 6)
-            val endIndex = ((rawEnd - weekStart) / 86_400_000L).toInt().coerceIn(startIndex, 6)
-            val startTime = task.startAt ?: task.dueAt ?: weekStart
-            val minutes = calField(startTime, Calendar.HOUR_OF_DAY) * 60 + calField(startTime, Calendar.MINUTE)
-            val y = if (task.allDay) 12.dp + 62.dp * (eventIndex % 4) else 36.dp + ((minutes / 1440f) * 270f).dp
-            val accent = task.resolveAccent(MaterialTheme.colorScheme.primary)
-            Surface(
-                color = accent.copy(alpha = 0.20f),
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, accent.copy(alpha = 0.55f)),
-                modifier = Modifier
-                    .offset(x = dayWidth * startIndex + 4.dp, y = y)
-                    .width(dayWidth * (endIndex - startIndex + 1) - 8.dp)
-                    .heightIn(min = 52.dp)
-                    .clickable { onTaskClick(task) },
-            ) {
-                Row(Modifier.height(IntrinsicSize.Min)) {
-                    Box(Modifier.width(5.dp).fillMaxHeight().background(accent))
-                    Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                        Text(task.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(formatTaskTimeRange(task.startAt, task.dueAt, task.allDay), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-    }
-    Text("Tasks for ${dayNames[selected]}", fontWeight = FontWeight.Black, fontSize = 16.sp)
-    val selectedStart = startOfDay(week[selected])
-    val selectedEnd = selectedStart + 86_399_999L
-    val dayTasks = tasks.filter { task ->
-        val start = task.startAt ?: task.dueAt ?: return@filter false
-        val end = task.dueAt ?: start
-        end >= selectedStart && start <= selectedEnd
-    }.sortedBy { it.startAt ?: it.dueAt }
-    if (dayTasks.isEmpty()) {
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Text("No tasks on ${dayNames[selected]}", Modifier.padding(18.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
-        }
-    } else {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            dayTasks.forEach { task -> CalendarTimeBar(task = task) { onTaskClick(task) } }
-        }
-    }
-}
-
-@Composable
-private fun CalendarTimeBar(task: TaskItem, onClick: () -> Unit) {
-    // Encode time-of-day as a horizontal indent (later in the day → indented right, like the reference).
-    val minutes = task.dueAt?.let { calField(it, Calendar.HOUR_OF_DAY) * 60 + calField(it, Calendar.MINUTE) } ?: 0
-    val indent = (minutes / 1440f) * 120f
-    val accent = task.resolveAccent(MaterialTheme.colorScheme.primary)
-    Row(Modifier.fillMaxWidth()) {
-        if (indent > 0f) Spacer(Modifier.width(indent.dp))
-        Surface(
-            color = accent.copy(alpha = 0.18f),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.weight(1f).clickable(onClick = onClick),
-        ) {
-            Row(Modifier.height(IntrinsicSize.Min)) {
-                Box(Modifier.width(5.dp).fillMaxHeight().background(accent))
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    Text(task.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(formatTaskTimeRange(task.startAt, task.dueAt, task.allDay), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CalendarMonthGrid(now: Long, tasks: List<TaskItem>, onTaskClick: (TaskItem) -> Unit) {
-    val monthInfo = remember(now) {
-        val c = Calendar.getInstance().apply {
-            timeInMillis = now
-            set(Calendar.DAY_OF_MONTH, 1)
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }
-        val firstMs = c.timeInMillis
-        val lead = c.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY
-        val daysInMonth = c.getActualMaximum(Calendar.DAY_OF_MONTH)
-        Triple(firstMs, lead, daysInMonth)
-    }
-    val (firstMs, lead, daysInMonth) = monthInfo
-    val cells: List<Long?> = List(lead) { null } + (0 until daysInMonth).map { firstMs + it * 86_400_000L }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth()) {
-            listOf("S", "M", "T", "W", "T", "F", "S").forEach {
-                Text(it, Modifier.weight(1f), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-            }
-        }
-        cells.chunked(7).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                row.forEach { dayMs ->
-                    Box(Modifier.weight(1f).height(54.dp)) {
-                        if (dayMs != null) {
-                            val isToday = sameDay(dayMs, now)
-                            val dayTasks = tasks.filter { it.dueAt?.let { d -> sameDay(d, dayMs) } == true }
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (isToday) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                                    .clickable(enabled = dayTasks.isNotEmpty()) { dayTasks.firstOrNull()?.let(onTaskClick) }
-                                    .padding(6.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Text(calField(dayMs, Calendar.DAY_OF_MONTH).toString(), fontSize = 12.sp, fontWeight = if (isToday) FontWeight.Black else FontWeight.Medium)
-                                Spacer(Modifier.height(3.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    dayTasks.take(3).forEach { t ->
-                                        Box(Modifier.size(5.dp).clip(CircleShape).background(t.resolveAccent(MaterialTheme.colorScheme.primary)))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                repeat(7 - row.size) { Spacer(Modifier.weight(1f)) }
-            }
-        }
-    }
-}
-
 private fun sameDay(a: Long, b: Long): Boolean {
     val ca = Calendar.getInstance().apply { timeInMillis = a }
     val cb = Calendar.getInstance().apply { timeInMillis = b }
@@ -1557,14 +2192,23 @@ private fun TaskRailPanel(
     onCreateColumn: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var tab by remember(action) { mutableStateOf(TaskRailAction.Filter) }
     AnimatedVisibility(visible = action != null, modifier = modifier) {
         Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(22.dp), tonalElevation = 6.dp) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(action?.name.orEmpty(), modifier = Modifier.weight(1f), fontWeight = FontWeight.Black)
-                    TextButton(onClick = onDismiss) { Text("Close") }
+            Column(
+                Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(TaskRailAction.Filter, TaskRailAction.Sort, TaskRailAction.New, TaskRailAction.Settings).forEach { item ->
+                        TextButton(onClick = { tab = item }, modifier = Modifier.weight(1f)) {
+                            Text(item.name, color = if (tab == item) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close task controls") }
                 }
-                when (action) {
+                HorizontalDivider()
+                when (tab) {
                     TaskRailAction.Search -> OutlinedTextField(query, onQueryChange, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Search") }, colors = taskTextFieldColors())
                     TaskRailAction.Filter -> {
                         FilterChips("Assignee", assignees, assigneeFilter, onAssigneeFilter)
@@ -1623,7 +2267,6 @@ private fun TaskRailPanel(
                             Text("Default view: Table", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    null -> Unit
                 }
             }
         }
@@ -1686,6 +2329,8 @@ private fun AdaptiveTaskPage(
     propertyValues: List<TaskPropertyValue>,
     checklistItems: List<TaskChecklistItem>,
     columns: List<TaskColumnItem>,
+    tags: List<Tag>,
+    boardName: String,
     taskObjectId: Long?,
     comments: List<WorkspaceComment>,
     files: List<WorkspaceFileItem>,
@@ -1694,6 +2339,7 @@ private fun AdaptiveTaskPage(
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    BackHandler(onBack = onDismiss)
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -1702,7 +2348,7 @@ private fun AdaptiveTaskPage(
     ) {
         val sidePanel = maxWidth > 720.dp
         Surface(
-            color = MaterialTheme.colorScheme.surface,
+            color = MaterialTheme.colorScheme.surfaceVariant,
             contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 10.dp,
             shape = if (sidePanel) RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp) else RoundedCornerShape(0.dp),
@@ -1716,14 +2362,24 @@ private fun AdaptiveTaskPage(
             val sortedProperties = properties.sortedWith(compareBy<TaskPropertyDefinition> { it.sortOrder }.thenBy { it.id })
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp),
+                contentPadding = PaddingValues(bottom = if (sidePanel) 24.dp else 124.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val nameProperty = sortedProperties.firstOrNull { it.type == TaskPropertyType.Name }
-                        var editingTitle by remember(task.id) { mutableStateOf(false) }
-                        var titleDraft by remember(task.id, task.title) { mutableStateOf(task.title) }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val nameProperty = sortedProperties.firstOrNull { it.type == TaskPropertyType.Name }
+                    var editingTitle by remember(task.id) { mutableStateOf(false) }
+                    var titleDraft by remember(task.id, task.title) { mutableStateOf(task.title) }
+                    var starred by remember(task.id) { mutableStateOf(false) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .size(46.dp)
+                                .shadow(3.dp, RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(MaterialTheme.colorScheme.surface),
+                        ) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", modifier = Modifier.size(20.dp)) }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (editingTitle) {
                                 OutlinedTextField(
                                     value = titleDraft,
@@ -1747,27 +2403,91 @@ private fun AdaptiveTaskPage(
                                     ) { Text("Save") }
                                 }
                             } else {
-                                Text(task.title.ifBlank { "Untitled task" }, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text("Saved task page", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    task.title.ifBlank { "Untitled task" },
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.Black,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.clickable { editingTitle = true },
+                                )
+                                Row {
+                                    Text("From ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                    Text(boardName, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
-                        IconButton(onClick = { editingTitle = !editingTitle }) { Icon(Icons.Outlined.Edit, null) }
-                        IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, null) }
+                        IconButton(onClick = { starred = !starred }) {
+                            Icon(
+                                if (starred) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                "Star",
+                                tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Button(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
+                        ) { Text("Save", fontWeight = FontWeight.Bold) }
                     }
                 }
                 item { TaskColorPalette(task = task, viewModel = viewModel) }
                 val visibleProperties = sortedProperties.filterNot { it.type == TaskPropertyType.Name || it.type == TaskPropertyType.FilesMedia }
-                itemsIndexed(visibleProperties, key = { _, property -> property.id }) { index, property ->
-                    TaskPropertyBlock(
+                val mainPropertyTypes = setOf(
+                    TaskPropertyType.Status,
+                    TaskPropertyType.Assignee,
+                    TaskPropertyType.Person,
+                    TaskPropertyType.Priority,
+                    TaskPropertyType.Labels,
+                    TaskPropertyType.Multiselect,
+                    TaskPropertyType.DueDate,
+                    TaskPropertyType.Date,
+                )
+                val mainPropertyOrder = mapOf(
+                    TaskPropertyType.Status to 0,
+                    TaskPropertyType.Assignee to 1,
+                    TaskPropertyType.Person to 1,
+                    TaskPropertyType.Priority to 2,
+                    TaskPropertyType.Labels to 3,
+                    TaskPropertyType.Multiselect to 3,
+                    TaskPropertyType.DueDate to 4,
+                    TaskPropertyType.Date to 4,
+                )
+                val mainProperties = visibleProperties
+                    .filter { it.type in mainPropertyTypes }
+                    .sortedBy { mainPropertyOrder[it.type] ?: Int.MAX_VALUE }
+                val checklistProperties = visibleProperties.filter { it.type == TaskPropertyType.Checklist }
+                val noteProperties = visibleProperties.filter { it.type == TaskPropertyType.Text }
+                if (mainProperties.isNotEmpty()) {
+                    item {
+                        MainPropertiesCard(
+                            task = task,
+                            properties = mainProperties,
+                            propertyValues = propertyValues,
+                            columns = columns,
+                            tags = tags,
+                            viewModel = viewModel,
+                        )
+                    }
+                }
+                itemsIndexed(checklistProperties, key = { _, property -> property.id }) { index, property ->
+                    TaskChecklistSummaryCard(
                         task = task,
                         property = property,
                         propertyIndex = index,
-                        propertyCount = visibleProperties.size,
-                        value = propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id },
-                        checklistItems = checklistItems.filter { it.taskId == task.id && it.propertyId == property.id }.sortedBy { it.sortOrder },
-                        columns = columns,
+                        propertyCount = checklistProperties.size,
+                        items = checklistItems.filter { it.taskId == task.id && it.propertyId == property.id }.sortedBy { it.sortOrder },
                         viewModel = viewModel,
-                        onPickAttachment = onPickAttachment,
+                    )
+                }
+                items(noteProperties, key = { it.id }) { property ->
+                    TaskNotesSection(
+                        task = task,
+                        property = property,
+                        value = propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id },
+                        columns = columns,
+                        tags = tags,
+                        viewModel = viewModel,
                     )
                 }
                 item {
@@ -1778,43 +2498,61 @@ private fun AdaptiveTaskPage(
                     )
                 }
                 item {
-                    TextButton(onClick = { showPicker = true }) {
-                        Icon(Icons.Outlined.Add, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("New property")
-                    }
-                }
-                item {
-                    HorizontalDivider()
-                    Text("Comments", color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
-                    comments.filter { it.objectId == taskObjectId }.sortedBy { it.createdAt }.forEach { comment ->
-                        Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(10.dp)) {
-                                Text(comment.authorDisplayName.ifBlank { comment.authorUsername.ifBlank { "You" } }, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                Text(comment.body)
+                    // Always-present Details card (mockup) — independent of user-added properties.
+                    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Outlined.Event, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                                Text("Details", fontWeight = FontWeight.Bold)
+                            }
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Created at", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                                Text(shortTime(task.createdAt), fontSize = 13.sp)
+                            }
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Last modified", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                                Text(shortTime(task.updatedAt), fontSize = 13.sp)
                             }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(commentDraft, { commentDraft = it }, modifier = Modifier.weight(1f), placeholder = { Text("Add a reply...") }, colors = taskTextFieldColors())
-                        IconButton(
-                            enabled = taskObjectId != null && commentDraft.isNotBlank(),
-                            onClick = { taskObjectId?.let { viewModel.addWorkspaceComment(it, commentDraft.trim()) }; commentDraft = "" },
-                        ) { Icon(Icons.Outlined.Add, null) }
+                }
+                item {
+                    DashedActionButton(text = "New property", onClick = { showPicker = true })
+                }
+                item {
+                    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Outlined.ChatBubbleOutline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                                Text("Comments", fontWeight = FontWeight.Bold)
+                            }
+                            comments.filter { it.objectId == taskObjectId }.sortedBy { it.createdAt }.forEach { comment ->
+                                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(10.dp)) {
+                                        Text(comment.authorDisplayName.ifBlank { comment.authorUsername.ifBlank { "You" } }, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text(comment.body)
+                                    }
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(commentDraft, { commentDraft = it }, modifier = Modifier.weight(1f), placeholder = { Text("Add a reply...") }, colors = taskTextFieldColors(), shape = RoundedCornerShape(16.dp))
+                                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                                    IconButton(
+                                        enabled = taskObjectId != null && commentDraft.isNotBlank(),
+                                        onClick = { taskObjectId?.let { viewModel.addWorkspaceComment(it, commentDraft.trim()) }; commentDraft = "" },
+                                    ) { Icon(Icons.AutoMirrored.Outlined.Send, "Send comment", tint = MaterialTheme.colorScheme.primary) }
+                                }
+                            }
+                        }
                     }
                 }
                 item {
-                    Text("Enter a / to insert a block, or start typing", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 18.sp)
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = onDelete) {
-                            Icon(Icons.Outlined.Delete, null)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        TextButton(onClick = onDelete, colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                            Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error)
                             Spacer(Modifier.width(6.dp))
-                            Text("Delete")
+                            Text("Delete task", color = MaterialTheme.colorScheme.error)
                         }
-                        Spacer(Modifier.weight(1f))
-                        Button(onClick = onDismiss) { Text("Done") }
                     }
                 }
             }
@@ -1831,18 +2569,70 @@ private fun AdaptiveTaskPage(
     }
 }
 
+private fun Modifier.dashedOutline(color: Color, radius: Dp): Modifier = drawBehind {
+    val strokeWidth = 1.dp.toPx()
+    drawRoundRect(
+        color = color,
+        cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius.toPx(), radius.toPx()),
+        style = Stroke(
+            width = strokeWidth,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx())),
+        ),
+    )
+}
+
+@Composable
+private fun DashedActionButton(text: String, onClick: () -> Unit) {
+    val outline = MaterialTheme.colorScheme.outlineVariant
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .dashedOutline(outline, 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 15.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Add, null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(8.dp))
+        Text(text, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+    }
+}
+
 @Composable
 private fun TaskFilesSection(files: List<WorkspaceFileItem>, onAttach: () -> Unit, onRemove: (WorkspaceFileItem) -> Unit) {
     val context = LocalContext.current
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.AttachFile, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Text("Files & media", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                TextButton(onClick = onAttach) { Text("Attach") }
+                Surface(shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                    TextButton(onClick = onAttach) { Text("Attach") }
+                }
             }
-            if (files.isEmpty()) Text("No files attached", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (files.isEmpty()) {
+                val outline = MaterialTheme.colorScheme.outlineVariant
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .dashedOutline(outline, 16.dp)
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                        Icon(Icons.Outlined.AttachFile, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(10.dp))
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("No files attached", fontWeight = FontWeight.Bold)
+                        Text("Attach files or images to this task", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    }
+                    FilledTonalButton(onClick = onAttach, shape = RoundedCornerShape(14.dp)) { Text("Attach") }
+                }
+            }
             files.forEach { file ->
                 Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1884,23 +2674,25 @@ private fun TaskItem.resolveAccent(fallback: Color): Color =
 
 @Composable
 private fun TaskColorPalette(task: TaskItem, viewModel: NotesViewModel) {
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text("Color", color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
-        ColorSwatch(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            selected = task.colorArgb == null,
-            onClick = { viewModel.setTaskColor(task, null) },
-        )
-        TaskAccentPalette.forEach { argb ->
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Color", fontWeight = FontWeight.Bold)
             ColorSwatch(
-                color = Color(argb.toInt()),
-                selected = task.colorArgb == argb,
-                onClick = { viewModel.setTaskColor(task, argb) },
+                color = MaterialTheme.colorScheme.primary,
+                selected = task.colorArgb == null,
+                onClick = { viewModel.setTaskColor(task, null) },
             )
+            TaskAccentPalette.forEach { argb ->
+                ColorSwatch(
+                    color = Color(argb.toInt()),
+                    selected = task.colorArgb == argb,
+                    onClick = { viewModel.setTaskColor(task, argb) },
+                )
+            }
         }
     }
 }
@@ -1918,7 +2710,394 @@ private fun ColorSwatch(color: Color, selected: Boolean, onClick: () -> Unit) {
                 shape = CircleShape,
             )
             .clickable(onClick = onClick),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) Icon(Icons.Filled.Check, "Selected color", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
+    }
+}
+
+/**
+ * The mockup's grouped "Main properties" card: each property is a compact row showing its current
+ * value; tapping a row opens a popup editor. Persistence reuses the same view-model calls as the
+ * standalone editors.
+ */
+@Composable
+private fun MainPropertiesCard(
+    task: TaskItem,
+    properties: List<TaskPropertyDefinition>,
+    propertyValues: List<TaskPropertyValue>,
+    columns: List<TaskColumnItem>,
+    tags: List<Tag>,
+    viewModel: NotesViewModel,
+) {
+    var editing by remember(task.id) { mutableStateOf<TaskPropertyDefinition?>(null) }
+    var expanded by remember(task.id) { mutableStateOf(true) }
+    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { expanded = !expanded }.padding(bottom = 4.dp),
+            ) {
+                Icon(Icons.Outlined.Tune, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Text("Main properties", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, if (expanded) "Collapse" else "Expand")
+            }
+            AnimatedVisibility(expanded) {
+                Column {
+                    properties.forEach { property ->
+                        val value = propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id }
+                        MainPropertyRow(
+                            icon = property.type.icon(),
+                            label = property.name,
+                            value = mainPropertyDisplay(task, property, value, columns),
+                            showLabelChips = property.type == TaskPropertyType.Labels || property.type == TaskPropertyType.Multiselect,
+                            showCalendar = property.type == TaskPropertyType.Date || property.type == TaskPropertyType.DueDate,
+                            onClick = { editing = property },
+                        )
+                    }
+                }
+            }
+        }
+    }
+    editing?.let { property ->
+        FocusedTaskPropertyDialog(
+            task = task,
+            property = property,
+            value = propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id },
+            checklistItems = emptyList(),
+            columns = columns,
+            tags = tags,
+            anchor = null,
+            viewModel = viewModel,
+            onPickAttachment = {},
+            onDismiss = { editing = null },
+        )
+    }
+}
+
+@Composable
+private fun MainPropertyRow(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    showLabelChips: Boolean,
+    showCalendar: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Text(
+            label,
+            modifier = Modifier.widthIn(min = 86.dp, max = 116.dp),
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.weight(1f),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (showLabelChips && value.isNotBlank()) {
+                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        value.split(',', ';').map { it.trim() }.filter { it.isNotBlank() }.forEach { labelValue ->
+                            Surface(color = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer, shape = RoundedCornerShape(8.dp)) {
+                                Text(labelValue, Modifier.padding(horizontal = 7.dp, vertical = 3.dp), fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        value.ifBlank { if (showCalendar) "No date set" else "Empty" },
+                        modifier = Modifier.weight(1f),
+                        fontSize = 13.sp,
+                        color = if (value.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (showCalendar && value.isBlank()) Icon(Icons.Outlined.Event, null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                else Icon(Icons.Outlined.ExpandMore, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskChecklistSummaryCard(
+    task: TaskItem,
+    property: TaskPropertyDefinition,
+    propertyIndex: Int,
+    propertyCount: Int,
+    items: List<TaskChecklistItem>,
+    viewModel: NotesViewModel,
+) {
+    if (property.hiddenWhenEmpty && items.isEmpty()) return
+    var newItem by remember(task.id, property.id) { mutableStateOf("") }
+    var expanded by remember(task.id, property.id) { mutableStateOf(true) }
+    val completed = items.count { it.checked }
+    val progress = if (items.isEmpty()) 0f else completed.toFloat() / items.size
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        tonalElevation = 1.dp,
+        shadowElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(Icons.Outlined.CheckBox, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Text(property.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                Text("$completed/${items.size}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.width(82.dp).height(5.dp).clip(CircleShape),
+                )
+                Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, if (expanded) "Collapse" else "Expand", modifier = Modifier.size(18.dp))
+            }
+            AnimatedVisibility(expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items.forEachIndexed { index, item ->
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            VerticalReorderHandle(enabled = items.size > 1, rowHeight = 38.dp, size = 18.dp) { delta ->
+                                viewModel.moveChecklistItemToIndex(item, (index + delta).coerceIn(0, items.lastIndex))
+                            }
+                            Checkbox(
+                                checked = item.checked,
+                                onCheckedChange = { checked -> viewModel.updateChecklistItem(item, item.text, checked) },
+                                modifier = Modifier.size(32.dp),
+                            )
+                            Text(
+                                item.text,
+                                modifier = Modifier.weight(1f),
+                                color = if (item.checked) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                                textDecoration = if (item.checked) TextDecoration.LineThrough else TextDecoration.None,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            AssigneeAvatar(task.assignee.ifBlank { "@owner" })
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = newItem,
+                            onValueChange = { newItem = it },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            placeholder = { Text("Add a new item") },
+                            colors = taskTextFieldColors(),
+                            shape = RoundedCornerShape(14.dp),
+                        )
+                        FilledTonalButton(
+                            onClick = {
+                                viewModel.addChecklistItem(task, property, newItem.trim())
+                                newItem = ""
+                            },
+                            enabled = newItem.isNotBlank(),
+                            shape = RoundedCornerShape(14.dp),
+                        ) { Text("Add") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskNotesSection(
+    task: TaskItem,
+    property: TaskPropertyDefinition,
+    value: TaskPropertyValue?,
+    columns: List<TaskColumnItem>,
+    tags: List<Tag>,
+    viewModel: NotesViewModel,
+) {
+    val displayed = property.displayValue(task, value?.valueJson.orEmpty())
+    if (property.hiddenWhenEmpty && displayed.isBlank()) return
+    var editing by remember(task.id, property.id) { mutableStateOf(false) }
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        tonalElevation = 1.dp,
+        shadowElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Outlined.TextFields, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Text("Notes", fontWeight = FontWeight.Bold)
+            }
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth().clickable { editing = true },
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(displayed.ifBlank { "Add notes" }, modifier = Modifier.weight(1f), color = if (displayed.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    Icon(Icons.Outlined.Edit, "Edit notes", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+    if (editing) {
+        FocusedTaskPropertyDialog(
+            task = task,
+            property = property,
+            value = value,
+            checklistItems = emptyList(),
+            columns = columns,
+            tags = tags,
+            anchor = null,
+            viewModel = viewModel,
+            onPickAttachment = {},
+            onDismiss = { editing = false },
+        )
+    }
+}
+
+/** The value string shown in a [MainPropertyRow] for the given property. */
+private fun mainPropertyDisplay(
+    task: TaskItem,
+    property: TaskPropertyDefinition,
+    value: TaskPropertyValue?,
+    columns: List<TaskColumnItem>,
+): String = when (property.type) {
+    TaskPropertyType.Status -> columns.firstOrNull { it.id == task.taskColumnId }?.name ?: "—"
+    TaskPropertyType.Priority -> task.priority.name
+    TaskPropertyType.DueDate, TaskPropertyType.Date -> {
+        val range = TaskDateRangeCodec.decode(value?.valueJson.orEmpty(), task.dueAt)
+        when {
+            range.startAt == null && range.endAt == null -> "No date set"
+            range.startAt == range.endAt -> formatCalendarDate(range.endAt ?: range.startAt!!)
+            else -> "${formatCalendarDate(range.startAt!!)} → ${formatCalendarDate(range.endAt!!)}"
+        }
+    }
+    TaskPropertyType.Checkbox -> if ((value?.valueJson ?: "").toBoolean()) "Checked" else "Unchecked"
+    else -> property.displayValue(task, value?.valueJson.orEmpty())
+}
+
+/** Popup editor for a single main property, chosen by [property] type. */
+@Composable
+private fun MainPropertyEditDialog(
+    task: TaskItem,
+    property: TaskPropertyDefinition,
+    value: TaskPropertyValue?,
+    columns: List<TaskColumnItem>,
+    viewModel: NotesViewModel,
+    onDismiss: () -> Unit,
+) {
+    when (property.type) {
+        TaskPropertyType.Status -> AlertDialog(
+            onDismissRequest = onDismiss,
+            confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+            title = { Text("Status") },
+            text = {
+                Column {
+                    columns.forEach { column ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { viewModel.moveTaskToColumn(task, column); onDismiss() }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = task.taskColumnId == column.id, onClick = { viewModel.moveTaskToColumn(task, column); onDismiss() })
+                            Text(column.name)
+                        }
+                    }
+                }
+            },
+        )
+        TaskPropertyType.Priority -> {
+            var draft by remember(task.id, property.id) { mutableStateOf(task.priority.name) }
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft); onDismiss() }) { Text("Save") } },
+                dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+                title = { Text("Priority") },
+                text = {
+                    Column {
+                        TaskPriority.entries.forEach { priority ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { draft = priority.name }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = draft == priority.name, onClick = { draft = priority.name })
+                                Text(priority.name)
+                            }
+                        }
+                    }
+                },
+            )
+        }
+        TaskPropertyType.DueDate, TaskPropertyType.Date -> AlertDialog(
+            onDismissRequest = onDismiss,
+            confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+            title = { Text(property.name) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DatePropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
+                }
+            },
+        )
+        TaskPropertyType.Checkbox -> {
+            var draft by remember(task.id, property.id) { mutableStateOf((value?.valueJson ?: "").toBoolean()) }
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft.toString()); onDismiss() }) { Text("Save") } },
+                dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+                title = { Text(property.name) },
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = draft, onCheckedChange = { draft = it })
+                        Text(if (draft) "Checked" else "Unchecked")
+                    }
+                },
+            )
+        }
+        else -> {
+            var draft by remember(task.id, property.id) { mutableStateOf(value?.valueJson.orEmpty()) }
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft); onDismiss() }) { Text("Save") } },
+                dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+                title = { Text(property.name) },
+                text = {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text(property.type.defaultPropertyName()) },
+                        colors = taskTextFieldColors(),
+                    )
+                },
+            )
+        }
+    }
 }
 
 @Composable
@@ -1947,7 +3126,7 @@ private fun TaskPropertyBlock(
                     checklistItems.progressPercent()?.let { Text("$it%", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 IconButton(onClick = { menuOpen = true }) { Icon(Icons.Outlined.MoreVert, null) }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                NorfoldTaskMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(text = { Text(if (property.hiddenWhenEmpty) "Always show" else "Hide when empty") }, leadingIcon = { Icon(Icons.Outlined.Visibility, null) }, onClick = { viewModel.updateTaskPropertyDefinition(property, property.name, property.type, !property.hiddenWhenEmpty); menuOpen = false })
                     DropdownMenuItem(text = { Text("Duplicate") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) }, onClick = { viewModel.duplicateTaskProperty(property); menuOpen = false })
                     DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { viewModel.deleteTaskProperty(property); menuOpen = false })
@@ -1976,13 +3155,34 @@ private fun TaskPropertyBlock(
     }
 }
 
+@Composable
+private fun NorfoldTaskMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val style = LocalContextualMenuStyle.current
+    val colorMode = LocalContextualMenuColor.current
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        shape = when (style) {
+            ContextualMenuStyle.Pill -> RoundedCornerShape(18.dp)
+            ContextualMenuStyle.Block -> RoundedCornerShape(8.dp)
+            ContextualMenuStyle.Minimal -> RoundedCornerShape(2.dp)
+        },
+        containerColor = if (colorMode == ContextualMenuColor.AppAccent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) { content() }
+}
+
 /**
  * A drag handle that live-reorders as you drag: each time the drag crosses one row height it emits
  * a single step (+1 down / -1 up), so the block moves continuously under the finger rather than only
  * snapping on release. [onStep] is expected to persist the move (which re-renders the list).
  */
 @Composable
-private fun VerticalReorderHandle(enabled: Boolean = true, rowHeight: Dp = 64.dp, onStep: (Int) -> Unit) {
+private fun VerticalReorderHandle(enabled: Boolean = true, rowHeight: Dp = 64.dp, size: Dp = 28.dp, onStep: (Int) -> Unit) {
     val density = LocalDensity.current
     val thresholdPx = with(density) { rowHeight.toPx() }
     var dragY by remember { mutableStateOf(0f) }
@@ -1992,7 +3192,7 @@ private fun VerticalReorderHandle(enabled: Boolean = true, rowHeight: Dp = 64.dp
         null,
         tint = if (dragging) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
-            .size(28.dp)
+            .size(size)
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 detectDragGesturesAfterLongPress(
@@ -2477,14 +3677,24 @@ private fun StatusCount(count: Int) {
 
 @Composable
 private fun PriorityPill(priority: TaskPriority) {
-    val color = when (priority) {
-        TaskPriority.High -> Color(0xFFE25D6A)
-        TaskPriority.Urgent -> Color(0xFFFF4D7D)
-        TaskPriority.Low -> Color(0xFF5FCB8F)
-        TaskPriority.Normal -> MaterialTheme.colorScheme.primary
-    }
-    Surface(color = color.copy(alpha = 0.16f), contentColor = color, shape = RoundedCornerShape(10.dp)) {
+    // Neutralized: only the highest tiers get an accent tint; the rest are neutral chips.
+    val emphasized = priority == TaskPriority.High || priority == TaskPriority.Urgent
+    val bg = if (emphasized) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+    val fg = if (emphasized) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(color = bg, contentColor = fg, shape = RoundedCornerShape(10.dp)) {
         Text(priority.label(), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun AssigneeAvatar(name: String) {
+    val initial = name.trimStart('@', ' ').take(1).uppercase().ifBlank { "?" }
+    Box(
+        Modifier.size(24.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(initial, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -2509,6 +3719,10 @@ private fun taskBackground(): Brush = Brush.verticalGradient(
         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
     ),
 )
+
+@Composable
+private fun TaskColumnItem.resolvedColor(): Color =
+    if (color == 0L) MaterialTheme.colorScheme.primary else Color(color)
 
 @Composable
 private fun taskTextFieldColors() = TextFieldDefaults.colors(

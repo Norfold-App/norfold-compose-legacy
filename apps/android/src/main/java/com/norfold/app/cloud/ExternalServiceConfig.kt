@@ -20,7 +20,8 @@ object ExternalServiceConfig {
 
     val capabilities: ServiceCapabilities
         get() {
-            val supabaseReady = supabaseUrl.startsWith("https://") && supabasePublishableKey.startsWith("sb_")
+            val supportedUrl = supabaseUrl.startsWith("https://") || (BuildConfig.DEBUG && supabaseUrl.startsWith("http://"))
+            val supabaseReady = supportedUrl && supabasePublishableKey.isNotBlank()
             val googleReady = googleServerClientId.endsWith(".apps.googleusercontent.com")
             return ServiceCapabilities(
                 supabase = supabaseReady,

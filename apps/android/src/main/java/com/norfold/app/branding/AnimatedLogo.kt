@@ -30,7 +30,7 @@ fun AnimatedNorfoldLogo(
         modifier
             .size(size)
             .clip(RoundedCornerShape(size * 0.24f))
-            .background(Brush.linearGradient(listOf(palette.c1, palette.c2, Color(0xFF9A48FF)))),
+            .background(Brush.linearGradient(listOf(palette.c1, palette.c2, palette.c3))),
         contentAlignment = Alignment.Center,
     ) {
         Text(
