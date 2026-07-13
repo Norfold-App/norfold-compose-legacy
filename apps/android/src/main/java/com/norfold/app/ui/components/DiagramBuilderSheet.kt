@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -1020,23 +1021,12 @@ private fun FlowchartEdgeCard(
                 Text("Connection ${index + 1}", Modifier.weight(1f), fontWeight = FontWeight.Medium)
                 TextButton(onClick = onDelete) { Text("Remove") }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = edge.from,
-                    onValueChange = { onUpdate(edge.copy(from = it)) },
-                    label = { Text("From") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                )
-                Text("→", modifier = Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.titleLarge)
-                OutlinedTextField(
-                    value = edge.to,
-                    onValueChange = { onUpdate(edge.copy(to = it)) },
-                    label = { Text("To") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                )
-            }
+            ResponsiveEndpointFields(
+                from = edge.from,
+                onFromChange = { onUpdate(edge.copy(from = it)) },
+                to = edge.to,
+                onToChange = { onUpdate(edge.copy(to = it)) },
+            )
             OutlinedTextField(
                 value = edge.label,
                 onValueChange = { onUpdate(edge.copy(label = it)) },
@@ -1044,6 +1034,62 @@ private fun FlowchartEdgeCard(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
+        }
+    }
+}
+
+@Composable
+private fun ResponsiveEndpointFields(
+    from: String,
+    onFromChange: (String) -> Unit,
+    to: String,
+    onToChange: (String) -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 360.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = from,
+                    onValueChange = onFromChange,
+                    label = { Text("From") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Text(
+                    "↓",
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                OutlinedTextField(
+                    value = to,
+                    onValueChange = onToChange,
+                    label = { Text("To") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = from,
+                    onValueChange = onFromChange,
+                    label = { Text("From") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+                Text(
+                    "→",
+                    modifier = Modifier.align(Alignment.CenterVertically),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                OutlinedTextField(
+                    value = to,
+                    onValueChange = onToChange,
+                    label = { Text("To") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+            }
         }
     }
 }
@@ -1140,27 +1186,16 @@ private fun SequenceForm(model: DiagramBuilderModel, onChange: (DiagramBuilderMo
                             },
                         ) { Text("Remove") }
                     }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = message.from,
-                            onValueChange = {
-                                onChange(model.copy(messages = model.messages.updated(index, message.copy(from = it))))
-                            },
-                            label = { Text("From") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                        )
-                        Text("→", modifier = Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.titleLarge)
-                        OutlinedTextField(
-                            value = message.to,
-                            onValueChange = {
-                                onChange(model.copy(messages = model.messages.updated(index, message.copy(to = it))))
-                            },
-                            label = { Text("To") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                        )
-                    }
+                    ResponsiveEndpointFields(
+                        from = message.from,
+                        onFromChange = {
+                            onChange(model.copy(messages = model.messages.updated(index, message.copy(from = it))))
+                        },
+                        to = message.to,
+                        onToChange = {
+                            onChange(model.copy(messages = model.messages.updated(index, message.copy(to = it))))
+                        },
+                    )
                     OutlinedTextField(
                         value = message.text,
                         onValueChange = {
