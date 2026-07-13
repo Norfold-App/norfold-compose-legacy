@@ -22,6 +22,72 @@ class BlockDocumentFoundationTest {
     }
 
     @Test
+    fun `render modes and embed size survive json round trip`() {
+        val document = BlockDocument(
+            listOf(
+                CodeBlock(code = "println(42)", renderMode = BlockRenderMode.Source),
+                TableBlock(headers = listOf(TableCell(listOf(InlineText("A")))), renderMode = BlockRenderMode.Source),
+                ChartBlock(vegaLiteSpec = "{\"mark\":\"bar\"}", renderMode = BlockRenderMode.Source),
+                MathBlock(tex = "x^2", renderMode = BlockRenderMode.Source),
+                MermaidBlock(code = "graph TD; A-->B", renderMode = BlockRenderMode.Source),
+                EmbedBlock(url = "https://example.com", displayHeightDp = 286f),
+            ),
+        )
+
+        val restored = BlockDocumentJson.decode(BlockDocumentJson.encode(document))
+
+        assertEquals(document, restored)
+        assertEquals(286f, (restored.blocks.last() as EmbedBlock).displayHeightDp)
+        assertTrue(restored.blocks.dropLast(1).all {
+            when (it) {
+                is CodeBlock -> it.renderMode == BlockRenderMode.Source
+                is TableBlock -> it.renderMode == BlockRenderMode.Source
+                is ChartBlock -> it.renderMode == BlockRenderMode.Source
+                is MathBlock -> it.renderMode == BlockRenderMode.Source
+                is MermaidBlock -> it.renderMode == BlockRenderMode.Source
+                else -> false
+            }
+        })
+    }
+
+    @Test
+    fun `inline formatting accepts reversed selections in paragraphs lists and todos`() {
+        val paragraph = ParagraphBlock(id = "p", content = listOf(InlineText("alpha")))
+        val listItem = ListItem(id = "li", content = listOf(InlineText("bravo")))
+        val todoItem = TodoItem(id = "ti", content = listOf(InlineText("charlie")))
+        val session = BlockEditorSession(
+            BlockDocument(
+                listOf(
+                    paragraph,
+                    BulletListBlock(id = "list", items = listOf(listItem)),
+                    TodoListBlock(id = "todo", items = listOf(todoItem)),
+                ),
+            ),
+        )
+
+        session.replaceSelectionWithInline(BlockCursor("p", 5), BlockCursor("p", 0), BoldInline(listOf(InlineText("alpha"))))
+        session.replaceSelectionWithInline(BlockCursor("list", 5, "li"), BlockCursor("list", 0, "li"), ItalicInline(listOf(InlineText("bravo"))))
+        session.replaceSelectionWithInline(BlockCursor("todo", 7, "ti"), BlockCursor("todo", 0, "ti"), StrikethroughInline(listOf(InlineText("charlie"))))
+
+        assertTrue((session.document.blocks[0] as ParagraphBlock).content.single() is BoldInline)
+        assertTrue((session.document.blocks[1] as BulletListBlock).items.single().content.single() is ItalicInline)
+        assertTrue((session.document.blocks[2] as TodoListBlock).items.single().content.single() is StrikethroughInline)
+        assertEquals(listOf("alpha", "bravo", "charlie"), session.document.blocks.map(DocumentBlock::plainText))
+    }
+
+    @Test
+    fun `quote edits retain inline structure`() {
+        val quote = QuoteBlock(id = "quote", children = listOf(ParagraphBlock(content = listOf(BoldInline(listOf(InlineText("hello")))))))
+        val session = BlockEditorSession(BlockDocument(listOf(quote)))
+
+        session.editText(quote.id, "hello", "hello world")
+
+        val content = ((session.document.blocks.single() as QuoteBlock).children.single() as ParagraphBlock).content
+        assertTrue(content.first() is BoldInline)
+        assertEquals("hello world", content.joinToString("") { it.plainText() })
+    }
+
+    @Test
     fun `seed style markdown import export is structurally stable`() {
         val markdown = """
             # Norfold Guide
