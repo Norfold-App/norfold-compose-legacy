@@ -85,6 +85,25 @@ class MathBuilderSheetTest {
         assertEquals(TextRange(3), appended.selection)
     }
 
+    @Test
+    fun `math runtime detection includes simple inline expressions without commands`() {
+        val dollar = '$'
+
+        assertTrue(markdownNeedsMath("Energy is ${dollar}E = mc^2$dollar."))
+        assertTrue(markdownNeedsMath("Display: ${dollar}${dollar}x^2$dollar$dollar"))
+        assertTrue(markdownNeedsMath("Bracketed: \\(x + y\\)"))
+    }
+
+    @Test
+    fun `math runtime detection ignores escaped prices and incomplete delimiters`() {
+        val dollar = '$'
+
+        assertFalse(markdownNeedsMath("Price is \\$dollar${5}, not \\$dollar${7}."))
+        assertFalse(markdownNeedsMath("Currency ranges: ${dollar}5 and ${dollar}10"))
+        assertFalse(markdownNeedsMath("An unfinished ${dollar}expression"))
+        assertFalse(markdownNeedsMath("Inline math cannot cross ${dollar}a line\nb$dollar"))
+    }
+
     private fun TextFieldValue.selectedText(): String {
         val start = minOf(selection.start, selection.end)
         val end = maxOf(selection.start, selection.end)
