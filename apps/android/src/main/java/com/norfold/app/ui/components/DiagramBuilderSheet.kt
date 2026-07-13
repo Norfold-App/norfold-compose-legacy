@@ -571,11 +571,11 @@ fun DiagramBuilderSheet(
             colors.errorContainer,
         ).distinctBy(Color::toArgb)
     }
-    val seeded = remember(initialSource, defaultColor) {
+    val seeded = remember(initialSource) {
         MermaidDiagramCodec.decodeOrDefault(initialSource, defaultColor)
     }
-    var model by remember(initialSource, defaultColor) { mutableStateOf(seeded) }
-    var source by remember(initialSource, defaultColor) {
+    var model by remember(initialSource) { mutableStateOf(seeded) }
+    var source by remember(initialSource) {
         mutableStateOf(
             initialSource?.trim()?.takeIf(String::isNotBlank)
                 ?: MermaidDiagramCodec.encode(seeded, defaultColor),
@@ -894,7 +894,10 @@ private fun FlowchartNodeCard(
                     )
                 }
             }
-            Text("Color", style = MaterialTheme.typography.labelLarge)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Color", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                Text(node.color, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
