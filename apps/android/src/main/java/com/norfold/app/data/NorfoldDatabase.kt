@@ -39,7 +39,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 29,
+    version = 30,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -79,6 +79,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_26_27,
                     MIGRATION_27_28,
                     MIGRATION_28_29,
+                    MIGRATION_29_30,
                 )
                 .build()
                 .also { instance = it }
@@ -270,6 +271,13 @@ abstract class NorfoldDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE notes ADD COLUMN overlapMode TEXT NOT NULL DEFAULT 'reflow'")
                 db.execSQL("ALTER TABLE notes ADD COLUMN freeformLayoutJson TEXT")
+            }
+        }
+
+        internal val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeStartAction TEXT NOT NULL DEFAULT 'Complete'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeEndAction TEXT NOT NULL DEFAULT 'Delete'")
             }
         }
 
@@ -814,6 +822,8 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("settings", "taskSortMode", "TEXT NOT NULL DEFAULT 'Manual'")
             addColumnIfMissing("settings", "taskCompactLayout", "INTEGER NOT NULL DEFAULT 1")
             addColumnIfMissing("settings", "taskKanbanEngine", "TEXT NOT NULL DEFAULT 'BoardPointer'")
+            addColumnIfMissing("settings", "taskSwipeStartAction", "TEXT NOT NULL DEFAULT 'Complete'")
+            addColumnIfMissing("settings", "taskSwipeEndAction", "TEXT NOT NULL DEFAULT 'Delete'")
             addColumnIfMissing("settings", "onboardingComplete", "INTEGER NOT NULL DEFAULT 0")
             addColumnIfMissing("settings", "workspacePurpose", "TEXT NOT NULL DEFAULT 'Personal'")
             addColumnIfMissing("settings", "calendarDefaultView", "TEXT NOT NULL DEFAULT 'Month'")

@@ -1627,6 +1627,8 @@ class NotesRepository(private val database: NorfoldDatabase) {
             taskSortMode = settings.taskSortMode,
             taskCompactLayout = settings.taskCompactLayout,
             taskKanbanEngine = settings.taskKanbanEngine,
+            taskSwipeStartAction = settings.taskSwipeStartAction.name,
+            taskSwipeEndAction = settings.taskSwipeEndAction.name,
             onboardingComplete = settings.onboardingComplete,
             workspacePurpose = settings.workspacePurpose,
             calendarDefaultView = settings.calendarDefaultView,

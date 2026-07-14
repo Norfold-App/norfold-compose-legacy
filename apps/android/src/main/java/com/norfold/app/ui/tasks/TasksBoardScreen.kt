@@ -104,7 +104,14 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -159,6 +166,7 @@ import com.norfold.app.ui.dnd.dragLift
 import com.norfold.app.domain.TaskBoardItem
 import com.norfold.app.domain.TaskChecklistItem
 import com.norfold.app.domain.TaskColumnItem
+import com.norfold.app.domain.TaskGestureAction
 import com.norfold.app.domain.TaskItem
 import com.norfold.app.domain.TaskPriority
 import com.norfold.app.domain.TaskPropertyDefinition
@@ -210,6 +218,12 @@ private data class PendingTaskCreation(
     val payload: TaskCreationPayload,
 )
 
+private data class PendingTaskSwipe(
+    val task: TaskItem,
+    val action: TaskGestureAction,
+    val priorStatus: TaskStatus,
+)
+
 @Composable
 fun TasksBoardScreen(
     state: NotesUiState,
@@ -226,6 +240,9 @@ fun TasksBoardScreen(
     var priorityFilter by remember { mutableStateOf<TaskPriority?>(null) }
     var activeRailAction by remember { mutableStateOf<TaskRailAction?>(null) }
     var editingTask by remember { mutableStateOf<TaskItem?>(null) }
+    var pendingDeleteIds by remember { mutableStateOf(setOf<Long>()) }
+    val swipeSnackbar = remember { SnackbarHostState() }
+    val swipeScope = rememberCoroutineScope()
     var creatingTask by remember { mutableStateOf(false) }
     var createSeedColumn by remember { mutableStateOf<TaskColumnItem?>(null) }
     var pendingCreation by remember { mutableStateOf<PendingTaskCreation?>(null) }
@@ -257,6 +274,32 @@ fun TasksBoardScreen(
     val filteredTasks = boardTasks
         .filterTasks(query, assigneeFilter, labelFilter, priorityFilter)
         .sortedFor(sort)
+        .filterNot { it.id in pendingDeleteIds }
+    val swipeStartAction = state.settings.taskSwipeStartAction
+    val swipeEndAction = state.settings.taskSwipeEndAction
+    val runSwipeAction: (TaskItem, TaskGestureAction) -> Unit = { task, action ->
+        when (action) {
+            TaskGestureAction.Complete -> {
+                val prior = task.status
+                viewModel.moveTask(task, if (prior == TaskStatus.Done) TaskStatus.Todo else TaskStatus.Done)
+                if (prior != TaskStatus.Done) {
+                    swipeScope.launch {
+                        val result = swipeSnackbar.showSnackbar("Task completed", actionLabel = "Undo", duration = SnackbarDuration.Short)
+                        if (result == SnackbarResult.ActionPerformed) viewModel.moveTask(task, prior)
+                    }
+                }
+            }
+            TaskGestureAction.Delete -> {
+                pendingDeleteIds = pendingDeleteIds + task.id
+                swipeScope.launch {
+                    val result = swipeSnackbar.showSnackbar("Task deleted", actionLabel = "Undo", duration = SnackbarDuration.Long)
+                    if (result != SnackbarResult.ActionPerformed) viewModel.deleteTask(task)
+                    pendingDeleteIds = pendingDeleteIds - task.id
+                }
+            }
+            TaskGestureAction.None -> Unit
+        }
+    }
     val assignees = state.tasks.map { it.assignee.ifBlank { "@owner" } }.distinct().sorted()
     val labels = state.tasks.flatMap { it.labels.split(",").map(String::trim) }.filter(String::isNotBlank).distinct().sorted()
     val taskCardCounts = boardTasks.associate { task ->
@@ -380,6 +423,9 @@ fun TasksBoardScreen(
                             creatingTask = true
                         },
                         modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 112.dp),
+                        swipeStartAction = swipeStartAction,
+                        swipeEndAction = swipeEndAction,
+                        onSwipeAction = runSwipeAction,
                     )
                 } else {
                     Column(
@@ -411,16 +457,37 @@ fun TasksBoardScreen(
                                             createSeedColumn = column
                                             creatingTask = true
                                         },
+                                        swipeStartAction = swipeStartAction,
+                                        swipeEndAction = swipeEndAction,
+                                        onSwipeAction = runSwipeAction,
                                     )
                                 } else {
-                                    TaskListView(filteredTasks, columns, taskProperties, taskPropertyValues, taskChecklistItems, onTaskClick = { editingTask = it })
+                                    TaskListView(
+                                        filteredTasks, columns, taskProperties, taskPropertyValues, taskChecklistItems,
+                                        onTaskClick = { editingTask = it },
+                                        swipeStartAction = swipeStartAction,
+                                        swipeEndAction = swipeEndAction,
+                                        onSwipeAction = runSwipeAction,
+                                    )
                                 }
                             }
                             TaskWorkspaceView.Timeline -> TaskTimelineView(filteredTasks, columns, onTaskClick = { editingTask = it })
-                            TaskWorkspaceView.Feed -> TaskFeedView(filteredTasks, taskProperties, taskPropertyValues, taskChecklistItems, onTaskClick = { editingTask = it })
+                            TaskWorkspaceView.Feed -> TaskFeedView(
+                                filteredTasks, taskProperties, taskPropertyValues, taskChecklistItems,
+                                onTaskClick = { editingTask = it },
+                                swipeStartAction = swipeStartAction,
+                                swipeEndAction = swipeEndAction,
+                                onSwipeAction = runSwipeAction,
+                            )
                             TaskWorkspaceView.Calendar -> Unit
                             TaskWorkspaceView.Chart -> TaskChartView(filteredTasks)
-                            TaskWorkspaceView.Gallery -> TaskGalleryView(filteredTasks, taskChecklistItems, onTaskClick = { editingTask = it })
+                            TaskWorkspaceView.Gallery -> TaskGalleryView(
+                                filteredTasks, taskChecklistItems,
+                                onTaskClick = { editingTask = it },
+                                swipeStartAction = swipeStartAction,
+                                swipeEndAction = swipeEndAction,
+                                onSwipeAction = runSwipeAction,
+                            )
                         }
                     }
                 }
@@ -519,6 +586,11 @@ fun TasksBoardScreen(
                 },
             )
         }
+
+        SnackbarHost(
+            hostState = swipeSnackbar,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp).zIndex(30f),
+        )
     }
 }
 
@@ -1036,6 +1108,9 @@ private fun TaskDatabaseTable(
     onTaskClick: (TaskItem) -> Unit,
     onNewTask: () -> Unit,
     modifier: Modifier = Modifier,
+    swipeStartAction: TaskGestureAction = TaskGestureAction.None,
+    swipeEndAction: TaskGestureAction = TaskGestureAction.None,
+    onSwipeAction: (TaskItem, TaskGestureAction) -> Unit = { _, _ -> },
 ) {
     var editor by remember { mutableStateOf<Pair<TaskItem, TaskPropertyDefinition>?>(null) }
     var editorAnchor by remember { mutableStateOf<Rect?>(null) }
@@ -1105,7 +1180,14 @@ private fun TaskDatabaseTable(
                     val taskChecks = checklistItems.filter { it.taskId == task.id }.sortedBy { it.sortOrder }
                     val taskFiles = filesByTask[task.id].orEmpty()
                     val rowHeight = taskTableRowHeight(task, taskChecks, taskFiles)
-                    Row(Modifier.animateItem()) {
+                    TaskSwipeRow(
+                        task = task,
+                        startAction = swipeStartAction,
+                        endAction = swipeEndAction,
+                        onAction = onSwipeAction,
+                        modifier = Modifier.animateItem(),
+                    ) {
+                    Row {
                         Box(Modifier.width(indexWidth).height(rowHeight).border(0.5.dp, border), contentAlignment = Alignment.Center) {
                             Text((index + 1).toString(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -1146,6 +1228,7 @@ private fun TaskDatabaseTable(
                             )
                         }
                         Spacer(Modifier.width(newPropertyWidth).height(rowHeight).border(0.5.dp, border))
+                    }
                     }
                 }
                 item {
@@ -1475,6 +1558,9 @@ private fun CompactGroupedTaskTable(
     onPropertyClick: (TaskItem, TaskPropertyDefinition) -> Unit,
     onTaskClick: (TaskItem) -> Unit,
     onNewTask: (TaskColumnItem) -> Unit,
+    swipeStartAction: TaskGestureAction = TaskGestureAction.None,
+    swipeEndAction: TaskGestureAction = TaskGestureAction.None,
+    onSwipeAction: (TaskItem, TaskGestureAction) -> Unit = { _, _ -> },
 ) {
     val collapsed = remember { mutableStateMapOf<Long, Boolean>() }
     var expandedTaskId by remember { mutableStateOf<Long?>(null) }
@@ -1493,6 +1579,7 @@ private fun CompactGroupedTaskTable(
                     }
                     if (collapsed[column.id] != true) {
                         columnTasks.forEachIndexed { index, task ->
+                            TaskSwipeRow(task = task, startAction = swipeStartAction, endAction = swipeEndAction, onAction = onSwipeAction) {
                             Surface(
                                 shape = RoundedCornerShape(14.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
@@ -1538,6 +1625,7 @@ private fun CompactGroupedTaskTable(
                                         }
                                     }
                                 }
+                            }
                             }
                         }
                         Surface(
@@ -1900,6 +1988,58 @@ private fun MatrixQuadrant(
     }
 }
 
+/**
+ * Wraps a task row in a SwipeToDismissBox honoring the user's configured swipe actions.
+ * The row is never actually dismissed by the box — actions run and the box snaps back,
+ * matching the note-list swipe behavior.
+ */
+@Composable
+private fun TaskSwipeRow(
+    task: TaskItem,
+    startAction: TaskGestureAction,
+    endAction: TaskGestureAction,
+    onAction: (TaskItem, TaskGestureAction) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> onAction(task, startAction)
+                SwipeToDismissBoxValue.EndToStart -> onAction(task, endAction)
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+            false
+        },
+    )
+    SwipeToDismissBox(
+        modifier = modifier,
+        state = dismissState,
+        enableDismissFromStartToEnd = startAction != TaskGestureAction.None,
+        enableDismissFromEndToStart = endAction != TaskGestureAction.None,
+        backgroundContent = {
+            val action = when (dismissState.dismissDirection) {
+                SwipeToDismissBoxValue.StartToEnd -> startAction
+                SwipeToDismissBoxValue.EndToStart -> endAction
+                SwipeToDismissBoxValue.Settled -> TaskGestureAction.None
+            }
+            val tint = if (action == TaskGestureAction.Delete) MaterialTheme.colorScheme.error else accent
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(tint.copy(alpha = 0.18f))
+                    .padding(16.dp),
+                contentAlignment = if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) Alignment.CenterEnd else Alignment.CenterStart,
+            ) {
+                Text(action.name, fontWeight = FontWeight.Bold, color = tint)
+            }
+        },
+        content = { content() },
+    )
+}
+
 @Composable
 private fun TaskListView(
     tasks: List<TaskItem>,
@@ -1908,9 +2048,13 @@ private fun TaskListView(
     propertyValues: List<TaskPropertyValue>,
     checklistItems: List<TaskChecklistItem>,
     onTaskClick: (TaskItem) -> Unit,
+    swipeStartAction: TaskGestureAction = TaskGestureAction.None,
+    swipeEndAction: TaskGestureAction = TaskGestureAction.None,
+    onSwipeAction: (TaskItem, TaskGestureAction) -> Unit = { _, _ -> },
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         tasks.forEach { task ->
+            TaskSwipeRow(task = task, startAction = swipeStartAction, endAction = swipeEndAction, onAction = onSwipeAction) {
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(18.dp),
@@ -1947,6 +2091,7 @@ private fun TaskListView(
                     }
                 }
             }
+            }
         }
     }
 }
@@ -1958,17 +2103,22 @@ private fun TaskFeedView(
     propertyValues: List<TaskPropertyValue>,
     checklistItems: List<TaskChecklistItem>,
     onTaskClick: (TaskItem) -> Unit,
+    swipeStartAction: TaskGestureAction = TaskGestureAction.None,
+    swipeEndAction: TaskGestureAction = TaskGestureAction.None,
+    onSwipeAction: (TaskItem, TaskGestureAction) -> Unit = { _, _ -> },
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         tasks.sortedByDescending { it.updatedAt }.forEach { task ->
-            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().clickable { onTaskClick(task) }) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(task.title, fontWeight = FontWeight.Bold)
-                    val progress = task.propertyProgress(properties, checklistItems)
-                    Text("Updated ${shortTime(task.updatedAt)}${progress?.let { " • $it%" }.orEmpty()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    properties.firstOrNull { it.type == TaskPropertyType.Text }?.let { property ->
-                        propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id }?.valueJson?.takeIf { it.isNotBlank() }?.let {
-                            Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TaskSwipeRow(task = task, startAction = swipeStartAction, endAction = swipeEndAction, onAction = onSwipeAction) {
+                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().clickable { onTaskClick(task) }) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(task.title, fontWeight = FontWeight.Bold)
+                        val progress = task.propertyProgress(properties, checklistItems)
+                        Text("Updated ${shortTime(task.updatedAt)}${progress?.let { " • $it%" }.orEmpty()}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        properties.firstOrNull { it.type == TaskPropertyType.Text }?.let { property ->
+                            propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id }?.valueJson?.takeIf { it.isNotBlank() }?.let {
+                                Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -2027,12 +2177,26 @@ private fun TaskChartView(tasks: List<TaskItem>) {
 }
 
 @Composable
-private fun TaskGalleryView(tasks: List<TaskItem>, checklistItems: List<TaskChecklistItem>, onTaskClick: (TaskItem) -> Unit) {
+private fun TaskGalleryView(
+    tasks: List<TaskItem>,
+    checklistItems: List<TaskChecklistItem>,
+    onTaskClick: (TaskItem) -> Unit,
+    swipeStartAction: TaskGestureAction = TaskGestureAction.None,
+    swipeEndAction: TaskGestureAction = TaskGestureAction.None,
+    onSwipeAction: (TaskItem, TaskGestureAction) -> Unit = { _, _ -> },
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         tasks.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 row.forEach { task ->
-                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.weight(1f).height(142.dp).clickable { onTaskClick(task) }) {
+                    TaskSwipeRow(
+                        task = task,
+                        startAction = swipeStartAction,
+                        endAction = swipeEndAction,
+                        onAction = onSwipeAction,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().height(142.dp).clickable { onTaskClick(task) }) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
                             Text(task.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             task.progressFromChecklist(checklistItems)?.let { progress ->
@@ -2040,6 +2204,7 @@ private fun TaskGalleryView(tasks: List<TaskItem>, checklistItems: List<TaskChec
                             }
                             PriorityPill(task.priority)
                         }
+                    }
                     }
                 }
                 if (row.size == 1) Spacer(Modifier.weight(1f))
