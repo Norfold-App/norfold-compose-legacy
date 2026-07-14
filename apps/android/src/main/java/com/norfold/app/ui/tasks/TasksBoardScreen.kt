@@ -83,6 +83,7 @@ import androidx.compose.material.icons.outlined.TableRows
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.ViewAgenda
 import androidx.compose.material.icons.automirrored.outlined.Send
 import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.AssistChip
@@ -126,6 +127,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -239,6 +241,8 @@ fun TasksBoardScreen(
     var labelFilter by remember { mutableStateOf("") }
     var priorityFilter by remember { mutableStateOf<TaskPriority?>(null) }
     var activeRailAction by remember { mutableStateOf<TaskRailAction?>(null) }
+    // Feed display mode (Gallery merged into Feed): true = grid cards, false = list rows.
+    var feedGridMode by rememberSaveable { mutableStateOf(true) }
     var editingTask by remember { mutableStateOf<TaskItem?>(null) }
     var pendingDeleteIds by remember { mutableStateOf(setOf<Long>()) }
     val swipeSnackbar = remember { SnackbarHostState() }
@@ -371,6 +375,8 @@ fun TasksBoardScreen(
                 onQueryChange = { query = it },
                 activeAction = activeRailAction,
                 onActionToggle = { action -> activeRailAction = if (activeRailAction == action) null else action },
+                feedGridMode = feedGridMode,
+                onToggleFeedMode = { feedGridMode = !feedGridMode },
                 onViewChange = { next ->
                     if (next == TaskWorkspaceView.Calendar) {
                         viewModel.go(Destination.Calendar)
@@ -472,28 +478,33 @@ fun TasksBoardScreen(
                                 }
                             }
                             TaskWorkspaceView.Timeline -> TaskTimelineView(filteredTasks, columns, onTaskClick = { editingTask = it })
-                            TaskWorkspaceView.Feed -> TaskFeedView(
-                                filteredTasks, taskProperties, taskPropertyValues, taskChecklistItems,
-                                onTaskClick = { editingTask = it },
-                                swipeStartAction = swipeStartAction,
-                                swipeEndAction = swipeEndAction,
-                                onSwipeAction = runSwipeAction,
-                            )
+                            TaskWorkspaceView.Feed -> if (feedGridMode) {
+                                TaskGalleryView(
+                                    filteredTasks, taskChecklistItems,
+                                    onTaskClick = { editingTask = it },
+                                    swipeStartAction = swipeStartAction,
+                                    swipeEndAction = swipeEndAction,
+                                    onSwipeAction = runSwipeAction,
+                                )
+                            } else {
+                                TaskFeedView(
+                                    filteredTasks, taskProperties, taskPropertyValues, taskChecklistItems,
+                                    onTaskClick = { editingTask = it },
+                                    swipeStartAction = swipeStartAction,
+                                    swipeEndAction = swipeEndAction,
+                                    onSwipeAction = runSwipeAction,
+                                )
+                            }
                             TaskWorkspaceView.Calendar -> Unit
                             TaskWorkspaceView.Chart -> TaskChartView(filteredTasks)
-                            TaskWorkspaceView.Gallery -> TaskGalleryView(
-                                filteredTasks, taskChecklistItems,
-                                onTaskClick = { editingTask = it },
-                                swipeStartAction = swipeStartAction,
-                                swipeEndAction = swipeEndAction,
-                                onSwipeAction = runSwipeAction,
-                            )
                         }
                     }
                 }
             }
         }
 
+        // The rail is hidden entirely while Feed shows its list display mode.
+        if (currentView != TaskWorkspaceView.Feed || feedGridMode) {
         TaskRailPanel(
             action = activeRailAction,
             modifier = Modifier
@@ -535,6 +546,7 @@ fun TasksBoardScreen(
             },
             onDismiss = { activeRailAction = null },
         )
+        }
 
         editingTask?.let { task ->
             AdaptiveTaskPage(
@@ -602,6 +614,8 @@ private fun TaskHeader(
     onQueryChange: (String) -> Unit,
     activeAction: TaskRailAction?,
     onActionToggle: (TaskRailAction) -> Unit,
+    feedGridMode: Boolean,
+    onToggleFeedMode: () -> Unit,
     onViewChange: (TaskWorkspaceView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -634,8 +648,18 @@ private fun TaskHeader(
             singleLine = true,
             leadingIcon = { Icon(Icons.Outlined.Search, null) },
             trailingIcon = {
-                IconButton(onClick = { onActionToggle(TaskRailAction.Filter) }) {
-                    Icon(Icons.Outlined.Tune, "Task controls", tint = if (activeAction != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                // Shared adaptive header hook: Feed toggles list/grid; other views open the rail.
+                when (currentView) {
+                    TaskWorkspaceView.Feed -> IconButton(onClick = onToggleFeedMode) {
+                        Icon(
+                            imageVector = if (feedGridMode) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
+                            contentDescription = if (feedGridMode) "Switch to list view" else "Switch to grid view",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> IconButton(onClick = { onActionToggle(TaskRailAction.Filter) }) {
+                        Icon(Icons.Outlined.Tune, "Task controls", tint = if (activeAction != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             },
             placeholder = { Text("Search tasks, assignees, labels") },
