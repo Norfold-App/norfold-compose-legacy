@@ -124,7 +124,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.window.Dialog
+import com.norfold.app.ui.components.NorfoldContentDialog
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -417,7 +417,7 @@ private fun CanvasNodeDetailDialog(
             }.onFailure { viewModel.showMessage(it.localizedMessage ?: "Cannot open target") }
         }
     }
-    Dialog(onDismissRequest = onDismiss) {
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),

@@ -35,7 +35,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TrackChanges
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -626,11 +626,11 @@ private fun EmptyPlanningCard(title: String, detail: String, onCreate: () -> Uni
 @Composable
 private fun GoalCreateDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     var title by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("New goal") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Goal") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    NorfoldDialog(onDismissRequest = onDismiss, title = { Text("New goal") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Goal") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @Composable
 private fun EventCreateDialog(date: LocalDate, onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     var title by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("New event") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), color = MaterialTheme.colorScheme.onSurfaceVariant); OutlinedTextField(title, { title = it }, label = { Text("Event name") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create at 10:00 AM") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    NorfoldDialog(onDismissRequest = onDismiss, title = { Text("New event") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), color = MaterialTheme.colorScheme.onSurfaceVariant); OutlinedTextField(title, { title = it }, label = { Text("Event name") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create at 10:00 AM") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }

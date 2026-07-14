@@ -84,7 +84,7 @@ import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.automirrored.outlined.Send
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
@@ -102,7 +102,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import com.norfold.app.ui.components.NorfoldBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -148,7 +148,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.norfold.app.ui.components.NorfoldContentDialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
@@ -698,7 +698,7 @@ private fun TaskPointerKanbanBoard(
         }
     }
     if (showNewColumnDialog) {
-        AlertDialog(
+        NorfoldDialog(
             onDismissRequest = { showNewColumnDialog = false },
             title = { Text("New column") },
             text = {
@@ -1208,7 +1208,7 @@ private fun CreateTaskDialog(
     var selectedColumn by remember(columns) { mutableStateOf(columns.first()) }
     var priority by remember { mutableStateOf(TaskPriority.Normal) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 620.dp).heightIn(max = 720.dp),
             shape = RoundedCornerShape(16.dp),
@@ -1342,7 +1342,7 @@ private fun MultiPropertyPickerDialog(
             .filterNot { it == TaskPropertyType.Name || it in activeTypes }
             .filter { query.isBlank() || it.defaultPropertyName().contains(query, ignoreCase = true) }
     }
-    Dialog(onDismissRequest = onDismiss) {
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp).heightIn(max = 640.dp),
             shape = RoundedCornerShape(16.dp),
@@ -1736,7 +1736,7 @@ private fun FocusedTaskPropertyDialog(
         }
     }
     if (compact) {
-        ModalBottomSheet(onDismissRequest = onDismiss) {
+        NorfoldBottomSheet(onDismissRequest = onDismiss) {
             Box(Modifier.fillMaxWidth().heightIn(max = 680.dp).verticalScroll(rememberScrollState())) { editorContent() }
             Spacer(Modifier.navigationBarsPadding())
         }
@@ -2298,7 +2298,7 @@ private fun TaskSettingsCard(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun BoardRenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var draft by remember { mutableStateOf(initial) }
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text("Rename board", fontWeight = FontWeight.Black) },
         text = {
@@ -3012,7 +3012,7 @@ private fun MainPropertyEditDialog(
     onDismiss: () -> Unit,
 ) {
     when (property.type) {
-        TaskPropertyType.Status -> AlertDialog(
+        TaskPropertyType.Status -> NorfoldDialog(
             onDismissRequest = onDismiss,
             confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
             title = { Text("Status") },
@@ -3036,7 +3036,7 @@ private fun MainPropertyEditDialog(
         )
         TaskPropertyType.Priority -> {
             var draft by remember(task.id, property.id) { mutableStateOf(task.priority.name) }
-            AlertDialog(
+            NorfoldDialog(
                 onDismissRequest = onDismiss,
                 confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft); onDismiss() }) { Text("Save") } },
                 dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -3060,7 +3060,7 @@ private fun MainPropertyEditDialog(
                 },
             )
         }
-        TaskPropertyType.DueDate, TaskPropertyType.Date -> AlertDialog(
+        TaskPropertyType.DueDate, TaskPropertyType.Date -> NorfoldDialog(
             onDismissRequest = onDismiss,
             confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
             title = { Text(property.name) },
@@ -3072,7 +3072,7 @@ private fun MainPropertyEditDialog(
         )
         TaskPropertyType.Checkbox -> {
             var draft by remember(task.id, property.id) { mutableStateOf((value?.valueJson ?: "").toBoolean()) }
-            AlertDialog(
+            NorfoldDialog(
                 onDismissRequest = onDismiss,
                 confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft.toString()); onDismiss() }) { Text("Save") } },
                 dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -3087,7 +3087,7 @@ private fun MainPropertyEditDialog(
         }
         else -> {
             var draft by remember(task.id, property.id) { mutableStateOf(value?.valueJson.orEmpty()) }
-            AlertDialog(
+            NorfoldDialog(
                 onDismissRequest = onDismiss,
                 confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft); onDismiss() }) { Text("Save") } },
                 dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -3475,7 +3475,7 @@ private fun TaskPropertyPicker(onDismiss: () -> Unit, onPick: (TaskPropertyType)
     val types = remember(query) {
         TaskPropertyPickerTypes.filter { it.defaultPropertyName().contains(query, ignoreCase = true) || it.name.contains(query, ignoreCase = true) }
     }
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text("New property") },
         text = {
@@ -3514,7 +3514,7 @@ private fun TaskDetailDialog(
     var assignee by remember(task.id) { mutableStateOf(task.assignee.ifBlank { "@owner" }) }
     var labels by remember(task.id) { mutableStateOf(task.labels) }
     var dueAt by remember(task.id) { mutableStateOf(task.dueAt) }
-    Dialog(onDismissRequest = onDismiss) {
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Task", fontWeight = FontWeight.Black, fontSize = 24.sp)

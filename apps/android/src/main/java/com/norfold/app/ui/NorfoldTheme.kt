@@ -31,6 +31,8 @@ import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.domain.ThemeMode
+import com.norfold.app.ui.components.LocalPopupStyle
+import com.norfold.app.ui.components.PopupStyle
 
 // Neutral surface/ink tokens shared by both schemes. These are intentionally hue-free so the
 // only brand color in the app is the user-selected [AppSettings.accentColor].
@@ -140,6 +142,7 @@ fun NorfoldTheme(settings: AppSettings, content: @Composable () -> Unit) {
         ),
         LocalContextualMenuStyle provides settings.contextualMenuStyle,
         LocalContextualMenuColor provides settings.contextualMenuColor,
+        LocalPopupStyle provides PopupStyle(),
     ) {
         MaterialTheme(
             colorScheme = if (dark) darkScheme(accent) else lightScheme(accent),

@@ -24,7 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Workspaces
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FilterChip
@@ -83,7 +83,7 @@ fun WorkspaceVisualDialog(
         if (uri != null) backgroundUri = uri.toString()
     }
 
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text("Workspace visuals", fontWeight = FontWeight.Black) },
         text = {
@@ -181,7 +181,7 @@ fun CreateWorkspaceVisualDialog(
         if (uri != null) backgroundUri = uri.toString()
     }
 
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text("Create workspace", fontWeight = FontWeight.Black) },
         text = {

@@ -54,7 +54,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Workspaces
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -382,7 +382,7 @@ private fun WorkspaceAdvancedSettings(state: NotesUiState, viewModel: NotesViewM
     var confirmDelete by remember { mutableStateOf(false) }
     val active = state.workspaces.firstOrNull { it.id == state.settings.activeWorkspaceId }
     if (confirmDelete && active != null) {
-        AlertDialog(
+        NorfoldDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Delete workspace?") },
             text = { Text("This permanently removes ${active.name} and its local content. The final workspace cannot be deleted.") },
@@ -1046,7 +1046,7 @@ private fun AppInfoSettings() {
         context.resources.openRawResource(com.norfold.app.R.raw.changelog).bufferedReader().use { it.readText() }
     }
     if (showChangelog) {
-        AlertDialog(
+        NorfoldDialog(
             onDismissRequest = { showChangelog = false },
             title = { Text("Changelog") },
             text = { Text(changelog) },
