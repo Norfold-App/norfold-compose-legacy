@@ -82,6 +82,8 @@ object BackupCodec {
                     it.createdAt,
                     it.updatedAt,
                     b64(it.tags.joinToString(",") { tag -> tag.name }),
+                    it.overlapMode.name,
+                    b64(DocLayoutJson.encode(it.freeformLayout).orEmpty()),
                 ).joinToString("|"),
             )
         }
@@ -278,6 +280,8 @@ object BackupCodec {
                     tags = unb64(cells[13]).split(",").filter { it.isNotBlank() }.mapIndexed { index, name ->
                         Tag(id = index.toLong() + 1, name = name, color = 0xFF8B5CF6)
                     },
+                    overlapMode = docOverlapModeOf(cells.getOrNull(14)),
+                    freeformLayout = DocLayoutJson.decode(unb64(cells.getOrElse(15) { "" })),
                 )
                 "ATTACHMENT" -> attachments += Attachment(
                     id = cells[1].toLong(),

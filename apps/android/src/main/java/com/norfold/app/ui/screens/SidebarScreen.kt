@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -77,6 +78,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.DocOutline
+import com.norfold.app.domain.Note
 import com.norfold.app.ui.NotesUiState
 import com.norfold.app.ui.NotesViewModel
 
@@ -268,6 +271,11 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Spacer(Modifier.height(4.dp))
+            val tocNote = state.selectedNote
+            if (state.destination == Destination.NoteEditor && tocNote != null) {
+                DocTableOfContents(tocNote, viewModel)
+                Spacer(Modifier.height(4.dp))
+            }
             SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
             SideNavItem("Today", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar && state.settings.calendarDefaultView == "Day") {
                 viewModel.patchSettings { it.copy(calendarDefaultView = "Day") }
@@ -436,6 +444,68 @@ private fun sectionItems(destination: Destination): List<SidebarEntry> = when (d
         SidebarEntry("Archive", Icons.Outlined.Archive, Destination.NotesHome),
         SidebarEntry("Trash", Icons.Outlined.Delete, Destination.NotesHome),
     )
+}
+
+/**
+ * The open Doc's table of contents, shown in the sidebar only while inside a Doc (viewing or editing).
+ * Tapping a heading fires [NotesViewModel.scrollToBlock]; the editor observes the request and scrolls
+ * (or, in free-overlap mode, pans) to the heading's top-level block. The bottom-sheet Outline stays too.
+ */
+@Composable
+private fun DocTableOfContents(note: Note, viewModel: NotesViewModel) {
+    val headings = remember(note.id, note.document) { DocOutline.extract(note.document) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .padding(vertical = 6.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "On this page",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (headings.isEmpty()) {
+            Text(
+                "No headings yet",
+                Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            headings.forEach { heading ->
+                Text(
+                    heading.label,
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            viewModel.scrollToBlock(heading.blockId)
+                            viewModel.closeSidebar()
+                        }
+                        .padding(
+                            start = (14 + (heading.level.coerceAtMost(4) - 1) * 12).dp,
+                            end = 14.dp,
+                            top = 7.dp,
+                            bottom = 7.dp,
+                        ),
+                    fontSize = 13.sp,
+                    fontWeight = if (heading.level <= 1) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }
 
 @Composable

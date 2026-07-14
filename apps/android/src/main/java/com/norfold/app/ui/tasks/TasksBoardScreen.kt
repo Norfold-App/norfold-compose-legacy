@@ -114,6 +114,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -152,6 +153,9 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import com.norfold.app.ui.components.MarkdownPreview
+import com.norfold.app.ui.dnd.DropSlot
+import com.norfold.app.ui.dnd.animatePlacement
+import com.norfold.app.ui.dnd.dragLift
 import com.norfold.app.domain.TaskBoardItem
 import com.norfold.app.domain.TaskChecklistItem
 import com.norfold.app.domain.TaskColumnItem
@@ -672,20 +676,6 @@ private fun TaskPointerKanbanBoard(
             }
         }
 
-        dragState.currentTarget()?.let { target ->
-            dragState.dropIndicatorRect(target)?.let { rect ->
-                Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = RoundedCornerShape(50.dp),
-                    modifier = Modifier
-                        .offset { IntOffset(rect.left.roundToInt(), rect.top.roundToInt()) }
-                        .width(with(density) { (rect.right - rect.left).toDp() })
-                        .height(4.dp)
-                        .zIndex(18f),
-                ) {}
-            }
-        }
-
         dragState.draggingTask?.let { task ->
             val position = dragState.pointer - dragState.grabOffset
             TaskKanbanCard(
@@ -698,7 +688,8 @@ private fun TaskPointerKanbanBoard(
                 modifier = Modifier
                     .width(284.dp)
                     .offset { IntOffset(position.x.roundToInt(), position.y.roundToInt()) }
-                    .zIndex(20f),
+                    .zIndex(20f)
+                    .dragLift(lifted = true, cornerRadius = 10.dp),
                 onClick = {},
                 onDragStart = { _, _ -> },
                 onDragMove = {},
@@ -808,15 +799,28 @@ private fun TaskKanbanColumn(
                     }
                 }
             }
-            tasks.forEachIndexed { index, task ->
-                if (target?.columnId == column.id && target.index == index) DropIndicator()
-                if (drag.draggingTask?.id == task.id) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
-                        shape = RoundedCornerShape(18.dp),
-                        modifier = Modifier.fillMaxWidth().height(if (compact) 86.dp else 116.dp),
-                    ) {}
-                } else {
+            // While dragging, the source card leaves the list entirely (it floats as a clone) and a
+            // dashed DropSlot placeholder occupies the live target index; TaskDropTarget.index is
+            // already computed over the dragged-card-excluded list, so the indices line up 1:1 with
+            // the onMoveTask commit. Neighbors slide around the slot via animatePlacement().
+            val draggingId = drag.draggingTask?.id
+            val visibleTasks = if (draggingId == null) tasks else tasks.filter { it.id != draggingId }
+            val slotIndex = when {
+                draggingId == null -> -1
+                target?.columnId == column.id -> target.index.coerceIn(0, visibleTasks.size)
+                target == null -> tasks.indexOfFirst { it.id == draggingId }
+                else -> -1
+            }
+            val density = LocalDensity.current
+            val slotHeight = draggingId
+                ?.let { drag.cardBounds[it]?.bounds }
+                ?.let { with(density) { it.height.toDp() } }
+                ?: if (compact) 86.dp else 116.dp
+            visibleTasks.forEachIndexed { index, task ->
+                if (index == slotIndex) {
+                    DropSlot(modifier = Modifier.fillMaxWidth(), height = slotHeight)
+                }
+                key(task.id) {
                     TaskKanbanCard(
                         task = task,
                         statusName = column.name,
@@ -824,7 +828,7 @@ private fun TaskKanbanColumn(
                         counts = cardCounts[task.id] ?: TaskCardCounts(),
                         compact = compact,
                         onClick = { onTaskClick(task) },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().animatePlacement(),
                         onBoundsChanged = { bounds ->
                             drag.cardBounds[task.id] = TaskCardBounds(task.id, column.id, drag.toBoardRect(bounds))
                         },
@@ -835,7 +839,9 @@ private fun TaskKanbanColumn(
                     )
                 }
             }
-            if (target?.columnId == column.id && target.index >= tasks.size) DropIndicator()
+            if (slotIndex >= visibleTasks.size && slotIndex >= 0) {
+                DropSlot(modifier = Modifier.fillMaxWidth(), height = slotHeight)
+            }
             if (composerVisible) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(

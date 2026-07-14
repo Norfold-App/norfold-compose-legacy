@@ -21,6 +21,9 @@ import com.norfold.app.domain.CanvasNodeItem
 import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.DocLayerOrder
+import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
 import com.norfold.app.domain.HomeTab
@@ -108,6 +111,9 @@ data class NotesUiState(
     val message: String? = null,
 )
 
+/** A one-shot request from the sidebar ToC to scroll the open Doc to a block. */
+data class ScrollToBlockRequest(val blockId: String, val serial: Long)
+
 private data class NavigationState(
     val selectedNoteId: Long?,
     val selectedObjectId: Long?,
@@ -171,6 +177,9 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private val sidebarOpen = MutableStateFlow(false)
     private val _pendingSettingsSection = MutableStateFlow<String?>(null)
     val pendingSettingsSection: StateFlow<String?> = _pendingSettingsSection.asStateFlow()
+    private var scrollToBlockSerial = 0L
+    private val _scrollToBlockRequest = MutableStateFlow<ScrollToBlockRequest?>(null)
+    val scrollToBlockRequest: StateFlow<ScrollToBlockRequest?> = _scrollToBlockRequest.asStateFlow()
     private val conflictReport = MutableStateFlow<ParsedSyncConflictReport?>(null)
     private val diagnostics = MutableStateFlow(diagnosticsStore.state())
     private val message = MutableStateFlow<String?>(null)
@@ -509,6 +518,42 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     fun togglePin(note: Note) = viewModelScope.launch { repository.setPinned(note) }
     fun toggleStar(note: Note) = viewModelScope.launch { repository.setStarred(note) }
     fun toggleLock(note: Note) = viewModelScope.launch { repository.setLocked(note) }
+
+    fun setOverlapMode(note: Note, mode: DocOverlapMode) = viewModelScope.launch { repository.setOverlapMode(note, mode) }
+
+    fun updateBlockPlacement(note: Note, blockId: String, placement: FreeformPlacement) = viewModelScope.launch {
+        repository.setFreeformLayout(note, note.freeformLayout + (blockId to placement))
+    }
+
+    fun updateFreeformLayout(note: Note, layout: Map<String, FreeformPlacement>) = viewModelScope.launch {
+        repository.setFreeformLayout(note, layout)
+    }
+
+    fun bringBlockToFront(note: Note, blockId: String) = viewModelScope.launch {
+        repository.setFreeformLayout(note, DocLayerOrder.bringToFront(note.freeformLayout, blockId))
+    }
+
+    fun bringBlockForward(note: Note, blockId: String) = viewModelScope.launch {
+        repository.setFreeformLayout(note, DocLayerOrder.bringForward(note.freeformLayout, blockId))
+    }
+
+    fun sendBlockBackward(note: Note, blockId: String) = viewModelScope.launch {
+        repository.setFreeformLayout(note, DocLayerOrder.sendBackward(note.freeformLayout, blockId))
+    }
+
+    fun sendBlockToBack(note: Note, blockId: String) = viewModelScope.launch {
+        repository.setFreeformLayout(note, DocLayerOrder.sendToBack(note.freeformLayout, blockId))
+    }
+
+    /** Sidebar ToC → editor scroll. The serial retriggers the editor even for repeated same-heading taps. */
+    fun scrollToBlock(blockId: String) {
+        _scrollToBlockRequest.value = ScrollToBlockRequest(blockId, ++scrollToBlockSerial)
+    }
+
+    fun consumeScrollToBlock() {
+        _scrollToBlockRequest.value = null
+    }
+
     fun archive(note: Note) = viewModelScope.launch { repository.setArchived(note, true) }
     fun delete(note: Note) = viewModelScope.launch { repository.deleteNote(note) }
 

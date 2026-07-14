@@ -460,6 +460,12 @@ interface NotesDao {
     @Query("UPDATE notes SET locked = :value, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setLocked(id: Long, value: Boolean, updatedAt: Long)
 
+    @Query("UPDATE notes SET overlapMode = :mode, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setNoteOverlapMode(id: Long, mode: String, updatedAt: Long)
+
+    @Query("UPDATE notes SET freeformLayoutJson = :layoutJson, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setNoteFreeformLayout(id: Long, layoutJson: String?, updatedAt: Long)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNote(id: Long)
 
