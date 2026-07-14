@@ -29,7 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Menu
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -227,7 +227,7 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
     NorfoldTheme(state.settings) {
         Surface(Modifier.fillMaxSize()) {
             if (state.diagnostics.pendingCrashPrompt && state.diagnostics.askBeforeSharing && !loading) {
-                AlertDialog(
+                NorfoldDialog(
                     onDismissRequest = viewModel::acknowledgeCrashPrompt,
                     title = { Text("Norfold noticed a crash") },
                     text = { Text("A local diagnostics log is ready. You can share it through your email or any app from the share sheet.") },

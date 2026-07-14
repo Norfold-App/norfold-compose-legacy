@@ -43,7 +43,7 @@ import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ElevatedButton
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -798,7 +798,7 @@ private fun ObjectInspectorDialog(obj: WorkspaceObject, state: NotesUiState, vie
     val links = state.workspaceObjectLinks.filter { it.fromObjectId == obj.id || it.toObjectId == obj.id }
     val comments = state.workspaceComments.filter { it.objectId == obj.id }
     val history = state.workspaceObjectHistory.filter { it.objectId == obj.id }.take(8)
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text(obj.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {

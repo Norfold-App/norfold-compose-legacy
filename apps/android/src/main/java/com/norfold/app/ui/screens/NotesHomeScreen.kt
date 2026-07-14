@@ -63,7 +63,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.norfold.app.ui.components.NorfoldContentDialog
 import coil.compose.AsyncImage
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.WorkspaceIconKind
@@ -307,7 +307,7 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, viewModel: No
 
 @Composable
 private fun NoteQuickActionsDialog(note: Note, viewModel: NotesViewModel, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(note.title, fontWeight = FontWeight.Black, fontSize = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)

@@ -44,7 +44,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.ModalBottomSheet
+import com.norfold.app.ui.components.NorfoldBottomSheet
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -87,7 +87,7 @@ import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.material.icons.outlined.Title
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -170,7 +170,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.window.Dialog
+import com.norfold.app.ui.components.NorfoldFullscreenDialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -859,7 +859,7 @@ fun BlockNoteEditorScreen(
     }
     if (showOutline) {
         val headings = DocOutline.extract(renderedDocument)
-        ModalBottomSheet(onDismissRequest = { showOutline = false }) {
+        NorfoldBottomSheet(onDismissRequest = { showOutline = false }) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
                 Text(
                     "Outline",
@@ -1091,7 +1091,7 @@ private fun LinkEditorDialog(
     var text by remember(request) { mutableStateOf(request.text) }
     var url by remember(request) { mutableStateOf(request.url) }
     val valid = remember(url) { runCatching { Uri.parse(url.trim()) }.getOrNull()?.scheme in setOf("http", "https", "mailto") }
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit link") },
         text = {
@@ -2924,7 +2924,7 @@ private fun EngineFullscreenDialog(
 ) {
     StableLandscapeOrientationEffect(landscape)
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    NorfoldFullscreenDialog(onDismissRequest = onDismiss) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -3343,7 +3343,7 @@ private fun MediaFullscreenDialog(
     onDismiss: () -> Unit,
 ) {
     StableLandscapeOrientationEffect(landscape)
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    NorfoldFullscreenDialog(onDismissRequest = onDismiss) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -3459,7 +3459,7 @@ private fun EditableEmbedBlock(block: EmbedBlock, mode: BlockSurfaceMode, onRepl
 @Composable
 private fun EmbedFullscreenDialog(embed: EmbedBlock, landscape: Boolean, onDismiss: () -> Unit) {
     StableLandscapeOrientationEffect(landscape)
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    NorfoldFullscreenDialog(onDismissRequest = onDismiss) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
