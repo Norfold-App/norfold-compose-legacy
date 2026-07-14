@@ -98,6 +98,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -243,6 +244,8 @@ fun TasksBoardScreen(
     var activeRailAction by remember { mutableStateOf<TaskRailAction?>(null) }
     // Feed display mode (Gallery merged into Feed): true = grid cards, false = list rows.
     var feedGridMode by rememberSaveable { mutableStateOf(true) }
+    // Sort direction for the rail's Sort sheet (session-local; Manual ignores it).
+    var sortDescending by rememberSaveable { mutableStateOf(false) }
     var editingTask by remember { mutableStateOf<TaskItem?>(null) }
     var pendingDeleteIds by remember { mutableStateOf(setOf<Long>()) }
     val swipeSnackbar = remember { SnackbarHostState() }
@@ -278,6 +281,7 @@ fun TasksBoardScreen(
     val filteredTasks = boardTasks
         .filterTasks(query, assigneeFilter, labelFilter, priorityFilter)
         .sortedFor(sort)
+        .let { if (sortDescending && sort != TaskWorkspaceSort.Manual) it.asReversed() else it }
         .filterNot { it.id in pendingDeleteIds }
     val swipeStartAction = state.settings.taskSwipeStartAction
     val swipeEndAction = state.settings.taskSwipeEndAction
@@ -512,8 +516,8 @@ fun TasksBoardScreen(
                 .padding(top = 190.dp, end = 18.dp, start = 18.dp)
                 .fillMaxWidth(0.78f)
                 .widthIn(max = 680.dp),
-            query = query,
-            onQueryChange = { query = it },
+            sortDescending = sortDescending,
+            onSortDescendingChange = { sortDescending = it },
             assignees = assignees,
             assigneeFilter = assigneeFilter,
             onAssigneeFilter = { assigneeFilter = it },
@@ -531,7 +535,7 @@ fun TasksBoardScreen(
             onSelectBoard = { boardId -> viewModel.patchSettings { it.copy(taskSelectedBoardId = boardId) } },
             boardName = boardName,
             onBoardNameChange = { boardName = it },
-            onRenameBoard = { newName -> selectedBoard?.let { viewModel.renameTaskBoard(it.id, newName) } },
+            onRenameBoard = { board, newName -> viewModel.renameTaskBoard(board.id, newName) },
             newBoardName = newBoardName,
             onNewBoardNameChange = { newBoardName = it },
             onCreateBoard = {
@@ -2237,12 +2241,12 @@ private fun TaskGalleryView(
     }
 }
 
+private enum class TaskRailSheet { Filter, Sort, Boards }
+
 @Composable
 private fun TaskRailPanel(
     action: TaskRailAction?,
     modifier: Modifier,
-    query: String,
-    onQueryChange: (String) -> Unit,
     assignees: List<String>,
     assigneeFilter: String,
     onAssigneeFilter: (String) -> Unit,
@@ -2253,6 +2257,8 @@ private fun TaskRailPanel(
     onPriorityFilter: (TaskPriority?) -> Unit,
     sort: TaskWorkspaceSort,
     onSortChange: (TaskWorkspaceSort) -> Unit,
+    sortDescending: Boolean,
+    onSortDescendingChange: (Boolean) -> Unit,
     compact: Boolean,
     onCompactChange: (Boolean) -> Unit,
     boards: List<TaskBoardItem>,
@@ -2260,7 +2266,7 @@ private fun TaskRailPanel(
     onSelectBoard: (Long) -> Unit,
     boardName: String,
     onBoardNameChange: (String) -> Unit,
-    onRenameBoard: (String) -> Unit,
+    onRenameBoard: (TaskBoardItem, String) -> Unit,
     newBoardName: String,
     onNewBoardNameChange: (String) -> Unit,
     onCreateBoard: () -> Unit,
@@ -2269,99 +2275,170 @@ private fun TaskRailPanel(
     onCreateColumn: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var tab by remember(action) { mutableStateOf(TaskRailAction.Filter) }
+    var openSheet by remember(action) { mutableStateOf<TaskRailSheet?>(null) }
+    val activeFilters = listOf(assigneeFilter.isNotBlank(), labelFilter.isNotBlank(), priorityFilter != null).count { it }
+    val selectedBoardName = boards.firstOrNull { it.id == selectedBoardId }?.name ?: "Default board"
     AnimatedVisibility(visible = action != null, modifier = modifier) {
         Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(22.dp), tonalElevation = 6.dp) {
             Column(
                 Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf(TaskRailAction.Filter, TaskRailAction.Sort, TaskRailAction.New, TaskRailAction.Settings).forEach { item ->
-                        TextButton(onClick = { tab = item }, modifier = Modifier.weight(1f)) {
-                            Text(item.name, color = if (tab == item) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Task controls", modifier = Modifier.weight(1f), fontWeight = FontWeight.Black)
                     IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close task controls") }
                 }
-                HorizontalDivider()
-                when (tab) {
-                    TaskRailAction.Search -> OutlinedTextField(query, onQueryChange, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Search") }, colors = taskTextFieldColors())
-                    TaskRailAction.Filter -> {
-                        FilterChips("Assignee", assignees, assigneeFilter, onAssigneeFilter)
-                        FilterChips("Label", labels, labelFilter, onLabelFilter)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AssistChip(onClick = { onPriorityFilter(null) }, label = { Text("All") })
-                            TaskPriority.entries.forEach { priority ->
-                                AssistChip(onClick = { onPriorityFilter(priority) }, label = { Text(priority.label()) })
-                            }
-                        }
-                        Text("Active: ${assigneeFilter.ifBlank { "anyone" }} / ${labelFilter.ifBlank { "any label" }} / ${priorityFilter?.label() ?: "any priority"}")
+                TaskRailRow(
+                    icon = Icons.Outlined.Tune,
+                    title = "Filter",
+                    summary = if (activeFilters == 0) "None active" else "$activeFilters active",
+                    onClick = { openSheet = TaskRailSheet.Filter },
+                )
+                TaskRailRow(
+                    icon = Icons.AutoMirrored.Outlined.Sort,
+                    title = "Sort",
+                    summary = if (sort == TaskWorkspaceSort.Manual) sort.label else "${sort.label} ${if (sortDescending) "↓" else "↑"}",
+                    onClick = { openSheet = TaskRailSheet.Sort },
+                )
+                TaskRailRow(
+                    icon = Icons.Outlined.GridView,
+                    title = "Boards",
+                    summary = selectedBoardName,
+                    onClick = { openSheet = TaskRailSheet.Boards },
+                )
+                TaskRailRow(
+                    icon = Icons.Outlined.Settings,
+                    title = "Layout",
+                    summary = if (compact) "Compact cards" else "Comfortable cards",
+                    onClick = { onCompactChange(!compact) },
+                )
+            }
+        }
+    }
+    when (openSheet) {
+        TaskRailSheet.Filter -> NorfoldBottomSheet(onDismissRequest = { openSheet = null }) {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Filter tasks", modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, fontSize = 18.sp)
+                    TextButton(
+                        onClick = {
+                            onAssigneeFilter("")
+                            onLabelFilter("")
+                            onPriorityFilter(null)
+                        },
+                        enabled = activeFilters > 0,
+                    ) { Text("Reset") }
+                }
+                FilterChips("Assignee", assignees, assigneeFilter, onAssigneeFilter)
+                FilterChips("Label", labels, labelFilter, onLabelFilter)
+                Text("Priority", fontWeight = FontWeight.Bold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        FilterChip(selected = priorityFilter == null, onClick = { onPriorityFilter(null) }, label = { Text("All") })
                     }
-                    TaskRailAction.Sort -> TaskWorkspaceSort.entries.forEach { mode ->
-                        AssistChip(onClick = { onSortChange(mode) }, label = { Text(if (mode == sort) "${mode.label} ✓" else mode.label) })
-                    }
-                    TaskRailAction.New -> {
-                        OutlinedTextField(newBoardName, onNewBoardNameChange, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New board") }, colors = taskTextFieldColors())
-                        Button(onClick = onCreateBoard, enabled = newBoardName.isNotBlank()) { Text("Create board") }
-                        HorizontalDivider()
-                        OutlinedTextField(newColumnName, onNewColumnNameChange, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New column") }, colors = taskTextFieldColors())
-                        Button(onClick = onCreateColumn, enabled = newColumnName.isNotBlank()) { Text("Create column") }
-                    }
-                    TaskRailAction.Settings -> {
-                        var showRename by remember { mutableStateOf(false) }
-                        TaskSettingsCard("Board") {
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(boards, key = { it.id }) { board ->
-                                    AssistChip(onClick = { onSelectBoard(board.id) }, label = { Text(if (board.id == selectedBoardId) "${board.name} ✓" else board.name) })
-                                }
-                            }
-                            Surface(
-                                color = MaterialTheme.colorScheme.surface,
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(boardName.ifBlank { "Untitled board" }, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    IconButton(onClick = { showRename = true }) { Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.primary) }
-                                }
-                            }
-                        }
-                        if (showRename) {
-                            BoardRenameDialog(
-                                initial = boardName,
-                                onDismiss = { showRename = false },
-                                onConfirm = { next ->
-                                    onBoardNameChange(next)
-                                    onRenameBoard(next)
-                                    showRename = false
-                                },
-                            )
-                        }
-                        TaskSettingsCard("Layout") {
-                            AssistChip(onClick = { onCompactChange(!compact) }, label = { Text(if (compact) "Compact cards ✓" else "Comfortable cards") })
-                            Text("Default view: Table", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                    items(TaskPriority.entries) { priority ->
+                        FilterChip(selected = priorityFilter == priority, onClick = { onPriorityFilter(priority) }, label = { Text(priority.label()) })
                     }
                 }
             }
         }
+        TaskRailSheet.Sort -> NorfoldBottomSheet(onDismissRequest = { openSheet = null }) {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Sort tasks", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                TaskWorkspaceSort.entries.forEach { mode ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onSortChange(mode) }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = mode == sort, onClick = { onSortChange(mode) })
+                        Text(mode.label, fontWeight = if (mode == sort) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+                HorizontalDivider()
+                Text("Direction", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !sortDescending,
+                        onClick = { onSortDescendingChange(false) },
+                        label = { Text("Ascending ↑") },
+                        enabled = sort != TaskWorkspaceSort.Manual,
+                    )
+                    FilterChip(
+                        selected = sortDescending,
+                        onClick = { onSortDescendingChange(true) },
+                        label = { Text("Descending ↓") },
+                        enabled = sort != TaskWorkspaceSort.Manual,
+                    )
+                }
+            }
+        }
+        TaskRailSheet.Boards -> NorfoldBottomSheet(onDismissRequest = { openSheet = null }) {
+            var renamingBoard by remember { mutableStateOf<TaskBoardItem?>(null) }
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Boards", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                boards.forEach { board ->
+                    Surface(
+                        color = if (board.id == selectedBoardId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth().clickable { onSelectBoard(board.id) },
+                    ) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                board.name.ifBlank { "Untitled board" },
+                                modifier = Modifier.weight(1f),
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (board.id == selectedBoardId) Icon(Icons.Outlined.CheckCircle, "Selected board", tint = MaterialTheme.colorScheme.primary)
+                            IconButton(onClick = { renamingBoard = board }) { Icon(Icons.Outlined.Edit, "Rename board", tint = MaterialTheme.colorScheme.primary) }
+                        }
+                    }
+                }
+                HorizontalDivider()
+                OutlinedTextField(newBoardName, onNewBoardNameChange, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New board") }, colors = taskTextFieldColors())
+                Button(onClick = onCreateBoard, enabled = newBoardName.isNotBlank()) { Text("Create board") }
+                HorizontalDivider()
+                OutlinedTextField(newColumnName, onNewColumnNameChange, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New column") }, colors = taskTextFieldColors())
+                Button(onClick = onCreateColumn, enabled = newColumnName.isNotBlank()) { Text("Create column") }
+            }
+            renamingBoard?.let { board ->
+                BoardRenameDialog(
+                    initial = board.name,
+                    onDismiss = { renamingBoard = null },
+                    onConfirm = { next ->
+                        if (board.id == selectedBoardId) onBoardNameChange(next)
+                        onRenameBoard(board, next)
+                        renamingBoard = null
+                    },
+                )
+            }
+        }
+        null -> Unit
     }
 }
 
 @Composable
-private fun TaskSettingsCard(title: String, content: @Composable () -> Unit) {
+private fun TaskRailRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    summary: String,
+    onClick: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable(onClick = onClick),
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title.uppercase(), fontWeight = FontWeight.Black, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, letterSpacing = 1.sp)
-            content()
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(summary, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(Icons.Outlined.ExpandMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
