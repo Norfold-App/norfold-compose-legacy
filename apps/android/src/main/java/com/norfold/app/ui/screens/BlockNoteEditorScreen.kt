@@ -80,6 +80,8 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Star
@@ -233,6 +235,8 @@ import com.norfold.app.ui.LocalContextualMenuStyle
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.ui.components.MarkdownPreview
+import com.norfold.app.ui.components.RenderCache
+import com.norfold.app.ui.components.markdownRenderCached
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.ChartBuilderSheet
 import com.norfold.app.ui.components.DiagramBuilderSheet
@@ -1656,6 +1660,24 @@ private fun BlockEditorHeader(
                                 if (overlapMode != DocOverlapMode.Overlap) onSetOverlapMode(DocOverlapMode.Overlap)
                             },
                         )
+                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text("Re-render all blocks")
+                                    Text(
+                                        "Clears the render cache and redraws every engine block",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                            onClick = {
+                                showDocSettings = false
+                                RenderCache.rerenderAll()
+                            },
+                        )
                     }
                 }
             }
@@ -2774,6 +2796,7 @@ private fun EditableEngineCard(
     var landscape by rememberSaveable(blockId) { mutableStateOf(false) }
     var liveHeight by remember(blockId) { mutableStateOf(editorHeightDp.coerceIn(96f, 420f)) }
     var resizing by remember(blockId) { mutableStateOf(false) }
+    var refreshTick by remember(blockId) { mutableStateOf(0) }
     val density = LocalDensity.current
     val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
     val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
@@ -2791,6 +2814,9 @@ private fun EditableEngineCard(
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (!nativeCode && !showSource) {
+                    IconButton(onClick = { refreshTick++ }) { Icon(Icons.Outlined.Refresh, "Render again") }
+                }
                 TextButton(onClick = { hidden = !hidden }) { Text(if (hidden) "Show" else "Hide") }
                 IconButton(onClick = { landscape = false; fullScreen = true }) { Icon(Icons.Outlined.Fullscreen, "Full screen") }
                 IconButton(onClick = { landscape = true; fullScreen = true }) { Icon(Icons.Outlined.ScreenRotation, "Landscape") }
@@ -2850,7 +2876,7 @@ private fun EditableEngineCard(
                 } else if (nativeCode) {
                     NativeCodeSurface(source)
                 } else {
-                    DeferredEnginePreview(markdown, accentHex, scrolling)
+                    DeferredEnginePreview(markdown, accentHex, scrolling, refreshTick = refreshTick)
                 }
             }
         }
@@ -2923,12 +2949,17 @@ private fun EngineFullscreenDialog(
 }
 
 @Composable
-private fun DeferredEnginePreview(markdown: String, accentHex: String, scrolling: Boolean) {
+private fun DeferredEnginePreview(markdown: String, accentHex: String, scrolling: Boolean, refreshTick: Int = 0) {
     var mounted by remember(markdown) { mutableStateOf(false) }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val textColor = MaterialTheme.colorScheme.onSurface
+    // A cached render mounts immediately — no deferral, no "Rendering…" flash.
+    val cached = remember(markdown, dark, accentHex, textColor) {
+        markdownRenderCached(markdown, dark, accentHex, textColor)
+    }
     LaunchedEffect(markdown, scrolling) {
-        if (!mounted && !scrolling) {
-            delay(300)
+        if (!mounted && (cached || !scrolling)) {
+            if (!cached) delay(300)
             mounted = true
         }
     }
@@ -2938,6 +2969,7 @@ private fun DeferredEnginePreview(markdown: String, accentHex: String, scrolling
             dark = dark,
             accentHex = accentHex,
             modifier = Modifier.fillMaxWidth(),
+            refreshTick = refreshTick,
         )
     } else {
         Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) {
