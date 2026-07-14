@@ -1373,27 +1373,47 @@ private fun RenderBlock(
             }
         } else EditableTodos(block, onReplace, onInsert, onEditTodoItem, onSelectionChange)
         is QuoteBlock -> Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f), shape = RoundedCornerShape(8.dp)) {
-            val content = block.children.firstOrNull()?.editableInlineContent() ?: listOf(InlineText(block.plainText()))
-            InlineTextBlock(
-                content = content,
-                id = block.id,
-                mode = mode,
-                focus = focus,
-                onFocusConsumed = onFocusConsumed,
-                onText = onEditText,
-                onReplaceInline = onReplaceInline,
-                onSplit = onSplit,
-                onMerge = onMerge,
-                onInsert = onInsert,
-                onSelectionChange = onSelectionChange,
-                style = TextStyle(fontSize = 16.sp, lineHeight = 25.sp, fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurface),
-            )
+            Column {
+                val first = block.children.firstOrNull()
+                val content = first?.editableInlineContent() ?: listOf(InlineText(first?.plainText() ?: block.plainText()))
+                InlineTextBlock(
+                    content = content,
+                    id = block.id,
+                    mode = mode,
+                    focus = focus,
+                    onFocusConsumed = onFocusConsumed,
+                    onText = onEditText,
+                    onReplaceInline = onReplaceInline,
+                    onSplit = onSplit,
+                    onMerge = onMerge,
+                    onInsert = onInsert,
+                    onSelectionChange = onSelectionChange,
+                    style = TextStyle(fontSize = 16.sp, lineHeight = 25.sp, fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurface),
+                )
+                // Additional quoted blocks (multi-paragraph / nested content) render read-only so
+                // they are never silently dropped; the first child stays inline-editable above.
+                block.children.drop(1).forEach { child ->
+                    InlineRichText(
+                        nodes = child.editableInlineContent() ?: listOf(InlineText(child.plainText())),
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                        style = TextStyle(fontSize = 16.sp, lineHeight = 25.sp, fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurface),
+                    )
+                }
+            }
         }
         is CalloutBlock -> Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f), shape = RoundedCornerShape(10.dp)) { Column(Modifier.padding(12.dp)) {
             if (mode == BlockSurfaceMode.Edit) {
                 SimpleBlockTextField(block.title, { onReplace(block.copy(title = it)) }, Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold)
                 SimpleBlockTextField(block.children.joinToString("\n") { it.plainText() }, { onReplace(block.copy(children = listOf(ParagraphBlock(content = listOf(InlineText(it)))))) }, Modifier.fillMaxWidth().padding(top = 6.dp))
-            } else { Text(block.title, fontWeight = FontWeight.Bold); Text(block.children.joinToString("\n") { it.plainText() }) }
+            } else {
+                Text(block.title, fontWeight = FontWeight.Bold)
+                block.children.forEach { child ->
+                    InlineRichText(
+                        nodes = child.editableInlineContent() ?: listOf(InlineText(child.plainText())),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         } }
         is DividerBlock -> Spacer(Modifier.fillMaxWidth().padding(vertical = 14.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
         is CodeBlock -> Column {
