@@ -1294,6 +1294,7 @@ private fun InlineTextBlock(
         var textLayout by remember(id) { mutableStateOf<TextLayoutResult?>(null) }
         val requester = remember(id) { FocusRequester() }
         val bringIntoView = remember(id) { BringIntoViewRequester() }
+        val caretBottomClearancePx = with(LocalDensity.current) { 104.dp.toPx() }
         val editingVisual = rememberInlineEditingTransformation(content)
 
         fun publishSelection(field: TextFieldValue = value) {
@@ -1342,7 +1343,7 @@ private fun InlineTextBlock(
                     left = (rect.left - 12f).coerceAtLeast(0f),
                     top = (rect.top - 20f).coerceAtLeast(0f),
                     right = rect.right + 12f,
-                    bottom = rect.bottom + 48f,
+                    bottom = rect.bottom + caretBottomClearancePx,
                 ),
             )
         }
@@ -1568,6 +1569,7 @@ private fun EditableListItem(
     var textLayout by remember(item.id) { mutableStateOf<TextLayoutResult?>(null) }
     val requester = remember(item.id) { FocusRequester() }
     val bringIntoView = remember(item.id) { BringIntoViewRequester() }
+    val caretBottomClearancePx = with(LocalDensity.current) { 104.dp.toPx() }
     val editingVisual = rememberInlineEditingTransformation(item.content)
 
     fun publishSelection(field: TextFieldValue = value) {
@@ -1598,7 +1600,7 @@ private fun EditableListItem(
         if (!focused) return@LaunchedEffect
         val layout = textLayout ?: return@LaunchedEffect
         val rect = layout.getCursorRect(value.selection.end.coerceIn(0, layout.layoutInput.text.length))
-        bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + 48f))
+        bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + caretBottomClearancePx))
     }
     Row(verticalAlignment = Alignment.Top) {
         Text(marker, Modifier.width(28.dp).padding(top = 8.dp), color = MaterialTheme.colorScheme.primary)
@@ -1712,6 +1714,7 @@ private fun TodoItemTextField(
     var textLayout by remember(itemId) { mutableStateOf<TextLayoutResult?>(null) }
     val requester = remember { FocusRequester() }
     val bringIntoView = remember { BringIntoViewRequester() }
+    val caretBottomClearancePx = with(LocalDensity.current) { 104.dp.toPx() }
     val editingVisual = rememberInlineEditingTransformation(content)
 
     fun publishSelection(field: TextFieldValue = value) {
@@ -1734,7 +1737,7 @@ private fun TodoItemTextField(
         if (!focused) return@LaunchedEffect
         val layout = textLayout ?: return@LaunchedEffect
         val rect = layout.getCursorRect(value.selection.end.coerceIn(0, layout.layoutInput.text.length))
-        bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + 48f))
+        bringIntoView.bringIntoView(Rect((rect.left - 12f).coerceAtLeast(0f), (rect.top - 20f).coerceAtLeast(0f), rect.right + 12f, rect.bottom + caretBottomClearancePx))
     }
     BasicTextField(
         value = value,
