@@ -207,6 +207,8 @@ import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.ui.components.MarkdownPreview
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.ChartBuilderSheet
+import com.norfold.app.ui.components.MathBuilderSheet
+import com.norfold.app.ui.components.MathInsertionKind
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -234,6 +236,7 @@ fun BlockNoteEditorScreen(
     var rangeAnchorId by remember(note.id) { mutableStateOf<String?>(null) }
     var rangeExtentId by remember(note.id) { mutableStateOf<String?>(null) }
     var chartBuilderRequest by remember(note.id) { mutableStateOf<ChartBuilderRequest?>(null) }
+    var mathBuilderRequest by remember(note.id) { mutableStateOf<MathBuilderRequest?>(null) }
     var activeSelection by remember(note.id) { mutableStateOf<EditorSelection?>(null) }
     var linkEditorRequest by remember(note.id) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
@@ -434,8 +437,20 @@ fun BlockNoteEditorScreen(
                         }
                     },
                     onInsert = { type ->
-                        if (type == InsertBlockType.Chart) chartBuilderRequest = ChartBuilderRequest(anchorId = block.id)
-                        else changed(session.insertAfter(block.id, newDocumentBlock(type)))
+                        when (type) {
+                            InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = block.id)
+                            InsertBlockType.Math -> {
+                                val inlineSelection = activeSelection?.takeIf {
+                                    it.start.blockId == block.id && it.end.blockId == block.id
+                                }
+                                mathBuilderRequest = MathBuilderRequest(
+                                    anchorId = block.id,
+                                    initialKind = if (inlineSelection == null) MathInsertionKind.Block else MathInsertionKind.Inline,
+                                    inlineSelection = inlineSelection,
+                                )
+                            }
+                            else -> changed(session.insertAfter(block.id, newDocumentBlock(type)))
+                        }
                     },
                     onDelete = { changed(session.delete(block.id)) },
                     onDuplicate = { changed(session.insertAfter(block.id, duplicateBlock(block))) },
@@ -448,6 +463,12 @@ fun BlockNoteEditorScreen(
                     onExtendRangeSelection = { rangeExtentId = block.id },
                     scrolling = listScrolling,
                     onEditChart = { chart -> chartBuilderRequest = ChartBuilderRequest(editingId = chart.id, initialSpec = chart.vegaLiteSpec) },
+                    onEditMath = { math ->
+                        mathBuilderRequest = MathBuilderRequest(
+                            editingId = math.id,
+                            initialTex = math.tex,
+                        )
+                    },
                     onSelectionChange = { activeSelection = it },
                 )
             }
@@ -455,8 +476,11 @@ fun BlockNoteEditorScreen(
                 item("insert-end") {
                     BlockInsertButton { type ->
                         val anchor = session.document.blocks.lastOrNull()?.id
-                        if (type == InsertBlockType.Chart) chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
-                        else changed(session.insertAfter(anchor, newDocumentBlock(type)))
+                        when (type) {
+                            InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
+                            InsertBlockType.Math -> mathBuilderRequest = MathBuilderRequest(anchorId = anchor)
+                            else -> changed(session.insertAfter(anchor, newDocumentBlock(type)))
+                        }
                     }
                 }
             }
@@ -487,8 +511,15 @@ fun BlockNoteEditorScreen(
             onTurnInto = ::transformActiveBlock,
             onInsert = { type ->
                 val anchor = activeSelection?.start?.blockId
-                if (type == InsertBlockType.Chart) chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
-                else changed(session.insertAfter(anchor, newDocumentBlock(type)))
+                when (type) {
+                    InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
+                    InsertBlockType.Math -> mathBuilderRequest = MathBuilderRequest(
+                        anchorId = anchor,
+                        initialKind = MathInsertionKind.Inline,
+                        inlineSelection = activeSelection,
+                    )
+                    else -> changed(session.insertAfter(anchor, newDocumentBlock(type)))
+                }
             },
             onMove = { delta ->
                 val blockId = activeSelection?.start?.blockId
@@ -518,6 +549,49 @@ fun BlockNoteEditorScreen(
             },
         )
     }
+    mathBuilderRequest?.let { request ->
+        MathBuilderSheet(
+            initialTex = request.initialTex,
+            initialKind = request.initialKind,
+            allowKindSelection = request.editingId == null,
+            onDismiss = { mathBuilderRequest = null },
+            onInsert = { output ->
+                when {
+                    request.editingId != null -> {
+                        val existing = session.document.blocks
+                            .firstOrNull { it.id == request.editingId } as? MathBlock
+                        session.replaceBlock(
+                            existing?.copy(tex = output.tex)
+                                ?: MathBlock(id = request.editingId, tex = output.tex),
+                        )
+                        changed()
+                    }
+                    output.kind == MathInsertionKind.Block -> {
+                        changed(session.insertAfter(request.anchorId, MathBlock(tex = output.tex)))
+                    }
+                    request.inlineSelection != null -> {
+                        val selection = request.inlineSelection
+                        changed(
+                            session.replaceSelectionWithInline(
+                                selection.start,
+                                selection.end,
+                                MathInline(output.tex),
+                            ),
+                        )
+                    }
+                    else -> {
+                        changed(
+                            session.insertAfter(
+                                request.anchorId,
+                                ParagraphBlock(content = listOf(MathInline(output.tex))),
+                            ),
+                        )
+                    }
+                }
+                mathBuilderRequest = null
+            },
+        )
+    }
     linkEditorRequest?.let { request ->
         LinkEditorDialog(
             request = request,
@@ -540,6 +614,14 @@ private data class ChartBuilderRequest(
     val anchorId: String? = null,
     val editingId: String? = null,
     val initialSpec: String? = null,
+)
+
+private data class MathBuilderRequest(
+    val anchorId: String? = null,
+    val editingId: String? = null,
+    val initialTex: String = "",
+    val initialKind: MathInsertionKind = MathInsertionKind.Block,
+    val inlineSelection: EditorSelection? = null,
 )
 
 private data class EditorSelection(
@@ -991,6 +1073,7 @@ private fun SharedBlockRow(
     onExtendRangeSelection: () -> Unit,
     scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
+    onEditMath: (MathBlock) -> Unit,
     onSelectionChange: (EditorSelection) -> Unit,
 ) {
     var menu by remember(block.id) { mutableStateOf(false) }
@@ -1065,6 +1148,7 @@ private fun SharedBlockRow(
                 onInsert = onInsert,
                 scrolling = scrolling,
                 onEditChart = onEditChart,
+                onEditMath = onEditMath,
                 onSelectionChange = onSelectionChange,
             )
             if (rangeSelectionActive && rangeSelectable) {
@@ -1109,7 +1193,10 @@ private fun SharedBlockRow(
                             onReplace(block.copy(rows = block.rows + listOf(List(columns) { TableCell() })))
                         })
                         is CodeBlock -> DropdownMenuItem({ Text("Expand code editor") }, onClick = { menu = false; onReplace(block.copy(editorHeightDp = block.editorHeightDp + 80f)) })
-                        is MathBlock -> DropdownMenuItem({ Text("Expand math editor") }, onClick = { menu = false; onReplace(block.copy(editorHeightDp = block.editorHeightDp + 80f)) })
+                        is MathBlock -> {
+                            DropdownMenuItem({ Text("Edit equation") }, onClick = { menu = false; onEditMath(block) })
+                            DropdownMenuItem({ Text("Expand math editor") }, onClick = { menu = false; onReplace(block.copy(editorHeightDp = block.editorHeightDp + 80f)) })
+                        }
                         is MermaidBlock -> DropdownMenuItem({ Text("Expand diagram editor") }, onClick = { menu = false; onReplace(block.copy(editorHeightDp = block.editorHeightDp + 80f)) })
                         is FileBlock -> DropdownMenuItem({ Text("Replace file") }, onClick = { menu = false; onReplace(block.copy(uri = "", name = "")) })
                         is EmbedBlock -> DropdownMenuItem({ Text("Refresh preview") }, onClick = { menu = false; onReplace(block.copy(metadata = EmbedMetadata())) })
@@ -1157,6 +1244,7 @@ private fun RenderBlock(
     onInsert: (InsertBlockType) -> Unit,
     scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
+    onEditMath: (MathBlock) -> Unit,
     onSelectionChange: (EditorSelection) -> Unit,
 ) {
     when (block) {
@@ -1239,18 +1327,7 @@ private fun RenderBlock(
         is FileBlock -> EditableFileBlock(block, mode, onReplace)
         is EmbedBlock -> EditableEmbedBlock(block, mode, onReplace)
         is ChartBlock -> EditableChartBlock(block, mode, scrolling, onReplace, onEditChart)
-        is MathBlock -> EditableEngineCard(
-            blockId = block.id,
-            label = "Math",
-            source = block.tex,
-            markdown = "$$\n${block.tex}\n$$",
-            mode = mode,
-            editorHeightDp = block.editorHeightDp,
-            onSourceChange = { onReplace(block.copy(tex = it)) },
-            onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
-            scrolling = scrolling,
-            showSource = block.renderMode == BlockRenderMode.Source,
-        )
+        is MathBlock -> EditableMathBlock(block, mode, scrolling, onReplace, onEditMath)
         is MermaidBlock -> EditableEngineCard(
             blockId = block.id,
             label = "Diagram",
@@ -1484,6 +1561,46 @@ private fun ListBlock(items: List<List<InlineNode>>, marker: String) {
                 InlineRichText(item)
             }
         }
+    }
+}
+
+@Composable
+private fun EditableMathBlock(
+    block: MathBlock,
+    mode: BlockSurfaceMode,
+    scrolling: Boolean,
+    onReplace: (DocumentBlock) -> Unit,
+    onEditMath: (MathBlock) -> Unit,
+) {
+    Column {
+        if (mode == BlockSurfaceMode.Edit) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { onEditMath(block) }) { Text("Edit equation") }
+                TextButton(onClick = {
+                    onReplace(
+                        block.copy(
+                            renderMode = if (block.renderMode == BlockRenderMode.Source) {
+                                BlockRenderMode.Render
+                            } else {
+                                BlockRenderMode.Source
+                            },
+                        ),
+                    )
+                }) { Text(if (block.renderMode == BlockRenderMode.Source) "Render" else "Advanced") }
+            }
+        }
+        EditableEngineCard(
+            blockId = block.id,
+            label = "Math",
+            source = block.tex,
+            markdown = "$$\n${block.tex}\n$$",
+            mode = mode,
+            editorHeightDp = block.editorHeightDp,
+            onSourceChange = { onReplace(block.copy(tex = it)) },
+            onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
+            scrolling = scrolling,
+            showSource = block.renderMode == BlockRenderMode.Source,
+        )
     }
 }
 
@@ -2530,6 +2647,7 @@ private fun StableLandscapeOrientationEffect(enabled: Boolean) {
             InsertBlockType.Chart -> normalized in setOf("plot", "graph", "histogram", "draw graph")
             InsertBlockType.TodoList -> normalized in setOf("checklist", "task")
             InsertBlockType.Embed -> normalized in setOf("link", "url")
+            InsertBlockType.Math -> normalized in setOf("equation", "formula", "latex")
             else -> false
         }
     }
