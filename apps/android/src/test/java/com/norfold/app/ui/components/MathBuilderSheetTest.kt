@@ -56,6 +56,43 @@ class MathBuilderSheetTest {
     }
 
     @Test
+    fun `matrix template exposes and fills every visual slot in order`() {
+        val blank = TextFieldValue(MathSlot, TextRange(0, MathSlot.length))
+        var matrix = applyMathTemplate(
+            blank,
+            "\\begin{bmatrix} {{norfold-selection}} & $MathSlot \\\\ $MathSlot & $MathSlot \\end{bmatrix}",
+        )
+
+        assertEquals(4, pendingMathSlotCount(matrix.text))
+        assertEquals(MathSlot, matrix.selectedText())
+
+        listOf("a", "b", "c", "d").forEach { value ->
+            matrix = insertMathToken(matrix, value)
+        }
+
+        assertEquals("\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}", matrix.text)
+        assertEquals(0, pendingMathSlotCount(matrix.text))
+    }
+
+    @Test
+    fun `blank slot navigation wraps in both directions`() {
+        val expression = "$MathSlot + $MathSlot + $MathSlot"
+        val secondSlot = expression.indexOf(MathSlot, MathSlot.length)
+        val selectedSecond = TextFieldValue(
+            expression,
+            TextRange(secondSlot, secondSlot + MathSlot.length),
+        )
+
+        val third = selectMathSlot(selectedSecond, forward = true)
+        val wrappedFirst = selectMathSlot(third, forward = true)
+        val wrappedLast = selectMathSlot(wrappedFirst, forward = false)
+
+        assertEquals(expression.lastIndexOf(MathSlot), third.selection.start)
+        assertEquals(0, wrappedFirst.selection.start)
+        assertEquals(expression.lastIndexOf(MathSlot), wrappedLast.selection.start)
+    }
+
+    @Test
     fun `visual preview replaces private slots and preserves valid square command`() {
         val markdown = mathPreviewMarkdown(
             "$MathSlot + \\square",
