@@ -57,6 +57,7 @@ data class ChartDataRow(
 data class ChartBuilderModel(
     val type: ChartType = ChartType.Bar,
     val title: String = "Chart",
+    val caption: String = "",
     val xAxis: String = "Category",
     val yAxis: String = "Value",
     val showLegend: Boolean = true,
@@ -99,7 +100,14 @@ object ChartSpecCodec {
 
         return buildJsonObject {
             put("${'$'}schema", "https://vega.github.io/schema/vega-lite/v5.json")
-            put("title", model.title)
+            if (model.caption.isBlank()) {
+                put("title", model.title)
+            } else {
+                put("title", buildJsonObject {
+                    put("text", model.title)
+                    put("subtitle", model.caption)
+                })
+            }
             put("data", buildJsonObject { put("values", values) })
             when (model.type) {
                 ChartType.Pie -> {
@@ -203,6 +211,7 @@ object ChartSpecCodec {
             ChartBuilderModel(
                 type = type,
                 title = root.text("title") ?: root["title"].objectOrNull()?.text("text") ?: "Chart",
+                caption = norfold.text("caption") ?: root["title"].objectOrNull()?.text("subtitle").orEmpty(),
                 xAxis = norfold.text("xAxis") ?: "Category",
                 yAxis = norfold.text("yAxis") ?: "Value",
                 showLegend = norfold?.get("showLegend")?.primitiveBoolean() ?: true,
@@ -222,6 +231,7 @@ object ChartSpecCodec {
 
     private fun metadata(model: ChartBuilderModel, styles: List<ChartSeriesStyle>): JsonObject = buildJsonObject {
         put("chartType", model.type.name)
+        put("caption", model.caption)
         put("xAxis", model.xAxis)
         put("yAxis", model.yAxis)
         put("showLegend", model.showLegend)
