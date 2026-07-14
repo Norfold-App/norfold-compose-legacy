@@ -330,7 +330,12 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
    expandEmojiShortcodes(document.getElementById('content'),emojiMap);
  }).catch(function(){return null;});
  var diagrams=emojiReady.then(function(){
-   if(!window.mermaid){return null;}
+   if(!window.mermaid){
+     mermaidBlocks.forEach(function(diagram){
+       engineFallback(diagram,diagram.dataset.source||'','Couldn\'t render this diagram — showing its source.');
+     });
+     return null;
+   }
    mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'${if (dark) "dark" else "default"}'});
    return Promise.all(mermaidBlocks.map(function(diagram,index){
      var source=diagram.dataset.source||'';
@@ -343,7 +348,12 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
    }));
  });
  var charts=emojiReady.then(function(){
-   if(!window.vegaEmbed){return null;}
+   if(!window.vegaEmbed){
+     chartBlocks.forEach(function(chart){
+       engineFallback(chart,chart.dataset.spec||'','Couldn\'t render this chart — showing its source.');
+     });
+     return null;
+   }
    return Promise.all(chartBlocks.map(function(chart){
      var source=chart.dataset.spec||'{}';
      try {
@@ -398,7 +408,14 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
    }));
  });
  Promise.all([diagrams,charts]).then(function(){
-   if(window.MathJax&&MathJax.typesetPromise){return MathJax.typesetPromise();}
+   if(window.MathJax&&MathJax.typesetPromise){
+     return MathJax.typesetPromise().catch(function(){
+       var note=document.createElement('div');
+       note.className='engine-fallback';
+       note.textContent='Couldn\'t typeset the math on this page — showing raw TeX.';
+       document.getElementById('content').prepend(note);
+     });
+   }
  }).finally(window.norfoldMeasure);
  window.requestAnimationFrame(window.norfoldMeasure);
 </script>

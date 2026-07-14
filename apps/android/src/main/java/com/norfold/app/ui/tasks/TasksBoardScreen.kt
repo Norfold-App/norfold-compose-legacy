@@ -2349,7 +2349,7 @@ private fun AdaptiveTaskPage(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.35f))
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.35f))
             .zIndex(20f),
     ) {
         val sidePanel = maxWidth > 720.dp
