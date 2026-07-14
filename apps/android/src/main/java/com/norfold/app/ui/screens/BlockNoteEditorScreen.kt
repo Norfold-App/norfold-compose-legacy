@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package com.norfold.app.ui.screens
 
@@ -44,6 +44,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -242,6 +243,8 @@ fun BlockNoteEditorScreen(
     var activeSelection by remember(note.id) { mutableStateOf<EditorSelection?>(null) }
     var linkEditorRequest by remember(note.id) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
+    val outlineScope = rememberCoroutineScope()
+    var showOutline by remember { mutableStateOf(false) }
     val listScrolling by remember { derivedStateOf { listState.isScrollInProgress } }
     val rangeBounds = remember(renderedDocument, rangeAnchorId, rangeExtentId) {
         val anchorIndex = renderedDocument.blocks.indexOfFirst { it.id == rangeAnchorId }
@@ -365,6 +368,7 @@ fun BlockNoteEditorScreen(
             onStar = { viewModel.toggleStar(note) },
             onPin = { viewModel.togglePin(note) },
             onLock = { viewModel.toggleLock(note) },
+            onOutline = { showOutline = true },
         )
         if (rangeAnchorId != null) {
             DocumentRangeToolbar(
@@ -621,6 +625,48 @@ fun BlockNoteEditorScreen(
                 diagramBuilderRequest = null
             },
         )
+    }
+    if (showOutline) {
+        val headings = renderedDocument.blocks.mapIndexedNotNull { index, block ->
+            (block as? HeadingBlock)?.let { index to it }
+        }
+        ModalBottomSheet(onDismissRequest = { showOutline = false }) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+                Text(
+                    "Outline",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+                if (headings.isEmpty()) {
+                    Text(
+                        "No headings yet. Add a heading to build an outline.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                } else {
+                    headings.forEach { (index, heading) ->
+                        val depth = heading.level.coerceIn(1, 6)
+                        val label = heading.content.joinToString("") { it.plainText() }
+                            .ifBlank { "Untitled heading" }
+                        Text(
+                            text = label,
+                            fontSize = (17 - (depth.coerceAtMost(4) - 1)).sp,
+                            fontWeight = if (depth <= 1) FontWeight.SemiBold else FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    showOutline = false
+                                    outlineScope.launch { listState.animateScrollToItem(index) }
+                                }
+                                .padding(start = ((depth - 1) * 14).dp, top = 10.dp, bottom = 10.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
     linkEditorRequest?.let { request ->
         LinkEditorDialog(
@@ -1017,6 +1063,7 @@ private fun BlockEditorHeader(
     onStar: () -> Unit,
     onPin: () -> Unit,
     onLock: () -> Unit,
+    onOutline: () -> Unit,
 ) {
     var titleValue by remember { mutableStateOf(TextFieldValue(title)) }
     var titleFocused by remember { mutableStateOf(false) }
@@ -1061,6 +1108,7 @@ private fun BlockEditorHeader(
                 IconButton(onClick = onStar) { Icon(Icons.Outlined.Star, "Star", tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 IconButton(onClick = onPin) { Icon(Icons.Outlined.PushPin, "Pin", tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 IconButton(onClick = onLock) { Icon(if (locked) Icons.Outlined.Lock else Icons.Outlined.LockOpen, "Lock") }
+                IconButton(onClick = onOutline) { Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "Outline") }
             }
             Surface(
                 modifier = Modifier.align(Alignment.CenterEnd).width(108.dp),
