@@ -51,6 +51,51 @@ class ChartSpecCodecTest {
     }
 
     @Test
+    fun `caption round trips through the spec and Vega title subtitle`() {
+        val input = ChartBuilderModel(
+            title = "Revenue",
+            caption = "FY26 actuals vs forecast",
+            rows = listOf(ChartDataRow(label = "Q1", value = "10")),
+        )
+
+        val encoded = ChartSpecCodec.encode(input)
+        val decoded = ChartSpecCodec.decode(encoded)
+
+        assertEquals("Revenue", decoded.title)
+        assertEquals("FY26 actuals vs forecast", decoded.caption)
+        assertTrue(encoded.contains("\"subtitle\":\"FY26 actuals vs forecast\""))
+    }
+
+    @Test
+    fun `subtitle only specs still surface a caption`() {
+        val decoded = ChartSpecCodec.decode(
+            """{"title":{"text":"Imported","subtitle":"From Vega"},"mark":"bar","data":{"values":[{"x":"A","y":1}]}}""",
+        )
+
+        assertEquals("Imported", decoded.title)
+        assertEquals("From Vega", decoded.caption)
+    }
+
+    @Test
+    fun `per row colors round trip and drive the color scale range`() {
+        val input = ChartBuilderModel(
+            type = ChartType.Pie,
+            color = "#123456",
+            rows = listOf(
+                ChartDataRow(label = "A", value = "3", color = "#FF0000"),
+                ChartDataRow(label = "B", value = "7", color = ""),
+            ),
+        )
+
+        val encoded = ChartSpecCodec.encode(input)
+        val decoded = ChartSpecCodec.decode(encoded)
+
+        assertEquals(listOf("#FF0000", ""), decoded.rows.map { it.color })
+        // Blank row colors inherit the global default inside the encoded color scale.
+        assertTrue(encoded.contains("\"range\":[\"#FF0000\",\"#123456\"]"))
+    }
+
+    @Test
     fun `malformed source falls back to a usable chart`() {
         val decoded = ChartSpecCodec.decode("not-json")
 

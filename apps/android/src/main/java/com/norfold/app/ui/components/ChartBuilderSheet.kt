@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +28,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -93,6 +96,7 @@ fun ChartBuilderSheet(
     val initial = remember(initialSpec) { ChartSpecCodec.decode(initialSpec) }
     var type by remember(initialSpec) { mutableStateOf(initial.type) }
     var title by remember(initialSpec) { mutableStateOf(initial.title) }
+    var caption by remember(initialSpec) { mutableStateOf(initial.caption) }
     var xAxis by remember(initialSpec) { mutableStateOf(initial.xAxis) }
     var yAxis by remember(initialSpec) { mutableStateOf(initial.yAxis) }
     var legend by remember(initialSpec) { mutableStateOf(initial.showLegend) }
@@ -103,7 +107,16 @@ fun ChartBuilderSheet(
     var creating by remember { mutableStateOf(false) }
     val rows = remember(initialSpec) { mutableStateListOf<ChartDataRow>().apply { addAll(initial.rows) } }
 
-    fun model() = ChartBuilderModel(type, title, xAxis, yAxis, legend, color, rows.toList())
+    fun model() = ChartBuilderModel(
+        type = type,
+        title = title,
+        caption = caption,
+        xAxis = xAxis,
+        yAxis = yAxis,
+        showLegend = legend,
+        color = color,
+        rows = rows.toList(),
+    )
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -123,22 +136,33 @@ fun ChartBuilderSheet(
                 onAdd = { rows += ChartDataRow(label = "Section ${rows.size + 1}", value = "1") },
             )
             OutlinedTextField(title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            OutlinedTextField(caption, { caption = it }, label = { Text("Caption") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(xAxis, { xAxis = it }, label = { Text("X axis") }, modifier = Modifier.weight(1f), singleLine = true)
                 OutlinedTextField(yAxis, { yAxis = it }, label = { Text("Y axis") }, modifier = Modifier.weight(1f), singleLine = true)
             }
             Text("Data", fontWeight = FontWeight.SemiBold)
-            Column(Modifier.fillMaxWidth().height(210.dp).horizontalScroll(rememberScrollState())) {
-                rows.forEachIndexed { index, row ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(row.label, { rows[index] = row.copy(label = it) }, label = { Text("Label") }, modifier = Modifier.width(150.dp), singleLine = true)
-                        OutlinedTextField(row.value, { rows[index] = row.copy(value = it) }, label = { Text("Value") }, modifier = Modifier.width(120.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-                        OutlinedTextField(row.series, { rows[index] = row.copy(series = it) }, label = { Text("Series") }, modifier = Modifier.width(150.dp), singleLine = true)
-                        TextButton(onClick = { if (rows.size > 1) rows.removeAt(index) }, enabled = rows.size > 1) { Text("Delete") }
+            // Both scroll axes: the row list scrolls vertically inside a bounded height so long data
+            // sets never clip, and the whole grid pans horizontally so Series/Delete stay reachable.
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+                    rows.forEachIndexed { index, row ->
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            RowColorSwatch(
+                                rowColor = row.color,
+                                palette = themeChartColors,
+                                fallback = runCatching { Color(android.graphics.Color.parseColor(color)) }.getOrDefault(colorScheme.primary),
+                                onChange = { rows[index] = row.copy(color = it) },
+                            )
+                            OutlinedTextField(row.label, { rows[index] = row.copy(label = it) }, label = { Text("Label") }, modifier = Modifier.width(150.dp), singleLine = true)
+                            OutlinedTextField(row.value, { rows[index] = row.copy(value = it) }, label = { Text("Value") }, modifier = Modifier.width(120.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                            OutlinedTextField(row.series, { rows[index] = row.copy(series = it) }, label = { Text("Series") }, modifier = Modifier.width(150.dp), singleLine = true)
+                            TextButton(onClick = { if (rows.size > 1) rows.removeAt(index) }, enabled = rows.size > 1) { Text("Delete") }
+                        }
                     }
                 }
-                TextButton(onClick = { rows += ChartDataRow(label = "Item ${rows.size + 1}", value = "0") }) { Text("+ Add row") }
             }
+            TextButton(onClick = { rows += ChartDataRow(label = "Item ${rows.size + 1}", value = "0") }) { Text("+ Add row") }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Legend", Modifier.weight(1f)); Switch(legend, { legend = it })
             }
@@ -184,6 +208,40 @@ fun ChartBuilderSheet(
 }
 
 @Composable
+private fun RowColorSwatch(
+    rowColor: String,
+    palette: List<Color>,
+    fallback: Color,
+    onChange: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val current = runCatching { Color(android.graphics.Color.parseColor(rowColor)) }.getOrNull()
+    Box {
+        Spacer(
+            Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(current ?: fallback.copy(alpha = .35f))
+                .clickable { open = true },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Default") },
+                leadingIcon = { Spacer(Modifier.size(22.dp).clip(CircleShape).background(fallback.copy(alpha = .35f))) },
+                onClick = { onChange(""); open = false },
+            )
+            palette.forEach { candidate ->
+                DropdownMenuItem(
+                    text = { Text(candidate.toRgbHex()) },
+                    leadingIcon = { Spacer(Modifier.size(22.dp).clip(CircleShape).background(candidate)) },
+                    onClick = { onChange(candidate.toRgbHex()); open = false },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun VisualChartComposer(
     type: ChartType,
     rows: List<ChartDataRow>,
@@ -192,6 +250,8 @@ private fun VisualChartComposer(
 ) {
     val accent = runCatching { Color(android.graphics.Color.parseColor(color)) }.getOrDefault(MaterialTheme.colorScheme.primary)
     val surfaceColor = MaterialTheme.colorScheme.surface
+    fun rowColor(row: ChartDataRow, default: Color): Color =
+        runCatching { Color(android.graphics.Color.parseColor(row.color)) }.getOrDefault(default)
     val values = rows.map { it.value.toFloatOrNull()?.coerceAtLeast(0f) ?: 0f }
     val maximum = (values.maxOrNull() ?: 1f).coerceAtLeast(1f)
     Surface(
@@ -216,7 +276,7 @@ private fun VisualChartComposer(
                             val value = row.value.toFloatOrNull()?.takeIf { it > 0f } ?: 1f
                             val sweep = value / total * 360f
                             drawArc(
-                                color = accent.copy(alpha = (1f - index * 0.12f).coerceAtLeast(0.34f)),
+                                color = rowColor(row, accent.copy(alpha = (1f - index * 0.12f).coerceAtLeast(0.34f))),
                                 startAngle = start,
                                 sweepAngle = sweep,
                                 useCenter = true,
@@ -234,7 +294,7 @@ private fun VisualChartComposer(
                             val value = row.value.toFloatOrNull() ?: 0f
                             val y = bottom - (value / maximum) * (bottom - top)
                             drawRoundRect(
-                                accent.copy(alpha = 0.85f),
+                                rowColor(row, accent.copy(alpha = 0.85f)),
                                 topLeft = androidx.compose.ui.geometry.Offset(left + slot * index + slot * .18f, y),
                                 size = androidx.compose.ui.geometry.Size(slot * .64f, bottom - y),
                                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(7.dp.toPx()),
@@ -257,7 +317,7 @@ private fun VisualChartComposer(
                         rows.forEachIndexed { index, row ->
                             val x = left + slot * (index + .5f)
                             val y = bottom - ((row.value.toFloatOrNull() ?: 0f) / maximum) * (bottom - top)
-                            drawCircle(accent.copy(alpha = .82f), 7.dp.toPx(), androidx.compose.ui.geometry.Offset(x, y))
+                            drawCircle(rowColor(row, accent.copy(alpha = .82f)), 7.dp.toPx(), androidx.compose.ui.geometry.Offset(x, y))
                         }
                     }
                 }
@@ -285,8 +345,17 @@ private suspend fun renderChartImage(
     val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = runCatching { android.graphics.Color.parseColor(model.color) }.getOrDefault(fallbackAccentArgb); strokeWidth = 7f; style = Paint.Style.FILL }
     canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), background)
     ink.textSize = 42f; ink.isFakeBoldText = true; canvas.drawText(model.title, 72f, 72f, ink)
-    ink.textSize = 25f; ink.isFakeBoldText = false
-    val left = 100f; val top = 130f; val right = 1120f; val bottom = 620f
+    ink.isFakeBoldText = false
+    if (model.caption.isNotBlank()) {
+        ink.textSize = 26f; ink.alpha = 170
+        canvas.drawText(model.caption, 72f, 112f, ink)
+        ink.alpha = 255
+    }
+    ink.textSize = 25f
+    val baseAccentArgb = accent.color
+    fun rowArgb(row: ChartDataRow): Int? =
+        runCatching { android.graphics.Color.parseColor(row.color) }.getOrNull()
+    val left = 100f; val top = 150f; val right = 1120f; val bottom = 620f
     canvas.drawLine(left, bottom, right, bottom, ink); canvas.drawLine(left, top, left, bottom, ink)
     val values = model.rows.map { it.value.toFloatOrNull() ?: 0f }
     val max = (values.maxOrNull() ?: 1f).coerceAtLeast(1f)
@@ -302,16 +371,18 @@ private suspend fun renderChartImage(
             accent.style = Paint.Style.STROKE; canvas.drawPath(path, accent); accent.style = Paint.Style.FILL
         }
         ChartType.Scatter -> model.rows.forEachIndexed { index, row ->
+            accent.color = rowArgb(row) ?: baseAccentArgb
             val x = left + slot * (index + .5f); val y = bottom - ((row.value.toFloatOrNull() ?: 0f) / max) * (bottom - top); canvas.drawCircle(x, y, 16f, accent)
         }
         ChartType.Pie -> {
             val total = values.sum().coerceAtLeast(1f); var start = -90f
             model.rows.forEachIndexed { index, row ->
-                accent.color = rotateColor(accent.color, index); val sweep = ((row.value.toFloatOrNull() ?: 0f) / total) * 360f
-                canvas.drawArc(330f, 150f, 870f, 690f, start, sweep, true, accent); start += sweep
+                accent.color = rowArgb(row) ?: rotateColor(baseAccentArgb, index); val sweep = ((row.value.toFloatOrNull() ?: 0f) / total) * 360f
+                canvas.drawArc(330f, 170f, 870f, 690f, start, sweep, true, accent); start += sweep
             }
         }
         ChartType.Bar, ChartType.Histogram -> model.rows.forEachIndexed { index, row ->
+            accent.color = rowArgb(row) ?: baseAccentArgb
             val value = row.value.toFloatOrNull() ?: 0f; val x = left + slot * index + slot * .18f; val barRight = x + slot * .64f; val y = bottom - (value / max) * (bottom - top)
             canvas.drawRoundRect(x, y, barRight, bottom, 12f, 12f, accent); canvas.drawText(row.label.take(12), x, bottom + 34f, ink)
         }
