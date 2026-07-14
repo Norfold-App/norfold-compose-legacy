@@ -188,6 +188,14 @@ private fun buildHtml(
  .vega-chart .vega-embed summary{color:$muted}
  .footnotes{margin-top:1.4em;padding-top:.7em;border-top:1px solid $border;color:$muted;font-size:.9em}
  .footnotes ol{padding-left:1.35em}.footnote-backref{margin-left:.35em}
+ dl{margin:.6em 0} dt{font-weight:700;margin-top:.5em} dd{margin:.15em 0 .15em 1.2em;color:$muted}
+ .wikilink{border-bottom:1px dashed $accent}
+ .norfold-toc{list-style:none;padding:10px 14px;margin:.7em 0;border:1px solid $border;border-radius:12px;background:$codeBg}
+ .norfold-toc li{margin:.18em 0}
+ abbr[title]{text-decoration:underline dotted;cursor:help}
+ kbd{background:$codeBg;border:1px solid $border;border-bottom-width:2px;border-radius:6px;padding:.08em .4em;font-family:'Roboto Mono',monospace;font-size:.85em}
+ details{border:1px solid $border;border-radius:10px;padding:.5em .8em;margin:.6em 0}
+ summary{cursor:pointer;font-weight:600}
 </style>
 <script>
  window.MathJax={
@@ -231,6 +239,13 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
    var body=source.replace(/^\[\^([^\]]+)\]:[ \t]*(.+(?:\n(?:[ \t]{2,}|\t).+)*)$/gm,function(match,id,text){
      definitions[id]=text.replace(/\n[ \t]+/g,' ').trim();
      return '';
+   });
+   var inlineIndex=0;
+   body=body.replace(/\^\[([^\]]+)\]/g,function(match,text){
+     inlineIndex+=1;
+     var id='inline-'+inlineIndex;
+     definitions[id]=text.trim();
+     return '[^'+id+']';
    });
    var order=[];
    body=body.replace(/\[\^([^\]]+)\]/g,function(match,id){
@@ -288,12 +303,150 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
         var m=/^~([^~\s]+?)~/.exec(src);
         if(m){return {type:'sub',raw:m[0],tokens:this.lexer.inlineTokens(m[1])};}
       },
-      renderer:function(token){return '<sub>'+this.parser.parseInline(token.tokens)+'</sub>';}}
+      renderer:function(token){return '<sub>'+this.parser.parseInline(token.tokens)+'</sub>';}},
+     {name:'wikilink',level:'inline',
+      start:function(src){return src.indexOf('[[');},
+      tokenizer:function(src){
+        var m=/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/.exec(src);
+        if(m){return {type:'wikilink',raw:m[0],page:m[1].trim(),alias:(m[2]||m[1]).trim()};}
+      },
+      renderer:function(token){
+        return '<a class="wikilink" href="norfold://page/'+encodeURIComponent(token.page)+'">'+escapeHtml(token.alias)+'</a>';
+      }},
+     {name:'obsidianComment',level:'inline',
+      start:function(src){return src.indexOf('%%');},
+      tokenizer:function(src){
+        var m=/^%%[\s\S]*?%%/.exec(src);
+        if(m){return {type:'obsidianComment',raw:m[0]};}
+      },
+      renderer:function(){return '';}},
+     {name:'obsidianCommentBlock',level:'block',
+      start:function(src){return src.indexOf('%%');},
+      tokenizer:function(src){
+        var m=/^%%[\s\S]*?%%(?:\n+|$)/.exec(src);
+        if(m){return {type:'obsidianCommentBlock',raw:m[0]};}
+      },
+      renderer:function(){return '';}},
+     {name:'defList',level:'block',
+      start:function(src){var m=src.match(/[^\n]\n:[ \t]/);return m?m.index:undefined;},
+      tokenizer:function(src){
+        var m=/^(?![-*+>#\s:])([^\n]+)\n((?::[ \t][^\n]*(?:\n|$))+)/.exec(src);
+        if(m){
+          var lexer=this.lexer;
+          var defs=m[2].split('\n').filter(function(l){return l.trim();}).map(function(l){
+            return lexer.inlineTokens(l.replace(/^:[ \t]+/,''));
+          });
+          return {type:'defList',raw:m[0],term:lexer.inlineTokens(m[1].trim()),defs:defs};
+        }
+      },
+      renderer:function(token){
+        var parser=this.parser;
+        return '<dl><dt>'+parser.parseInline(token.term)+'</dt>'+
+          token.defs.map(function(d){return '<dd>'+parser.parseInline(d)+'</dd>';}).join('')+'</dl>';
+      }}
    ]});
  }
+ var allowedTags={A:1,ABBR:1,B:1,BLOCKQUOTE:1,BR:1,CODE:1,DD:1,DEL:1,DETAILS:1,DIV:1,DL:1,DT:1,EM:1,
+   H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,HR:1,I:1,IMG:1,INPUT:1,KBD:1,LI:1,MARK:1,OL:1,P:1,PRE:1,S:1,
+   SECTION:1,SPAN:1,STRONG:1,SUB:1,SUMMARY:1,SUP:1,TABLE:1,TBODY:1,TD:1,TH:1,THEAD:1,TR:1,U:1,UL:1};
+ function sanitizeContent(root){
+   Array.prototype.slice.call(root.querySelectorAll('*')).forEach(function(el){
+     var tag=el.tagName;
+     if(tag==='SCRIPT'||tag==='STYLE'||tag==='IFRAME'||tag==='OBJECT'||tag==='EMBED'||tag==='FORM'||tag==='LINK'||tag==='META'){
+       el.remove();return;
+     }
+     if(!allowedTags[tag]){
+       var parent=el.parentNode;
+       if(!parent){return;}
+       while(el.firstChild){parent.insertBefore(el.firstChild,el);}
+       parent.removeChild(el);
+       return;
+     }
+     Array.prototype.slice.call(el.attributes).forEach(function(attr){
+       var name=attr.name.toLowerCase();
+       if(name.indexOf('on')===0){el.removeAttribute(attr.name);return;}
+       if((name==='href'||name==='src')&&/^\s*javascript:/i.test(attr.value)){el.removeAttribute(attr.name);}
+     });
+     if(tag==='INPUT'&&el.type!=='checkbox'){el.remove();}
+   });
+ }
+ function injectTableOfContents(root){
+   var markers=Array.prototype.filter.call(root.querySelectorAll('p'),function(p){
+     return p.textContent.trim().toUpperCase()==='[TOC]';
+   });
+   if(!markers.length){return;}
+   var headings=root.querySelectorAll('h1,h2,h3,h4,h5,h6');
+   markers.forEach(function(marker){
+     if(!headings.length){
+       var empty=document.createElement('div');
+       empty.className='engine-fallback';
+       empty.textContent='No headings yet.';
+       marker.replaceWith(empty);
+       return;
+     }
+     var list=document.createElement('ul');
+     list.className='norfold-toc';
+     Array.prototype.forEach.call(headings,function(heading,index){
+       if(!heading.id){heading.id='norfold-heading-'+index;}
+       var item=document.createElement('li');
+       item.style.marginLeft=((parseInt(heading.tagName.slice(1),10)-1)*14)+'px';
+       var link=document.createElement('a');
+       link.href='#'+heading.id;
+       link.textContent=heading.textContent;
+       item.appendChild(link);
+       list.appendChild(item);
+     });
+     marker.replaceWith(list);
+   });
+ }
+ function applyAbbreviations(root,defs){
+   var names=Object.keys(defs);
+   if(!names.length){return;}
+   var pattern=new RegExp('\\b('+names.map(function(n){
+     return n.replace(/[.*+?^$&{}()|[\]\\]/g,'\\$&');
+   }).join('|')+')\\b','g');
+   var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
+     acceptNode:function(node){
+       var parent=node.parentElement;
+       return parent&&parent.closest('pre,code,script,style,textarea,abbr')
+         ? NodeFilter.FILTER_REJECT
+         : NodeFilter.FILTER_ACCEPT;
+     }
+   });
+   var nodes=[];
+   while(walker.nextNode()){nodes.push(walker.currentNode);}
+   nodes.forEach(function(node){
+     var value=node.nodeValue;
+     pattern.lastIndex=0;
+     if(!pattern.test(value)){return;}
+     pattern.lastIndex=0;
+     var frag=document.createDocumentFragment();
+     var cursor=0;
+     var match;
+     while((match=pattern.exec(value))){
+       if(match.index>cursor){frag.appendChild(document.createTextNode(value.slice(cursor,match.index)));}
+       var abbr=document.createElement('abbr');
+       abbr.title=defs[match[1]];
+       abbr.textContent=match[1];
+       frag.appendChild(abbr);
+       cursor=match.index+match[1].length;
+     }
+     if(cursor<value.length){frag.appendChild(document.createTextNode(value.slice(cursor)));}
+     node.parentNode.replaceChild(frag,node);
+   });
+ }
  try {
-   var documentSource=extractFootnotes(raw);
-   document.getElementById('content').innerHTML=marked.parse(documentSource.body,{gfm:true,breaks:true})+documentSource.footer;
+   var abbrDefinitions={};
+   var withoutAbbr=raw.replace(/^\*\[([^\]]+)\]:[ \t]*(.+)$/gm,function(match,name,def){
+     abbrDefinitions[name]=def.trim();
+     return '';
+   });
+   var documentSource=extractFootnotes(withoutAbbr);
+   var contentRoot=document.getElementById('content');
+   contentRoot.innerHTML=marked.parse(documentSource.body,{gfm:true,breaks:true})+documentSource.footer;
+   sanitizeContent(contentRoot);
+   injectTableOfContents(contentRoot);
+   applyAbbreviations(contentRoot,abbrDefinitions);
  }
  catch(e){ document.getElementById('content').textContent = raw; }
  var mermaidBlocks=[];

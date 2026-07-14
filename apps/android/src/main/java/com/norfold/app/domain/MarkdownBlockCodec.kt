@@ -12,10 +12,105 @@ object MarkdownBlockCodec {
     private val parser = MarkdownParser(GFMFlavourDescriptor(), false, CancellationToken.NonCancellable)
 
     fun import(markdown: String): BlockDocument {
-        val normalized = unwrapOuterMarkdownFence(markdown)
+        val normalized = preprocessExtendedSyntax(unwrapOuterMarkdownFence(markdown))
         if (normalized.isBlank()) return BlockDocument()
         val root = parser.buildMarkdownTreeFromString(normalized as CharSequence)
         return BlockDocument(root.children.flatMap { mapBlock(it, normalized) }).normalized()
+    }
+
+    /**
+     * Rewrites Obsidian-style syntax the parser has no tokens for, outside code fences:
+     * `%%comments%%` are stripped, `[[Page|Alias]]` wikilinks become `norfold://page/` links, and
+     * definition lists (`Term` / `: definition`) become a bold term plus a bullet list.
+     */
+    private fun preprocessExtendedSyntax(source: String): String {
+        val lines = ArrayList<String>(source.lines().size)
+        var fenceChar: Char? = null
+        var inComment = false
+        for (line in source.lines()) {
+            val trimmed = line.trim()
+            if (!inComment) {
+                if (fenceChar != null) {
+                    if (trimmed.length >= 3 && trimmed.all { it == fenceChar }) fenceChar = null
+                    lines += line
+                    continue
+                }
+                val open = fenceOpening.matchEntire(trimmed)
+                if (open != null) {
+                    fenceChar = open.groupValues[1][0]
+                    lines += line
+                    continue
+                }
+            }
+            var text = line
+            if (inComment) {
+                val end = text.indexOf("%%")
+                if (end < 0) continue
+                text = text.substring(end + 2)
+                inComment = false
+            }
+            val stripped = StringBuilder()
+            var cursor = 0
+            while (cursor < text.length) {
+                val start = text.indexOf("%%", cursor)
+                if (start < 0) {
+                    stripped.append(text, cursor, text.length)
+                    break
+                }
+                stripped.append(text, cursor, start)
+                val end = text.indexOf("%%", start + 2)
+                if (end < 0) {
+                    inComment = true
+                    break
+                }
+                cursor = end + 2
+            }
+            text = wikilinkPattern.replace(stripped.toString()) { match ->
+                val page = match.groupValues[1].trim()
+                val alias = match.groupValues[2].trim().ifBlank { page }
+                "[$alias](norfold://page/${page.replace(" ", "%20")})"
+            }
+            lines += text
+        }
+        return rewriteDefinitionLists(lines).joinToString("\n")
+    }
+
+    private fun rewriteDefinitionLists(lines: List<String>): List<String> {
+        val result = ArrayList<String>(lines.size)
+        var fenceChar: Char? = null
+        var index = 0
+        while (index < lines.size) {
+            val line = lines[index]
+            val trimmed = line.trim()
+            if (fenceChar != null) {
+                if (trimmed.length >= 3 && trimmed.all { it == fenceChar }) fenceChar = null
+                result += line
+                index++
+                continue
+            }
+            val open = fenceOpening.matchEntire(trimmed)
+            if (open != null) {
+                fenceChar = open.groupValues[1][0]
+                result += line
+                index++
+                continue
+            }
+            val isTerm = trimmed.isNotBlank() && trimmed.first() !in ":-*+>#|" && !trimmed.first().isDigit() &&
+                index + 1 < lines.size && definitionLine.matches(lines[index + 1])
+            if (isTerm) {
+                result += "**$trimmed**"
+                result += ""
+                index++
+                while (index < lines.size && definitionLine.matches(lines[index])) {
+                    result += "- " + definitionLine.matchEntire(lines[index])!!.groupValues[1]
+                    index++
+                }
+            } else {
+                result += line
+                index++
+            }
+        }
+        return result
     }
 
     fun export(document: BlockDocument): String =
@@ -326,6 +421,8 @@ object MarkdownBlockCodec {
     private val checkedTodoPattern = Regex("^[-*+]\\s+\\[[xX]].*", RegexOption.DOT_MATCHES_ALL)
     private val inlineToken = Regex("(?<![\\w])([#@][\\p{L}\\p{N}_-]+)")
     private val fenceOpening = Regex("^(`{3,}|~{3,})\\s*([A-Za-z0-9_+.-]*)\\s*$")
+    private val wikilinkPattern = Regex("\\[\\[([^\\]|]+)(?:\\|([^\\]]+))?]]")
+    private val definitionLine = Regex("^:[ \\t]+(.*)$")
     private val mermaidSource = Regex("(?is)^\\s*(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie|mindmap|timeline|journey|gitGraph)\\b.*")
     private val texSource = Regex("\\\\(?:frac|sum|int|begin|mathbb|vec|tag|newcommand)\\b|(?:\\^|_)\\{[^}]+\\}")
     private val structuralTokens = setOf(MarkdownTokenTypes.ATX_HEADER, MarkdownTokenTypes.SETEXT_1, MarkdownTokenTypes.SETEXT_2)

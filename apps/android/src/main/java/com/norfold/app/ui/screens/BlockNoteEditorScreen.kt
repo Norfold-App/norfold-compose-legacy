@@ -2003,7 +2003,13 @@ private fun RenderBlock(
             }
         } else EditableTodos(block, onReplace, onInsert, onEditTodoItem, onSelectionChange)
         is QuoteBlock -> Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f), shape = RoundedCornerShape(8.dp)) {
-            Column {
+            // View mode renders quoted children recursively so nested quotes/lists keep their
+            // structure and depth; edit mode keeps the first child inline-editable as before.
+            if (mode == BlockSurfaceMode.View && renderChild != null) {
+                Column(Modifier.padding(start = 6.dp)) {
+                    block.children.forEach { child -> renderChild(child) }
+                }
+            } else Column {
                 val first = block.children.firstOrNull()
                 val content = first?.editableInlineContent() ?: listOf(InlineText(first?.plainText() ?: block.plainText()))
                 InlineTextBlock(
@@ -3660,7 +3666,7 @@ private fun inlineAnnotated(
                     appendNodes(node.children, inherited)
                 }
             }
-            is MathInline -> withStyle(inherited.merge(SpanStyle(fontFamily = FontFamily.Serif))) { append(node.tex) }
+            is MathInline -> withStyle(inherited.merge(SpanStyle(fontFamily = FontFamily.Monospace, fontStyle = FontStyle.Italic, background = codeBackground.copy(alpha = .35f)))) { append(node.tex) }
             is EmojiInline -> withStyle(inherited) { append(node.unicode) }
             is TagInline -> withStyle(inherited.merge(SpanStyle(color = tagColor, fontWeight = FontWeight.SemiBold))) { append("#${node.value}") }
             is MentionInline -> withStyle(inherited.merge(SpanStyle(fontWeight = FontWeight.SemiBold))) { append("@${node.value}") }
