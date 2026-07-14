@@ -12,6 +12,7 @@ import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,8 +32,7 @@ import kotlin.math.abs
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun MarkdownPreview(markdown: String, dark: Boolean, accentHex: String, modifier: Modifier = Modifier) {
-    var heightDp by remember { mutableStateOf(0) }
+fun MarkdownPreview(markdown: String, dark: Boolean, accentHex: String, modifier: Modifier = Modifier, refreshTick: Int = 0) {
     val colors = MaterialTheme.colorScheme
     val text = colors.onSurface.toCssHex()
     val muted = colors.onSurfaceVariant.toCssHex()
@@ -41,8 +41,25 @@ fun MarkdownPreview(markdown: String, dark: Boolean, accentHex: String, modifier
     val secondary = colors.secondary.toCssHex()
     val tertiary = colors.tertiary.toCssHex()
     val error = colors.error.toCssHex()
-    val html = buildHtml(markdown, text, muted, codeBg, border, accentHex, secondary, tertiary, error, dark)
-    val htmlKey = remember(html) { html.hashCode() }
+    val generation = RenderCache.generation
+    val cacheKey = remember(markdown, dark, accentHex, text) { RenderCache.key(markdown, dark, accentHex, text) }
+    val html = remember(cacheKey, muted, codeBg, border, secondary, tertiary, error) {
+        RenderCache.html(cacheKey)
+            ?: buildHtml(markdown, text, muted, codeBg, border, accentHex, secondary, tertiary, error, dark)
+                .also { RenderCache.putHtml(cacheKey, it) }
+    }
+    // A cached height means this exact content already rendered at this size: mount at the final
+    // height immediately instead of collapsing to the "Rendering…" min height.
+    var heightDp by remember(cacheKey) { mutableStateOf(RenderCache.heightFor(cacheKey) ?: 0) }
+    val htmlKey = remember(html, refreshTick, generation) { (html.hashCode() * 31 + refreshTick) * 31 + generation }
+    LaunchedEffect(refreshTick, generation) {
+        if (refreshTick > 0 || generation > 0) {
+            // Forced re-render: drop the stale artifact but keep the entry populated so the
+            // fresh measurement lands in the cache again.
+            RenderCache.evict(cacheKey)
+            RenderCache.putHtml(cacheKey, html)
+        }
+    }
     AndroidView(
         modifier = modifier.then(if (heightDp > 0) Modifier.height(heightDp.dp) else Modifier.heightIn(min = 24.dp)),
         factory = { ctx ->
@@ -110,13 +127,16 @@ fun MarkdownPreview(markdown: String, dark: Boolean, accentHex: String, modifier
             web.removeJavascriptInterface(HeightBridgeName)
             web.addJavascriptInterface(
                 HeightBridge { measured ->
-                    web.post { if (measured > 0 && measured != heightDp) heightDp = measured }
+                    web.post {
+                        if (measured > 0 && measured != heightDp) heightDp = measured
+                        if (measured > 0) RenderCache.storeHeight(cacheKey, measured)
+                    }
                 },
                 HeightBridgeName,
             )
             if (web.tag != htmlKey) {
                 web.tag = htmlKey
-                heightDp = 0
+                if (RenderCache.heightFor(cacheKey) == null) heightDp = 0
                 web.scrollTo(0, 0)
                 web.loadDataWithBaseURL("file:///android_asset/preview/", html, "text/html", "utf-8", null)
             }
@@ -125,6 +145,10 @@ fun MarkdownPreview(markdown: String, dark: Boolean, accentHex: String, modifier
 }
 
 private fun Color.toCssHex(): String = "#%06X".format(toArgb() and 0x00FFFFFF)
+
+/** True when this exact content+theme already has a measured render in [RenderCache]. */
+fun markdownRenderCached(markdown: String, dark: Boolean, accentHex: String, textColor: Color): Boolean =
+    RenderCache.heightFor(RenderCache.key(markdown, dark, accentHex, textColor.toCssHex())) != null
 
 private class HeightBridge(private val onHeight: (Int) -> Unit) {
     @JavascriptInterface
