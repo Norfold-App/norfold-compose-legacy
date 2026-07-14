@@ -170,6 +170,9 @@ private fun buildHtml(
  pre{background:$codeBg;padding:14px;border-radius:14px;overflow:auto}
  pre code{background:none;padding:0}
  blockquote{margin:.6em 0;padding:.35em .9em;border-left:4px solid $accent;background:${accent}18;border-radius:0 12px 12px 0;color:$muted}
+ mark{background:${accent}33;color:inherit;padding:.02em .22em;border-radius:4px}
+ sub,sup{font-size:.75em;line-height:0}
+ .engine-fallback{color:$muted;font-size:.9em;margin:.5em 0 .3em}
  table{border-collapse:collapse;width:100%;margin:.7em 0;font-size:.94em;display:block;overflow-x:auto}
  th,td{border:1px solid $border;padding:7px 11px;text-align:left}
  th{background:$codeBg}
@@ -211,6 +214,18 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
  function escapeHtml(value){
    return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
  }
+ function engineFallback(target,source,message){
+   target.innerHTML='';
+   var note=document.createElement('div');
+   note.className='engine-fallback';
+   note.textContent=message;
+   var pre=document.createElement('pre');
+   var code=document.createElement('code');
+   code.textContent=source;
+   pre.appendChild(code);
+   target.appendChild(note);
+   target.appendChild(pre);
+ }
  function extractFootnotes(source){
    var definitions={};
    var body=source.replace(/^\[\^([^\]]+)\]:[ \t]*(.+(?:\n(?:[ \t]{2,}|\t).+)*)$/gm,function(match,id,text){
@@ -249,6 +264,32 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
        return emojiMap[alias]||match;
      });
    });
+ }
+ if(window.marked&&marked.use){
+   marked.use({extensions:[
+     {name:'highlight',level:'inline',
+      start:function(src){return src.indexOf('==');},
+      tokenizer:function(src){
+        var m=/^==(?=\S)([\s\S]*?\S)==/.exec(src);
+        if(m){return {type:'highlight',raw:m[0],tokens:this.lexer.inlineTokens(m[1])};}
+      },
+      renderer:function(token){return '<mark>'+this.parser.parseInline(token.tokens)+'</mark>';}},
+     {name:'sup',level:'inline',
+      start:function(src){return src.indexOf('^');},
+      tokenizer:function(src){
+        var m=/^\^([^\^\s]+?)\^/.exec(src);
+        if(m){return {type:'sup',raw:m[0],tokens:this.lexer.inlineTokens(m[1])};}
+      },
+      renderer:function(token){return '<sup>'+this.parser.parseInline(token.tokens)+'</sup>';}},
+     {name:'sub',level:'inline',
+      start:function(src){return src.indexOf('~');},
+      tokenizer:function(src){
+        if(src.slice(0,2)==='~~'){return;}
+        var m=/^~([^~\s]+?)~/.exec(src);
+        if(m){return {type:'sub',raw:m[0],tokens:this.lexer.inlineTokens(m[1])};}
+      },
+      renderer:function(token){return '<sub>'+this.parser.parseInline(token.tokens)+'</sub>';}}
+   ]});
  }
  try {
    var documentSource=extractFootnotes(raw);
@@ -297,11 +338,7 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
        diagram.innerHTML=result.svg;
        if(result.bindFunctions){result.bindFunctions(diagram);}
      }).catch(function(){
-       var fallback=document.createElement('pre');
-       var code=document.createElement('code');
-       code.textContent=source;
-       fallback.appendChild(code);
-       diagram.replaceWith(fallback);
+       engineFallback(diagram,source,'Couldn\'t render this diagram — showing its source.');
      });
    }));
  });
@@ -352,10 +389,10 @@ ${if (needsChart) "<script src=\"vega.min.js\"></script><script src=\"vega-lite.
        });
        chart.textContent='';
        return vegaEmbed(chart,spec,{actions:false,renderer:'svg'}).catch(function(){
-         chart.textContent=source;
+         engineFallback(chart,source,'Couldn\'t render this chart — showing its source.');
        });
      } catch(e) {
-       chart.textContent=source;
+       engineFallback(chart,source,'Couldn\'t render this chart — showing its source.');
        return null;
      }
    }));
