@@ -32,6 +32,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.MermaidBlock
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 internal enum class DiagramKind(val label: String, val guided: Boolean) {
     Flowchart("Flowchart", true),
@@ -440,9 +442,7 @@ internal object MermaidDiagramCodec {
             kind = DiagramKind.Flowchart,
             direction = direction,
             nodes = colored.ifEmpty { defaultModel(defaultColor).nodes },
-            edges = edges.ifEmpty {
-                if (colored.size >= 2) listOf(DiagramEdgeInput(colored[0].id, colored[1].id)) else emptyList()
-            },
+            edges = edges,
         )
     }
 
@@ -472,9 +472,7 @@ internal object MermaidDiagramCodec {
         return DiagramBuilderModel(
             kind = DiagramKind.Sequence,
             participants = safeParticipants,
-            messages = messages.ifEmpty {
-                listOf(DiagramMessageInput(safeParticipants.first().id, safeParticipants.last().id, "Message"))
-            },
+            messages = messages,
         )
     }
 
@@ -658,10 +656,16 @@ fun DiagramBuilderSheet(
                 ?: MermaidDiagramCodec.encode(seeded, defaultColor),
         )
     }
+    var previewSource by remember(initialSource) { mutableStateOf(source) }
     var showAdvanced by remember(initialSource) { mutableStateOf(false) }
     val errors = remember(model) { MermaidDiagramCodec.validate(model) }
     val sourceKind = remember(source) { MermaidDiagramCodec.detectKind(source) }
     val dark = colors.surface.luminance() < 0.5f
+
+    LaunchedEffect(source) {
+        delay(300)
+        previewSource = source
+    }
 
     fun updateModel(updated: DiagramBuilderModel) {
         model = updated
@@ -716,7 +720,7 @@ fun DiagramBuilderSheet(
                 onSelect = ::selectTemplate,
             )
 
-            DiagramPreview(source = source, dark = dark, accentHex = defaultColor)
+            DiagramPreview(source = previewSource, dark = dark, accentHex = defaultColor)
 
             when (model.kind) {
                 DiagramKind.Flowchart -> FlowchartForm(
@@ -729,6 +733,16 @@ fun DiagramBuilderSheet(
                 else -> Text(
                     text = "${model.kind.label} starts from a working template. Use Advanced to customize its Mermaid source.",
                     style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+
+            if (!initialSource.isNullOrBlank() && model.kind.guided &&
+                source.trim() != MermaidDiagramCodec.encode(model, defaultColor).trim()
+            ) {
+                Text(
+                    text = "Custom Mermaid stays unchanged until you edit a visual field. Visual edits rebuild the supported form and may simplify subgraphs, comments, or custom arrows.",
+                    style = MaterialTheme.typography.bodySmall,
                     color = colors.onSurfaceVariant,
                 )
             }
