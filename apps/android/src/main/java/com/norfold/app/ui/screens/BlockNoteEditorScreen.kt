@@ -45,9 +45,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -60,7 +62,9 @@ import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
@@ -95,11 +99,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -109,14 +117,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.Key
@@ -126,6 +138,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -169,13 +184,23 @@ import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.CodeInline
+import com.norfold.app.domain.ContainerAxis
+import com.norfold.app.domain.ContainerBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.DocumentBlock
+import com.norfold.app.domain.DropTarget
+import com.norfold.app.domain.Edge
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.EmbedMetadata
 import com.norfold.app.domain.EmojiInline
 import com.norfold.app.domain.FileBlock
+import com.norfold.app.domain.DocOutline
+import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.findById
+import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.HeadingBlock
+import com.norfold.app.ui.dnd.dragLift
+import com.norfold.app.ui.dnd.dropSlotOutline
 import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.ImageLayout
 import com.norfold.app.domain.InlineNode
@@ -183,6 +208,8 @@ import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.ItalicInline
 import com.norfold.app.domain.LinkInline
 import com.norfold.app.domain.ListItem
+import com.norfold.app.domain.locate
+import com.norfold.app.domain.pathOf
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MathInline
 import com.norfold.app.domain.MarkdownBlockCodec
@@ -215,6 +242,7 @@ import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
@@ -243,19 +271,117 @@ fun BlockNoteEditorScreen(
     var activeSelection by remember(note.id) { mutableStateOf<EditorSelection?>(null) }
     var linkEditorRequest by remember(note.id) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
+    val overlapScrollState = rememberScrollState()
     val outlineScope = rememberCoroutineScope()
     var showOutline by remember { mutableStateOf(false) }
+    // Sidebar ToC taps: resolve the heading to its top-level ancestor, then scroll the Reflow list
+    // (or pan the free-overlap canvas to the block's stored y) and consume the one-shot request.
+    val scrollRequest by viewModel.scrollToBlockRequest.collectAsState()
+    val screenDensity = LocalDensity.current
+    LaunchedEffect(scrollRequest) {
+        val request = scrollRequest ?: return@LaunchedEffect
+        val entry = DocOutline.extract(renderedDocument).firstOrNull { it.blockId == request.blockId }
+        val topId = entry?.topLevelId ?: request.blockId
+        if (note.overlapMode == DocOverlapMode.Overlap) {
+            val y = (note.freeformLayout[topId]?.y ?: 0f) - 12f
+            overlapScrollState.animateScrollTo(with(screenDensity) { y.coerceAtLeast(0f).dp.roundToPx() })
+        } else {
+            val index = renderedDocument.blocks.indexOfFirst { it.id == topId }
+            if (index >= 0) listState.animateScrollToItem(index)
+        }
+        viewModel.consumeScrollToBlock()
+    }
     val listScrolling by remember { derivedStateOf { listState.isScrollInProgress } }
     val rangeBounds = remember(renderedDocument, rangeAnchorId, rangeExtentId) {
         val anchorIndex = renderedDocument.blocks.indexOfFirst { it.id == rangeAnchorId }
         val extentIndex = renderedDocument.blocks.indexOfFirst { it.id == (rangeExtentId ?: rangeAnchorId) }
         if (anchorIndex >= 0 && extentIndex >= 0) minOf(anchorIndex, extentIndex)..maxOf(anchorIndex, extentIndex) else null
     }
+    // Cross-container drag: every rendered block reports its window bounds here; a drag hit-tests against
+    // them to find the hovered block + edge, then drops via a DropTarget (reorder / move / edge-split).
+    val dragBounds = remember(note.id) { mutableStateMapOf<String, Rect>() }
+    var draggingId by remember(note.id) { mutableStateOf<String?>(null) }
+    var dragHoverId by remember(note.id) { mutableStateOf<String?>(null) }
+    var dragHoverEdge by remember(note.id) { mutableStateOf<Edge?>(null) }
+    // Floating-clone state: window pointer, grab offset inside the block, and the block's bounds at
+    // lift-off, so the clone tracks the finger at the same relative spot it was grabbed.
+    var dragPointer by remember(note.id) { mutableStateOf<Offset?>(null) }
+    var dragGrabOffset by remember(note.id) { mutableStateOf(Offset.Zero) }
+    var dragStartBounds by remember(note.id) { mutableStateOf<Rect?>(null) }
+    var editorRootOrigin by remember(note.id) { mutableStateOf(Offset.Zero) }
 
     fun changed(cursor: BlockCursor? = null) {
         renderedDocument = session.document
         revision++
         focusTarget = cursor
+    }
+
+    // --- Cross-container drag hit-testing (window coordinates) ---
+    fun blockIsDescendantOf(id: String, ancestorId: String): Boolean =
+        session.document.pathOf(id)?.ids?.dropLast(1)?.contains(ancestorId) == true
+
+    fun updateDragHover(pointer: Offset) {
+        val dragged = draggingId ?: return
+        val hit = dragBounds.entries
+            .filter { it.key != dragged && it.value.contains(pointer) && !blockIsDescendantOf(it.key, dragged) }
+            .minByOrNull { it.value.width * it.value.height }
+        if (hit == null) {
+            // Keep the current target while the pointer rides the dragged block's own placeholder
+            // (the live reorder preview parks that slot right under the finger); only clear the
+            // target when the pointer genuinely leaves every block.
+            val ownBounds = dragBounds[dragged]
+            if (ownBounds == null || !ownBounds.contains(pointer)) {
+                dragHoverId = null; dragHoverEdge = null
+            }
+            return
+        }
+        val r = hit.value
+        val fx = if (r.width <= 0f) .5f else ((pointer.x - r.left) / r.width).coerceIn(0f, 1f)
+        val fy = if (r.height <= 0f) .5f else ((pointer.y - r.top) / r.height).coerceIn(0f, 1f)
+        dragHoverId = hit.key
+        dragHoverEdge = when {
+            fx < 0.22f -> Edge.Left
+            fx > 0.78f -> Edge.Right
+            fy < 0.28f -> Edge.Top
+            fy > 0.72f -> Edge.Bottom
+            else -> null // center → drop into a container (or vertical split as fallback)
+        }
+    }
+
+    // True while a drag previews a plain top-level reorder (both blocks top-level, Top/Bottom edge):
+    // the rendered list is permuted live so neighbors slide via animateItem(), instead of edge lines.
+    fun previewReorderActive(): Boolean {
+        val dragged = draggingId ?: return false
+        val hover = dragHoverId ?: return false
+        if (dragHoverEdge != Edge.Top && dragHoverEdge != Edge.Bottom) return false
+        val blocks = renderedDocument.blocks
+        return blocks.any { it.id == dragged } && blocks.any { it.id == hover }
+    }
+
+    fun finishDrag() {
+        val dragged = draggingId
+        val hover = dragHoverId
+        val edge = dragHoverEdge
+        draggingId = null; dragHoverId = null; dragHoverEdge = null
+        dragPointer = null; dragStartBounds = null
+        if (dragged == null || hover == null || dragged == hover) return
+        val target: DropTarget? = when (edge) {
+            Edge.Left, Edge.Right -> DropTarget.Split(hover, edge)
+            Edge.Top, Edge.Bottom -> session.document.blocks.locate(hover)?.let { (parentId, idx, _) ->
+                DropTarget.Into(parentId, idx + if (edge == Edge.Bottom) 1 else 0)
+            }
+            null -> (session.document.findById(hover) as? ContainerBlock)?.let { DropTarget.Into(hover, it.children.size) }
+                ?: DropTarget.Split(hover, Edge.Bottom)
+        }
+        if (target != null) {
+            session.move(dragged, target)
+            changed()
+        }
+    }
+
+    fun cancelDrag() {
+        draggingId = null; dragHoverId = null; dragHoverEdge = null
+        dragPointer = null; dragStartBounds = null
     }
 
     fun replaceActiveSelection(factory: (String) -> InlineNode) {
@@ -340,7 +466,7 @@ fun BlockNoteEditorScreen(
     }
 
     CompositionLocalProvider(LocalEmojiShortcodes provides emojiShortcodes) {
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().onGloballyPositioned { editorRootOrigin = it.positionInWindow() }) {
     Column(Modifier.fillMaxSize()) {
         BlockEditorHeader(
             title = title,
@@ -369,6 +495,8 @@ fun BlockNoteEditorScreen(
             onPin = { viewModel.togglePin(note) },
             onLock = { viewModel.toggleLock(note) },
             onOutline = { showOutline = true },
+            overlapMode = note.overlapMode,
+            onSetOverlapMode = { viewModel.setOverlapMode(note, it) },
         )
         if (rangeAnchorId != null) {
             DocumentRangeToolbar(
@@ -391,6 +519,155 @@ fun BlockNoteEditorScreen(
                 },
             )
         }
+        // Renders one block and, for containers, recurses into its children via `renderChild`. Defined
+        // locally so it can call itself while still capturing the session + editor state. `index` is the
+        // top-level lazy index (or -1 when nested); `nested` gates drag/reorder chrome.
+        @Composable
+        fun BlockNode(block: DocumentBlock, index: Int, nested: Boolean, rowModifier: Modifier) {
+            SharedBlockRow(
+                modifier = rowModifier,
+                block = block,
+                index = index,
+                mode = if (editMode) BlockSurfaceMode.Edit else BlockSurfaceMode.View,
+                focus = focusTarget?.takeIf { it.blockId == block.id },
+                onFocusConsumed = { focusTarget = null },
+                onReplace = { session.replaceBlock(it); changed() },
+                onEditText = { old, new ->
+                    val outcome = session.editTextOrSmartPaste(block.id, old, new)
+                    changed(outcome.cursor.takeIf { outcome.structuredPaste })
+                },
+                onReplaceInline = { start, end, inline ->
+                    session.replaceSelectionWithInline(BlockCursor(block.id, start), BlockCursor(block.id, end), inline)
+                    changed()
+                },
+                onEditListItem = { itemId, old, new -> session.editListItem(block.id, itemId, old, new); changed() },
+                onEditTodoItem = { itemId, old, new -> session.editTodoItem(block.id, itemId, old, new); changed() },
+                onSplitListItem = { itemId, offset -> changed(session.splitListItem(block.id, itemId, offset)) },
+                onExitListItem = { itemId -> changed(session.exitEmptyListItem(block.id, itemId)) },
+                onMergeListItem = { itemId -> changed(session.mergeListItemWithPrevious(block.id, itemId)) },
+                onSplit = { offset -> changed(session.split(block.id, offset)) },
+                onMerge = { changed(session.mergeWithPrevious(block.id)) },
+                onMove = { target -> session.move(block.id, target); changed() },
+                dragTarget = { dragOffset ->
+                    val current = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == block.id }
+                    if (current == null) null else {
+                        val center = current.offset + dragOffset + current.size / 2f
+                        listState.layoutInfo.visibleItemsInfo
+                            .asSequence()
+                            .filter { it.index < renderedDocument.blocks.size }
+                            .minByOrNull { candidate -> kotlin.math.abs(center - (candidate.offset + candidate.size / 2f)) }
+                            ?.index
+                    }
+                },
+                onInsert = { type ->
+                    when (type) {
+                        InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = block.id)
+                        InsertBlockType.Math -> {
+                            val inlineSelection = activeSelection?.takeIf {
+                                it.start.blockId == block.id && it.end.blockId == block.id
+                            }
+                            mathBuilderRequest = MathBuilderRequest(
+                                anchorId = block.id,
+                                initialKind = if (inlineSelection == null) MathInsertionKind.Block else MathInsertionKind.Inline,
+                                inlineSelection = inlineSelection,
+                            )
+                        }
+                        InsertBlockType.Mermaid -> diagramBuilderRequest = DiagramBuilderRequest(anchorId = block.id)
+                        else -> changed(session.insertAfter(block.id, newDocumentBlock(type)))
+                    }
+                },
+                onDelete = { changed(session.delete(block.id)) },
+                onDuplicate = { changed(session.insertAfter(block.id, duplicateBlock(block))) },
+                rangeSelectionActive = rangeAnchorId != null,
+                selectedForRange = !nested && rangeBounds?.contains(index) == true,
+                onStartRangeSelection = {
+                    rangeAnchorId = block.id
+                    rangeExtentId = block.id
+                },
+                onExtendRangeSelection = { rangeExtentId = block.id },
+                scrolling = listScrolling,
+                onEditChart = { chart -> chartBuilderRequest = ChartBuilderRequest(editingId = chart.id, initialSpec = chart.vegaLiteSpec) },
+                onEditMath = { math ->
+                    mathBuilderRequest = MathBuilderRequest(
+                        editingId = math.id,
+                        initialTex = math.tex,
+                    )
+                },
+                onEditDiagram = { diagram ->
+                    diagramBuilderRequest = DiagramBuilderRequest(
+                        editingId = diagram.id,
+                        initialSource = diagram.code,
+                    )
+                },
+                onSelectionChange = { activeSelection = it },
+                nested = nested,
+                onWrap = { axis -> session.wrapInContainer(block.id, axis); changed() },
+                onUnwrap = { session.unwrap(block.id); changed() },
+                onExtract = { session.extractToTopLevel(block.id); changed() },
+                onToggleAxis = {
+                    (block as? ContainerBlock)?.let {
+                        session.setAxis(it.id, if (it.axis == ContainerAxis.Row) ContainerAxis.Column else ContainerAxis.Row)
+                        changed()
+                    }
+                },
+                onAddToContainer = { session.addChild(block.id, ParagraphBlock()); changed() },
+                onMoveWithin = { delta ->
+                    session.document.blocks.locate(block.id)?.let { (parentId, idx, siblings) ->
+                        val raw = if (delta < 0) idx - 1 else idx + 2
+                        session.move(block.id, DropTarget.Into(parentId, raw.coerceIn(0, siblings.size)))
+                        changed()
+                    }
+                },
+                onReportBounds = { rect -> if (rect != null) dragBounds[block.id] = rect else dragBounds.remove(block.id) },
+                onDragBegin = {
+                    draggingId = block.id
+                    dragStartBounds = dragBounds[block.id]
+                },
+                onDragTo = { p ->
+                    if (dragPointer == null) dragGrabOffset = p - (dragStartBounds?.topLeft ?: p)
+                    dragPointer = p
+                    updateDragHover(p)
+                },
+                onDragDrop = { finishDrag() },
+                onDragAbort = { cancelDrag() },
+                isBeingDragged = draggingId == block.id,
+                isDragHovered = dragHoverId == block.id && draggingId != null && !previewReorderActive(),
+                dragHoverEdge = if (dragHoverId == block.id && !previewReorderActive()) dragHoverEdge else null,
+                renderChild = { child -> BlockNode(child, index = -1, nested = true, rowModifier = Modifier) },
+            )
+        }
+        if (note.overlapMode == DocOverlapMode.Overlap) {
+            // Free-overlap mode: a completely freeform canvas (absolute x/y, explicit size, z-layers)
+            // replaces the stacked list; the Reflow LazyColumn path below is untouched.
+            FreeformDocCanvas(
+                blocks = renderedDocument.blocks,
+                layout = note.freeformLayout,
+                editMode = editMode,
+                onSeedLayout = { viewModel.updateFreeformLayout(note, it) },
+                onCommitPlacement = { id, placement -> viewModel.updateBlockPlacement(note, id, placement) },
+                onBringToFront = { viewModel.bringBlockToFront(note, it) },
+                onBringForward = { viewModel.bringBlockForward(note, it) },
+                onSendBackward = { viewModel.sendBlockBackward(note, it) },
+                onSendToBack = { viewModel.sendBlockToBack(note, it) },
+                onBackgroundTap = { if (editMode) { editMode = false; activeSelection = null } },
+                onBackgroundDoubleTap = { if (!editMode) editMode = true },
+                scrollState = overlapScrollState,
+                modifier = Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally).imePadding(),
+            ) { block -> BlockNode(block, index = -1, nested = true, rowModifier = Modifier) }
+        } else {
+        // Live reorder preview: while dragging over a top-level Top/Bottom edge, render the list with
+        // the dragged block moved to the would-be drop slot; animateItem() slides the neighbors. The
+        // real document is only mutated on drop (session.move in finishDrag), so aborting snaps back.
+        val displayBlocks = if (!previewReorderActive()) renderedDocument.blocks else {
+            val blocks = renderedDocument.blocks
+            val draggedBlock = blocks.first { it.id == draggingId }
+            val without = blocks.filter { it.id != draggingId }
+            val anchor = without.indexOfFirst { it.id == dragHoverId }
+            if (anchor < 0) blocks else {
+                val insertAt = (anchor + if (dragHoverEdge == Edge.Bottom) 1 else 0).coerceIn(0, without.size)
+                without.toMutableList().apply { add(insertAt, draggedBlock) }
+            }
+        }
         LazyColumn(
             Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally).imePadding().pointerInput(editMode) {
                 detectTapGestures(
@@ -403,86 +680,15 @@ fun BlockNoteEditorScreen(
             state = listState,
         ) {
             itemsIndexed(
-                renderedDocument.blocks,
+                displayBlocks,
                 key = { _, block -> block.id },
                 contentType = { _, block -> block::class },
             ) { index, block ->
-                SharedBlockRow(
-                    modifier = if (editMode) Modifier.animateItem() else Modifier,
+                BlockNode(
                     block = block,
                     index = index,
-                    mode = if (editMode) BlockSurfaceMode.Edit else BlockSurfaceMode.View,
-                    focus = focusTarget?.takeIf { it.blockId == block.id },
-                    onFocusConsumed = { focusTarget = null },
-                    onReplace = { session.replaceBlock(it); changed() },
-                    onEditText = { old, new ->
-                        val outcome = session.editTextOrSmartPaste(block.id, old, new)
-                        changed(outcome.cursor.takeIf { outcome.structuredPaste })
-                    },
-                    onReplaceInline = { start, end, inline ->
-                        session.replaceSelectionWithInline(BlockCursor(block.id, start), BlockCursor(block.id, end), inline)
-                        changed()
-                    },
-                    onEditListItem = { itemId, old, new -> session.editListItem(block.id, itemId, old, new); changed() },
-                    onEditTodoItem = { itemId, old, new -> session.editTodoItem(block.id, itemId, old, new); changed() },
-                    onSplitListItem = { itemId, offset -> changed(session.splitListItem(block.id, itemId, offset)) },
-                    onExitListItem = { itemId -> changed(session.exitEmptyListItem(block.id, itemId)) },
-                    onMergeListItem = { itemId -> changed(session.mergeListItemWithPrevious(block.id, itemId)) },
-                    onSplit = { offset -> changed(session.split(block.id, offset)) },
-                    onMerge = { changed(session.mergeWithPrevious(block.id)) },
-                    onMove = { target -> session.move(block.id, target); changed() },
-                    dragTarget = { dragOffset ->
-                        val current = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == block.id }
-                        if (current == null) null else {
-                            val center = current.offset + dragOffset + current.size / 2f
-                            listState.layoutInfo.visibleItemsInfo
-                                .asSequence()
-                                .filter { it.index < renderedDocument.blocks.size }
-                                .minByOrNull { candidate -> kotlin.math.abs(center - (candidate.offset + candidate.size / 2f)) }
-                                ?.index
-                        }
-                    },
-                    onInsert = { type ->
-                        when (type) {
-                            InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = block.id)
-                            InsertBlockType.Math -> {
-                                val inlineSelection = activeSelection?.takeIf {
-                                    it.start.blockId == block.id && it.end.blockId == block.id
-                                }
-                                mathBuilderRequest = MathBuilderRequest(
-                                    anchorId = block.id,
-                                    initialKind = if (inlineSelection == null) MathInsertionKind.Block else MathInsertionKind.Inline,
-                                    inlineSelection = inlineSelection,
-                                )
-                            }
-                            InsertBlockType.Mermaid -> diagramBuilderRequest = DiagramBuilderRequest(anchorId = block.id)
-                            else -> changed(session.insertAfter(block.id, newDocumentBlock(type)))
-                        }
-                    },
-                    onDelete = { changed(session.delete(block.id)) },
-                    onDuplicate = { changed(session.insertAfter(block.id, duplicateBlock(block))) },
-                    rangeSelectionActive = rangeAnchorId != null,
-                    selectedForRange = rangeBounds?.contains(index) == true,
-                    onStartRangeSelection = {
-                        rangeAnchorId = block.id
-                        rangeExtentId = block.id
-                    },
-                    onExtendRangeSelection = { rangeExtentId = block.id },
-                    scrolling = listScrolling,
-                    onEditChart = { chart -> chartBuilderRequest = ChartBuilderRequest(editingId = chart.id, initialSpec = chart.vegaLiteSpec) },
-                    onEditMath = { math ->
-                        mathBuilderRequest = MathBuilderRequest(
-                            editingId = math.id,
-                            initialTex = math.tex,
-                        )
-                    },
-                    onEditDiagram = { diagram ->
-                        diagramBuilderRequest = DiagramBuilderRequest(
-                            editingId = diagram.id,
-                            initialSource = diagram.code,
-                        )
-                    },
-                    onSelectionChange = { activeSelection = it },
+                    nested = false,
+                    rowModifier = if (editMode) Modifier.animateItem() else Modifier,
                 )
             }
             if (editMode) {
@@ -498,6 +704,27 @@ fun BlockNoteEditorScreen(
                     }
                 }
             }
+        }
+        }
+    }
+    // Floating drag clone: the grabbed block "lifts off" and follows the finger while its source row
+    // collapses into a dashed placeholder slot in the list below.
+    val cloneBlock = draggingId?.let { id -> renderedDocument.findById(id) }
+    val clonePointer = dragPointer
+    if (cloneBlock != null && clonePointer != null) {
+        val density = LocalDensity.current
+        val cloneWidth = with(density) { (dragStartBounds?.width ?: 0f).toDp() }
+        val position = clonePointer - dragGrabOffset - editorRootOrigin
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+                .then(if (cloneWidth > 0.dp) Modifier.width(cloneWidth) else Modifier.fillMaxWidth(0.8f))
+                .offset { IntOffset(position.x.roundToInt(), position.y.roundToInt()) }
+                .zIndex(20f)
+                .dragLift(lifted = true, cornerRadius = 10.dp),
+        ) {
+            Box(Modifier.heightIn(max = 240.dp).padding(10.dp)) { BlockCloneContent(cloneBlock) }
         }
     }
     if (editMode && activeSelection != null) {
@@ -627,9 +854,7 @@ fun BlockNoteEditorScreen(
         )
     }
     if (showOutline) {
-        val headings = renderedDocument.blocks.mapIndexedNotNull { index, block ->
-            (block as? HeadingBlock)?.let { index to it }
-        }
+        val headings = DocOutline.extract(renderedDocument)
         ModalBottomSheet(onDismissRequest = { showOutline = false }) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
                 Text(
@@ -645,12 +870,10 @@ fun BlockNoteEditorScreen(
                         modifier = Modifier.padding(vertical = 12.dp),
                     )
                 } else {
-                    headings.forEach { (index, heading) ->
-                        val depth = heading.level.coerceIn(1, 6)
-                        val label = heading.content.joinToString("") { it.plainText() }
-                            .ifBlank { "Untitled heading" }
+                    headings.forEach { heading ->
+                        val depth = heading.level
                         Text(
-                            text = label,
+                            text = heading.label,
                             fontSize = (17 - (depth.coerceAtMost(4) - 1)).sp,
                             fontWeight = if (depth <= 1) FontWeight.SemiBold else FontWeight.Normal,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -659,7 +882,14 @@ fun BlockNoteEditorScreen(
                                 .fillMaxWidth()
                                 .clickable {
                                     showOutline = false
-                                    outlineScope.launch { listState.animateScrollToItem(index) }
+                                    outlineScope.launch {
+                                        if (note.overlapMode == DocOverlapMode.Overlap) {
+                                            val y = (note.freeformLayout[heading.topLevelId]?.y ?: 0f) - 12f
+                                            overlapScrollState.animateScrollTo(with(screenDensity) { y.coerceAtLeast(0f).dp.roundToPx() })
+                                        } else {
+                                            listState.animateScrollToItem(heading.topLevelIndex)
+                                        }
+                                    }
                                 }
                                 .padding(start = ((depth - 1) * 14).dp, top = 10.dp, bottom = 10.dp),
                         )
@@ -1024,7 +1254,7 @@ private fun DocumentRangeToolbar(
 }
 
 private enum class BlockSurfaceMode { View, Edit }
-private enum class InsertBlockType { Text, Heading, BulletList, NumberedList, TodoList, Quote, Callout, Divider, Code, Table, Image, File, Embed, Chart, Math, Mermaid }
+private enum class InsertBlockType { Text, Heading, BulletList, NumberedList, TodoList, Quote, Callout, Container, Divider, Code, Table, Image, File, Embed, Chart, Math, Mermaid }
 
 private fun DocumentBlock.renderModeOrNull(): BlockRenderMode? = when (this) {
     is CodeBlock -> renderMode
@@ -1042,6 +1272,255 @@ private fun DocumentBlock.withRenderMode(mode: BlockRenderMode): DocumentBlock =
     is MathBlock -> copy(renderMode = mode)
     is MermaidBlock -> copy(renderMode = mode)
     else -> this
+}
+
+/** Snap distance (dp) for the free-overlap alignment guides. */
+private const val FreeformSnapThresholdDp = 6f
+
+/**
+ * Free-overlap canvas ([DocOverlapMode.Overlap]): top-level blocks float at absolute dp positions
+ * with explicit size and z-order instead of the stacked Reflow list, so anything can be dropped on
+ * top of anything (a callout positioned over an image *is* the overlay). Move/resize gestures update
+ * a transient local map (same pattern as the workspace canvas) and persist on gesture end; z always
+ * comes from the stored layout so the layer menu applies instantly. While a block moves, other
+ * blocks' edges/centers within [FreeformSnapThresholdDp] snap the drag and draw dashed guides.
+ */
+@Composable
+private fun FreeformDocCanvas(
+    blocks: List<DocumentBlock>,
+    layout: Map<String, FreeformPlacement>,
+    editMode: Boolean,
+    onSeedLayout: (Map<String, FreeformPlacement>) -> Unit,
+    onCommitPlacement: (String, FreeformPlacement) -> Unit,
+    onBringToFront: (String) -> Unit,
+    onBringForward: (String) -> Unit,
+    onSendBackward: (String) -> Unit,
+    onSendToBack: (String) -> Unit,
+    onBackgroundTap: () -> Unit,
+    onBackgroundDoubleTap: () -> Unit,
+    scrollState: ScrollState,
+    modifier: Modifier = Modifier,
+    renderBlock: @Composable (DocumentBlock) -> Unit,
+) {
+    // Blocks without a stored placement (first entry into Overlap mode, or newly inserted) cascade
+    // down the page below the lowest existing block, each on its own fresh top layer.
+    val effectiveLayout = remember(blocks, layout) {
+        val merged = layout.toMutableMap()
+        var nextY = (layout.values.maxOfOrNull { it.y + it.height } ?: 0f) + 16f
+        var nextZ = (layout.values.maxOfOrNull { it.z } ?: -1) + 1
+        blocks.forEach { block ->
+            if (block.id !in merged) {
+                merged[block.id] = FreeformPlacement(x = 16f, y = nextY, width = 328f, height = 160f, z = nextZ++)
+                nextY += 176f
+            }
+        }
+        merged
+    }
+    LaunchedEffect(layout, blocks) {
+        if (blocks.any { it.id !in layout }) {
+            onSeedLayout(effectiveLayout.filterKeys { id -> blocks.any { it.id == id } })
+        }
+    }
+    // Gesture closures survive recomposition, so they must read layout/blocks through these.
+    val latestLayout = rememberUpdatedState(effectiveLayout)
+    val latestBlocks = rememberUpdatedState(blocks)
+    // In-flight move/resize overrides; an entry clears once the persisted layout catches up so the
+    // block never snaps back while the write round-trips through the repository.
+    val localPlacements = remember { mutableStateMapOf<String, FreeformPlacement>() }
+    LaunchedEffect(layout) {
+        localPlacements.keys.toList().forEach { id ->
+            val local = localPlacements[id] ?: return@forEach
+            val stored = layout[id] ?: return@forEach
+            if (stored.copy(z = 0) == local.copy(z = 0)) localPlacements.remove(id)
+        }
+    }
+    fun displayed(id: String, source: Map<String, FreeformPlacement> = effectiveLayout): FreeformPlacement {
+        val stored = source[id] ?: FreeformPlacement()
+        return (localPlacements[id] ?: stored).copy(z = stored.z)
+    }
+    var movingId by remember { mutableStateOf<String?>(null) }
+    val verticalGuides = remember { mutableStateListOf<Float>() }
+    val horizontalGuides = remember { mutableStateListOf<Float>() }
+    fun clearGuides() {
+        verticalGuides.clear()
+        horizontalGuides.clear()
+    }
+    // Nearest own-line → other-line match within threshold; returns (delta to apply, guide line).
+    fun snapDelta(own: List<Float>, targets: List<Float>): Pair<Float, Float>? {
+        var best: Pair<Float, Float>? = null
+        own.forEach { o ->
+            targets.forEach { t ->
+                val d = t - o
+                if (abs(d) <= FreeformSnapThresholdDp && (best == null || abs(d) < abs(best!!.first))) best = d to t
+            }
+        }
+        return best
+    }
+    val zOrder = effectiveLayout.entries.sortedWith(compareBy({ it.value.z }, { it.key })).map { it.key }
+    val contentHeight = ((blocks.maxOfOrNull { block -> displayed(block.id).let { it.y + it.height } } ?: 480f) + 320f).dp
+    val guideColor = MaterialTheme.colorScheme.primary
+    Box(
+        modifier
+            .verticalScroll(scrollState)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onBackgroundTap() },
+                    onDoubleTap = { onBackgroundDoubleTap() },
+                )
+            },
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(contentHeight)
+                .drawBehind {
+                    if (verticalGuides.isEmpty() && horizontalGuides.isEmpty()) return@drawBehind
+                    val dash = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 6.dp.toPx()))
+                    verticalGuides.forEach { x ->
+                        drawLine(guideColor, Offset(x.dp.toPx(), 0f), Offset(x.dp.toPx(), size.height), strokeWidth = 1.5.dp.toPx(), pathEffect = dash)
+                    }
+                    horizontalGuides.forEach { y ->
+                        drawLine(guideColor, Offset(0f, y.dp.toPx()), Offset(size.width, y.dp.toPx()), strokeWidth = 1.5.dp.toPx(), pathEffect = dash)
+                    }
+                },
+        ) {
+            blocks.forEach { block ->
+                key(block.id) {
+                    val placement = displayed(block.id)
+                    val moving = movingId == block.id
+                    var layerMenu by remember { mutableStateOf(false) }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(10.dp),
+                        tonalElevation = if (editMode) 1.dp else 0.dp,
+                        modifier = Modifier
+                            .offset { IntOffset(placement.x.dp.roundToPx(), placement.y.dp.roundToPx()) }
+                            .size(placement.width.dp, placement.height.dp)
+                            .zIndex(placement.z.toFloat() + if (moving) 1000f else 0f)
+                            .dragLift(lifted = moving, cornerRadius = 10.dp)
+                            .then(
+                                if (editMode) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                else Modifier,
+                            ),
+                    ) {
+                        Box(Modifier.fillMaxSize()) {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                            ) { renderBlock(block) }
+                            if (editMode) {
+                                Row(
+                                    Modifier.align(Alignment.TopEnd).padding(2.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box {
+                                        Icon(
+                                            Icons.Outlined.Layers,
+                                            contentDescription = "Layer options",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .size(26.dp)
+                                                .clip(CircleShape)
+                                                .clickable { layerMenu = true }
+                                                .padding(4.dp),
+                                        )
+                                        DropdownMenu(expanded = layerMenu, onDismissRequest = { layerMenu = false }) {
+                                            Text(
+                                                "Layer ${zOrder.indexOf(block.id) + 1} of ${zOrder.size}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                            )
+                                            DropdownMenuItem(text = { Text("Bring to front") }, onClick = { layerMenu = false; onBringToFront(block.id) })
+                                            DropdownMenuItem(text = { Text("Bring forward") }, onClick = { layerMenu = false; onBringForward(block.id) })
+                                            DropdownMenuItem(text = { Text("Send backward") }, onClick = { layerMenu = false; onSendBackward(block.id) })
+                                            DropdownMenuItem(text = { Text("Send to back") }, onClick = { layerMenu = false; onSendToBack(block.id) })
+                                        }
+                                    }
+                                    Icon(
+                                        Icons.Outlined.DragIndicator,
+                                        contentDescription = "Move block",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .size(26.dp)
+                                            .clip(CircleShape)
+                                            .pointerInput(block.id) {
+                                                detectDragGestures(
+                                                    onDragStart = { movingId = block.id },
+                                                    onDragEnd = {
+                                                        movingId = null
+                                                        clearGuides()
+                                                        localPlacements[block.id]?.let { onCommitPlacement(block.id, it) }
+                                                    },
+                                                    onDragCancel = {
+                                                        movingId = null
+                                                        clearGuides()
+                                                        localPlacements.remove(block.id)
+                                                    },
+                                                ) { change, dragAmount ->
+                                                    change.consume()
+                                                    val stored = latestLayout.value[block.id] ?: FreeformPlacement()
+                                                    val current = localPlacements[block.id] ?: stored
+                                                    var nx = current.x + dragAmount.x.toDp().value
+                                                    var ny = (current.y + dragAmount.y.toDp().value).coerceAtLeast(0f)
+                                                    clearGuides()
+                                                    val others = latestBlocks.value
+                                                        .filter { it.id != block.id }
+                                                        .map { displayed(it.id, latestLayout.value) }
+                                                    snapDelta(
+                                                        listOf(nx, nx + current.width / 2f, nx + current.width),
+                                                        others.flatMap { listOf(it.x, it.x + it.width / 2f, it.x + it.width) },
+                                                    )?.let { (d, guide) ->
+                                                        nx += d
+                                                        verticalGuides.add(guide)
+                                                    }
+                                                    snapDelta(
+                                                        listOf(ny, ny + current.height / 2f, ny + current.height),
+                                                        others.flatMap { listOf(it.y, it.y + it.height / 2f, it.y + it.height) },
+                                                    )?.let { (d, guide) ->
+                                                        ny += d
+                                                        horizontalGuides.add(guide)
+                                                    }
+                                                    localPlacements[block.id] = current.copy(x = nx, y = ny)
+                                                }
+                                            }
+                                            .padding(4.dp),
+                                    )
+                                }
+                                // Corner resize handle.
+                                Box(
+                                    Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(3.dp)
+                                        .size(16.dp)
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.85f), CircleShape)
+                                        .pointerInput(block.id) {
+                                            detectDragGestures(
+                                                onDragEnd = {
+                                                    localPlacements[block.id]?.let { onCommitPlacement(block.id, it) }
+                                                },
+                                                onDragCancel = { localPlacements.remove(block.id) },
+                                            ) { change, dragAmount ->
+                                                change.consume()
+                                                val stored = latestLayout.value[block.id] ?: FreeformPlacement()
+                                                val current = localPlacements[block.id] ?: stored
+                                                localPlacements[block.id] = current.copy(
+                                                    width = (current.width + dragAmount.x.toDp().value).coerceAtLeast(120f),
+                                                    height = (current.height + dragAmount.y.toDp().value).coerceAtLeast(64f),
+                                                )
+                                            }
+                                        },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1064,6 +1543,8 @@ private fun BlockEditorHeader(
     onPin: () -> Unit,
     onLock: () -> Unit,
     onOutline: () -> Unit,
+    overlapMode: DocOverlapMode,
+    onSetOverlapMode: (DocOverlapMode) -> Unit,
 ) {
     var titleValue by remember { mutableStateOf(TextFieldValue(title)) }
     var titleFocused by remember { mutableStateOf(false) }
@@ -1093,6 +1574,19 @@ private fun BlockEditorHeader(
             } else {
                 Text(title, Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 3)
             }
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (overlapMode == DocOverlapMode.Overlap) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Text(
+                    if (overlapMode == DocOverlapMode.Overlap) "Overlap On" else "Reflow",
+                    Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    color = if (overlapMode == DocOverlapMode.Overlap) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         Box(Modifier.fillMaxWidth().height(48.dp)) {
             Row(
@@ -1109,6 +1603,61 @@ private fun BlockEditorHeader(
                 IconButton(onClick = onPin) { Icon(Icons.Outlined.PushPin, "Pin", tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 IconButton(onClick = onLock) { Icon(if (locked) Icons.Outlined.Lock else Icons.Outlined.LockOpen, "Lock") }
                 IconButton(onClick = onOutline) { Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "Outline") }
+                Box {
+                    var showDocSettings by remember { mutableStateOf(false) }
+                    IconButton(onClick = { showDocSettings = true }) { Icon(Icons.Outlined.MoreVert, "Document settings") }
+                    DropdownMenu(expanded = showDocSettings, onDismissRequest = { showDocSettings = false }) {
+                        Text(
+                            "Document settings",
+                            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text("Reflow")
+                                    Text(
+                                        "Blocks push down and adapt to new space",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                if (overlapMode == DocOverlapMode.Reflow) {
+                                    Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
+                                } else Spacer(Modifier.size(24.dp))
+                            },
+                            onClick = {
+                                showDocSettings = false
+                                if (overlapMode != DocOverlapMode.Reflow) onSetOverlapMode(DocOverlapMode.Reflow)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text("Free overlap")
+                                    Text(
+                                        "Allow overlapping blocks — permit blocks to\nbe dropped on top of existing content",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            leadingIcon = {
+                                if (overlapMode == DocOverlapMode.Overlap) {
+                                    Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
+                                } else Spacer(Modifier.size(24.dp))
+                            },
+                            onClick = {
+                                showDocSettings = false
+                                if (overlapMode != DocOverlapMode.Overlap) onSetOverlapMode(DocOverlapMode.Overlap)
+                            },
+                        )
+                    }
+                }
             }
             Surface(
                 modifier = Modifier.align(Alignment.CenterEnd).width(108.dp),
@@ -1160,10 +1709,25 @@ private fun SharedBlockRow(
     onEditMath: (MathBlock) -> Unit,
     onEditDiagram: (MermaidBlock) -> Unit,
     onSelectionChange: (EditorSelection) -> Unit,
+    nested: Boolean = false,
+    onWrap: (ContainerAxis) -> Unit = {},
+    onUnwrap: () -> Unit = {},
+    onExtract: () -> Unit = {},
+    onToggleAxis: () -> Unit = {},
+    onAddToContainer: () -> Unit = {},
+    onMoveWithin: (Int) -> Unit = {},
+    renderChild: (@Composable (DocumentBlock) -> Unit)? = null,
+    onReportBounds: (Rect?) -> Unit = {},
+    onDragBegin: () -> Unit = {},
+    onDragTo: (Offset) -> Unit = {},
+    onDragDrop: () -> Unit = {},
+    onDragAbort: () -> Unit = {},
+    isBeingDragged: Boolean = false,
+    isDragHovered: Boolean = false,
+    dragHoverEdge: Edge? = null,
 ) {
     var menu by remember(block.id) { mutableStateOf(false) }
     var insertMenu by remember(block.id) { mutableStateOf(false) }
-    var dragY by remember(block.id) { mutableStateOf(0f) }
     val rangeSelectable = block is ParagraphBlock || block is HeadingBlock
     val menuStyle = LocalContextualMenuStyle.current
     val menuColor = LocalContextualMenuColor.current
@@ -1175,9 +1739,15 @@ private fun SharedBlockRow(
     val menuContainer = if (menuColor == ContextualMenuColor.AppAccent) {
         MaterialTheme.colorScheme.primaryContainer
     } else MaterialTheme.colorScheme.surface
-    val rowModifier = modifier.fillMaxWidth().offset { IntOffset(0, dragY.roundToInt()) }.zIndex(if (dragY == 0f) 0f else 2f).let {
+    // Report window bounds for drag hit-testing; clear on dispose so stale rects never match.
+    DisposableEffect(block.id) { onDispose { onReportBounds(null) } }
+    val dropHintColor = MaterialTheme.colorScheme.primary
+    // While dragged, the source row becomes the placeholder slot: a dashed outline with the content
+    // ghosted, so the list keeps its height and neighbors displace around it. The block itself
+    // travels with the finger as the floating clone.
+    val rowModifier = modifier.fillMaxWidth().let {
         if (mode == BlockSurfaceMode.Edit) it.animateContentSize() else it
-    }
+    }.let { if (isBeingDragged) it.dropSlotOutline(dropHintColor).alpha(.15f) else it }
     Row(
         rowModifier.background(
             if (selectedForRange) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f) else Color.Transparent,
@@ -1186,23 +1756,23 @@ private fun SharedBlockRow(
         verticalAlignment = Alignment.Top,
     ) {
         if (mode == BlockSurfaceMode.Edit) {
+            // Drag handle: works at any depth. Reports the window pointer while dragging so the host can
+            // hit-test across containers and drop (reorder, move into a group, or edge-split into a new row).
+            var handleOrigin by remember(block.id) { mutableStateOf(Offset.Zero) }
+            var dragPos by remember(block.id) { mutableStateOf(Offset.Zero) }
             Icon(
                 Icons.Outlined.DragIndicator,
                 "Move block",
-                Modifier.padding(top = 9.dp).size(22.dp).pointerInput(block.id) {
-                    detectDragGestures(
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dragY += amount.y
-                            dragTarget(dragY)?.takeIf { it != index }?.let { target ->
-                                onMove(target)
-                                dragY = 0f
-                            }
-                        },
-                        onDragCancel = { dragY = 0f },
-                        onDragEnd = { dragY = 0f },
-                    )
-                },
+                Modifier.padding(top = 9.dp).size(22.dp)
+                    .onGloballyPositioned { handleOrigin = it.positionInWindow() }
+                    .pointerInput(block.id) {
+                        detectDragGestures(
+                            onDragStart = { local -> dragPos = handleOrigin + local; onDragBegin(); onDragTo(dragPos) },
+                            onDrag = { change, amount -> change.consume(); dragPos += amount; onDragTo(dragPos) },
+                            onDragEnd = { onDragDrop() },
+                            onDragCancel = { onDragAbort() },
+                        )
+                    },
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Box {
@@ -1211,9 +1781,23 @@ private fun SharedBlockRow(
             }
         }
         Box(
-            Modifier.weight(1f).then(
-                if (mode == BlockSurfaceMode.View) Modifier.combinedClickable(onClick = {}, onLongClick = { menu = true }) else Modifier,
-            ),
+            Modifier.weight(1f)
+                .onGloballyPositioned { onReportBounds(it.boundsInWindow()) }
+                .drawBehind {
+                    if (isDragHovered) {
+                        val stroke = 3.dp.toPx()
+                        when (dragHoverEdge) {
+                            Edge.Left -> drawLine(dropHintColor, Offset(0f, 0f), Offset(0f, size.height), stroke)
+                            Edge.Right -> drawLine(dropHintColor, Offset(size.width, 0f), Offset(size.width, size.height), stroke)
+                            Edge.Top -> drawLine(dropHintColor, Offset(0f, 0f), Offset(size.width, 0f), stroke)
+                            Edge.Bottom -> drawLine(dropHintColor, Offset(0f, size.height), Offset(size.width, size.height), stroke)
+                            null -> drawRect(dropHintColor.copy(alpha = .12f))
+                        }
+                    }
+                }
+                .then(
+                    if (mode == BlockSurfaceMode.View) Modifier.combinedClickable(onClick = {}, onLongClick = { menu = true }) else Modifier,
+                ),
         ) {
             RenderBlock(
                 block = block,
@@ -1236,6 +1820,7 @@ private fun SharedBlockRow(
                 onEditMath = onEditMath,
                 onEditDiagram = onEditDiagram,
                 onSelectionChange = onSelectionChange,
+                renderChild = renderChild,
             )
             if (rangeSelectionActive && rangeSelectable) {
                 Box(Modifier.matchParentSize().clickable(onClick = onExtendRangeSelection))
@@ -1301,6 +1886,21 @@ private fun SharedBlockRow(
                             )
                         }
                     }
+                    // Layout / nesting actions (generic recursive containers).
+                    if (mode == BlockSurfaceMode.Edit) {
+                        DropdownMenuItem({ Text("Wrap in row") }, onClick = { menu = false; onWrap(ContainerAxis.Row) })
+                        DropdownMenuItem({ Text("Wrap in column") }, onClick = { menu = false; onWrap(ContainerAxis.Column) })
+                        if (block is ContainerBlock) {
+                            DropdownMenuItem({ Text(if (block.axis == ContainerAxis.Row) "Make column" else "Make row") }, onClick = { menu = false; onToggleAxis() })
+                            DropdownMenuItem({ Text("Add block to group") }, onClick = { menu = false; onAddToContainer() })
+                            DropdownMenuItem({ Text("Ungroup") }, onClick = { menu = false; onUnwrap() })
+                        }
+                        if (nested) {
+                            DropdownMenuItem({ Text("Move up in group") }, onClick = { menu = false; onMoveWithin(-1) })
+                            DropdownMenuItem({ Text("Move down in group") }, onClick = { menu = false; onMoveWithin(1) })
+                            DropdownMenuItem({ Text("Extract from group") }, onClick = { menu = false; onExtract() })
+                        }
+                    }
                     DropdownMenuItem({ Text("Delete") }, onClick = { menu = false; onDelete() }, leadingIcon = { Icon(Icons.Outlined.Delete, null) })
                 }
             }
@@ -1312,6 +1912,35 @@ private fun DocumentBlock.isTextFamily(): Boolean = when (this) {
     is ParagraphBlock, is HeadingBlock, is BulletListBlock, is NumberedListBlock,
     is TodoListBlock, is QuoteBlock, is CodeBlock, is DividerBlock -> true
     else -> false
+}
+
+@Composable
+private fun BlockCloneContent(block: DocumentBlock) {
+    // Non-interactive view-mode render used by the floating drag clone; scrolling=true keeps heavy
+    // blocks (webview charts/diagrams) in their lightweight placeholder state during the drag.
+    RenderBlock(
+        block = block,
+        mode = BlockSurfaceMode.View,
+        focus = null,
+        onFocusConsumed = {},
+        onReplace = {},
+        onEditText = { _, _ -> },
+        onReplaceInline = { _, _, _ -> },
+        onEditListItem = { _, _, _ -> },
+        onEditTodoItem = { _, _, _ -> },
+        onSplitListItem = { _, _ -> },
+        onExitListItem = {},
+        onMergeListItem = {},
+        onSplit = {},
+        onMerge = {},
+        onInsert = {},
+        scrolling = true,
+        onEditChart = {},
+        onEditMath = {},
+        onEditDiagram = {},
+        onSelectionChange = {},
+        renderChild = { child -> BlockCloneContent(child) },
+    )
 }
 
 @Composable
@@ -1336,6 +1965,7 @@ private fun RenderBlock(
     onEditMath: (MathBlock) -> Unit,
     onEditDiagram: (MermaidBlock) -> Unit,
     onSelectionChange: (EditorSelection) -> Unit,
+    renderChild: (@Composable (DocumentBlock) -> Unit)? = null,
 ) {
     when (block) {
         is ParagraphBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface))
@@ -1415,6 +2045,7 @@ private fun RenderBlock(
                 }
             }
         } }
+        is ContainerBlock -> ContainerBlockView(block, mode, renderChild)
         is DividerBlock -> Spacer(Modifier.fillMaxWidth().padding(vertical = 14.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
         is CodeBlock -> Column {
             if (mode == BlockSurfaceMode.Edit) SimpleLabeledBlockField("Language", block.language) { onReplace(block.copy(language = it.trim())) }
@@ -1439,6 +2070,66 @@ private fun RenderBlock(
         is ChartBlock -> EditableChartBlock(block, mode, scrolling, onReplace, onEditChart)
         is MathBlock -> EditableMathBlock(block, mode, scrolling, onReplace, onEditMath)
         is MermaidBlock -> EditableMermaidBlock(block, mode, scrolling, onReplace, onEditDiagram)
+    }
+}
+
+/**
+ * Renders a [ContainerBlock] recursively. `Row` lays children side-by-side with per-child flex [weights];
+ * `Column` stacks them. Each child is drawn through [renderChild] (a fully-wired [SharedBlockRow] from the
+ * host), so nested blocks stay editable at any depth. In preview the container is borderless — just the
+ * laid-out children; in Edit mode a light frame + axis label makes the group visible.
+ */
+@Composable
+private fun ContainerBlockView(
+    block: ContainerBlock,
+    mode: BlockSurfaceMode,
+    renderChild: (@Composable (DocumentBlock) -> Unit)?,
+) {
+    val drawChild: @Composable (DocumentBlock) -> Unit = renderChild ?: { child ->
+        InlineRichText(
+            nodes = child.editableInlineContent() ?: listOf(InlineText(child.plainText())),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    val content: @Composable () -> Unit = {
+        when (block.axis) {
+            ContainerAxis.Row -> Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                block.children.forEachIndexed { index, child ->
+                    val weight = block.weights.getOrElse(index) { 1f }.coerceAtLeast(0.05f)
+                    Box(Modifier.weight(weight)) { drawChild(child) }
+                }
+            }
+            ContainerAxis.Column -> Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                block.children.forEach { child -> drawChild(child) }
+            }
+        }
+    }
+    if (mode == BlockSurfaceMode.Edit) {
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .2f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(6.dp)) {
+                Text(
+                    "Layout · ${if (block.axis == ContainerAxis.Row) "row" else "column"}",
+                    Modifier.padding(start = 4.dp, bottom = 4.dp),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                content()
+            }
+        }
+    } else {
+        content()
     }
 }
 
@@ -2081,6 +2772,15 @@ private fun EditableEngineCard(
     val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
     val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
     LaunchedEffect(editorHeightDp) { if (!resizing) liveHeight = editorHeightDp.coerceIn(96f, 420f) }
+    // Clean preview: while reading, engine blocks render just their content — no bordered card, label,
+    // or Hide/Fullscreen chrome. The full editing surface only appears in Edit mode.
+    if (mode == BlockSurfaceMode.View) {
+        when {
+            nativeCode || showSource -> NativeCodeSurface(source)
+            else -> DeferredEnginePreview(markdown, accentHex, scrolling)
+        }
+        return
+    }
     Surface(shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2671,13 +3371,16 @@ private fun EditableEmbedBlock(block: EmbedBlock, mode: BlockSurfaceMode, onRepl
         }
     }
     Column {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Embed", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = { hidden = !hidden }, enabled = block.url.isNotBlank()) { Text(if (hidden) "Show" else "Hide") }
-            IconButton(onClick = { landscape = false; fullScreen = true }, enabled = block.url.isNotBlank()) { Icon(Icons.Outlined.Fullscreen, "Full screen embed") }
-            IconButton(onClick = { landscape = true; fullScreen = true }, enabled = block.url.isNotBlank()) { Icon(Icons.Outlined.ScreenRotation, "Landscape embed") }
+        // Clean preview: the "Embed · Hide · Fullscreen" chrome is Edit-only; reading shows just the card.
+        if (mode == BlockSurfaceMode.Edit) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Embed", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = { hidden = !hidden }, enabled = block.url.isNotBlank()) { Text(if (hidden) "Show" else "Hide") }
+                IconButton(onClick = { landscape = false; fullScreen = true }, enabled = block.url.isNotBlank()) { Icon(Icons.Outlined.Fullscreen, "Full screen embed") }
+                IconButton(onClick = { landscape = true; fullScreen = true }, enabled = block.url.isNotBlank()) { Icon(Icons.Outlined.ScreenRotation, "Landscape embed") }
+            }
+            SimpleLabeledBlockField("Embed URL", block.url) { onReplace(block.copy(url = it, metadata = if (it == block.url) block.metadata else com.norfold.app.domain.EmbedMetadata())) }
         }
-        if (mode == BlockSurfaceMode.Edit) SimpleLabeledBlockField("Embed URL", block.url) { onReplace(block.copy(url = it, metadata = if (it == block.url) block.metadata else com.norfold.app.domain.EmbedMetadata())) }
         if (!hidden && block.url.isNotBlank()) {
             Column {
                 Box(Modifier.fillMaxWidth().height(liveHeight.dp)) {
@@ -2787,6 +3490,7 @@ private fun StableLandscapeOrientationEffect(enabled: Boolean) {
             InsertBlockType.TodoList -> normalized in setOf("checklist", "task")
             InsertBlockType.Embed -> normalized in setOf("link", "url")
             InsertBlockType.Math -> normalized in setOf("equation", "formula", "latex")
+            InsertBlockType.Container -> normalized in setOf("columns", "layout", "group", "row", "column", "split")
             else -> false
         }
     }
@@ -2805,6 +3509,14 @@ private fun newDocumentBlock(type: InsertBlockType): DocumentBlock = when (type)
     InsertBlockType.TodoList -> TodoListBlock(items = listOf(com.norfold.app.domain.TodoItem(content = listOf(InlineText("Task")))))
     InsertBlockType.Quote -> QuoteBlock(children = listOf(ParagraphBlock(content = listOf(InlineText("Quote")))))
     InsertBlockType.Callout -> CalloutBlock(children = listOf(ParagraphBlock(content = listOf(InlineText("Callout")))))
+    InsertBlockType.Container -> ContainerBlock(
+        axis = ContainerAxis.Row,
+        children = listOf(
+            ParagraphBlock(content = listOf(InlineText("Left column"))),
+            ParagraphBlock(content = listOf(InlineText("Right column"))),
+        ),
+        weights = listOf(1f, 1f),
+    )
     InsertBlockType.Divider -> DividerBlock()
     InsertBlockType.Code -> CodeBlock()
     InsertBlockType.Table -> TableBlock(headers = listOf(com.norfold.app.domain.TableCell(listOf(InlineText("Column"))), com.norfold.app.domain.TableCell(listOf(InlineText("Detail")))), rows = listOf(listOf(com.norfold.app.domain.TableCell(), com.norfold.app.domain.TableCell())))
@@ -2824,6 +3536,7 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is TodoListBlock -> TodoListBlock(items = block.items)
     is QuoteBlock -> QuoteBlock(children = block.children)
     is CalloutBlock -> CalloutBlock(tone = block.tone, title = block.title, children = block.children)
+    is ContainerBlock -> ContainerBlock(axis = block.axis, children = block.children.map(::duplicateBlock), weights = block.weights)
     is DividerBlock -> DividerBlock()
     is CodeBlock -> CodeBlock(language = block.language, code = block.code, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
     is TableBlock -> TableBlock(headers = block.headers, rows = block.rows, columnWidthsDp = block.columnWidthsDp, columnAlignments = block.columnAlignments, renderMode = block.renderMode)
@@ -2843,6 +3556,7 @@ private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
     is TodoListBlock -> copy(id = id)
     is QuoteBlock -> copy(id = id)
     is CalloutBlock -> copy(id = id)
+    is ContainerBlock -> copy(id = id)
     is DividerBlock -> copy(id = id)
     is CodeBlock -> copy(id = id)
     is TableBlock -> copy(id = id)

@@ -16,6 +16,8 @@ data class Note(
     val embeds: List<NoteEmbedItem> = emptyList(),
     val coverUri: String? = null,
     val coverMimeType: String? = null,
+    val overlapMode: DocOverlapMode = DocOverlapMode.Reflow,
+    val freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
 ) {
     val bodyMarkdown: String get() = MarkdownBlockCodec.export(document)
 
@@ -35,6 +37,8 @@ data class Note(
         embeds: List<NoteEmbedItem> = emptyList(),
         coverUri: String? = null,
         coverMimeType: String? = null,
+        overlapMode: DocOverlapMode = DocOverlapMode.Reflow,
+        freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
     ) : this(
         id = id,
         title = title,
@@ -51,6 +55,8 @@ data class Note(
         embeds = embeds,
         coverUri = coverUri,
         coverMimeType = coverMimeType,
+        overlapMode = overlapMode,
+        freeformLayout = freeformLayout,
     )
 }
 

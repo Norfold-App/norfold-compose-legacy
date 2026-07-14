@@ -10,6 +10,10 @@ import com.norfold.app.domain.CanvasNodeItem
 import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.DocLayerOrder
+import com.norfold.app.domain.DocLayoutJson
+import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.EmbedMetadata
 import com.norfold.app.domain.FileBlock
@@ -1548,6 +1552,10 @@ class NotesRepository(private val database: NorfoldDatabase) {
     suspend fun setStarred(note: Note) = dao.setStarred(note.id, !note.starred, System.currentTimeMillis())
     suspend fun setArchived(note: Note, value: Boolean = !note.archived) = dao.setArchived(note.id, value, System.currentTimeMillis())
     suspend fun setLocked(note: Note) = dao.setLocked(note.id, !note.locked, System.currentTimeMillis())
+    suspend fun setOverlapMode(note: Note, mode: DocOverlapMode) =
+        dao.setNoteOverlapMode(note.id, mode.name.lowercase(), System.currentTimeMillis())
+    suspend fun setFreeformLayout(note: Note, layout: Map<String, FreeformPlacement>) =
+        dao.setNoteFreeformLayout(note.id, DocLayoutJson.encode(DocLayerOrder.normalize(layout)), System.currentTimeMillis())
     suspend fun deleteNote(note: Note) = dao.deleteNote(note.id)
 
     suspend fun updateSettings(settings: AppSettings) = dao.upsertSettings(
@@ -1744,6 +1752,8 @@ class NotesRepository(private val database: NorfoldDatabase) {
                     locked = note.locked,
                     createdAt = note.createdAt,
                     updatedAt = note.updatedAt,
+                    overlapMode = note.overlapMode.name.lowercase(),
+                    freeformLayoutJson = DocLayoutJson.encode(note.freeformLayout),
                 ),
             )
             dao.upsertNoteBlocks(note.document.blocks.mapIndexed { position, block ->

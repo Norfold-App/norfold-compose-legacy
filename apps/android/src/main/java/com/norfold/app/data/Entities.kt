@@ -18,8 +18,10 @@ import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.domain.DocLayoutJson
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
+import com.norfold.app.domain.docOverlapModeOf
 import com.norfold.app.domain.Note
 import com.norfold.app.domain.NoteEmbedItem
 import com.norfold.app.domain.NoteEmbedType
@@ -123,6 +125,8 @@ data class NoteEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val workspaceId: Long = 1,
+    val overlapMode: String = "reflow",
+    val freeformLayoutJson: String? = null,
 )
 
 @Entity(
@@ -916,6 +920,8 @@ fun NoteEntity.toDomain(
     updatedAt = updatedAt,
     tags = tags,
     attachments = attachments,
+    overlapMode = docOverlapModeOf(overlapMode),
+    freeformLayout = DocLayoutJson.decode(freeformLayoutJson),
 )
 
 data class NoteWithRelations(

@@ -8,9 +8,25 @@ import java.util.UUID
 
 @Serializable
 data class BlockDocument(val blocks: List<DocumentBlock> = listOf(ParagraphBlock())) {
-    fun normalized() = copy(blocks = blocks.ifEmpty { listOf(ParagraphBlock()) })
+    fun normalized() = copy(blocks = normalizeBlocks(blocks).ifEmpty { listOf(ParagraphBlock()) })
     fun plainText() = blocks.joinToString("\n") { it.plainText() }
 }
+
+/**
+ * Recursively normalizes a block list: fixes container weight lengths to match child counts and
+ * drops containers that ended up empty. Runs on every encode/decode and after each session mutation,
+ * so it must be structurally conservative — it never unwraps intentional single-child containers.
+ */
+internal fun normalizeBlocks(blocks: List<DocumentBlock>): List<DocumentBlock> =
+    blocks.mapNotNull { block ->
+        if (block is ContainerBlock) {
+            val kids = normalizeBlocks(block.children)
+            if (kids.isEmpty()) return@mapNotNull null
+            val weights = if (block.weights.size == kids.size) block.weights
+                else List(kids.size) { block.weights.getOrElse(it) { 1f } }
+            block.copy(children = kids, weights = weights)
+        } else block
+    }
 
 @Serializable
 sealed interface DocumentBlock {
@@ -67,6 +83,25 @@ data class CalloutBlock(
     val children: List<DocumentBlock> = emptyList(),
 ) : DocumentBlock {
     override fun plainText() = listOf(title, children.joinToString("\n") { it.plainText() }).filter(String::isNotBlank).joinToString("\n")
+}
+
+@Serializable
+enum class ContainerAxis { Row, Column }
+
+/**
+ * Generic recursive layout container. Holds an ordered list of child blocks laid out along [axis]
+ * (Row = side-by-side columns, Column = stacked). Children may themselves be [ContainerBlock]s, giving
+ * arbitrary nesting. [weights] gives per-child flex weight for Row layouts (empty = equal). This is the
+ * structural backbone for multi-column pages and future PDF/print export.
+ */
+@Serializable @SerialName("container")
+data class ContainerBlock(
+    override val id: String = blockId(),
+    val axis: ContainerAxis = ContainerAxis.Column,
+    val children: List<DocumentBlock> = emptyList(),
+    val weights: List<Float> = emptyList(),
+) : DocumentBlock {
+    override fun plainText() = children.joinToString("\n") { it.plainText() }
 }
 
 @Serializable @SerialName("divider")

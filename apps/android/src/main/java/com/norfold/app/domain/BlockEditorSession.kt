@@ -3,6 +3,24 @@ package com.norfold.app.domain
 data class BlockCursor(val blockId: String, val offset: Int, val itemId: String? = null)
 data class EditTextOutcome(val cursor: BlockCursor, val structuredPaste: Boolean)
 
+/** Edge of a target block a dragged block is dropped against, forming a new [ContainerBlock]. */
+enum class Edge { Left, Right, Top, Bottom }
+
+/** Where a dragged block should land. */
+sealed interface DropTarget {
+    /** Insert between siblings of [parentId] (top level if null) at [index]. */
+    data class Into(val parentId: String?, val index: Int) : DropTarget
+    /** Wrap [targetId] and the dragged block in a fresh container split along [edge]. */
+    data class Split(val targetId: String, val edge: Edge) : DropTarget
+}
+
+/**
+ * Editing session over a nested block tree. Public ops stay **id-based** (the editor edits blocks in
+ * place by id); internally every structural op resolves the block's own **sibling list** by path
+ * ([BlockTree]) and mutates that, so operations work identically at the top level or nested inside a
+ * [ContainerBlock]. Persistence is one Room row per **top-level** block, so nested edits mark the
+ * top-level ancestor dirty and only genuinely top-level removals go to [deletedBlockIds].
+ */
 class BlockEditorSession(initial: BlockDocument) {
     var document: BlockDocument = initial.normalized()
         private set
@@ -17,7 +35,7 @@ class BlockEditorSession(initial: BlockDocument) {
     fun canRedo() = redo.isNotEmpty()
 
     fun replaceBlock(block: DocumentBlock) = mutate(setOf(block.id)) { blocks ->
-        blocks.map { if (it.id == block.id) block else it }
+        blocks.updateBlock(block.id) { block }
     }
 
     fun editText(blockId: String, oldText: String, newText: String): BlockCursor {
@@ -48,7 +66,7 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     fun editListItem(blockId: String, itemId: String, oldText: String, newText: String): BlockCursor {
-        val block = document.blocks.firstOrNull { it.id == blockId } ?: return BlockCursor(blockId, 0, itemId)
+        val block = document.findById(blockId) ?: return BlockCursor(blockId, 0, itemId)
         val items = block.listItems() ?: return BlockCursor(blockId, 0, itemId)
         val index = items.indexOfFirst { it.id == itemId }
         if (index < 0 || oldText == newText) return BlockCursor(blockId, newText.length, itemId)
@@ -59,7 +77,7 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     fun editTodoItem(blockId: String, itemId: String, oldText: String, newText: String): BlockCursor {
-        val block = document.blocks.firstOrNull { it.id == blockId } as? TodoListBlock
+        val block = document.findById(blockId) as? TodoListBlock
             ?: return BlockCursor(blockId, 0, itemId)
         val index = block.items.indexOfFirst { it.id == itemId }
         if (index < 0 || oldText == newText) return BlockCursor(blockId, newText.length, itemId)
@@ -70,7 +88,7 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     fun splitListItem(blockId: String, itemId: String, offset: Int): BlockCursor {
-        val block = document.blocks.firstOrNull { it.id == blockId } ?: return BlockCursor(blockId, offset, itemId)
+        val block = document.findById(blockId) ?: return BlockCursor(blockId, offset, itemId)
         val items = block.listItems() ?: return BlockCursor(blockId, offset, itemId)
         val index = items.indexOfFirst { it.id == itemId }
         if (index < 0) return BlockCursor(blockId, offset, itemId)
@@ -86,19 +104,18 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     fun exitEmptyListItem(blockId: String, itemId: String): BlockCursor {
-        val blockIndex = document.blocks.indexOfFirst { it.id == blockId }
-        val block = document.blocks.getOrNull(blockIndex) ?: return firstCursor()
+        val block = document.findById(blockId) ?: return firstCursor()
         val items = block.listItems() ?: return BlockCursor(blockId, 0, itemId)
         val itemIndex = items.indexOfFirst { it.id == itemId }
         if (itemIndex < 0 || items[itemIndex].content.plainText().isNotBlank()) return BlockCursor(blockId, 0, itemId)
         val paragraph = ParagraphBlock(id = if (items.size == 1) block.id else ParagraphBlock().id)
-        mutate(setOf(block.id, paragraph.id)) { blocks ->
-            blocks.toMutableList().apply {
+        mutateSiblings(blockId, setOf(block.id, paragraph.id)) { siblings, index, _ ->
+            siblings.toMutableList().apply {
                 if (items.size == 1) {
-                    this[blockIndex] = paragraph
+                    this[index] = paragraph
                 } else {
-                    this[blockIndex] = block.withListItems(items.toMutableList().apply { removeAt(itemIndex) })
-                    add(blockIndex + 1, paragraph)
+                    this[index] = block.withListItems(items.toMutableList().apply { removeAt(itemIndex) })
+                    add(index + 1, paragraph)
                 }
             }
         }
@@ -106,7 +123,7 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     fun mergeListItemWithPrevious(blockId: String, itemId: String): BlockCursor {
-        val block = document.blocks.firstOrNull { it.id == blockId } ?: return BlockCursor(blockId, 0, itemId)
+        val block = document.findById(blockId) ?: return BlockCursor(blockId, 0, itemId)
         val items = block.listItems() ?: return BlockCursor(blockId, 0, itemId)
         val index = items.indexOfFirst { it.id == itemId }
         if (index <= 0) return BlockCursor(blockId, 0, itemId)
@@ -122,36 +139,79 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     fun insertAfter(anchorId: String?, block: DocumentBlock): BlockCursor {
+        val located = anchorId?.let { document.blocks.locate(it) }
         mutate(setOf(block.id)) { blocks ->
-            val index = anchorId?.let { id -> blocks.indexOfFirst { it.id == id } } ?: -1
-            blocks.toMutableList().apply { add((index + 1).coerceIn(0, size), block) }
+            if (located == null) blocks.toMutableList().apply { add(0, block) }
+            else blocks.insertInto(located.first, located.second + 1, listOf(block))
         }
         return BlockCursor(block.id, 0)
     }
 
     fun delete(blockId: String): BlockCursor {
-        val index = document.blocks.indexOfFirst { it.id == blockId }
-        if (index < 0) return firstCursor()
-        deletedBlockIds += blockId
-        mutate(emptySet()) { blocks -> blocks.filterNot { it.id == blockId }.ifEmpty { listOf(ParagraphBlock()) } }
-        val target = document.blocks.getOrNull(index.coerceAtMost(document.blocks.lastIndex)) ?: document.blocks.first()
+        val located = document.blocks.locate(blockId) ?: return firstCursor()
+        val (parentId, index, siblings) = located
+        val neighbor = siblings.getOrNull(index + 1) ?: siblings.getOrNull(index - 1)
+        markRemoved(listOf(blockId))
+        mutate(emptySet()) { blocks ->
+            blocks.updateChildList(parentId) { list -> list.filterNot { it.id == blockId } }
+        }
+        val target = neighbor?.id?.let { document.findById(it) } ?: document.blocks.first()
         return BlockCursor(target.id, target.plainText().length)
     }
 
-    fun move(blockId: String, targetIndex: Int) {
-        val from = document.blocks.indexOfFirst { it.id == blockId }
-        if (from < 0) return
-        mutate(document.blocks.mapTo(linkedSetOf()) { it.id }) { source ->
-            source.toMutableList().apply {
-                val moved = removeAt(from)
-                add(targetIndex.coerceIn(0, size), moved)
+    /** Legacy top-level reorder by index; retained until the drag layer is fully generalized. */
+    fun move(blockId: String, targetIndex: Int) = moveInto(blockId, parentId = null, index = targetIndex)
+
+    /** Generalized move: into a sibling slot, or edge-drop that forms a new container. */
+    fun move(blockId: String, target: DropTarget) = when (target) {
+        is DropTarget.Into -> moveInto(blockId, target.parentId, target.index)
+        is DropTarget.Split -> splitDrop(blockId, target.targetId, target.edge)
+    }
+
+    private fun moveInto(blockId: String, parentId: String?, index: Int) {
+        if (blockId == parentId) return
+        if (parentId != null && isDescendant(container = blockId, maybeChild = parentId)) return
+        val located = document.blocks.locate(blockId) ?: return
+        val moved = document.findById(blockId) ?: return
+        val wasTopLevel = document.blocks.any { it.id == blockId }
+        mutate(document.blocks.mapTo(linkedSetOf()) { it.id }) { blocks ->
+            val (removed, _) = blocks.removeBlock(blockId)
+            val adjusted = if (located.first == parentId && located.second < index) index - 1 else index
+            removed.insertInto(parentId, adjusted, listOf(moved))
+        }
+        finishMove(blockId, wasTopLevel)
+    }
+
+    private fun splitDrop(blockId: String, targetId: String, edge: Edge) {
+        if (blockId == targetId) return
+        if (isDescendant(container = blockId, maybeChild = targetId)) return
+        val moved = document.findById(blockId) ?: return
+        document.findById(targetId) ?: return
+        val wasTopLevel = document.blocks.any { it.id == blockId }
+        val axis = if (edge == Edge.Left || edge == Edge.Right) ContainerAxis.Row else ContainerAxis.Column
+        mutate(document.blocks.mapTo(linkedSetOf()) { it.id }) { blocks ->
+            val (removedMoved, _) = blocks.removeBlock(blockId)
+            removedMoved.updateBlock(targetId) { target ->
+                val ordered = when (edge) {
+                    Edge.Left, Edge.Top -> listOf(moved, target)
+                    Edge.Right, Edge.Bottom -> listOf(target, moved)
+                }
+                ContainerBlock(axis = axis, children = ordered, weights = List(ordered.size) { 1f })
             }
         }
+        finishMove(blockId, wasTopLevel)
+    }
+
+    /** Shared dirty/deleted bookkeeping after a cross-tree move. */
+    private fun finishMove(blockId: String, wasTopLevel: Boolean) {
+        if (wasTopLevel && document.blocks.none { it.id == blockId }) deletedBlockIds += blockId
+        dirtyBlockIds += document.blocks.map { it.id }
+        document.rootAncestorId(blockId)?.let { dirtyBlockIds += it }
     }
 
     fun split(blockId: String, offset: Int): BlockCursor {
-        val index = document.blocks.indexOfFirst { it.id == blockId }
-        val block = document.blocks.getOrNull(index) ?: return firstCursor()
+        val located = document.blocks.locate(blockId) ?: return firstCursor()
+        val block = located.third[located.second]
         val content = block.editableInline() ?: return BlockCursor(blockId, offset)
         val (before, after) = splitInline(content, offset.coerceIn(0, content.plainText().length))
         val left = block.withInline(before)
@@ -159,45 +219,52 @@ class BlockEditorSession(initial: BlockDocument) {
             is HeadingBlock -> ParagraphBlock(content = after)
             else -> block.withInline(after, newId = true)
         }
-        mutate(setOf(left.id, right.id)) { blocks ->
-            blocks.toMutableList().apply { this[index] = left; add(index + 1, right) }
+        mutateSiblings(blockId, setOf(left.id, right.id)) { siblings, index, _ ->
+            siblings.toMutableList().apply { this[index] = left; add(index + 1, right) }
         }
         return BlockCursor(right.id, 0)
     }
 
     fun mergeWithPrevious(blockId: String): BlockCursor {
-        val index = document.blocks.indexOfFirst { it.id == blockId }
+        val located = document.blocks.locate(blockId) ?: return BlockCursor(blockId, 0)
+        val (_, index, siblings) = located
         if (index <= 0) return BlockCursor(blockId, 0)
-        val previous = document.blocks[index - 1]
-        val current = document.blocks[index]
+        val previous = siblings[index - 1]
+        val current = siblings[index]
         val previousInline = previous.editableInline() ?: return BlockCursor(blockId, 0)
         val currentInline = current.editableInline() ?: return BlockCursor(blockId, 0)
         val join = previousInline.plainText().length
         val merged = previous.withInline(previousInline + currentInline)
-        deletedBlockIds += current.id
-        mutate(setOf(previous.id)) { blocks ->
-            blocks.toMutableList().apply { this[index - 1] = merged; removeAt(index) }
+        markRemoved(listOf(current.id))
+        mutateSiblings(blockId, setOf(previous.id)) { list, idx, _ ->
+            list.toMutableList().apply { this[idx - 1] = merged; removeAt(idx) }
         }
         return BlockCursor(previous.id, join)
     }
 
     fun replaceSelection(start: BlockCursor, end: BlockCursor, replacement: String): BlockCursor {
-        val startIndex = document.blocks.indexOfFirst { it.id == start.blockId }
-        val endIndex = document.blocks.indexOfFirst { it.id == end.blockId }
-        if (startIndex < 0 || endIndex < startIndex) return firstCursor()
-        val first = document.blocks[startIndex]
-        val last = document.blocks[endIndex]
+        val s = document.blocks.locate(start.blockId) ?: return firstCursor()
+        val e = document.blocks.locate(end.blockId) ?: return firstCursor()
+        if (s.first != e.first || e.second < s.second) return firstCursor()
+        val parentId = s.first
+        val siblings = s.third
+        val startIndex = s.second
+        val endIndex = e.second
+        val first = siblings[startIndex]
+        val last = siblings[endIndex]
         val firstInline = first.editableInline() ?: return firstCursor()
         val lastInline = last.editableInline() ?: return firstCursor()
         val before = splitInline(firstInline, start.offset.coerceIn(0, firstInline.plainText().length)).first
         val after = splitInline(lastInline, end.offset.coerceIn(0, lastInline.plainText().length)).second
         val merged = first.withInline((before + InlineText(replacement) + after).mergeAdjacentText())
-        val removed = document.blocks.subList(startIndex + 1, endIndex + 1).map { it.id }
-        deletedBlockIds += removed
+        val removed = siblings.subList(startIndex + 1, endIndex + 1).map { it.id }
+        markRemoved(removed)
         mutate(setOf(merged.id)) { blocks ->
-            blocks.toMutableList().apply {
-                this[startIndex] = merged
-                repeat(endIndex - startIndex) { removeAt(startIndex + 1) }
+            blocks.updateChildList(parentId) { list ->
+                list.toMutableList().apply {
+                    this[startIndex] = merged
+                    repeat(endIndex - startIndex) { removeAt(startIndex + 1) }
+                }
             }
         }
         return BlockCursor(merged.id, before.plainText().length + replacement.length)
@@ -205,7 +272,7 @@ class BlockEditorSession(initial: BlockDocument) {
 
     fun replaceSelectionWithInline(start: BlockCursor, end: BlockCursor, replacement: InlineNode): BlockCursor {
         if (start.blockId != end.blockId) return firstCursor()
-        val block = document.blocks.firstOrNull { it.id == start.blockId } ?: return firstCursor()
+        val block = document.findById(start.blockId) ?: return firstCursor()
         val selectionStart = minOf(start.offset, end.offset)
         val selectionEnd = maxOf(start.offset, end.offset)
         if (start.itemId != null || end.itemId != null) {
@@ -247,11 +314,15 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     fun replaceSelectionWithBlocks(start: BlockCursor, end: BlockCursor, inserted: BlockDocument): BlockCursor {
-        val startIndex = document.blocks.indexOfFirst { it.id == start.blockId }
-        val endIndex = document.blocks.indexOfFirst { it.id == end.blockId }
-        if (startIndex < 0 || endIndex < startIndex) return firstCursor()
-        val first = document.blocks[startIndex]
-        val last = document.blocks[endIndex]
+        val s = document.blocks.locate(start.blockId) ?: return firstCursor()
+        val e = document.blocks.locate(end.blockId) ?: return firstCursor()
+        if (s.first != e.first || e.second < s.second) return firstCursor()
+        val parentId = s.first
+        val siblings = s.third
+        val startIndex = s.second
+        val endIndex = e.second
+        val first = siblings[startIndex]
+        val last = siblings[endIndex]
         val firstInline = first.editableInline() ?: return firstCursor()
         val lastInline = last.editableInline() ?: return firstCursor()
         val before = splitInline(firstInline, start.offset.coerceIn(0, firstInline.plainText().length)).first
@@ -269,12 +340,15 @@ class BlockEditorSession(initial: BlockDocument) {
         if (continuation != null) replacement += continuation
         if (replacement.isEmpty()) replacement += ParagraphBlock(id = first.id)
 
-        val removedIds = document.blocks.subList(startIndex, endIndex + 1).mapTo(linkedSetOf()) { it.id } - replacement.mapTo(hashSetOf()) { it.id }
-        deletedBlockIds += removedIds
+        val removedIds = siblings.subList(startIndex, endIndex + 1).mapTo(linkedSetOf()) { it.id } -
+            replacement.mapTo(hashSetOf()) { it.id }
+        markRemoved(removedIds)
         mutate(replacement.mapTo(linkedSetOf()) { it.id }) { blocks ->
-            blocks.toMutableList().apply {
-                repeat(endIndex - startIndex + 1) { removeAt(startIndex) }
-                addAll(startIndex, replacement)
+            blocks.updateChildList(parentId) { list ->
+                list.toMutableList().apply {
+                    repeat(endIndex - startIndex + 1) { removeAt(startIndex) }
+                    addAll(startIndex, replacement)
+                }
             }
         }
         return when {
@@ -282,6 +356,64 @@ class BlockEditorSession(initial: BlockDocument) {
             imported.isNotEmpty() -> BlockCursor(imported.last().id, imported.last().plainText().length)
             else -> BlockCursor(replacement.last().id, replacement.last().plainText().length)
         }
+    }
+
+    // --- Explicit container structuring (toolbar / block-actions menu, non-drag paths) ---
+
+    /** Wraps [blockId] in a new single-child container of [axis]. */
+    fun wrapInContainer(blockId: String, axis: ContainerAxis) {
+        val block = document.findById(blockId) ?: return
+        val wasTopLevel = document.blocks.any { it.id == blockId }
+        val container = ContainerBlock(axis = axis, children = listOf(block), weights = listOf(1f))
+        mutate(setOf(container.id)) { blocks -> blocks.updateBlock(blockId) { container } }
+        if (wasTopLevel) deletedBlockIds += blockId
+        document.rootAncestorId(container.id)?.let { dirtyBlockIds += it }
+    }
+
+    /** Replaces a container with its children inline in the container's parent list. */
+    fun unwrap(containerId: String) {
+        val container = document.findById(containerId) as? ContainerBlock ?: return
+        val located = document.blocks.locate(containerId) ?: return
+        val (parentId, index, _) = located
+        val wasTopLevel = parentId == null
+        mutate(container.children.mapTo(linkedSetOf()) { it.id }) { blocks ->
+            blocks.updateChildList(parentId) { list ->
+                list.toMutableList().apply {
+                    removeAt(index)
+                    addAll(index, container.children)
+                }
+            }
+        }
+        if (wasTopLevel) {
+            deletedBlockIds += containerId
+            container.children.forEach { child -> document.rootAncestorId(child.id)?.let { dirtyBlockIds += it } }
+        } else {
+            parentId?.let { document.rootAncestorId(it) }?.let { dirtyBlockIds += it }
+        }
+    }
+
+    fun setAxis(containerId: String, axis: ContainerAxis) {
+        val container = document.findById(containerId) as? ContainerBlock ?: return
+        replaceBlock(container.copy(axis = axis))
+    }
+
+    fun setWeights(containerId: String, weights: List<Float>) {
+        val container = document.findById(containerId) as? ContainerBlock ?: return
+        replaceBlock(container.copy(weights = weights))
+    }
+
+    fun addChild(containerId: String, block: DocumentBlock): BlockCursor {
+        val container = document.findById(containerId) as? ContainerBlock ?: return firstCursor()
+        replaceBlock(container.copy(children = container.children + block, weights = container.weights + 1f))
+        return BlockCursor(block.id, 0)
+    }
+
+    /** "Clip / cut out as a separate block" — hoists [blockId] to top level after its owning row. */
+    fun extractToTopLevel(blockId: String) {
+        val root = document.rootAncestorId(blockId) ?: return
+        if (root == blockId) return
+        val rootIndex = document.blocks.indexOfFirst { it.id == root }
+        moveInto(blockId, parentId = null, index = rootIndex + 1)
     }
 
     fun undo(): Boolean {
@@ -306,12 +438,42 @@ class BlockEditorSession(initial: BlockDocument) {
     }
 
     private fun mutate(dirty: Set<String>, transform: (List<DocumentBlock>) -> List<DocumentBlock>) {
-        val next = BlockDocument(transform(document.blocks)).normalized()
+        val next = document.copy(blocks = transform(document.blocks)).normalized()
         if (next == document) return
         undo += document
         redo.clear()
+        val roots = dirty.mapNotNullTo(linkedSetOf()) { next.rootAncestorId(it) }
         document = next
-        dirtyBlockIds += dirty
+        dirtyBlockIds += roots
+    }
+
+    /** Mutates the sibling list that directly contains [anchorId] (top level or a container's children). */
+    private fun mutateSiblings(
+        anchorId: String,
+        dirty: Set<String>,
+        transform: (siblings: List<DocumentBlock>, index: Int, parentId: String?) -> List<DocumentBlock>,
+    ) {
+        val (parentId, index, siblings) = document.blocks.locate(anchorId) ?: return
+        val updated = transform(siblings, index, parentId)
+        mutate(dirty) { blocks -> blocks.updateChildList(parentId) { updated } }
+    }
+
+    /**
+     * Records removed blocks against persistence: a top-level block deletes its Room row; a nested block
+     * just dirties its top-level ancestor. Must be called while [document] still contains the ids.
+     */
+    private fun markRemoved(ids: Collection<String>) {
+        val topLevel = document.blocks.mapTo(hashSetOf()) { it.id }
+        ids.forEach { id ->
+            if (id in topLevel) deletedBlockIds += id
+            else document.rootAncestorId(id)?.let { dirtyBlockIds += it }
+        }
+    }
+
+    /** True if [maybeChild] is a descendant of the container [container] (guards moving a node into itself). */
+    private fun isDescendant(container: String, maybeChild: String): Boolean {
+        val path = document.pathOf(maybeChild)?.ids ?: return false
+        return container in path.dropLast(1)
     }
 
     private fun replaceListItems(block: DocumentBlock, items: List<ListItem>) {
@@ -405,6 +567,7 @@ private fun DocumentBlock.withId(nextId: String): DocumentBlock = when (this) {
     is TodoListBlock -> copy(id = nextId)
     is QuoteBlock -> copy(id = nextId)
     is CalloutBlock -> copy(id = nextId)
+    is ContainerBlock -> copy(id = nextId)
     is DividerBlock -> copy(id = nextId)
     is CodeBlock -> copy(id = nextId)
     is TableBlock -> copy(id = nextId)

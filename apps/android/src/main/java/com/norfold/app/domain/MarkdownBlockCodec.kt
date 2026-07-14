@@ -233,6 +233,7 @@ object MarkdownBlockCodec {
             if (block.title.isNotBlank()) append(' ').append(block.title)
             if (block.children.isNotEmpty()) append('\n').append(export(BlockDocument(block.children)).lines().joinToString("\n") { "> $it" })
         }
+        is ContainerBlock -> containerMarkdown(block)
         is DividerBlock -> "---"
         is CodeBlock -> "```${block.language}\n${block.code}\n```"
         is TableBlock -> tableMarkdown(block)
@@ -242,6 +243,26 @@ object MarkdownBlockCodec {
         is ChartBlock -> "```vega-lite\n${block.vegaLiteSpec}\n```"
         is MathBlock -> if (block.display) "$$\n${block.tex}\n$$" else "$${block.tex}$"
         is MermaidBlock -> "```mermaid\n${block.code}\n```"
+    }
+
+    /**
+     * Projects a container to markdown. `Column` stacks its children (lossless for reading). `Row` emits a
+     * Pandoc/MyST `::::columns` / `:::column` directive so the split is recoverable — the future PDF/HTML
+     * exporter maps this onto a `<table>` row. Arbitrary nesting is fully preserved only in the JSON payload.
+     */
+    private fun containerMarkdown(block: ContainerBlock): String {
+        if (block.axis == ContainerAxis.Column) {
+            return block.children.joinToString("\n\n", transform = ::blockMarkdown)
+        }
+        return buildString {
+            append("::::columns\n")
+            block.children.forEach { child ->
+                append(":::column\n")
+                append(blockMarkdown(child))
+                append("\n:::\n")
+            }
+            append("::::")
+        }
     }
 
     private fun listMarkdown(items: List<ListItem>, marker: String): String =

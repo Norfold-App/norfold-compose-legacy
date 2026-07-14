@@ -39,7 +39,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 28,
+    version = 29,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -78,6 +78,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_25_26,
                     MIGRATION_26_27,
                     MIGRATION_27_28,
+                    MIGRATION_28_29,
                 )
                 .build()
                 .also { instance = it }
@@ -262,6 +263,13 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 db.execSQL("DROP INDEX IF EXISTS index_tags_name")
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_tags_scope_normalizedName ON tags(scope, normalizedName)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_tags_scope ON tags(scope)")
+            }
+        }
+
+        internal val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN overlapMode TEXT NOT NULL DEFAULT 'reflow'")
+                db.execSQL("ALTER TABLE notes ADD COLUMN freeformLayoutJson TEXT")
             }
         }
 
@@ -740,6 +748,8 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("notes", "coverUri", "TEXT")
             addColumnIfMissing("notes", "coverMimeType", "TEXT")
             addColumnIfMissing("notes", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
+            addColumnIfMissing("notes", "overlapMode", "TEXT NOT NULL DEFAULT 'reflow'")
+            addColumnIfMissing("notes", "freeformLayoutJson", "TEXT")
             addColumnIfMissing("tasks", "description", "TEXT NOT NULL DEFAULT ''")
             addColumnIfMissing("tasks", "assignee", "TEXT NOT NULL DEFAULT ''")
             addColumnIfMissing("tasks", "status", "TEXT NOT NULL DEFAULT 'Todo'")
