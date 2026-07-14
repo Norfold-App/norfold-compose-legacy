@@ -34,6 +34,7 @@ import com.norfold.app.domain.CalendarEventSource
 import com.norfold.app.domain.SubscriptionTier
 import com.norfold.app.domain.Tag
 import com.norfold.app.domain.TaskChecklistItem
+import com.norfold.app.domain.TaskGestureAction
 import com.norfold.app.domain.TaskItem
 import com.norfold.app.domain.TaskPriority
 import com.norfold.app.domain.TaskPropertyDefinition
@@ -581,6 +582,8 @@ data class AppSettingsEntity(
     val taskSortMode: String = "Manual",
     val taskCompactLayout: Boolean = true,
     val taskKanbanEngine: String = "BoardPointer",
+    val taskSwipeStartAction: String = TaskGestureAction.Complete.name,
+    val taskSwipeEndAction: String = TaskGestureAction.Delete.name,
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
@@ -887,6 +890,8 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     taskSortMode = taskSortMode,
     taskCompactLayout = taskCompactLayout,
     taskKanbanEngine = taskKanbanEngine,
+    taskSwipeStartAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeStartAction } ?: TaskGestureAction.Complete,
+    taskSwipeEndAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeEndAction } ?: TaskGestureAction.Delete,
     onboardingComplete = onboardingComplete,
     workspacePurpose = workspacePurpose,
     calendarDefaultView = calendarDefaultView,

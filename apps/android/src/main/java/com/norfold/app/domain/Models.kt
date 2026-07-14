@@ -390,6 +390,7 @@ enum class ThemeProfile { Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Go
 enum class EditorLineWidth { Narrow, Comfortable, Wide }
 enum class EditorFontFamily { Sans, Serif }
 enum class NoteGestureAction { Actions, Pin, Star, Lock, Archive, Delete, None }
+enum class TaskGestureAction { Complete, Delete, None }
 enum class SyncProvider { None, GoogleDrive, OneDrive, LocalFolder }
 enum class SyncFolderAction { CreateChain, RestoreChain }
 
@@ -475,6 +476,8 @@ data class AppSettings(
     val taskSortMode: String = "Manual",
     val taskCompactLayout: Boolean = true,
     val taskKanbanEngine: String = "BoardPointer",
+    val taskSwipeStartAction: TaskGestureAction = TaskGestureAction.Complete,
+    val taskSwipeEndAction: TaskGestureAction = TaskGestureAction.Delete,
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
