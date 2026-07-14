@@ -88,6 +88,39 @@ class DiagramBuilderCodecTest {
     }
 
     @Test
+    fun `disconnected flowchart nodes remain disconnected after visual reseed`() {
+        val source = """flowchart TD
+  Inbox("Inbox")
+  Archive(("Archive"))"""
+
+        val decoded = requireNotNull(MermaidDiagramCodec.decodeOrNull(source, fallbackColor))
+        val encoded = MermaidDiagramCodec.encode(decoded, fallbackColor)
+        val roundTrip = requireNotNull(MermaidDiagramCodec.decodeOrNull(encoded, fallbackColor))
+
+        assertEquals(listOf("Inbox", "Archive"), decoded.nodes.map { it.id })
+        assertTrue(decoded.edges.isEmpty())
+        assertTrue(roundTrip.edges.isEmpty())
+        assertFalse(encoded.contains("-->"))
+    }
+
+    @Test
+    fun `participant only sequence remains message free after visual reseed`() {
+        val source = """sequenceDiagram
+  participant App as Mobile app
+  participant Vault as Encrypted vault"""
+
+        val decoded = requireNotNull(MermaidDiagramCodec.decodeOrNull(source, fallbackColor))
+        val encoded = MermaidDiagramCodec.encode(decoded, fallbackColor)
+        val roundTrip = requireNotNull(MermaidDiagramCodec.decodeOrNull(encoded, fallbackColor))
+
+        assertEquals(listOf("App", "Vault"), decoded.participants.map { it.id })
+        assertTrue(decoded.messages.isEmpty())
+        assertTrue(roundTrip.messages.isEmpty())
+        assertFalse(encoded.contains("->>"))
+        assertFalse(encoded.contains("-->>"))
+    }
+
+    @Test
     fun `legacy semicolon separated diagrams reseed guided forms`() {
         val flowchart = MermaidDiagramCodec.decodeOrNull(
             "graph TD; A[Start] --> B{Choose}; B -->|Yes| C((Done)); style B fill:#ABCDEF,stroke:#ABCDEF;",
