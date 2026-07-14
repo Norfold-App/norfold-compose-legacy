@@ -207,6 +207,7 @@ import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.ui.components.MarkdownPreview
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.ChartBuilderSheet
+import com.norfold.app.ui.components.DiagramBuilderSheet
 import com.norfold.app.ui.components.MathBuilderSheet
 import com.norfold.app.ui.components.MathInsertionKind
 import java.io.File
@@ -237,6 +238,7 @@ fun BlockNoteEditorScreen(
     var rangeExtentId by remember(note.id) { mutableStateOf<String?>(null) }
     var chartBuilderRequest by remember(note.id) { mutableStateOf<ChartBuilderRequest?>(null) }
     var mathBuilderRequest by remember(note.id) { mutableStateOf<MathBuilderRequest?>(null) }
+    var diagramBuilderRequest by remember(note.id) { mutableStateOf<DiagramBuilderRequest?>(null) }
     var activeSelection by remember(note.id) { mutableStateOf<EditorSelection?>(null) }
     var linkEditorRequest by remember(note.id) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
@@ -449,6 +451,7 @@ fun BlockNoteEditorScreen(
                                     inlineSelection = inlineSelection,
                                 )
                             }
+                            InsertBlockType.Mermaid -> diagramBuilderRequest = DiagramBuilderRequest(anchorId = block.id)
                             else -> changed(session.insertAfter(block.id, newDocumentBlock(type)))
                         }
                     },
@@ -469,6 +472,12 @@ fun BlockNoteEditorScreen(
                             initialTex = math.tex,
                         )
                     },
+                    onEditDiagram = { diagram ->
+                        diagramBuilderRequest = DiagramBuilderRequest(
+                            editingId = diagram.id,
+                            initialSource = diagram.code,
+                        )
+                    },
                     onSelectionChange = { activeSelection = it },
                 )
             }
@@ -479,6 +488,7 @@ fun BlockNoteEditorScreen(
                         when (type) {
                             InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
                             InsertBlockType.Math -> mathBuilderRequest = MathBuilderRequest(anchorId = anchor)
+                            InsertBlockType.Mermaid -> diagramBuilderRequest = DiagramBuilderRequest(anchorId = anchor)
                             else -> changed(session.insertAfter(anchor, newDocumentBlock(type)))
                         }
                     }
@@ -518,6 +528,7 @@ fun BlockNoteEditorScreen(
                         initialKind = MathInsertionKind.Inline,
                         inlineSelection = activeSelection,
                     )
+                    InsertBlockType.Mermaid -> diagramBuilderRequest = DiagramBuilderRequest(anchorId = anchor)
                     else -> changed(session.insertAfter(anchor, newDocumentBlock(type)))
                 }
             },
@@ -592,6 +603,25 @@ fun BlockNoteEditorScreen(
             },
         )
     }
+    diagramBuilderRequest?.let { request ->
+        DiagramBuilderSheet(
+            initialSource = request.initialSource,
+            onDismiss = { diagramBuilderRequest = null },
+            onCreate = { built ->
+                if (request.editingId != null) {
+                    val existing = session.document.blocks
+                        .firstOrNull { it.id == request.editingId } as? MermaidBlock
+                    session.replaceBlock(
+                        existing?.copy(code = built.code) ?: built.withBlockId(request.editingId),
+                    )
+                    changed()
+                } else {
+                    changed(session.insertAfter(request.anchorId, built))
+                }
+                diagramBuilderRequest = null
+            },
+        )
+    }
     linkEditorRequest?.let { request ->
         LinkEditorDialog(
             request = request,
@@ -622,6 +652,12 @@ private data class MathBuilderRequest(
     val initialTex: String = "",
     val initialKind: MathInsertionKind = MathInsertionKind.Block,
     val inlineSelection: EditorSelection? = null,
+)
+
+private data class DiagramBuilderRequest(
+    val anchorId: String? = null,
+    val editingId: String? = null,
+    val initialSource: String? = null,
 )
 
 private data class EditorSelection(
@@ -1074,6 +1110,7 @@ private fun SharedBlockRow(
     scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
     onEditMath: (MathBlock) -> Unit,
+    onEditDiagram: (MermaidBlock) -> Unit,
     onSelectionChange: (EditorSelection) -> Unit,
 ) {
     var menu by remember(block.id) { mutableStateOf(false) }
@@ -1149,6 +1186,7 @@ private fun SharedBlockRow(
                 scrolling = scrolling,
                 onEditChart = onEditChart,
                 onEditMath = onEditMath,
+                onEditDiagram = onEditDiagram,
                 onSelectionChange = onSelectionChange,
             )
             if (rangeSelectionActive && rangeSelectable) {
@@ -1197,7 +1235,10 @@ private fun SharedBlockRow(
                             DropdownMenuItem({ Text("Edit equation") }, onClick = { menu = false; onEditMath(block) })
                             DropdownMenuItem({ Text("Expand math editor") }, onClick = { menu = false; onReplace(block.copy(editorHeightDp = block.editorHeightDp + 80f)) })
                         }
-                        is MermaidBlock -> DropdownMenuItem({ Text("Expand diagram editor") }, onClick = { menu = false; onReplace(block.copy(editorHeightDp = block.editorHeightDp + 80f)) })
+                        is MermaidBlock -> {
+                            DropdownMenuItem({ Text("Edit diagram") }, onClick = { menu = false; onEditDiagram(block) })
+                            DropdownMenuItem({ Text("Expand diagram editor") }, onClick = { menu = false; onReplace(block.copy(editorHeightDp = block.editorHeightDp + 80f)) })
+                        }
                         is FileBlock -> DropdownMenuItem({ Text("Replace file") }, onClick = { menu = false; onReplace(block.copy(uri = "", name = "")) })
                         is EmbedBlock -> DropdownMenuItem({ Text("Refresh preview") }, onClick = { menu = false; onReplace(block.copy(metadata = EmbedMetadata())) })
                         else -> Unit
@@ -1245,6 +1286,7 @@ private fun RenderBlock(
     scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
     onEditMath: (MathBlock) -> Unit,
+    onEditDiagram: (MermaidBlock) -> Unit,
     onSelectionChange: (EditorSelection) -> Unit,
 ) {
     when (block) {
@@ -1328,18 +1370,7 @@ private fun RenderBlock(
         is EmbedBlock -> EditableEmbedBlock(block, mode, onReplace)
         is ChartBlock -> EditableChartBlock(block, mode, scrolling, onReplace, onEditChart)
         is MathBlock -> EditableMathBlock(block, mode, scrolling, onReplace, onEditMath)
-        is MermaidBlock -> EditableEngineCard(
-            blockId = block.id,
-            label = "Diagram",
-            source = block.code,
-            markdown = "```mermaid\n${block.code}\n```",
-            mode = mode,
-            editorHeightDp = block.editorHeightDp,
-            onSourceChange = { onReplace(block.copy(code = it)) },
-            onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
-            scrolling = scrolling,
-            showSource = block.renderMode == BlockRenderMode.Source,
-        )
+        is MermaidBlock -> EditableMermaidBlock(block, mode, scrolling, onReplace, onEditDiagram)
     }
 }
 
@@ -1597,6 +1628,46 @@ private fun EditableMathBlock(
             mode = mode,
             editorHeightDp = block.editorHeightDp,
             onSourceChange = { onReplace(block.copy(tex = it)) },
+            onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
+            scrolling = scrolling,
+            showSource = block.renderMode == BlockRenderMode.Source,
+        )
+    }
+}
+
+@Composable
+private fun EditableMermaidBlock(
+    block: MermaidBlock,
+    mode: BlockSurfaceMode,
+    scrolling: Boolean,
+    onReplace: (DocumentBlock) -> Unit,
+    onEditDiagram: (MermaidBlock) -> Unit,
+) {
+    Column {
+        if (mode == BlockSurfaceMode.Edit) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { onEditDiagram(block) }) { Text("Edit diagram") }
+                TextButton(onClick = {
+                    onReplace(
+                        block.copy(
+                            renderMode = if (block.renderMode == BlockRenderMode.Source) {
+                                BlockRenderMode.Render
+                            } else {
+                                BlockRenderMode.Source
+                            },
+                        ),
+                    )
+                }) { Text(if (block.renderMode == BlockRenderMode.Source) "Render" else "Advanced") }
+            }
+        }
+        EditableEngineCard(
+            blockId = block.id,
+            label = "Diagram",
+            source = block.code,
+            markdown = "```mermaid\n${block.code}\n```",
+            mode = mode,
+            editorHeightDp = block.editorHeightDp,
+            onSourceChange = { onReplace(block.copy(code = it)) },
             onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
             scrolling = scrolling,
             showSource = block.renderMode == BlockRenderMode.Source,
