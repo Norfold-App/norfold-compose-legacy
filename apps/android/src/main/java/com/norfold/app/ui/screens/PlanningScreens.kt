@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -215,8 +217,12 @@ fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
     val accent = MaterialTheme.colorScheme.primary
     val mutedAccent = MaterialTheme.colorScheme.onSurfaceVariant
     val events = remember(state.calendarEvents, state.tasks, state.goals, accent, mutedAccent) { planningEvents(state, accent, mutedAccent) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // Same threshold as NorfoldAppRoot: on compact widths the floating sidebar
+    // button sits over the top-start corner, so the page header shifts right.
+    val headerInset = if (maxWidth < 720.dp) 56.dp else 0.dp
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        NorfoldPageHeader("Calendar", "Plan work and never miss a deadline.", Icons.Outlined.CalendarMonth)
+        NorfoldPageHeader("Calendar", "Plan work and never miss a deadline.", Icons.Outlined.CalendarMonth, modifier = Modifier.padding(start = headerInset))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
             IconButton(onClick = { createOpen = true }) { Icon(Icons.Outlined.Add, "New event") }
@@ -267,18 +273,25 @@ fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
                     item { AgendaPanel(events.filter { !it.date.isBefore(selectedDate) }) }
                 } else {
                     item {
-                        MonthPanel(month, selectedDate, events) {
-                        selectedDate = it
-                        month = YearMonth.from(it)
-                        mode = "Day"
-                        viewModel.patchSettings { settings -> settings.copy(calendarDefaultView = "Day") }
-                    }
+                        PagedMonthPanel(
+                            month = month,
+                            selected = selectedDate,
+                            events = events,
+                            onMonthSettled = { settled -> month = settled },
+                            onSelect = {
+                                selectedDate = it
+                                month = YearMonth.from(it)
+                                mode = "Day"
+                                viewModel.patchSettings { settings -> settings.copy(calendarDefaultView = "Day") }
+                            },
+                        )
                     }
                 }
                 item { DayAgenda(selectedDate, events.filter { it.date == selectedDate }) }
                 item { Spacer(Modifier.height(96.dp)) }
             }
         }
+    }
     }
     if (createOpen) EventCreateDialog(selectedDate, { createOpen = false }) { title ->
         val start = selectedDate.atTime(10, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -509,6 +522,66 @@ private fun ContinuousWeekDayColumn(
                 )
             }
         }
+    }
+}
+
+/**
+ * Shared infinite-feel horizontal pager for calendar panels (month/week).
+ * Pages are indexed around a large center so both directions swipe freely;
+ * [periodAt] maps an index offset to the period value, [indexOf] the reverse.
+ * When [current] changes externally (chevrons, day taps) the pager animates
+ * to it; when the user settles on a page, [onSettled] reports the new period.
+ */
+@Composable
+private fun <T> CalendarPeriodPager(
+    current: T,
+    periodAt: (Int) -> T,
+    indexOf: (T) -> Int,
+    onSettled: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable (T) -> Unit,
+) {
+    val pagerState = rememberPagerState(initialPage = indexOf(current), pageCount = { CALENDAR_PAGER_PAGES })
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { page -> onSettled(periodAt(page)) }
+    }
+    LaunchedEffect(current) {
+        val target = indexOf(current)
+        if (target != pagerState.currentPage && !pagerState.isScrollInProgress) {
+            pagerState.animateScrollToPage(target)
+        }
+    }
+    HorizontalPager(state = pagerState, modifier = modifier, beyondViewportPageCount = 1) { page ->
+        content(periodAt(page))
+    }
+}
+
+private const val CALENDAR_PAGER_PAGES = 24_000
+private const val CALENDAR_PAGER_CENTER = CALENDAR_PAGER_PAGES / 2
+
+/** MonthPanel wrapped in the shared pager: swipe = prev/next month, header follows the settled page. */
+@Composable
+private fun PagedMonthPanel(
+    month: YearMonth,
+    selected: LocalDate,
+    events: List<PlanningEvent>,
+    onMonthSettled: (YearMonth) -> Unit,
+    onSelect: (LocalDate) -> Unit,
+) {
+    val origin = remember { YearMonth.now() }
+    CalendarPeriodPager(
+        current = month,
+        periodAt = { page -> origin.plusMonths((page - CALENDAR_PAGER_CENTER).toLong()) },
+        indexOf = { m ->
+            (CALENDAR_PAGER_CENTER + ChronoUnit.MONTHS.between(origin, m))
+                .coerceIn(0L, CALENDAR_PAGER_PAGES.toLong() - 1L)
+                .toInt()
+        },
+        onSettled = onMonthSettled,
+    ) { pageMonth ->
+        MonthPanel(pageMonth, selected, events, onSelect)
     }
 }
 
