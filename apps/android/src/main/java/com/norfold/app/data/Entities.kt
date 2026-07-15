@@ -26,6 +26,7 @@ import com.norfold.app.domain.Note
 import com.norfold.app.domain.NoteEmbedItem
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.NoteGestureAction
+import com.norfold.app.domain.NoteRenderEngine
 import com.norfold.app.domain.Notebook
 import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.GoalStatus
@@ -584,6 +585,7 @@ data class AppSettingsEntity(
     val taskKanbanEngine: String = "BoardPointer",
     val taskSwipeStartAction: String = TaskGestureAction.Complete.name,
     val taskSwipeEndAction: String = TaskGestureAction.Delete.name,
+    val noteRenderEngine: String = NoteRenderEngine.Auto.name,
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
@@ -892,6 +894,7 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     taskKanbanEngine = taskKanbanEngine,
     taskSwipeStartAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeStartAction } ?: TaskGestureAction.Complete,
     taskSwipeEndAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeEndAction } ?: TaskGestureAction.Delete,
+    noteRenderEngine = NoteRenderEngine.entries.firstOrNull { it.name == noteRenderEngine } ?: NoteRenderEngine.Auto,
     onboardingComplete = onboardingComplete,
     workspacePurpose = workspacePurpose,
     calendarDefaultView = calendarDefaultView,

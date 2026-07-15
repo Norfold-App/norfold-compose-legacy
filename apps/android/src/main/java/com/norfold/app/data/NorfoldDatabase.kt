@@ -39,7 +39,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 30,
+    version = 31,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -80,6 +80,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_27_28,
                     MIGRATION_28_29,
                     MIGRATION_29_30,
+                    MIGRATION_30_31,
                 )
                 .build()
                 .also { instance = it }
@@ -278,6 +279,12 @@ abstract class NorfoldDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeStartAction TEXT NOT NULL DEFAULT 'Complete'")
                 db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeEndAction TEXT NOT NULL DEFAULT 'Delete'")
+            }
+        }
+
+        internal val MIGRATION_30_31 = object : Migration(30, 31) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN noteRenderEngine TEXT NOT NULL DEFAULT 'Auto'")
             }
         }
 
@@ -824,6 +831,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("settings", "taskKanbanEngine", "TEXT NOT NULL DEFAULT 'BoardPointer'")
             addColumnIfMissing("settings", "taskSwipeStartAction", "TEXT NOT NULL DEFAULT 'Complete'")
             addColumnIfMissing("settings", "taskSwipeEndAction", "TEXT NOT NULL DEFAULT 'Delete'")
+            addColumnIfMissing("settings", "noteRenderEngine", "TEXT NOT NULL DEFAULT 'Auto'")
             addColumnIfMissing("settings", "onboardingComplete", "INTEGER NOT NULL DEFAULT 0")
             addColumnIfMissing("settings", "workspacePurpose", "TEXT NOT NULL DEFAULT 'Personal'")
             addColumnIfMissing("settings", "calendarDefaultView", "TEXT NOT NULL DEFAULT 'Month'")

@@ -391,6 +391,7 @@ enum class EditorLineWidth { Narrow, Comfortable, Wide }
 enum class EditorFontFamily { Sans, Serif }
 enum class NoteGestureAction { Actions, Pin, Star, Lock, Archive, Delete, None }
 enum class TaskGestureAction { Complete, Delete, None }
+enum class NoteRenderEngine { Auto, Native, WebView }
 enum class SyncProvider { None, GoogleDrive, OneDrive, LocalFolder }
 enum class SyncFolderAction { CreateChain, RestoreChain }
 
@@ -478,6 +479,7 @@ data class AppSettings(
     val taskKanbanEngine: String = "BoardPointer",
     val taskSwipeStartAction: TaskGestureAction = TaskGestureAction.Complete,
     val taskSwipeEndAction: TaskGestureAction = TaskGestureAction.Delete,
+    val noteRenderEngine: NoteRenderEngine = NoteRenderEngine.Auto,
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
