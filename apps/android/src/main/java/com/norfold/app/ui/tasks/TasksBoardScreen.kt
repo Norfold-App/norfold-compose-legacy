@@ -55,6 +55,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -167,6 +168,10 @@ import com.norfold.app.ui.dnd.DropSlot
 import com.norfold.app.ui.dnd.animatePlacement
 import com.norfold.app.ui.dnd.dragLift
 import com.norfold.app.domain.TaskBoardItem
+import com.norfold.app.domain.TaskChartGroupBy
+import com.norfold.app.domain.TaskChartKind
+import com.norfold.app.domain.TaskChartMeasure
+import com.norfold.app.domain.TaskChartSpecBuilder
 import com.norfold.app.domain.TaskChecklistItem
 import com.norfold.app.domain.TaskColumnItem
 import com.norfold.app.domain.TaskGestureAction
@@ -246,6 +251,9 @@ fun TasksBoardScreen(
     var feedGridMode by rememberSaveable { mutableStateOf(true) }
     // Sort direction for the rail's Sort sheet (session-local; Manual ignores it).
     var sortDescending by rememberSaveable { mutableStateOf(false) }
+    // Chart view configuration (kind/group-by/measure) + its picker sheet.
+    var chartConfig by remember { mutableStateOf(TaskChartSpecBuilder.Config()) }
+    var showChartConfig by remember { mutableStateOf(false) }
     var editingTask by remember { mutableStateOf<TaskItem?>(null) }
     var pendingDeleteIds by remember { mutableStateOf(setOf<Long>()) }
     val swipeSnackbar = remember { SnackbarHostState() }
@@ -381,6 +389,7 @@ fun TasksBoardScreen(
                 onActionToggle = { action -> activeRailAction = if (activeRailAction == action) null else action },
                 feedGridMode = feedGridMode,
                 onToggleFeedMode = { feedGridMode = !feedGridMode },
+                onChartConfig = { showChartConfig = true },
                 onViewChange = { next ->
                     if (next == TaskWorkspaceView.Calendar) {
                         viewModel.go(Destination.Calendar)
@@ -500,7 +509,15 @@ fun TasksBoardScreen(
                                 )
                             }
                             TaskWorkspaceView.Calendar -> Unit
-                            TaskWorkspaceView.Chart -> TaskChartView(filteredTasks)
+                            TaskWorkspaceView.Chart -> TaskChartView(
+                                tasks = filteredTasks,
+                                properties = taskProperties,
+                                propertyValues = taskPropertyValues,
+                                chartConfig = chartConfig,
+                                onConfigChange = { chartConfig = it },
+                                showConfig = showChartConfig,
+                                onShowConfigChange = { showChartConfig = it },
+                            )
                         }
                     }
                 }
@@ -620,6 +637,7 @@ private fun TaskHeader(
     onActionToggle: (TaskRailAction) -> Unit,
     feedGridMode: Boolean,
     onToggleFeedMode: () -> Unit,
+    onChartConfig: () -> Unit,
     onViewChange: (TaskWorkspaceView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -652,7 +670,8 @@ private fun TaskHeader(
             singleLine = true,
             leadingIcon = { Icon(Icons.Outlined.Search, null) },
             trailingIcon = {
-                // Shared adaptive header hook: Feed toggles list/grid; other views open the rail.
+                // Shared adaptive header hook: Feed toggles list/grid, Chart opens its config
+                // picker, every other view opens the rail.
                 when (currentView) {
                     TaskWorkspaceView.Feed -> IconButton(onClick = onToggleFeedMode) {
                         Icon(
@@ -660,6 +679,9 @@ private fun TaskHeader(
                             contentDescription = if (feedGridMode) "Switch to list view" else "Switch to grid view",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    TaskWorkspaceView.Chart -> IconButton(onClick = onChartConfig) {
+                        Icon(Icons.Outlined.BarChart, "Chart options", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     else -> IconButton(onClick = { onActionToggle(TaskRailAction.Filter) }) {
                         Icon(Icons.Outlined.Tune, "Task controls", tint = if (activeAction != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2185,19 +2207,115 @@ private fun formatTaskTimeRange(startAt: Long?, dueAt: Long?, allDay: Boolean): 
 }
 
 @Composable
-private fun TaskChartView(tasks: List<TaskItem>) {
-    val groups = TaskStatus.entries.associateWith { status -> tasks.count { it.status == status } }
+private fun TaskChartView(
+    tasks: List<TaskItem>,
+    properties: List<TaskPropertyDefinition>,
+    propertyValues: List<TaskPropertyValue>,
+    chartConfig: TaskChartSpecBuilder.Config,
+    onConfigChange: (TaskChartSpecBuilder.Config) -> Unit,
+    showConfig: Boolean,
+    onShowConfigChange: (Boolean) -> Unit,
+) {
+    val numericProperties = properties.filter { it.type == TaskPropertyType.Numbers }
+    val hint = TaskChartSpecBuilder.validate(chartConfig)
+    val now = remember { System.currentTimeMillis() }
+    val slices = remember(tasks, propertyValues, chartConfig, now) {
+        if (hint != null) emptyList() else {
+            val property = numericProperties.firstOrNull { it.name == chartConfig.numericPropertyName }
+            TaskChartSpecBuilder.aggregate(tasks, chartConfig, now) { task ->
+                property?.let { prop ->
+                    propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == prop.id }?.valueJson?.toDoubleOrNull()
+                }
+            }
+        }
+    }
+    val spec = remember(slices, chartConfig) {
+        TaskChartSpecBuilder.build("Tasks by ${chartConfig.groupBy.label}", slices, chartConfig)
+    }
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
+    val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Chart", fontWeight = FontWeight.Black, fontSize = 22.sp)
-        groups.forEach { (status, count) ->
-            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp)) {
-                    Row {
-                        Text(status.label(), modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                        Text(count.toString())
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Chart", fontWeight = FontWeight.Black, fontSize = 22.sp)
+                Text(
+                    "${chartConfig.kind.label} · ${chartConfig.groupBy.label} · ${chartConfig.measure.label}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+            }
+            FilledTonalButton(onClick = { onShowConfigChange(true) }) { Text("Configure") }
+        }
+        when {
+            tasks.isEmpty() -> Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "No tasks match the current board and filters — nothing to chart yet.",
+                    modifier = Modifier.padding(18.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            hint != null -> Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Text(hint, modifier = Modifier.padding(18.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                MarkdownPreview(
+                    markdown = "```vega-lite\n$spec\n```",
+                    dark = dark,
+                    accentHex = accentHex,
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                )
+            }
+        }
+    }
+    if (showConfig) {
+        NorfoldBottomSheet(onDismissRequest = { onShowConfigChange(false) }) {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Chart options", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                Text("Chart type", fontWeight = FontWeight.Bold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(TaskChartKind.entries) { kind ->
+                        FilterChip(selected = chartConfig.kind == kind, onClick = { onConfigChange(chartConfig.copy(kind = kind)) }, label = { Text(kind.label) })
                     }
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(progress = { if (tasks.isEmpty()) 0f else count / tasks.size.toFloat() }, modifier = Modifier.fillMaxWidth())
+                }
+                Text("Group by", fontWeight = FontWeight.Bold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(TaskChartGroupBy.entries) { groupBy ->
+                        FilterChip(selected = chartConfig.groupBy == groupBy, onClick = { onConfigChange(chartConfig.copy(groupBy = groupBy)) }, label = { Text(groupBy.label) })
+                    }
+                }
+                Text("Measure", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = chartConfig.measure == TaskChartMeasure.Count,
+                        onClick = { onConfigChange(chartConfig.copy(measure = TaskChartMeasure.Count)) },
+                        label = { Text(TaskChartMeasure.Count.label) },
+                    )
+                    FilterChip(
+                        selected = chartConfig.measure == TaskChartMeasure.SumNumeric,
+                        onClick = { onConfigChange(chartConfig.copy(measure = TaskChartMeasure.SumNumeric)) },
+                        label = { Text(TaskChartMeasure.SumNumeric.label) },
+                        enabled = numericProperties.isNotEmpty(),
+                    )
+                }
+                if (chartConfig.measure == TaskChartMeasure.SumNumeric) {
+                    Text("Number property", fontWeight = FontWeight.Bold)
+                    if (numericProperties.isEmpty()) {
+                        Text("This board has no number properties to sum.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(numericProperties, key = { it.id }) { property ->
+                                FilterChip(
+                                    selected = chartConfig.numericPropertyName == property.name,
+                                    onClick = { onConfigChange(chartConfig.copy(numericPropertyName = property.name)) },
+                                    label = { Text(property.name) },
+                                )
+                            }
+                        }
+                    }
+                }
+                TaskChartSpecBuilder.validate(chartConfig)?.let { message ->
+                    Text(message, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
             }
         }
