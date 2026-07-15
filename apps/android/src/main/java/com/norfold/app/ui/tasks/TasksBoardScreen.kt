@@ -163,6 +163,7 @@ import com.norfold.app.ui.components.NorfoldContentDialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
+import com.norfold.app.ui.components.LiveMarkdownField
 import com.norfold.app.ui.components.MarkdownPreview
 import com.norfold.app.ui.dnd.DropSlot
 import com.norfold.app.ui.dnd.animatePlacement
@@ -3675,20 +3676,33 @@ private fun TextPropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
         }
         return
     }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { text = it },
-        modifier = Modifier.fillMaxWidth().heightIn(min = if (property.type == TaskPropertyType.Text) 96.dp else 54.dp),
-        placeholder = { Text(property.type.defaultPropertyName()) },
-        colors = taskTextFieldColors(),
-    )
     if (property.type == TaskPropertyType.Text) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { AssistChip(onClick = { text += "\n- [ ] " }, label = { Text("Checklist") }, leadingIcon = { Icon(Icons.Outlined.CheckBox, null) }) }
-            item { AssistChip(onClick = { text += "\n| Column | Value |\n| --- | --- |\n" }, label = { Text("Table") }, leadingIcon = { Icon(Icons.Outlined.TableRows, null) }) }
-            item { AssistChip(onClick = { text += "\n---\n" }, label = { Text("Divider") }, leadingIcon = { Icon(Icons.Outlined.Title, null) }) }
-            item { AssistChip(onClick = { text += "[](url)" }, label = { Text("Link") }, leadingIcon = { Icon(Icons.Outlined.Link, null) }) }
+        val engine = remember { viewModel.state.value.settings.noteRenderEngine }
+        LiveMarkdownField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = property.type.defaultPropertyName(),
+            engine = engine,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(
+                onClick = { text += "\n| Column | Value |\n| --- | --- |\n" },
+                label = { Text("Table") },
+            )
+            AssistChip(
+                onClick = { text += "\n---\n" },
+                label = { Text("Divider") },
+            )
         }
+    } else {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+            placeholder = { Text(property.type.defaultPropertyName()) },
+            colors = taskTextFieldColors(),
+        )
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(onClick = {
