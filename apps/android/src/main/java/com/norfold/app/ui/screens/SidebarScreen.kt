@@ -212,7 +212,10 @@ private fun WorkspaceSwitcher(state: NotesUiState, viewModel: NotesViewModel) {
 
 @Composable
 private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modifier: Modifier) {
-    var plannerExpanded by remember { mutableStateOf(state.destination in setOf(Destination.Tasks, Destination.Calendar, Destination.NotesHome, Destination.NoteEditor, Destination.Files)) }
+    var notesExpanded by remember { mutableStateOf(state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) }
+    var notesShowAll by remember { mutableStateOf(false) }
+    var tasksExpanded by remember { mutableStateOf(state.destination in setOf(Destination.Tasks, Destination.Calendar)) }
+    var plannerExpanded by remember { mutableStateOf(false) }
     var subjectsExpanded by remember { mutableStateOf(true) }
     val publicName = state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Local owner" } }
     Column(
@@ -276,7 +279,7 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
                 DocTableOfContents(tocNote, viewModel)
                 Spacer(Modifier.height(4.dp))
             }
-            SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
+            SideNavItem("Dashboard", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
             SideNavItem("Today", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar && state.settings.calendarDefaultView == "Day") {
                 viewModel.patchSettings { it.copy(calendarDefaultView = "Day") }
                 viewModel.go(Destination.Calendar)
@@ -287,22 +290,56 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
             }
             SideNavItem("Favorites", Icons.Outlined.Star, false) { viewModel.go(Destination.NotesHome) }
 
-            Row(
-                Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Workspace",
-                    Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                IconButton(onClick = viewModel::createNote, modifier = Modifier.size(30.dp)) {
-                    Icon(Icons.Outlined.Add, "Create page", Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            SidebarDropdownHeader(
+                label = "Notes",
+                icon = Icons.Outlined.Description,
+                expanded = notesExpanded,
+                selected = state.destination in setOf(Destination.NotesHome, Destination.NoteEditor),
+                onToggle = { notesExpanded = !notesExpanded },
+                onClick = { viewModel.go(Destination.NotesHome) },
+            )
+            AnimatedVisibility(notesExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    SideNavItem("All notes", Icons.Outlined.Description, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
+                    val recents = state.notes.sortedByDescending { it.updatedAt }
+                    val shown = if (notesShowAll) recents else recents.take(3)
+                    shown.forEach { note ->
+                        SideNavItem(note.title.ifBlank { "Untitled" }, Icons.Outlined.Description, state.destination == Destination.NoteEditor && state.selectedNote?.id == note.id) {
+                            viewModel.select(note)
+                        }
+                    }
+                    if (recents.size > 3) {
+                        SideNavItem(if (notesShowAll) "Show less" else "…", Icons.Outlined.UnfoldMore, false) { notesShowAll = !notesShowAll }
+                    }
                 }
             }
-            SideNavItem("Dashboard", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
+
+            SidebarDropdownHeader(
+                label = "Tasks",
+                icon = Icons.Outlined.Check,
+                expanded = tasksExpanded,
+                selected = state.destination == Destination.Tasks,
+                onToggle = { tasksExpanded = !tasksExpanded },
+                onClick = { viewModel.go(Destination.Tasks) },
+            )
+            AnimatedVisibility(tasksExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    SideNavItem("Board", Icons.Outlined.GridView, state.destination == Destination.Tasks && state.settings.taskViewMode == "Board") {
+                        viewModel.patchSettings { it.copy(taskViewMode = "Board") }; viewModel.go(Destination.Tasks)
+                    }
+                    SideNavItem("Table", Icons.Outlined.Check, state.destination == Destination.Tasks && state.settings.taskViewMode == "Table") {
+                        viewModel.patchSettings { it.copy(taskViewMode = "Table") }; viewModel.go(Destination.Tasks)
+                    }
+                    SideNavItem("Calendar", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar && state.settings.calendarDefaultView !in setOf("Day", "Agenda")) { viewModel.go(Destination.Calendar) }
+                    SideNavItem("Agenda", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar && state.settings.calendarDefaultView == "Agenda") {
+                        viewModel.patchSettings { it.copy(calendarDefaultView = "Agenda") }; viewModel.go(Destination.Calendar)
+                    }
+                }
+            }
+
+            SideNavItem("Files", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
+            SideNavItem("Chat", Icons.Outlined.ChatBubbleOutline, state.destination == Destination.Chat) { viewModel.go(Destination.Chat) }
+            SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
 
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { plannerExpanded = !plannerExpanded }.padding(horizontal = 14.dp, vertical = 11.dp),
@@ -315,15 +352,8 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
             }
             AnimatedVisibility(plannerExpanded) {
                 Column(Modifier.padding(start = 22.dp)) {
-                    SideNavItem("Tasks", Icons.Outlined.Check, state.destination == Destination.Tasks && state.settings.taskViewMode == "Table") {
-                        viewModel.patchSettings { it.copy(taskViewMode = "Table") }; viewModel.go(Destination.Tasks)
-                    }
-                    SideNavItem("Board", Icons.Outlined.GridView, state.destination == Destination.Tasks && state.settings.taskViewMode == "Board") {
-                        viewModel.patchSettings { it.copy(taskViewMode = "Board") }; viewModel.go(Destination.Tasks)
-                    }
-                    SideNavItem("Calendar", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar) { viewModel.go(Destination.Calendar) }
-                    SideNavItem("Docs", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) { viewModel.go(Destination.NotesHome) }
-                    SideNavItem("Resources", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
+                    SideNavItem("Docs", Icons.Outlined.Description, false) { viewModel.go(Destination.NotesHome) }
+                    SideNavItem("Resources", Icons.Outlined.Folder, false) { viewModel.go(Destination.Files) }
                 }
             }
             Row(
@@ -342,7 +372,6 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
                     }
                 }
             }
-            SideNavItem("Docs", Icons.Outlined.Description, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
             SideNavItem("Books", Icons.Outlined.Folder, false) { viewModel.go(Destination.Files) }
 
             Spacer(Modifier.height(6.dp))
@@ -504,6 +533,48 @@ private fun DocTableOfContents(note: Note, viewModel: NotesViewModel) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Top-level nav row with an expandable child list: tapping the row navigates,
+ * tapping the trailing chevron only toggles the dropdown.
+ */
+@Composable
+private fun SidebarDropdownHeader(
+    label: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(start = 14.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, Modifier.size(22.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            label,
+            Modifier.weight(1f),
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        )
+        IconButton(onClick = onToggle, modifier = Modifier.size(34.dp)) {
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore,
+                if (expanded) "Collapse $label" else "Expand $label",
+                Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
