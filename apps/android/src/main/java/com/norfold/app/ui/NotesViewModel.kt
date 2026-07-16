@@ -623,6 +623,13 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         navigateTo(Destination.NoteEditor)
     }
 
+    fun openCalendarEventDocument(event: CalendarEventItem) = viewModelScope.launch {
+        repository.ensureCalendarEventDocument(event)
+        selectedDocumentOwner.value = DocumentOwner.calendarEvent(event.id)
+        selectedNoteId.value = null
+        navigateTo(Destination.NoteEditor)
+    }
+
     fun createTaskAndOpen() = viewModelScope.launch {
         repository.addTask("New task", assignee = state.value.settings.syncUserName.ifBlank { "@owner" })
         navigateTo(Destination.Tasks)
@@ -642,7 +649,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 ?.let { repository.updateNote(it, title, document, dirtyBlockIds) }
             DocumentOwnerType.Task -> state.value.tasks.firstOrNull { it.id == owner.id }
                 ?.let { repository.updateTaskDocument(it, title, document, dirtyBlockIds) }
-            DocumentOwnerType.CalendarEvent -> Unit
+            DocumentOwnerType.CalendarEvent -> state.value.calendarEvents.firstOrNull { it.id == owner.id }
+                ?.let { repository.updateCalendarEventDocument(it, title, document, dirtyBlockIds) }
         }
     }
 

@@ -270,6 +270,7 @@ fun CalendarWorkspaceScreen(
                 selectedDate = selectedDate,
                 events = events,
                 onVisibleDate = { selectedDate = it; month = YearMonth.from(it) },
+                onEventClick = { event -> openPlanningDocument(event, state, viewModel, onTaskClick) },
                 modifier = Modifier.weight(1f),
             )
             "Week" -> WeekCalendar(
@@ -278,23 +279,13 @@ fun CalendarWorkspaceScreen(
                 onWeekSettled = { weekStart -> month = YearMonth.from(weekStart.plusDays(3)) },
                 onSelect = { selectedDate = it; month = YearMonth.from(it) },
                 onEventClick = { event ->
-                    val task = event.taskId?.let { taskId -> state.tasks.firstOrNull { it.id == taskId } }
-                    if (task != null && onTaskClick != null) {
-                        onTaskClick(task)
-                        return@WeekCalendar
-                    }
-                    val obj = event.taskId?.let { taskId ->
-                        state.workspaceObjects.firstOrNull {
-                            it.objectType == com.norfold.app.domain.WorkspaceObjectType.Task && it.sourceId == taskId
-                        }
-                    }
-                    if (obj != null) viewModel.openWorkspaceObject(obj)
+                    openPlanningDocument(event, state, viewModel, onTaskClick)
                 },
                 modifier = Modifier.weight(1f),
             )
             else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (mode == "Agenda") {
-                    item { AgendaPanel(events.filter { !it.date.isBefore(selectedDate) }) }
+                    item { AgendaPanel(events.filter { !it.date.isBefore(selectedDate) }) { event -> openPlanningDocument(event, state, viewModel, onTaskClick) } }
                 } else {
                     item {
                         PagedMonthPanel(
@@ -311,7 +302,7 @@ fun CalendarWorkspaceScreen(
                         )
                     }
                 }
-                item { DayAgenda(selectedDate, events.filter { it.date == selectedDate }) }
+                item { DayAgenda(selectedDate, events.filter { it.date == selectedDate }) { event -> openPlanningDocument(event, state, viewModel, onTaskClick) } }
                 item { Spacer(Modifier.height(96.dp)) }
             }
         }
@@ -324,12 +315,12 @@ fun CalendarWorkspaceScreen(
     }
 }
 
-private data class PlanningEvent(val id: String, val title: String, val detail: String, val date: LocalDate, val time: LocalTime?, val color: Color, val source: String, val taskId: Long? = null)
+private data class PlanningEvent(val id: String, val title: String, val detail: String, val date: LocalDate, val time: LocalTime?, val color: Color, val source: String, val taskId: Long? = null, val calendarEventId: Long? = null)
 
 private fun planningEvents(state: DocsUiState, accent: Color, mutedAccent: Color): List<PlanningEvent> = buildList {
     state.calendarEvents.forEach { event ->
         val instant = Instant.ofEpochMilli(event.startAt).atZone(ZoneId.systemDefault())
-        add(PlanningEvent("event-${event.id}", event.title, event.description, instant.toLocalDate(), if (event.allDay) null else instant.toLocalTime(), Color(event.color), event.source.name))
+        add(PlanningEvent("event-${event.id}", event.title, event.description, instant.toLocalDate(), if (event.allDay) null else instant.toLocalTime(), Color(event.color), event.source.name, calendarEventId = event.id))
     }
     state.tasks.filter { it.startAt != null || it.dueAt != null }.forEach { task ->
         val zone = ZoneId.systemDefault()
@@ -359,6 +350,7 @@ private fun ContinuousDayCalendar(
     selectedDate: LocalDate,
     events: List<PlanningEvent>,
     onVisibleDate: (LocalDate) -> Unit,
+    onEventClick: (PlanningEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val origin = remember { LocalDate.now().minusDays(365) }
@@ -380,7 +372,7 @@ private fun ContinuousDayCalendar(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(dates, key = { it.toEpochDay() }) { date ->
-            DayTimeline(date, events.filter { it.date == date })
+            DayTimeline(date, events.filter { it.date == date }, onEventClick)
         }
         item { Spacer(Modifier.height(96.dp)) }
     }
@@ -693,7 +685,7 @@ private fun MonthPanel(month: YearMonth, selected: LocalDate, events: List<Plann
 }
 
 @Composable
-private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>) {
+private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>, onEventClick: (PlanningEvent) -> Unit) {
     val allDay = events.filter { it.time == null }
     val timed = events.filter { it.time != null }.groupBy { it.time!!.hour }
     NorfoldCard(Modifier.fillMaxWidth()) {
@@ -702,7 +694,7 @@ private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>) {
             if (allDay.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("All day", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    allDay.forEach { event -> EventRow(event) }
+                    allDay.forEach { event -> EventRow(event, onEventClick) }
                 }
             }
             Column(Modifier.fillMaxWidth()) {
@@ -733,6 +725,7 @@ private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>) {
                                 hourEvents.forEach { event ->
                                     Row(
                                         Modifier.fillMaxWidth().height(46.dp)
+                                            .clickable { onEventClick(event) }
                                             .background(event.color.copy(alpha = 0.16f), RoundedCornerShape(7.dp)),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
@@ -753,21 +746,37 @@ private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>) {
 }
 
 @Composable
-private fun AgendaPanel(events: List<PlanningEvent>) {
-    NorfoldCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(horizontal = 14.dp)) { if (events.isEmpty()) Text("No scheduled work", Modifier.padding(vertical = 20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant); events.forEach { EventRow(it) } } }
+private fun AgendaPanel(events: List<PlanningEvent>, onEventClick: (PlanningEvent) -> Unit) {
+    NorfoldCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(horizontal = 14.dp)) { if (events.isEmpty()) Text("No scheduled work", Modifier.padding(vertical = 20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant); events.forEach { EventRow(it, onEventClick) } } }
 }
 
 @Composable
-private fun DayAgenda(date: LocalDate, events: List<PlanningEvent>) {
-    NorfoldCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), fontWeight = FontWeight.Bold); if (events.isEmpty()) Text("Nothing scheduled", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); events.forEach { EventRow(it) } } }
+private fun DayAgenda(date: LocalDate, events: List<PlanningEvent>, onEventClick: (PlanningEvent) -> Unit) {
+    NorfoldCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), fontWeight = FontWeight.Bold); if (events.isEmpty()) Text("Nothing scheduled", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); events.forEach { EventRow(it, onEventClick) } } }
 }
 
 @Composable
-private fun EventRow(event: PlanningEvent) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun EventRow(event: PlanningEvent, onClick: (PlanningEvent) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onClick(event) }.padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(4.dp).height(38.dp).background(event.color, RoundedCornerShape(999.dp)))
         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(event.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp); Text(event.detail.ifBlank { event.source }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Text(event.time?.format(DateTimeFormatter.ofPattern("h:mm a")) ?: "All day", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private fun openPlanningDocument(
+    event: PlanningEvent,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    onTaskClick: ((com.norfold.app.domain.TaskItem) -> Unit)?,
+) {
+    event.calendarEventId?.let { eventId ->
+        state.calendarEvents.firstOrNull { it.id == eventId }?.let(viewModel::openCalendarEventDocument)
+        return
+    }
+    event.taskId?.let { taskId ->
+        val task = state.tasks.firstOrNull { it.id == taskId } ?: return
+        if (onTaskClick != null) onTaskClick(task) else viewModel.openTaskDocument(task)
     }
 }
 

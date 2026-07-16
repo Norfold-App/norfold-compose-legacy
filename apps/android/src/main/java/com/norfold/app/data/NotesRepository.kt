@@ -1486,11 +1486,13 @@ class DocsRepository(private val database: NorfoldDatabase) {
     ): Long {
         require(endAt >= startAt) { "Event end must be after its start." }
         val now = System.currentTimeMillis()
+        val initialDocument = MarkdownBlockCodec.import(description)
+        val summary = initialDocument.plainText()
         val entity = CalendarEventEntity(
                 workspaceId = activeWs(),
                 syncId = UUID.randomUUID().toString(),
                 title = title.trim().ifBlank { "Untitled event" },
-                description = description.trim(),
+                description = summary,
                 startAt = startAt,
                 endAt = endAt,
                 allDay = allDay,
@@ -1500,23 +1502,84 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 createdAt = now,
                 updatedAt = now,
             )
-        val id = dao.insertCalendarEvent(entity)
+        val id = database.withTransaction {
+            val eventId = dao.insertCalendarEvent(entity)
+            persistDocument(
+                DocumentOwner.calendarEvent(eventId),
+                initialDocument,
+                initialDocument.blocks.mapTo(linkedSetOf()) { it.id },
+                null,
+                null,
+                null,
+                now,
+            )
+            eventId
+        }
         enqueueCloudUpsert(entity.copy(id = id).toDomain())
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, id, title, description, source.name, "calendar", color)
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, id, title, summary, source.name, "calendar", color)
         recordActivity(WorkspaceActivityType.Created, "You", "Created calendar event", title, objectId)
         return id
     }
 
     suspend fun updateCalendarEvent(event: CalendarEventItem) {
         require(event.endAt >= event.startAt) { "Event end must be after its start." }
-        dao.updateCalendarEvent(event.id, event.title, event.description, event.startAt, event.endAt, event.allDay, event.color, System.currentTimeMillis())
-        upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, event.id, event.title, event.description, event.source.name, "calendar", event.color)
-        enqueueCloudUpsert(event)
+        val current = documentByOwner(DocumentOwner.calendarEvent(event.id))
+        val document = if (current == null || event.description != current.document.plainText()) {
+            MarkdownBlockCodec.import(event.description)
+        } else {
+            current.document
+        }
+        val now = System.currentTimeMillis()
+        val summary = document.plainText()
+        database.withTransaction {
+            persistDocument(DocumentOwner.calendarEvent(event.id), document, document.blocks.mapTo(linkedSetOf()) { it.id }, null, null, null, now)
+            dao.updateCalendarEvent(event.id, event.title, summary, event.startAt, event.endAt, event.allDay, event.color, now)
+        }
+        upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, event.id, event.title, summary, event.source.name, "calendar", event.color)
+        enqueueCloudUpsert(event.copy(description = summary, updatedAt = now))
+    }
+
+    suspend fun ensureCalendarEventDocument(event: CalendarEventItem): OwnedDocument {
+        documentByOwner(DocumentOwner.calendarEvent(event.id))?.let { return it }
+        val initial = MarkdownBlockCodec.import(event.description)
+        return saveDocument(DocumentOwner.calendarEvent(event.id), initial)
+    }
+
+    suspend fun updateCalendarEventDocument(
+        event: CalendarEventItem,
+        title: String,
+        document: BlockDocument,
+        dirtyBlockIds: Set<String>,
+    ) {
+        val now = System.currentTimeMillis()
+        val normalized = database.withTransaction {
+            val persisted = persistDocument(DocumentOwner.calendarEvent(event.id), document, dirtyBlockIds, null, null, null, now)
+            dao.updateCalendarEvent(
+                event.id,
+                title.ifBlank { "Untitled event" },
+                persisted.document.plainText(),
+                event.startAt,
+                event.endAt,
+                event.allDay,
+                event.color,
+                now,
+            )
+            persisted.document
+        }
+        val summary = normalized.plainText()
+        val normalizedTitle = title.ifBlank { "Untitled event" }
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, event.id, normalizedTitle, summary, event.source.name, "calendar", event.color)
+        recordActivity(WorkspaceActivityType.Updated, "You", "Updated event doc", normalizedTitle, objectType = WorkspaceObjectType.CalendarEvent, sourceId = event.id, objectId = objectId)
+        recordHistory(WorkspaceHistoryType.Updated, objectId, "You", "Updated event doc", beforeValue = event.description.take(500), afterValue = summary.take(500))
+        enqueueCloudUpsert(event.copy(title = normalizedTitle, description = summary, updatedAt = now))
     }
 
     suspend fun deleteCalendarEvent(event: CalendarEventItem) {
         enqueueCloudDelete(event.workspaceId, "calendar_event", event.syncId)
-        dao.deleteCalendarEvent(event.id)
+        database.withTransaction {
+            dao.deleteDocumentForOwner(DocumentOwnerType.CalendarEvent.storageValue, event.id)
+            dao.deleteCalendarEvent(event.id)
+        }
         recordActivity(WorkspaceActivityType.Updated, "You", "Deleted calendar event", event.title)
     }
 
