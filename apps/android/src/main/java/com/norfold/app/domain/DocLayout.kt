@@ -9,16 +9,15 @@ import kotlinx.serialization.json.jsonObject
 import kotlin.math.ceil
 
 /**
- * Per-document layout controls for the Docs editor. These live on the [Note] (doc-level), not on the
- * block payloads, so block JSON (`note_blocks`) stays backward-compatible.
+ * Per-document layout controls for the Docs editor. These live on the owner-agnostic document row,
+ * not on block payloads, so block JSON remains portable across Notes, Tasks, and Calendar events.
  *
  * - [DocOverlapMode] selects Flow, a bounded document canvas, or an infinite spatial canvas.
  * - [FreeformPlacement] is one block's position/size/layer in [DocOverlapMode.Overlap], keyed by the
  *   top-level block id in `Note.freeformLayout`.
  *
- * Persistence contract: `NoteEntity.overlapMode` stores `name.lowercase()` ("reflow"/"overlap") and
- * [docOverlapModeOf] must keep decoding those literals forever — renaming an entry breaks every
- * stored note unless a compat mapping is added here first.
+ * Persistence contract: `DocumentEntity.layout_mode` stores `name.lowercase()` and
+ * [docOverlapModeOf] keeps decoding legacy literals from the pre-beta note-owned layout model.
  */
 @Serializable
 enum class DocOverlapMode { Reflow, Bounded, Overlap }
@@ -136,8 +135,8 @@ private data class DocLayoutPayload(
 )
 
 /**
- * Versioned JSON codec stored in `NoteEntity.freeformLayoutJson`. It deliberately reads the legacy
- * raw placement-map format so the feature does not require a Room schema change.
+ * Versioned JSON codec stored in `DocumentEntity.layout_json`. It deliberately reads the legacy raw
+ * placement-map format migrated from the pre-beta note-owned layout model.
  */
 object DocLayoutJson {
     private val format = Json { encodeDefaults = true; ignoreUnknownKeys = true }

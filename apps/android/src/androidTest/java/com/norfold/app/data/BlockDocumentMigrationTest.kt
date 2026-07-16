@@ -9,6 +9,7 @@ import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.MarkdownBlockCodec
+import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.TableBlock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -106,6 +107,46 @@ class BlockDocumentMigrationTest {
                 }
                 assertEquals("Pill", defaults["contextualMenuStyle"])
                 assertEquals("FollowTheme", defaults["contextualMenuColor"])
+            }
+        }
+    }
+
+    @Test
+    fun noteOwnedBlocksAndLayoutMoveToGenericDocumentsFromVersion32() {
+        val name = "generic-document-migration-test"
+        helper.createDatabase(name, 32).apply {
+            execSQL(
+                """
+                INSERT INTO notes(
+                    id, title, searchText, notebookId, coverUri, coverMimeType, pinned, starred,
+                    archived, locked, createdAt, updatedAt, workspaceId, overlapMode, freeformLayoutJson
+                ) VALUES(73, 'Owned doc', 'hello', NULL, NULL, NULL, 0, 0, 0, 0, 10, 20, 1, 'bounded', '{"version":2,"placements":{},"canvas":{"preset":"Letter","width":612.0,"height":792.0,"pageCount":1,"pageGap":24.0}}')
+                """.trimIndent(),
+            )
+            execSQL(
+                "INSERT INTO note_blocks(id, noteId, position, payloadJson, updatedAt) VALUES('stable-block', 73, 0, ?, 20)",
+                arrayOf(BlockDocumentJson.encodeBlock(ParagraphBlock(id = "stable-block", content = listOf(com.norfold.app.domain.InlineText("hello"))))),
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 33, true, NorfoldDatabase.MIGRATION_32_33).use { db ->
+            db.query("SELECT id, owner_type, owner_id, layout_mode, layout_json FROM documents").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("note:73", cursor.getString(0))
+                assertEquals("note", cursor.getString(1))
+                assertEquals(73, cursor.getLong(2))
+                assertEquals("bounded", cursor.getString(3))
+                assertTrue(cursor.getString(4).contains("Letter"))
+            }
+            db.query("SELECT block_id, document_id, payload_json FROM document_blocks").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("stable-block", cursor.getString(0))
+                assertEquals("note:73", cursor.getString(1))
+                assertEquals("hello", BlockDocumentJson.decodeBlock(cursor.getString(2)).plainText())
+            }
+            db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'note_blocks'").use { cursor ->
+                assertFalse(cursor.moveToFirst())
             }
         }
     }

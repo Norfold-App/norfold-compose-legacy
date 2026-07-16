@@ -10,6 +10,8 @@ import com.norfold.app.domain.BlockEditorSession
 import com.norfold.app.domain.BoldInline
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentOwner
+import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.FileBlock
 import com.norfold.app.domain.HeadingBlock
@@ -52,8 +54,9 @@ class BlockDocumentRoomTest {
             ),
         )
         dao.insertNote(note(id = 7, searchText = document.plainText()))
-        dao.upsertNoteBlocks(document.blocks.mapIndexed { position, block ->
-            NoteBlockEntity(block.id, 7, position, BlockDocumentJson.encodeBlock(block), 100)
+        dao.upsertDocument(documentEntity(owner = DocumentOwner.note(7), updatedAt = 100))
+        dao.upsertDocumentBlocks(document.blocks.mapIndexed { position, block ->
+            DocumentBlockEntity(block.id, DocumentOwner.note(7).documentId, position, BlockDocumentJson.encodeBlock(block), 100)
         })
 
         assertEquals(document, dao.noteById(7)!!.toDomain().document)
@@ -67,15 +70,16 @@ class BlockDocumentRoomTest {
         val second = ParagraphBlock(id = "second", content = listOf(InlineText("two")))
         val original = BlockDocument(listOf(first, second))
         dao.insertNote(note(id = 8, searchText = original.plainText()))
-        dao.upsertNoteBlocks(original.blocks.mapIndexed { position, block ->
-            NoteBlockEntity(block.id, 8, position, BlockDocumentJson.encodeBlock(block), 100)
+        dao.upsertDocument(documentEntity(owner = DocumentOwner.note(8), updatedAt = 100))
+        dao.upsertDocumentBlocks(original.blocks.mapIndexed { position, block ->
+            DocumentBlockEntity(block.id, DocumentOwner.note(8).documentId, position, BlockDocumentJson.encodeBlock(block), 100)
         })
         val loaded = dao.noteById(8)!!.toDomain()
         val changed = original.copy(blocks = listOf(first.copy(content = listOf(InlineText("changed"))), second))
 
         DocsRepository(database).updateNote(loaded, loaded.title, changed, setOf(first.id))
 
-        val rows = dao.blocksForNote(8).associateBy(NoteBlockEntity::id)
+        val rows = dao.blocksForDocument(DocumentOwner.note(8).documentId).associateBy(DocumentBlockEntity::blockId)
         assertTrue(rows.getValue("first").updatedAt > 100)
         assertEquals(100, rows.getValue("second").updatedAt)
         assertEquals(changed, dao.noteById(8)!!.toDomain().document)
@@ -92,7 +96,7 @@ class BlockDocumentRoomTest {
         assertEquals(DocOverlapMode.Overlap, dao.noteById(20)!!.toDomain().overlapMode)
         // The stored literal is the lowercase enum name — the compat contract docOverlapModeOf
         // decodes ("reflow"/"overlap"), never the UI labels ("Page"/"Infinite page").
-        assertEquals("overlap", dao.noteById(20)!!.note.overlapMode)
+        assertEquals("overlap", dao.documentByOwner(DocumentOwnerType.Note.storageValue, 20)!!.document.layoutMode)
     }
 
     @Test
@@ -116,8 +120,9 @@ class BlockDocumentRoomTest {
         val third = ParagraphBlock(id = "third", content = listOf(InlineText("gamma")))
         val original = BlockDocument(listOf(first, second, third))
         dao.insertNote(note(id = 9, searchText = original.plainText()))
-        dao.upsertNoteBlocks(original.blocks.mapIndexed { position, block ->
-            NoteBlockEntity(block.id, 9, position, BlockDocumentJson.encodeBlock(block), 100)
+        dao.upsertDocument(documentEntity(owner = DocumentOwner.note(9), updatedAt = 100))
+        dao.upsertDocumentBlocks(original.blocks.mapIndexed { position, block ->
+            DocumentBlockEntity(block.id, DocumentOwner.note(9).documentId, position, BlockDocumentJson.encodeBlock(block), 100)
         })
         val loaded = dao.noteById(9)!!.toDomain()
         val session = BlockEditorSession(loaded.document)
@@ -125,9 +130,26 @@ class BlockDocumentRoomTest {
         session.replaceSelection(BlockCursor(first.id, 2), BlockCursor(third.id, 2), "X")
         DocsRepository(database).updateNote(loaded, loaded.title, session.document, session.dirtyBlockIds)
 
-        assertEquals(listOf("first"), dao.blocksForNote(9).map(NoteBlockEntity::id))
+        assertEquals(listOf("first"), dao.blocksForDocument(DocumentOwner.note(9).documentId).map(DocumentBlockEntity::blockId))
         assertEquals("alXmma", dao.noteById(9)!!.toDomain().document.plainText())
         assertEquals(session.document, dao.noteById(9)!!.toDomain().document)
+    }
+
+    @Test
+    fun ownerAgnosticDocumentsDoNotCollideWhenLocalIdsMatch() = runBlocking {
+        val repository = DocsRepository(database)
+        val noteOwner = DocumentOwner.note(42)
+        val taskOwner = DocumentOwner.task(42)
+        val eventOwner = DocumentOwner.calendarEvent(42)
+
+        repository.saveDocument(noteOwner, BlockDocument(listOf(ParagraphBlock(id = "shared-block", content = listOf(InlineText("note"))))))
+        repository.saveDocument(taskOwner, BlockDocument(listOf(ParagraphBlock(id = "shared-block", content = listOf(InlineText("task"))))))
+        repository.saveDocument(eventOwner, BlockDocument(listOf(ParagraphBlock(id = "shared-block", content = listOf(InlineText("event"))))))
+
+        assertEquals("note", repository.documentByOwner(noteOwner)!!.document.plainText())
+        assertEquals("task", repository.documentByOwner(taskOwner)!!.document.plainText())
+        assertEquals("event", repository.documentByOwner(eventOwner)!!.document.plainText())
+        assertEquals(3, dao.allDocuments().size)
     }
 
     @Test
@@ -195,5 +217,13 @@ class BlockDocumentRoomTest {
         createdAt = 1,
         updatedAt = 1,
         workspaceId = 1,
+    )
+
+    private fun documentEntity(owner: DocumentOwner, updatedAt: Long) = DocumentEntity(
+        id = owner.documentId,
+        ownerType = owner.type.storageValue,
+        ownerId = owner.id,
+        createdAt = updatedAt,
+        updatedAt = updatedAt,
     )
 }

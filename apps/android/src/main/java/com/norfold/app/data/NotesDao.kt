@@ -43,6 +43,9 @@ interface NotesDao {
     @Query("DELETE FROM notes WHERE workspaceId = :ws")
     suspend fun deleteNotesForWorkspace(ws: Long)
 
+    @Query("DELETE FROM documents WHERE owner_type = 'note' AND owner_id IN (SELECT id FROM notes WHERE workspaceId = :ws)")
+    suspend fun deleteNoteDocumentsForWorkspace(ws: Long)
+
     @Query("DELETE FROM notebooks WHERE workspaceId = :ws")
     suspend fun deleteNotebooksForWorkspace(ws: Long)
 
@@ -298,16 +301,29 @@ interface NotesDao {
     suspend fun insertNote(entity: NoteEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertNoteBlocks(entities: List<NoteBlockEntity>)
+    suspend fun upsertDocument(entity: DocumentEntity)
 
-    @Query("DELETE FROM note_blocks WHERE id IN (:ids)")
-    suspend fun deleteNoteBlocks(ids: List<String>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDocumentBlocks(entities: List<DocumentBlockEntity>)
 
-    @Query("DELETE FROM note_blocks WHERE noteId = :noteId")
-    suspend fun deleteBlocksForNote(noteId: Long)
+    @Query("DELETE FROM document_blocks WHERE document_id = :documentId AND block_id IN (:ids)")
+    suspend fun deleteDocumentBlocks(documentId: String, ids: List<String>)
 
-    @Query("SELECT * FROM note_blocks WHERE noteId = :noteId ORDER BY position ASC")
-    suspend fun blocksForNote(noteId: Long): List<NoteBlockEntity>
+    @Query("SELECT * FROM document_blocks WHERE document_id = :documentId ORDER BY position ASC")
+    suspend fun blocksForDocument(documentId: String): List<DocumentBlockEntity>
+
+    @Transaction
+    @Query("SELECT * FROM documents WHERE owner_type = :ownerType AND owner_id = :ownerId LIMIT 1")
+    suspend fun documentByOwner(ownerType: String, ownerId: Long): DocumentWithBlocks?
+
+    @Query("SELECT * FROM documents ORDER BY updated_at DESC")
+    suspend fun allDocuments(): List<DocumentEntity>
+
+    @Query("SELECT * FROM document_blocks ORDER BY document_id ASC, position ASC")
+    suspend fun allDocumentBlocks(): List<DocumentBlockEntity>
+
+    @Query("DELETE FROM documents WHERE owner_type = :ownerType AND owner_id = :ownerId")
+    suspend fun deleteDocumentForOwner(ownerType: String, ownerId: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAttachment(entity: AttachmentEntity): Long
@@ -420,6 +436,9 @@ interface NotesDao {
     @Query("UPDATE notes SET title = :title, searchText = :searchText, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateNoteContent(id: Long, title: String, searchText: String, updatedAt: Long)
 
+    @Query("UPDATE notes SET updatedAt = :updatedAt WHERE id = :id")
+    suspend fun touchNote(id: Long, updatedAt: Long)
+
     @Query("UPDATE notes SET coverUri = :coverUri, coverMimeType = :coverMimeType, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateNoteCover(id: Long, coverUri: String?, coverMimeType: String?, updatedAt: Long)
 
@@ -434,12 +453,6 @@ interface NotesDao {
 
     @Query("UPDATE notes SET locked = :value, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setLocked(id: Long, value: Boolean, updatedAt: Long)
-
-    @Query("UPDATE notes SET overlapMode = :mode, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun setNoteOverlapMode(id: Long, mode: String, updatedAt: Long)
-
-    @Query("UPDATE notes SET freeformLayoutJson = :layoutJson, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun setNoteFreeformLayout(id: Long, layoutJson: String?, updatedAt: Long)
 
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNote(id: Long)
@@ -458,6 +471,9 @@ interface NotesDao {
 
     @Query("DELETE FROM notes")
     suspend fun clearNotes()
+
+    @Query("DELETE FROM documents")
+    suspend fun clearDocuments()
 
     @Query("DELETE FROM notebooks")
     suspend fun clearNotebooks()
