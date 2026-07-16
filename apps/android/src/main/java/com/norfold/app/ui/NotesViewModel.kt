@@ -24,6 +24,8 @@ import com.norfold.app.domain.DocLayerOrder
 import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocSectionAction
+import com.norfold.app.domain.DocumentOwner
+import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
@@ -33,6 +35,7 @@ import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.NoteGestureAction
 import com.norfold.app.domain.Notebook
+import com.norfold.app.domain.OwnedDocument
 import com.norfold.app.domain.ParsedSyncConflictReport
 import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.CalendarEventItem
@@ -71,6 +74,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -177,6 +181,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val selectedNotebookFilterId = MutableStateFlow<Long?>(null)
     private val selectedTagFilterId = MutableStateFlow<Long?>(null)
     private val selectedNoteId = MutableStateFlow<Long?>(null)
+    private val selectedDocumentOwner = MutableStateFlow<DocumentOwner?>(null)
     private val selectedObjectId = MutableStateFlow<Long?>(null)
     private val locked = MutableStateFlow(false)
     private val syncing = MutableStateFlow(false)
@@ -205,6 +210,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     // (driven by searchQuery) so browsing the list is never left in a filtered state.
     private val notes = repository.activeNotes
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val activeDocument: StateFlow<OwnedDocument?> = selectedDocumentOwner
+        .flatMapLatest { owner -> owner?.let(repository::observeDocument) ?: flowOf(null) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val primaryNavigation = combine<Any?, NavigationState>(selectedNoteId, selectedObjectId, destination, tab, searchQuery, selectedNotebookFilterId, selectedTagFilterId) { values ->
         @Suppress("UNCHECKED_CAST")
@@ -386,6 +395,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun select(note: Note) {
         selectedNoteId.value = note.id
+        selectedDocumentOwner.value = DocumentOwner.note(note.id)
         selectedObjectId.value = state.value.workspaceObjects.firstOrNull {
             it.objectType == WorkspaceObjectType.Note && it.sourceId == note.id
         }?.id
@@ -600,7 +610,16 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createNote() = viewModelScope.launch {
-        selectedNoteId.value = repository.createNote(title = "Untitled doc", body = "")
+        val id = repository.createNote(title = "Untitled doc", body = "")
+        selectedNoteId.value = id
+        selectedDocumentOwner.value = DocumentOwner.note(id)
+        navigateTo(Destination.NoteEditor)
+    }
+
+    fun openTaskDocument(task: TaskItem) = viewModelScope.launch {
+        repository.ensureTaskDocument(task)
+        selectedDocumentOwner.value = DocumentOwner.task(task.id)
+        selectedNoteId.value = null
         navigateTo(Destination.NoteEditor)
     }
 
@@ -615,6 +634,26 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateNoteDocument(note: Note, title: String, document: BlockDocument, dirtyBlockIds: Set<String>) = viewModelScope.launch {
         repository.updateNote(note, title, document, dirtyBlockIds)
+    }
+
+    fun updateActiveDocument(owner: DocumentOwner, title: String, document: BlockDocument, dirtyBlockIds: Set<String>) = viewModelScope.launch {
+        when (owner.type) {
+            DocumentOwnerType.Note -> state.value.notes.firstOrNull { it.id == owner.id }
+                ?.let { repository.updateNote(it, title, document, dirtyBlockIds) }
+            DocumentOwnerType.Task -> state.value.tasks.firstOrNull { it.id == owner.id }
+                ?.let { repository.updateTaskDocument(it, title, document, dirtyBlockIds) }
+            DocumentOwnerType.CalendarEvent -> Unit
+        }
+    }
+
+    fun updateActiveDocumentLayout(
+        owner: DocumentOwner,
+        document: BlockDocument,
+        mode: DocOverlapMode,
+        layout: Map<String, FreeformPlacement>,
+        canvasSpec: DocCanvasSpec,
+    ) = viewModelScope.launch {
+        repository.updateOwnedDocumentLayout(owner, document, mode, layout, canvasSpec)
     }
 
     fun togglePin(note: Note) = viewModelScope.launch { repository.setPinned(note) }
@@ -881,6 +920,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 require(body.isNotBlank()) { "Markdown file is empty" }
                 val title = displayName(uri).substringBeforeLast('.').ifBlank { "Imported Markdown" }
                 selectedNoteId.value = repository.createNote(title = title, body = body, tagNames = listOf("Imported"))
+                selectedDocumentOwner.value = DocumentOwner.note(requireNotNull(selectedNoteId.value))
                 navigateTo(Destination.NoteEditor)
                 "Markdown imported"
             }.onSuccess {

@@ -2806,9 +2806,6 @@ private fun AdaptiveTaskPage(
                     TaskNotesSection(
                         task = task,
                         property = property,
-                        value = propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id },
-                        columns = columns,
-                        tags = tags,
                         viewModel = viewModel,
                     )
                 }
@@ -3391,14 +3388,10 @@ private fun TaskChecklistSummaryCard(
 private fun TaskNotesSection(
     task: TaskItem,
     property: TaskPropertyDefinition,
-    value: TaskPropertyValue?,
-    columns: List<TaskColumnItem>,
-    tags: List<Tag>,
     viewModel: DocsViewModel,
 ) {
-    val displayed = property.displayValue(task, value?.valueJson.orEmpty())
+    val displayed = task.description
     if (property.hiddenWhenEmpty && displayed.isBlank()) return
-    var editing by remember(task.id, property.id) { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(18.dp),
@@ -3414,7 +3407,7 @@ private fun TaskNotesSection(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().clickable { editing = true },
+                modifier = Modifier.fillMaxWidth().clickable { viewModel.openTaskDocument(task) },
             ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(displayed.ifBlank { "Add notes" }, modifier = Modifier.weight(1f), color = if (displayed.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, maxLines = 4, overflow = TextOverflow.Ellipsis)
@@ -3422,20 +3415,6 @@ private fun TaskNotesSection(
                 }
             }
         }
-    }
-    if (editing) {
-        FocusedTaskPropertyDialog(
-            task = task,
-            property = property,
-            value = value,
-            checklistItems = emptyList(),
-            columns = columns,
-            tags = tags,
-            anchor = null,
-            viewModel = viewModel,
-            onPickAttachment = {},
-            onDismiss = { editing = false },
-        )
     }
 }
 

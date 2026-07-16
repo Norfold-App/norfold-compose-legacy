@@ -153,6 +153,32 @@ class BlockDocumentRoomTest {
     }
 
     @Test
+    fun taskDocumentIsCanonicalAndDescriptionIsPlainTextProjection() = runBlocking {
+        dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
+        dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
+        dao.insertTask(TaskEntity(id = 61, title = "Task with doc", description = "**Legacy** details", workspaceId = 1, createdAt = 1, updatedAt = 1))
+        val repository = DocsRepository(database)
+        val task = dao.taskById(61)!!.toDomain()
+
+        val migrated = repository.ensureTaskDocument(task)
+        assertEquals("Legacy details", migrated.document.plainText())
+
+        val structured = BlockDocument(
+            listOf(
+                HeadingBlock(id = "task-heading", level = 2, content = listOf(InlineText("Plan"))),
+                ParagraphBlock(id = "task-body", content = listOf(BoldInline(listOf(InlineText("Ship"))), InlineText(" safely"))),
+            ),
+        )
+        repository.updateTaskDocument(task, "Renamed task", structured, structured.blocks.mapTo(linkedSetOf()) { it.id })
+
+        val storedTask = dao.taskById(61)!!.toDomain()
+        val storedDocument = repository.documentByOwner(DocumentOwner.task(61))!!
+        assertEquals("Renamed task", storedTask.title)
+        assertEquals(structured.plainText(), storedTask.description)
+        assertEquals(structured, storedDocument.document)
+    }
+
+    @Test
     fun taskTagsAreCaseInsensitiveWithinBoardAndIndependentAcrossBoards() = runBlocking {
         dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
         dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
