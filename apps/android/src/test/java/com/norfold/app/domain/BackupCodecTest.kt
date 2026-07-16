@@ -237,6 +237,37 @@ class BackupCodecTest {
     }
 
     @Test
+    fun taskOwnedDocumentRoundTripsWithLayoutAndStableBlockIds() {
+        val owner = DocumentOwner.task(91)
+        val block = ParagraphBlock(id = "task-doc-block", content = listOf(InlineText("Structured task notes")))
+        val document = OwnedDocument(
+            owner = owner,
+            document = BlockDocument(listOf(block)),
+            layoutMode = DocOverlapMode.Bounded,
+            freeformLayout = mapOf(block.id to FreeformPlacement(x = 20f, y = 40f, width = 420f, height = 120f)),
+            canvasSpec = DocCanvasSpec.letter(),
+            createdAt = 10,
+            updatedAt = 20,
+        )
+        val snapshot = BackupSnapshot(
+            notes = emptyList(),
+            notebooks = emptyList(),
+            tags = emptyList(),
+            attachments = emptyList(),
+            ownedDocuments = listOf(document),
+        )
+
+        val restored = BackupCodec.decode(BackupCodec.encode(snapshot)).ownedDocuments.single()
+
+        assertEquals(owner, restored.owner)
+        assertEquals("task-doc-block", restored.document.blocks.single().id)
+        assertEquals("Structured task notes", restored.document.plainText())
+        assertEquals(DocOverlapMode.Bounded, restored.layoutMode)
+        assertEquals(document.freeformLayout, restored.freeformLayout)
+        assertEquals(DocPagePreset.Letter, restored.canvasSpec.preset)
+    }
+
+    @Test
     fun encryptedBackupRoundTrips() {
         val snapshot = BackupSnapshot(
             notes = listOf(Note(1, "Secret", "private", null, false, false, false, false, 1, 2)),

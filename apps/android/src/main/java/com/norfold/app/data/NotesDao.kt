@@ -46,6 +46,12 @@ interface NotesDao {
     @Query("DELETE FROM documents WHERE owner_type = 'note' AND owner_id IN (SELECT id FROM notes WHERE workspaceId = :ws)")
     suspend fun deleteNoteDocumentsForWorkspace(ws: Long)
 
+    @Query("DELETE FROM documents WHERE owner_type = 'task' AND owner_id IN (SELECT id FROM tasks WHERE workspaceId = :ws)")
+    suspend fun deleteTaskDocumentsForWorkspace(ws: Long)
+
+    @Query("DELETE FROM documents WHERE owner_type = 'calendar_event' AND owner_id IN (SELECT id FROM calendar_events WHERE workspaceId = :ws)")
+    suspend fun deleteCalendarEventDocumentsForWorkspace(ws: Long)
+
     @Query("DELETE FROM notebooks WHERE workspaceId = :ws")
     suspend fun deleteNotebooksForWorkspace(ws: Long)
 
@@ -316,6 +322,10 @@ interface NotesDao {
     @Query("SELECT * FROM documents WHERE owner_type = :ownerType AND owner_id = :ownerId LIMIT 1")
     suspend fun documentByOwner(ownerType: String, ownerId: Long): DocumentWithBlocks?
 
+    @Transaction
+    @Query("SELECT * FROM documents WHERE owner_type = :ownerType AND owner_id = :ownerId LIMIT 1")
+    fun observeDocumentByOwner(ownerType: String, ownerId: Long): Flow<DocumentWithBlocks?>
+
     @Query("SELECT * FROM documents ORDER BY updated_at DESC")
     suspend fun allDocuments(): List<DocumentEntity>
 
@@ -351,6 +361,9 @@ interface NotesDao {
 
     @Query("UPDATE tasks SET colorArgb = :colorArgb, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateTaskColor(id: Long, colorArgb: Long?, updatedAt: Long)
+
+    @Query("UPDATE tasks SET updatedAt = :updatedAt WHERE id = :id")
+    suspend fun touchTask(id: Long, updatedAt: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTask(entity: TaskEntity): Long
@@ -426,6 +439,9 @@ interface NotesDao {
 
     @Query("DELETE FROM calendar_events WHERE id = :id")
     suspend fun deleteCalendarEvent(id: Long)
+
+    @Query("UPDATE calendar_events SET updatedAt = :updatedAt WHERE id = :id")
+    suspend fun touchCalendarEvent(id: Long, updatedAt: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNoteTag(ref: NoteTagCrossRef)

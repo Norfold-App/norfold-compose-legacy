@@ -134,6 +134,7 @@ object SyncConflictReport {
         .put("taskChecklistItems", taskChecklistItems.size)
         .put("goals", goals.size)
         .put("calendarEvents", calendarEvents.size)
+        .put("ownedDocuments", ownedDocuments.size)
         .put("chatMessages", chatMessages.size)
         .put("workspaceObjects", workspaceObjects.size)
         .put("objectLinks", workspaceObjectLinks.size)
@@ -153,6 +154,7 @@ object SyncConflictReport {
         taskChecklistItems.maxOfOrNull { it.updatedAt } ?: 0L,
         goals.maxOfOrNull { it.updatedAt } ?: 0L,
         calendarEvents.maxOfOrNull { it.updatedAt } ?: 0L,
+        ownedDocuments.maxOfOrNull { it.updatedAt } ?: 0L,
         chatMessages.maxOfOrNull { it.createdAt } ?: 0L,
         workspaceObjects.maxOfOrNull { it.updatedAt } ?: 0L,
         workspaceFiles.maxOfOrNull { it.updatedAt } ?: 0L,
@@ -169,6 +171,14 @@ object SyncConflictReport {
         addAll(taskChecklistItems.map { SnapshotObject("Task checklist", it.id.toString(), it.text, it.updatedAt, if (it.checked) "checked" else "open") })
         addAll(goals.map { SnapshotObject("Goal", it.syncId, it.title, it.updatedAt, "${it.progress}/${it.target} ${it.unit}") })
         addAll(calendarEvents.map { SnapshotObject("Calendar event", it.syncId, it.title, it.updatedAt, it.description.take(120)) })
+        addAll(ownedDocuments.map { owned ->
+            val title = when (owned.owner.type) {
+                DocumentOwnerType.Task -> tasks.firstOrNull { it.id == owned.owner.id }?.title
+                DocumentOwnerType.CalendarEvent -> calendarEvents.firstOrNull { it.id == owned.owner.id }?.title
+                DocumentOwnerType.Note -> notes.firstOrNull { it.id == owned.owner.id }?.title
+            }.orEmpty().ifBlank { "Owned document" }
+            SnapshotObject("${owned.owner.type.name} doc", owned.owner.documentId, title, owned.updatedAt, owned.document.plainText().take(120))
+        })
         addAll(workspaceFiles.map { SnapshotObject("File", it.id.toString(), it.displayName, it.updatedAt, it.mimeType) })
         addAll(workspaceObjects.map { SnapshotObject(if (it.objectType == WorkspaceObjectType.Note) "Doc" else it.objectType.name, it.sourceId?.toString() ?: "object-${it.id}", it.title, it.updatedAt, it.summary.take(120)) })
     }
@@ -205,6 +215,15 @@ object SyncConflictReport {
         addAll(taskChecklistItems.map { SnapshotObject("Task checklist", it.id.toString(), it.text, it.updatedAt, "${it.taskId}\n${it.propertyId}\n${it.text}\n${it.checked}\n${it.sortOrder}") })
         addAll(goals.map { SnapshotObject("Goal", it.syncId, it.title, it.updatedAt, "${it.workspaceId}\n${it.title}\n${it.description}\n${it.owner}\n${it.target}\n${it.progress}\n${it.unit}\n${it.dueAt}\n${it.status}") })
         addAll(calendarEvents.map { SnapshotObject("Calendar event", it.syncId, it.title, it.updatedAt, "${it.workspaceId}\n${it.title}\n${it.description}\n${it.startAt}\n${it.endAt}\n${it.allDay}\n${it.color}\n${it.source}\n${it.externalId}") })
+        addAll(ownedDocuments.map { owned ->
+            SnapshotObject(
+                "${owned.owner.type.name} doc",
+                owned.owner.documentId,
+                owned.document.plainText().lineSequence().firstOrNull().orEmpty().ifBlank { "Owned document" },
+                owned.updatedAt,
+                "${BlockDocumentJson.encodeDocumentPayload(owned.document)}\n${owned.layoutMode}\n${DocLayoutJson.encode(owned.freeformLayout, owned.canvasSpec)}",
+            )
+        })
         addAll(chatMessages.map { SnapshotObject("Chat", it.id.toString(), it.authorDisplayName, it.createdAt, "${it.authorUsername}\n${it.body}\n${it.attachmentName.orEmpty()}") })
         addAll(workspaceFiles.map { SnapshotObject("File", it.id.toString(), it.displayName, it.updatedAt, "${it.displayName}\n${it.mimeType}\n${it.uri}\n${it.sizeBytes}") })
         addAll(workspaceComments.map { SnapshotObject("Comment", it.id.toString(), it.authorDisplayName, it.updatedAt, "${it.objectId}\n${it.body}\n${it.resolved}") })

@@ -204,6 +204,7 @@ import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.DocumentBlock
+import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.Edge
 import com.norfold.app.domain.EmbedBlock
@@ -213,6 +214,7 @@ import com.norfold.app.domain.EmojiInline
 import com.norfold.app.domain.FileBlock
 import com.norfold.app.domain.DocOutline
 import com.norfold.app.domain.DocCanvasSpec
+import com.norfold.app.domain.DocLayerOrder
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocPagination
 import com.norfold.app.domain.DocSectionAction
@@ -277,30 +279,38 @@ fun BlockNoteEditorScreen(
     modifier: Modifier,
     onOpenSidebar: () -> Unit,
 ) {
-    val note = state.selectedNote ?: return
+    val ownedDocument by viewModel.activeDocument.collectAsState()
+    val activeDocument = ownedDocument ?: return
+    val owner = activeDocument.owner
+    val editorKey = owner.documentId
+    val initialTitle = when (owner.type) {
+        DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == owner.id }?.title ?: "Untitled doc"
+        DocumentOwnerType.Task -> state.tasks.firstOrNull { it.id == owner.id }?.title ?: "Untitled task"
+        DocumentOwnerType.CalendarEvent -> state.calendarEvents.firstOrNull { it.id == owner.id }?.title ?: "Untitled event"
+    }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val emojiShortcodes = remember(context) { loadEmojiShortcodes(context) }
-    var title by remember(note.id) { mutableStateOf(note.title) }
-    val session = remember(note.id) { BlockEditorSession(note.document) }
-    var renderedDocument by remember(note.id) { mutableStateOf(session.document) }
-    var revision by remember(note.id) { mutableIntStateOf(0) }
-    var savedRevision by remember(note.id) { mutableIntStateOf(0) }
-    var editMode by remember(note.id) { mutableStateOf(false) }
-    var focusTarget by remember(note.id) { mutableStateOf<BlockCursor?>(null) }
-    var rangeAnchorId by remember(note.id) { mutableStateOf<String?>(null) }
-    var rangeExtentId by remember(note.id) { mutableStateOf<String?>(null) }
-    var chartBuilderRequest by remember(note.id) { mutableStateOf<ChartBuilderRequest?>(null) }
-    var mathBuilderRequest by remember(note.id) { mutableStateOf<MathBuilderRequest?>(null) }
-    var diagramBuilderRequest by remember(note.id) { mutableStateOf<DiagramBuilderRequest?>(null) }
-    var activeSelection by remember(note.id) { mutableStateOf<EditorSelection?>(null) }
-    var linkEditorRequest by remember(note.id) { mutableStateOf<LinkEditorRequest?>(null) }
+    var title by remember(editorKey) { mutableStateOf(initialTitle) }
+    val session = remember(editorKey) { BlockEditorSession(activeDocument.document) }
+    var renderedDocument by remember(editorKey) { mutableStateOf(session.document) }
+    var revision by remember(editorKey) { mutableIntStateOf(0) }
+    var savedRevision by remember(editorKey) { mutableIntStateOf(0) }
+    var editMode by remember(editorKey) { mutableStateOf(false) }
+    var focusTarget by remember(editorKey) { mutableStateOf<BlockCursor?>(null) }
+    var rangeAnchorId by remember(editorKey) { mutableStateOf<String?>(null) }
+    var rangeExtentId by remember(editorKey) { mutableStateOf<String?>(null) }
+    var chartBuilderRequest by remember(editorKey) { mutableStateOf<ChartBuilderRequest?>(null) }
+    var mathBuilderRequest by remember(editorKey) { mutableStateOf<MathBuilderRequest?>(null) }
+    var diagramBuilderRequest by remember(editorKey) { mutableStateOf<DiagramBuilderRequest?>(null) }
+    var activeSelection by remember(editorKey) { mutableStateOf<EditorSelection?>(null) }
+    var linkEditorRequest by remember(editorKey) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
-    val overlapViewport = remember(note.id) { FreeformViewport() }
+    val overlapViewport = remember(editorKey) { FreeformViewport() }
     // Page-mode paginated render path (a render path within Reflow, not a third mode): opt-in
     // WYSIWYG preview toggled from the doc-settings menu. Session-local by design — the reflow
     // list below stays the default and the only editing surface.
-    var paginatedView by remember(note.id) { mutableStateOf(false) }
+    var paginatedView by remember(editorKey) { mutableStateOf(false) }
     // The print-source WebView must outlive the composable frame that created it: the print
     // framework pulls pages from it asynchronously after the menu closes.
     var printSource by remember { mutableStateOf<WebView?>(null) }
@@ -322,8 +332,8 @@ fun BlockNoteEditorScreen(
         val request = scrollRequest ?: return@LaunchedEffect
         val entry = DocOutline.extract(renderedDocument).firstOrNull { it.blockId == request.blockId }
         val topId = entry?.topLevelId ?: request.blockId
-        if (note.overlapMode != DocOverlapMode.Reflow) {
-            val y = (note.freeformLayout[topId]?.y ?: 0f) - 12f
+        if (activeDocument.layoutMode != DocOverlapMode.Reflow) {
+            val y = (activeDocument.freeformLayout[topId]?.y ?: 0f) - 12f
             val yPx = with(screenDensity) { y.coerceAtLeast(0f).dp.toPx() }
             overlapViewport.offset = Offset(overlapViewport.offset.x, -yPx * overlapViewport.scale)
         } else {
@@ -349,16 +359,16 @@ fun BlockNoteEditorScreen(
     }
     // Cross-container drag: every rendered block reports its window bounds here; a drag hit-tests against
     // them to find the hovered block + edge, then drops via a DropTarget (reorder / move / edge-split).
-    val dragBounds = remember(note.id) { mutableStateMapOf<String, Rect>() }
-    var draggingId by remember(note.id) { mutableStateOf<String?>(null) }
-    var dragHoverId by remember(note.id) { mutableStateOf<String?>(null) }
-    var dragHoverEdge by remember(note.id) { mutableStateOf<Edge?>(null) }
+    val dragBounds = remember(editorKey) { mutableStateMapOf<String, Rect>() }
+    var draggingId by remember(editorKey) { mutableStateOf<String?>(null) }
+    var dragHoverId by remember(editorKey) { mutableStateOf<String?>(null) }
+    var dragHoverEdge by remember(editorKey) { mutableStateOf<Edge?>(null) }
     // Floating-clone state: window pointer, grab offset inside the block, and the block's bounds at
     // lift-off, so the clone tracks the finger at the same relative spot it was grabbed.
-    var dragPointer by remember(note.id) { mutableStateOf<Offset?>(null) }
-    var dragGrabOffset by remember(note.id) { mutableStateOf(Offset.Zero) }
-    var dragStartBounds by remember(note.id) { mutableStateOf<Rect?>(null) }
-    var editorRootOrigin by remember(note.id) { mutableStateOf(Offset.Zero) }
+    var dragPointer by remember(editorKey) { mutableStateOf<Offset?>(null) }
+    var dragGrabOffset by remember(editorKey) { mutableStateOf(Offset.Zero) }
+    var dragStartBounds by remember(editorKey) { mutableStateOf<Rect?>(null) }
+    var editorRootOrigin by remember(editorKey) { mutableStateOf(Offset.Zero) }
 
     fun changed(cursor: BlockCursor? = null) {
         renderedDocument = session.document
@@ -509,10 +519,10 @@ fun BlockNoteEditorScreen(
         }
     }
     LaunchedEffect(revision, title) {
-        if (revision == 0 && title == note.title) return@LaunchedEffect
+        if (revision == 0 && title == initialTitle) return@LaunchedEffect
         val savingRevision = revision
         delay(500)
-        viewModel.updateNoteDocument(note, title, session.document, session.dirtyBlockIds.toSet()).join()
+        viewModel.updateActiveDocument(owner, title, session.document, session.dirtyBlockIds.toSet()).join()
         session.markSaved()
         savedRevision = savingRevision
     }
@@ -520,12 +530,12 @@ fun BlockNoteEditorScreen(
     val latestDocument by rememberUpdatedState(renderedDocument)
     val latestRevision by rememberUpdatedState(revision)
     val latestSavedRevision by rememberUpdatedState(savedRevision)
-    DisposableEffect(lifecycleOwner, note.id) {
+    DisposableEffect(lifecycleOwner, editorKey) {
         fun flushPendingDocument() {
             val dirtyIds = session.dirtyBlockIds.toSet()
-            if (latestRevision == latestSavedRevision && latestTitle == note.title && dirtyIds.isEmpty()) return
+            if (latestRevision == latestSavedRevision && latestTitle == initialTitle && dirtyIds.isEmpty()) return
             val savingRevision = latestRevision
-            viewModel.updateNoteDocument(note, latestTitle, latestDocument, dirtyIds).invokeOnCompletion { error ->
+            viewModel.updateActiveDocument(owner, latestTitle, latestDocument, dirtyIds).invokeOnCompletion { error ->
                 if (error == null) {
                     session.markSaved()
                     savedRevision = savingRevision
@@ -574,19 +584,30 @@ fun BlockNoteEditorScreen(
             },
             onUndo = { if (session.undo()) changed() },
             onRedo = { if (session.redo()) changed() },
-            overlapMode = note.overlapMode,
+            overlapMode = activeDocument.layoutMode,
             onSetOverlapMode = { mode ->
                 if (mode == DocOverlapMode.Bounded) {
-                    val required = note.canvasSpec.pagesRequiredFor(note.freeformLayout)
-                    if (required > note.canvasSpec.pageCount) {
-                        viewModel.setCanvasSpec(note, note.canvasSpec.copy(pageCount = required))
+                    val required = activeDocument.canvasSpec.pagesRequiredFor(activeDocument.freeformLayout)
+                    if (required > activeDocument.canvasSpec.pageCount) {
+                        viewModel.updateActiveDocumentLayout(
+                            owner,
+                            session.document,
+                            mode,
+                            activeDocument.freeformLayout,
+                            activeDocument.canvasSpec.copy(pageCount = required),
+                        )
+                    } else {
+                        viewModel.updateActiveDocumentLayout(owner, session.document, mode, activeDocument.freeformLayout, activeDocument.canvasSpec)
                     }
+                } else {
+                    viewModel.updateActiveDocumentLayout(owner, session.document, mode, activeDocument.freeformLayout, activeDocument.canvasSpec)
                 }
-                viewModel.setOverlapMode(note, mode)
             },
-            canvasSpec = note.canvasSpec,
-            minimumCanvasPages = note.canvasSpec.pagesRequiredFor(note.freeformLayout),
-            onSetCanvasSpec = { viewModel.setCanvasSpec(note, it) },
+            canvasSpec = activeDocument.canvasSpec,
+            minimumCanvasPages = activeDocument.canvasSpec.pagesRequiredFor(activeDocument.freeformLayout),
+            onSetCanvasSpec = {
+                viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, activeDocument.freeformLayout, it)
+            },
             paginatedView = paginatedView,
             onTogglePaginatedView = { paginatedView = !paginatedView },
             onExportPdf = {
@@ -602,12 +623,12 @@ fun BlockNoteEditorScreen(
                             jobName,
                             view.createPrintDocumentAdapter(jobName),
                             PrintAttributes.Builder().setMediaSize(
-                                if (note.overlapMode == DocOverlapMode.Bounded) {
+                                if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
                                     PrintAttributes.MediaSize(
                                         "NORFOLD_DOCUMENT",
                                         "Norfold document",
-                                        (note.canvasSpec.width / 72f * 1000f).roundToInt(),
-                                        (note.canvasSpec.height / 72f * 1000f).roundToInt(),
+                                        (activeDocument.canvasSpec.width / 72f * 1000f).roundToInt(),
+                                        (activeDocument.canvasSpec.height / 72f * 1000f).roundToInt(),
                                     )
                                 } else {
                                     PrintAttributes.MediaSize.ISO_A4
@@ -618,8 +639,8 @@ fun BlockNoteEditorScreen(
                 }
                 web.loadDataWithBaseURL(
                     null,
-                    if (note.overlapMode == DocOverlapMode.Bounded) {
-                        MarkdownExporter.canvasPrintHtml(jobName, session.document, note.freeformLayout, note.canvasSpec)
+                    if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
+                        MarkdownExporter.canvasPrintHtml(jobName, session.document, activeDocument.freeformLayout, activeDocument.canvasSpec)
                     } else {
                         MarkdownExporter.printHtml(jobName, MarkdownBlockCodec.export(session.document))
                     },
@@ -781,31 +802,43 @@ fun BlockNoteEditorScreen(
                 },
             )
         }
-        if (note.overlapMode != DocOverlapMode.Reflow) {
+        if (activeDocument.layoutMode != DocOverlapMode.Reflow) {
             // Free-overlap mode: a completely freeform canvas (absolute x/y, explicit size, z-layers)
             // replaces the stacked list; the Reflow LazyColumn path below is untouched.
             FreeformDocCanvas(
                 blocks = renderedDocument.blocks,
-                layout = note.freeformLayout,
-                canvasSpec = note.canvasSpec.takeIf { note.overlapMode == DocOverlapMode.Bounded },
+                layout = activeDocument.freeformLayout,
+                canvasSpec = activeDocument.canvasSpec.takeIf { activeDocument.layoutMode == DocOverlapMode.Bounded },
                 editMode = editMode,
                 onSeedLayout = { seeded ->
-                    if (note.overlapMode == DocOverlapMode.Bounded) {
-                        val required = note.canvasSpec.pagesRequiredFor(seeded)
-                        viewModel.updateCanvasLayout(
-                            note,
+                    if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
+                        val required = activeDocument.canvasSpec.pagesRequiredFor(seeded)
+                        viewModel.updateActiveDocumentLayout(
+                            owner,
+                            session.document,
+                            activeDocument.layoutMode,
                             seeded,
-                            note.canvasSpec.copy(pageCount = maxOf(required, note.canvasSpec.pageCount)),
+                            activeDocument.canvasSpec.copy(pageCount = maxOf(required, activeDocument.canvasSpec.pageCount)),
                         )
                     } else {
-                        viewModel.updateFreeformLayout(note, seeded)
+                        viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, seeded, activeDocument.canvasSpec)
                     }
                 },
-                onCommitPlacement = { id, placement -> viewModel.updateBlockPlacement(note, id, placement) },
-                onBringToFront = { viewModel.bringBlockToFront(note, it) },
-                onBringForward = { viewModel.bringBlockForward(note, it) },
-                onSendBackward = { viewModel.sendBlockBackward(note, it) },
-                onSendToBack = { viewModel.sendBlockToBack(note, it) },
+                onCommitPlacement = { id, placement ->
+                    viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, activeDocument.freeformLayout + (id to placement), activeDocument.canvasSpec)
+                },
+                onBringToFront = { id ->
+                    viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, DocLayerOrder.bringToFront(activeDocument.freeformLayout, id), activeDocument.canvasSpec)
+                },
+                onBringForward = { id ->
+                    viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, DocLayerOrder.bringForward(activeDocument.freeformLayout, id), activeDocument.canvasSpec)
+                },
+                onSendBackward = { id ->
+                    viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, DocLayerOrder.sendBackward(activeDocument.freeformLayout, id), activeDocument.canvasSpec)
+                },
+                onSendToBack = { id ->
+                    viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, DocLayerOrder.sendToBack(activeDocument.freeformLayout, id), activeDocument.canvasSpec)
+                },
                 onBackgroundTap = { if (editMode) { editMode = false; activeSelection = null } },
                 onBackgroundDoubleTap = { if (!editMode) editMode = true },
                 viewport = overlapViewport,

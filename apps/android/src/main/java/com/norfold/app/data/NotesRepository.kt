@@ -582,6 +582,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun deleteWorkspace(id: Long): Boolean {
         if (dao.allWorkspaces().size <= 1) return false
         dao.deleteNoteDocumentsForWorkspace(id)
+        dao.deleteTaskDocumentsForWorkspace(id)
+        dao.deleteCalendarEventDocumentsForWorkspace(id)
         dao.deleteNotesForWorkspace(id)
         dao.deleteNotebooksForWorkspace(id)
         dao.deleteTasksForWorkspace(id)
@@ -608,6 +610,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     suspend fun documentByOwner(owner: DocumentOwner): OwnedDocument? =
         dao.documentByOwner(owner.type.storageValue, owner.id)?.toDomain()
+
+    fun observeDocument(owner: DocumentOwner): Flow<OwnedDocument?> =
+        dao.observeDocumentByOwner(owner.type.storageValue, owner.id).map { it?.toDomain() }
 
     suspend fun saveDocument(
         owner: DocumentOwner,
@@ -821,24 +826,30 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val boardId = ensureDefaultTaskBoard(activeWs())
         val columnId = ensureTaskColumnForStatus(boardId, status)
         val order = dao.maxTaskSortOrder(boardId, columnId) + 1
-        val id = dao.insertTask(
-            TaskEntity(
-                title = title.ifBlank { "New task" },
-                description = description,
-                assignee = assignee,
-                status = status.name,
-                priority = priority.name,
-                dueAt = dueAt,
-                labels = "",
-                createdAt = now,
-                updatedAt = now,
-                workspaceId = activeWs(),
-                taskBoardId = boardId,
-                taskColumnId = columnId,
-                sortOrder = order,
-            ),
-        )
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Task, id, title.ifBlank { "New task" }, description, "", "task", 0xFF56CC98)
+        val initialDocument = MarkdownBlockCodec.import(description)
+        val summary = initialDocument.plainText()
+        val id = database.withTransaction {
+            val taskId = dao.insertTask(
+                TaskEntity(
+                    title = title.ifBlank { "New task" },
+                    description = summary,
+                    assignee = assignee,
+                    status = status.name,
+                    priority = priority.name,
+                    dueAt = dueAt,
+                    labels = "",
+                    createdAt = now,
+                    updatedAt = now,
+                    workspaceId = activeWs(),
+                    taskBoardId = boardId,
+                    taskColumnId = columnId,
+                    sortOrder = order,
+                ),
+            )
+            persistDocument(DocumentOwner.task(taskId), initialDocument, initialDocument.blocks.mapTo(linkedSetOf()) { it.id }, null, null, null, now)
+            taskId
+        }
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Task, id, title.ifBlank { "New task" }, summary, "", "task", 0xFF56CC98)
         recordActivity(WorkspaceActivityType.Created, "You", "Created task", title.ifBlank { "New task" }, objectType = WorkspaceObjectType.Task, sourceId = id)
         recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created task", afterValue = title.ifBlank { "New task" })
         return id
@@ -1093,10 +1104,18 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun updateTaskMeta(task: TaskItem, priority: TaskPriority, dueAt: Long?, assignee: String) =
         dao.updateTaskMeta(task.id, priority.name, dueAt, assignee, System.currentTimeMillis())
     suspend fun updateTaskDetails(task: TaskItem, title: String, description: String, status: TaskStatus, priority: TaskPriority, dueAt: Long?, assignee: String, labels: String) =
-        dao.updateTaskDetails(
+        updateTaskDetailsAndDocument(task, title, description, status, priority, dueAt, assignee, labels)
+
+    private suspend fun updateTaskDetailsAndDocument(task: TaskItem, title: String, description: String, status: TaskStatus, priority: TaskPriority, dueAt: Long?, assignee: String, labels: String) {
+        val current = documentByOwner(DocumentOwner.task(task.id))
+        val document = if (description != task.description) MarkdownBlockCodec.import(description) else current?.document ?: MarkdownBlockCodec.import(task.description)
+        val summary = document.plainText()
+        database.withTransaction {
+            persistDocument(DocumentOwner.task(task.id), document, document.blocks.mapTo(linkedSetOf()) { it.id }, null, null, null)
+            dao.updateTaskDetails(
             id = task.id,
             title = title.ifBlank { "Untitled task" },
-            description = description,
+            description = summary,
             status = status.name,
             priority = priority.name,
             dueAt = dueAt,
@@ -1108,6 +1127,64 @@ class DocsRepository(private val database: NorfoldDatabase) {
             attachmentSizeBytes = task.attachmentSizeBytes,
             updatedAt = System.currentTimeMillis(),
         )
+        }
+    }
+
+    suspend fun ensureTaskDocument(task: TaskItem): OwnedDocument {
+        documentByOwner(DocumentOwner.task(task.id))?.let { return it }
+        val initial = MarkdownBlockCodec.import(task.description)
+        val saved = saveDocument(DocumentOwner.task(task.id), initial)
+        val summary = saved.document.plainText()
+        if (summary != task.description) {
+            dao.updateTaskDetails(
+                task.id,
+                task.title,
+                summary,
+                task.status.name,
+                task.priority.name,
+                task.dueAt,
+                task.assignee,
+                task.labels,
+                task.attachmentName,
+                task.attachmentMimeType,
+                task.attachmentUri,
+                task.attachmentSizeBytes,
+                saved.updatedAt,
+            )
+        }
+        return saved
+    }
+
+    suspend fun updateTaskDocument(
+        task: TaskItem,
+        title: String,
+        document: BlockDocument,
+        dirtyBlockIds: Set<String>,
+    ) {
+        val now = System.currentTimeMillis()
+        val normalized = database.withTransaction {
+            val persisted = persistDocument(DocumentOwner.task(task.id), document, dirtyBlockIds, null, null, null, now)
+            dao.updateTaskDetails(
+                task.id,
+                title.ifBlank { "Untitled task" },
+                persisted.document.plainText(),
+                task.status.name,
+                task.priority.name,
+                task.dueAt,
+                task.assignee,
+                task.labels,
+                task.attachmentName,
+                task.attachmentMimeType,
+                task.attachmentUri,
+                task.attachmentSizeBytes,
+                now,
+            )
+            persisted.document
+        }
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Task, task.id, title.ifBlank { "Untitled task" }, normalized.plainText().take(160), task.labels, "task", 0xFF56CC98)
+        recordActivity(WorkspaceActivityType.Updated, "You", "Updated task doc", title.ifBlank { "Untitled task" }, objectType = WorkspaceObjectType.Task, sourceId = task.id, objectId = objectId)
+        recordHistory(WorkspaceHistoryType.Updated, objectId, "You", "Updated task doc", beforeValue = task.description.take(500), afterValue = normalized.plainText().take(500))
+    }
     suspend fun updateTaskAttachment(task: TaskItem, name: String?, mimeType: String?, uri: String?, sizeBytes: Long?) =
         dao.updateTaskAttachment(task.id, name, mimeType, uri, sizeBytes, System.currentTimeMillis()).also {
             if (!name.isNullOrBlank() && !uri.isNullOrBlank()) {
@@ -1200,6 +1277,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
     }
 
     suspend fun setTaskPropertyValue(task: TaskItem, property: TaskPropertyDefinition, value: String) {
+        if (property.type == TaskPropertyType.Text) {
+            val document = MarkdownBlockCodec.import(value)
+            updateTaskDocument(task, task.title, document, document.blocks.mapTo(linkedSetOf()) { it.id })
+            return
+        }
         val now = System.currentTimeMillis()
         val existing = dao.taskPropertyValue(task.id, property.id)
         if (existing == null) {
@@ -1271,7 +1353,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
         }
     }
 
-    suspend fun deleteTask(task: TaskItem) = dao.deleteTask(task.id)
+    suspend fun deleteTask(task: TaskItem) = database.withTransaction {
+        dao.deleteDocumentForOwner(DocumentOwnerType.Task.storageValue, task.id)
+        dao.deleteTask(task.id)
+    }
 
     private suspend fun normalizeTaskPropertyOrders(boardId: Long) {
         val now = System.currentTimeMillis()
@@ -1487,10 +1572,23 @@ class DocsRepository(private val database: NorfoldDatabase) {
         mode: DocOverlapMode,
         layout: Map<String, FreeformPlacement>,
         canvasSpec: DocCanvasSpec,
+    ) =
+        updateOwnedDocumentLayout(DocumentOwner.note(note.id), note.document, mode, layout, canvasSpec)
+
+    suspend fun updateOwnedDocumentLayout(
+        owner: DocumentOwner,
+        document: BlockDocument,
+        mode: DocOverlapMode,
+        layout: Map<String, FreeformPlacement>,
+        canvasSpec: DocCanvasSpec,
     ) = database.withTransaction {
         val now = System.currentTimeMillis()
-        persistDocument(DocumentOwner.note(note.id), note.document, emptySet(), mode, layout, canvasSpec, now)
-        dao.touchNote(note.id, now)
+        persistDocument(owner, document, emptySet(), mode, layout, canvasSpec, now)
+        when (owner.type) {
+            DocumentOwnerType.Note -> dao.touchNote(owner.id, now)
+            DocumentOwnerType.Task -> dao.touchTask(owner.id, now)
+            DocumentOwnerType.CalendarEvent -> dao.touchCalendarEvent(owner.id, now)
+        }
     }
 
     suspend fun deleteNote(note: Note) = database.withTransaction {
@@ -1615,6 +1713,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
         taskPropertyDefinitions = dao.allTaskPropertyDefinitions().map { it.toDomain() },
         taskPropertyValues = dao.allTaskPropertyValues().map { it.toDomain() },
         taskChecklistItems = dao.allTaskChecklistItems().map { it.toDomain() },
+        ownedDocuments = dao.allDocuments()
+            .filterNot { it.ownerType == DocumentOwnerType.Note.storageValue }
+            .mapNotNull { document -> dao.documentByOwner(document.ownerType, document.ownerId)?.toDomain() },
         goals = dao.allGoals().map { it.toDomain() },
         calendarEvents = dao.allCalendarEvents().map { it.toDomain() },
         chatMessages = dao.allChatMessages().map { it.toDomain() },
@@ -1754,6 +1855,17 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     sortOrder = it.sortOrder,
                     colorArgb = it.colorArgb,
                 ),
+            )
+        }
+        snapshot.ownedDocuments.forEach { owned ->
+            persistDocument(
+                owner = owned.owner,
+                document = owned.document,
+                dirtyBlockIds = owned.document.blocks.mapTo(linkedSetOf()) { it.id },
+                layoutMode = owned.layoutMode,
+                freeformLayout = owned.freeformLayout,
+                canvasSpec = owned.canvasSpec,
+                updatedAt = owned.updatedAt,
             )
         }
         snapshot.taskPropertyValues.forEach {
