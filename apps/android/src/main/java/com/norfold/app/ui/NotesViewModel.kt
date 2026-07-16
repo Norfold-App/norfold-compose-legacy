@@ -193,6 +193,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val conflictReport = MutableStateFlow<ParsedSyncConflictReport?>(null)
     private val diagnostics = MutableStateFlow(diagnosticsStore.state())
     private val message = MutableStateFlow<String?>(null)
+    /** Sub-state of the email auth flow: code entry after signup, code + new password during recovery. */
+    val emailAuthPhase = MutableStateFlow<EmailAuthPhase>(EmailAuthPhase.None)
     private var sessionSyncSecret: String? = null
     private var syncCooldownDeadlineElapsedMs = 0L
     private var backgroundedAtElapsedMs: Long? = null
@@ -429,14 +431,100 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             message.value = "Enter a valid email and a password with at least 8 characters"
             return@launch
         }
-        runCatching {
-            if (signUp) NorfoldSupabase.signUpWithEmail(email, password)
-            else NorfoldSupabase.signInWithEmail(email, password)
-        }.onSuccess {
-            message.value = if (signUp) "Check your email to confirm the account" else "Signed in"
-        }.onFailure {
-            message.value = it.message ?: "Email authentication failed"
+        if (signUp) {
+            runCatching { NorfoldSupabase.signUpWithEmail(email, password) }
+                .onSuccess {
+                    emailAuthPhase.value = EmailAuthPhase.AwaitSignupCode(email)
+                    message.value = "We emailed a 6-digit code to $email"
+                }
+                .onFailure { message.value = it.message ?: "Could not create the account" }
+        } else {
+            runCatching { NorfoldSupabase.signInWithEmail(email, password) }
+                .onSuccess {
+                    emailAuthPhase.value = EmailAuthPhase.Completed
+                    message.value = "Signed in"
+                }
+                .onFailure { error ->
+                    if (error.message?.contains("confirm", ignoreCase = true) == true) {
+                        // Account exists but was never verified — resend the code and finish verification.
+                        runCatching { NorfoldSupabase.resendSignupCode(email) }
+                        emailAuthPhase.value = EmailAuthPhase.AwaitSignupCode(email)
+                        message.value = "This email still needs verification — we sent a new 6-digit code"
+                    } else {
+                        message.value = error.message ?: "Email sign-in failed"
+                    }
+                }
         }
+    }
+
+    fun verifyEmailCode(code: String) = viewModelScope.launch {
+        val trimmed = code.trim()
+        if (trimmed.length != 6 || trimmed.any { !it.isDigit() }) {
+            message.value = "Enter the 6-digit code from the email"
+            return@launch
+        }
+        when (val phase = emailAuthPhase.value) {
+            is EmailAuthPhase.AwaitSignupCode ->
+                runCatching { NorfoldSupabase.verifySignupCode(phase.email, trimmed) }
+                    .onSuccess {
+                        emailAuthPhase.value = EmailAuthPhase.Completed
+                        message.value = "Email verified — you're signed in"
+                    }
+                    .onFailure { message.value = it.message ?: "That code didn't work — try again or resend" }
+            is EmailAuthPhase.AwaitRecoveryCode ->
+                runCatching { NorfoldSupabase.verifyRecoveryCode(phase.email, trimmed) }
+                    .onSuccess { emailAuthPhase.value = EmailAuthPhase.AwaitNewPassword(phase.email) }
+                    .onFailure { message.value = it.message ?: "That code didn't work — try again or resend" }
+            else -> Unit
+        }
+    }
+
+    fun resendEmailCode() = viewModelScope.launch {
+        when (val phase = emailAuthPhase.value) {
+            is EmailAuthPhase.AwaitSignupCode ->
+                runCatching { NorfoldSupabase.resendSignupCode(phase.email) }
+                    .onSuccess { message.value = "New code sent to ${phase.email}" }
+                    .onFailure { message.value = it.message ?: "Could not resend the code" }
+            is EmailAuthPhase.AwaitRecoveryCode ->
+                runCatching { NorfoldSupabase.requestPasswordReset(phase.email) }
+                    .onSuccess { message.value = "New code sent to ${phase.email}" }
+                    .onFailure { message.value = it.message ?: "Could not resend the code" }
+            else -> Unit
+        }
+    }
+
+    fun beginPasswordReset(email: String) = viewModelScope.launch {
+        if (email.isBlank()) {
+            message.value = "Enter your email address first"
+            return@launch
+        }
+        runCatching { NorfoldSupabase.requestPasswordReset(email) }
+            .onSuccess {
+                emailAuthPhase.value = EmailAuthPhase.AwaitRecoveryCode(email)
+                message.value = "We emailed a 6-digit reset code to $email"
+            }
+            .onFailure { message.value = it.message ?: "Could not start the password reset" }
+    }
+
+    fun completePasswordReset(newPassword: String) = viewModelScope.launch {
+        if (newPassword.length < 8) {
+            message.value = "Use a password with at least 8 characters"
+            return@launch
+        }
+        runCatching { NorfoldSupabase.updatePassword(newPassword) }
+            .onSuccess {
+                emailAuthPhase.value = EmailAuthPhase.Completed
+                message.value = "Password updated — you're signed in"
+            }
+            .onFailure { message.value = it.message ?: "Could not update the password" }
+    }
+
+    fun cancelEmailAuth() {
+        emailAuthPhase.value = EmailAuthPhase.None
+    }
+
+    fun consumeEmailAuthCompleted() {
+        if (emailAuthPhase.value == EmailAuthPhase.Completed) emailAuthPhase.value = EmailAuthPhase.None
     }
 
     fun createGoal(title: String) = viewModelScope.launch {
@@ -1570,4 +1658,20 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+}
+
+sealed interface EmailAuthPhase {
+    data object None : EmailAuthPhase
+
+    /** Signup succeeded; waiting for the 6-digit confirmation code sent to [email]. */
+    data class AwaitSignupCode(val email: String) : EmailAuthPhase
+
+    /** Password reset requested; waiting for the 6-digit recovery code sent to [email]. */
+    data class AwaitRecoveryCode(val email: String) : EmailAuthPhase
+
+    /** Recovery code accepted; waiting for the user to choose a new password. */
+    data class AwaitNewPassword(val email: String) : EmailAuthPhase
+
+    /** Auth finished with a live session; UI should advance and then call consumeEmailAuthCompleted(). */
+    data object Completed : EmailAuthPhase
 }

@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -61,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +76,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -81,6 +84,7 @@ import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.EmailAuthPhase
 import coil.compose.AsyncImage
 import com.norfold.app.BuildConfig
 import com.norfold.app.branding.NorfoldLogo
@@ -112,6 +116,13 @@ fun NorfoldOnboardingScreen(
     var emailUpdates by rememberSaveable { mutableStateOf(false) }
     var reminders by rememberSaveable { mutableStateOf(true) }
     var productTips by rememberSaveable { mutableStateOf(false) }
+    val authPhase by viewModel.emailAuthPhase.collectAsState()
+    LaunchedEffect(authPhase) {
+        if (authPhase == EmailAuthPhase.Completed) {
+            viewModel.consumeEmailAuthCompleted()
+            if (step <= 3) step = 5
+        }
+    }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -190,7 +201,12 @@ fun NorfoldOnboardingScreen(
                         footerTitle = "Made for deep work",
                         footer = "Distraction-free, offline-ready, and built to help you focus.",
                     )
-                    3 -> SignInStep(email, { email = it }, password, { password = it }, signUp, { signUp = it }, onGoogleSignIn, onEmailSignIn) { step = 5 }
+                    3 -> when (val phase = authPhase) {
+                        is EmailAuthPhase.AwaitSignupCode -> EmailCodeStep(phase.email, recovery = false, viewModel::verifyEmailCode, viewModel::resendEmailCode, viewModel::cancelEmailAuth)
+                        is EmailAuthPhase.AwaitRecoveryCode -> EmailCodeStep(phase.email, recovery = true, viewModel::verifyEmailCode, viewModel::resendEmailCode, viewModel::cancelEmailAuth)
+                        is EmailAuthPhase.AwaitNewPassword -> NewPasswordStep(viewModel::completePasswordReset)
+                        else -> SignInStep(email, { email = it }, password, { password = it }, signUp, { signUp = it }, onGoogleSignIn, onEmailSignIn, { viewModel.beginPasswordReset(email.trim()) }) { step = 5 }
+                    }
                     4 -> RestoreStep(backupPassword, { backupPassword = it }) { onRestoreBackup(backupPassword) }
                     5 -> ProfileStep(fullName, { fullName = it }, displayName, { displayName = it }, avatarUri) {
                         avatarPicker.launch(arrayOf("image/*"))
@@ -320,7 +336,7 @@ private fun WorkflowPreview() {
 }
 
 @Composable
-private fun SignInStep(email: String, onEmail: (String) -> Unit, password: String, onPassword: (String) -> Unit, signUp: Boolean, onMode: (Boolean) -> Unit, onGoogle: () -> Unit, onEmailAction: (String, String, Boolean) -> Unit, onOffline: () -> Unit) {
+private fun SignInStep(email: String, onEmail: (String) -> Unit, password: String, onPassword: (String) -> Unit, signUp: Boolean, onMode: (Boolean) -> Unit, onGoogle: () -> Unit, onEmailAction: (String, String, Boolean) -> Unit, onForgotPassword: () -> Unit, onOffline: () -> Unit) {
     Text("Let's get you in", fontSize = 30.sp, fontWeight = FontWeight.Black)
     Text("Sign in to access your workspace or create a new account.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).padding(3.dp)) {
@@ -332,7 +348,53 @@ private fun SignInStep(email: String, onEmail: (String) -> Unit, password: Strin
     OutlinedTextField(email, onEmail, Modifier.fillMaxWidth(), label = { Text("Email address") }, leadingIcon = { Icon(Icons.Outlined.Email, null) }, singleLine = true)
     OutlinedTextField(password, onPassword, Modifier.fillMaxWidth(), label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
     OnboardingPrimaryButton(if (signUp) "Create account" else "Sign in") { onEmailAction(email.trim(), password, signUp) }
+    if (!signUp) TextButton(onClick = onForgotPassword) { Text("Forgot password?") }
     TextButton(onClick = onOffline) { Text("Continue offline") }
+}
+
+@Composable
+private fun EmailCodeStep(email: String, recovery: Boolean, onVerify: (String) -> Unit, onResend: () -> Unit, onBack: () -> Unit) {
+    var code by rememberSaveable { mutableStateOf("") }
+    StepIcon(Icons.Outlined.Email)
+    Text(if (recovery) "Reset your password" else "Check your email", fontSize = 30.sp, fontWeight = FontWeight.Black)
+    Text(
+        "Enter the 6-digit code we sent to $email.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+    )
+    OutlinedTextField(
+        code,
+        { value -> code = value.filter(Char::isDigit).take(6) },
+        Modifier.fillMaxWidth(),
+        label = { Text("6-digit code") },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+    )
+    OnboardingPrimaryButton(if (recovery) "Verify code" else "Verify and continue") { onVerify(code) }
+    TextButton(onClick = onResend) { Text("Resend code") }
+    TextButton(onClick = onBack) { Text(if (recovery) "Back to sign in" else "Use a different email") }
+}
+
+@Composable
+private fun NewPasswordStep(onSubmit: (String) -> Unit) {
+    var newPassword by rememberSaveable { mutableStateOf("") }
+    var confirm by rememberSaveable { mutableStateOf("") }
+    val mismatch = confirm.isNotEmpty() && confirm != newPassword
+    StepIcon(Icons.Outlined.Lock)
+    Text("Choose a new password", fontSize = 30.sp, fontWeight = FontWeight.Black)
+    Text("Code accepted. Set a new password for your account.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    OutlinedTextField(newPassword, { newPassword = it }, Modifier.fillMaxWidth(), label = { Text("New password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+    OutlinedTextField(
+        confirm,
+        { confirm = it },
+        Modifier.fillMaxWidth(),
+        label = { Text("Confirm password") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        isError = mismatch,
+        supportingText = { if (mismatch) Text("Passwords don't match") },
+    )
+    OnboardingPrimaryButton("Update password") { if (!mismatch && newPassword.isNotEmpty()) onSubmit(newPassword) }
 }
 
 @Composable
