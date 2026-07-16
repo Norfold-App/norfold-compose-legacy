@@ -22,14 +22,14 @@ class BlockDocumentFoundationTest {
     }
 
     @Test
-    fun `render modes and embed size survive json round trip`() {
+    fun `engine block payloads and embed size survive json round trip`() {
         val document = BlockDocument(
             listOf(
-                CodeBlock(code = "println(42)", renderMode = BlockRenderMode.Source),
-                TableBlock(headers = listOf(TableCell(listOf(InlineText("A")))), renderMode = BlockRenderMode.Source),
-                ChartBlock(vegaLiteSpec = "{\"mark\":\"bar\"}", renderMode = BlockRenderMode.Source),
-                MathBlock(tex = "x^2", renderMode = BlockRenderMode.Source),
-                MermaidBlock(code = "graph TD; A-->B", renderMode = BlockRenderMode.Source),
+                CodeBlock(code = "println(42)"),
+                TableBlock(headers = listOf(TableCell(listOf(InlineText("A"))))),
+                ChartBlock(vegaLiteSpec = "{\"mark\":\"bar\"}"),
+                MathBlock(tex = "x^2"),
+                MermaidBlock(code = "graph TD; A-->B"),
                 EmbedBlock(url = "https://example.com", displayHeightDp = 286f),
             ),
         )
@@ -38,16 +38,6 @@ class BlockDocumentFoundationTest {
 
         assertEquals(document, restored)
         assertEquals(286f, (restored.blocks.last() as EmbedBlock).displayHeightDp)
-        assertTrue(restored.blocks.dropLast(1).all {
-            when (it) {
-                is CodeBlock -> it.renderMode == BlockRenderMode.Source
-                is TableBlock -> it.renderMode == BlockRenderMode.Source
-                is ChartBlock -> it.renderMode == BlockRenderMode.Source
-                is MathBlock -> it.renderMode == BlockRenderMode.Source
-                is MermaidBlock -> it.renderMode == BlockRenderMode.Source
-                else -> false
-            }
-        })
     }
 
     @Test

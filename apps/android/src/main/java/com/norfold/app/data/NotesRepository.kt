@@ -1730,7 +1730,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
             taskKanbanEngine = settings.taskKanbanEngine,
             taskSwipeStartAction = settings.taskSwipeStartAction.name,
             taskSwipeEndAction = settings.taskSwipeEndAction.name,
-            noteRenderEngine = settings.noteRenderEngine.name,
+            noteRenderEngine = "Auto",
             onboardingComplete = settings.onboardingComplete,
             workspacePurpose = settings.workspacePurpose,
             calendarDefaultView = settings.calendarDefaultView,

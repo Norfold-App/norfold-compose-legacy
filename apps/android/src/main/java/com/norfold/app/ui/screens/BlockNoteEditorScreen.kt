@@ -108,7 +108,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.Stable
@@ -193,7 +192,6 @@ import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.UnknownBlock
 import com.norfold.app.domain.BlockEditorSession
-import com.norfold.app.domain.BlockRenderMode
 import com.norfold.app.domain.BoldInline
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
@@ -257,9 +255,6 @@ import com.norfold.app.ui.LocalContextualMenuColor
 import com.norfold.app.ui.LocalContextualMenuStyle
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
-import com.norfold.app.ui.components.MarkdownPreview
-import com.norfold.app.ui.components.RenderCache
-import com.norfold.app.ui.components.markdownRenderCached
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.ChartBuilderSheet
 import com.norfold.app.ui.components.DiagramBuilderSheet
@@ -351,7 +346,6 @@ fun BlockNoteEditorScreen(
         }
         viewModel.consumeScrollToBlock()
     }
-    val listScrolling by remember { derivedStateOf { listState.isScrollInProgress } }
     val rangeBounds = remember(renderedDocument, rangeAnchorId, rangeExtentId) {
         val anchorIndex = renderedDocument.blocks.indexOfFirst { it.id == rangeAnchorId }
         val extentIndex = renderedDocument.blocks.indexOfFirst { it.id == (rangeExtentId ?: rangeAnchorId) }
@@ -749,7 +743,6 @@ fun BlockNoteEditorScreen(
                     rangeExtentId = block.id
                 },
                 onExtendRangeSelection = { rangeExtentId = block.id },
-                scrolling = listScrolling,
                 onEditChart = { chart -> chartBuilderRequest = ChartBuilderRequest(editingId = chart.id, initialSpec = chart.vegaLiteSpec) },
                 onEditMath = { math ->
                     mathBuilderRequest = MathBuilderRequest(
@@ -1450,24 +1443,6 @@ private fun DocumentRangeToolbar(
 private enum class BlockSurfaceMode { View, Edit }
 private enum class InsertBlockType { Text, Heading, BulletList, NumberedList, TodoList, Quote, Callout, Container, Divider, Code, Table, Image, File, Embed, Chart, Math, Mermaid }
 
-private fun DocumentBlock.renderModeOrNull(): BlockRenderMode? = when (this) {
-    is CodeBlock -> renderMode
-    is TableBlock -> renderMode
-    is ChartBlock -> renderMode
-    is MathBlock -> renderMode
-    is MermaidBlock -> renderMode
-    else -> null
-}
-
-private fun DocumentBlock.withRenderMode(mode: BlockRenderMode): DocumentBlock = when (this) {
-    is CodeBlock -> copy(renderMode = mode)
-    is TableBlock -> copy(renderMode = mode)
-    is ChartBlock -> copy(renderMode = mode)
-    is MathBlock -> copy(renderMode = mode)
-    is MermaidBlock -> copy(renderMode = mode)
-    else -> this
-}
-
 /** Snap distance (dp) for the free-overlap alignment guides. */
 private const val FreeformSnapThresholdDp = 6f
 
@@ -2095,24 +2070,6 @@ private fun BlockEditorHeader(
                             onExportDocx()
                         },
                     )
-                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Re-render all blocks")
-                                Text(
-                                    "Clears the render cache and redraws every engine block",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                        onClick = {
-                            showDocSettings = false
-                            RenderCache.rerenderAll()
-                        },
-                    )
                 }
             }
         }
@@ -2146,7 +2103,6 @@ private fun SharedBlockRow(
     selectedForRange: Boolean,
     onStartRangeSelection: () -> Unit,
     onExtendRangeSelection: () -> Unit,
-    scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
     onEditMath: (MathBlock) -> Unit,
     onEditDiagram: (MermaidBlock) -> Unit,
@@ -2257,7 +2213,6 @@ private fun SharedBlockRow(
                 onSplit = onSplit,
                 onMerge = onMerge,
                 onInsert = onInsert,
-                scrolling = scrolling,
                 onEditChart = onEditChart,
                 onEditMath = onEditMath,
                 onEditDiagram = onEditDiagram,
@@ -2280,15 +2235,6 @@ private fun SharedBlockRow(
                     containerColor = menuContainer,
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
-                    block.renderModeOrNull()?.let { renderMode ->
-                        DropdownMenuItem(
-                            text = { Text(if (renderMode == BlockRenderMode.Render) "Show source" else "Render") },
-                            onClick = {
-                                menu = false
-                                onReplace(block.withRenderMode(if (renderMode == BlockRenderMode.Render) BlockRenderMode.Source else BlockRenderMode.Render))
-                            },
-                        )
-                    }
                     when (block) {
                         is ChartBlock -> DropdownMenuItem({ Text("Edit chart") }, onClick = { menu = false; onEditChart(block) })
                         is ImageBlock -> DropdownMenuItem({ Text("Cycle image layout") }, onClick = {
@@ -2358,8 +2304,6 @@ private fun DocumentBlock.isTextFamily(): Boolean = when (this) {
 
 @Composable
 private fun BlockCloneContent(block: DocumentBlock) {
-    // Non-interactive view-mode render used by the floating drag clone; scrolling=true keeps heavy
-    // blocks (webview charts/diagrams) in their lightweight placeholder state during the drag.
     RenderBlock(
         block = block,
         mode = BlockSurfaceMode.View,
@@ -2376,7 +2320,6 @@ private fun BlockCloneContent(block: DocumentBlock) {
         onSplit = {},
         onMerge = {},
         onInsert = {},
-        scrolling = true,
         onEditChart = {},
         onEditMath = {},
         onEditDiagram = {},
@@ -2402,7 +2345,6 @@ private fun RenderBlock(
     onSplit: (Int) -> Unit,
     onMerge: () -> Unit,
     onInsert: (InsertBlockType) -> Unit,
-    scrolling: Boolean,
     onEditChart: (ChartBlock) -> Unit,
     onEditMath: (MathBlock) -> Unit,
     onEditDiagram: (MermaidBlock) -> Unit,
@@ -2516,23 +2458,20 @@ private fun RenderBlock(
                 blockId = block.id,
                 label = "Code${block.language.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()}",
                 source = block.code,
-                markdown = "```${block.language}\n${block.code}\n```",
                 mode = mode,
                 editorHeightDp = block.editorHeightDp,
                 onSourceChange = { onReplace(block.copy(code = it)) },
                 onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
-                scrolling = scrolling,
-                nativeCode = true,
-                showSource = block.renderMode == BlockRenderMode.Source,
+                contentKind = EngineContentKind.Code,
             )
         }
-        is TableBlock -> if (block.renderMode == BlockRenderMode.Source) TableSourceBlock(block, mode, onReplace) else NativeTable(block, mode, onReplace)
+        is TableBlock -> NativeTable(block, mode, onReplace)
         is ImageBlock -> EditableImageBlock(block, mode, onReplace)
         is FileBlock -> EditableFileBlock(block, mode, onReplace)
         is EmbedBlock -> EditableEmbedBlock(block, mode, onReplace)
-        is ChartBlock -> EditableChartBlock(block, mode, scrolling, onReplace, onEditChart)
-        is MathBlock -> EditableMathBlock(block, mode, scrolling, onReplace, onEditMath)
-        is MermaidBlock -> EditableMermaidBlock(block, mode, scrolling, onReplace, onEditDiagram)
+        is ChartBlock -> EditableChartBlock(block, mode, onReplace, onEditChart)
+        is MathBlock -> EditableMathBlock(block, mode, onReplace, onEditMath)
+        is MermaidBlock -> EditableMermaidBlock(block, mode, onReplace, onEditDiagram)
     }
 }
 
@@ -2818,113 +2757,58 @@ private fun ListBlock(items: List<List<InlineNode>>, marker: String) {
 }
 
 @Composable
-private fun EditableMathBlock(
-    block: MathBlock,
-    mode: BlockSurfaceMode,
-    scrolling: Boolean,
-    onReplace: (DocumentBlock) -> Unit,
-    onEditMath: (MathBlock) -> Unit,
-) {
+private fun EditableMathBlock(block: MathBlock, mode: BlockSurfaceMode, onReplace: (DocumentBlock) -> Unit, onEditMath: (MathBlock) -> Unit) {
     Column {
         if (mode == BlockSurfaceMode.Edit) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = { onEditMath(block) }) { Text("Edit equation") }
-                TextButton(onClick = {
-                    onReplace(
-                        block.copy(
-                            renderMode = if (block.renderMode == BlockRenderMode.Source) {
-                                BlockRenderMode.Render
-                            } else {
-                                BlockRenderMode.Source
-                            },
-                        ),
-                    )
-                }) { Text(if (block.renderMode == BlockRenderMode.Source) "Render" else "Advanced") }
-            }
+            Button(onClick = { onEditMath(block) }) { Text("Edit equation") }
         }
         EditableEngineCard(
             blockId = block.id,
             label = "Math",
             source = block.tex,
-            markdown = "$$\n${block.tex}\n$$",
             mode = mode,
             editorHeightDp = block.editorHeightDp,
             onSourceChange = { onReplace(block.copy(tex = it)) },
             onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
-            scrolling = scrolling,
-            showSource = block.renderMode == BlockRenderMode.Source,
+            contentKind = EngineContentKind.Math,
         )
     }
 }
 
 @Composable
-private fun EditableMermaidBlock(
-    block: MermaidBlock,
-    mode: BlockSurfaceMode,
-    scrolling: Boolean,
-    onReplace: (DocumentBlock) -> Unit,
-    onEditDiagram: (MermaidBlock) -> Unit,
-) {
+private fun EditableMermaidBlock(block: MermaidBlock, mode: BlockSurfaceMode, onReplace: (DocumentBlock) -> Unit, onEditDiagram: (MermaidBlock) -> Unit) {
     Column {
         if (mode == BlockSurfaceMode.Edit) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = { onEditDiagram(block) }) { Text("Edit diagram") }
-                TextButton(onClick = {
-                    onReplace(
-                        block.copy(
-                            renderMode = if (block.renderMode == BlockRenderMode.Source) {
-                                BlockRenderMode.Render
-                            } else {
-                                BlockRenderMode.Source
-                            },
-                        ),
-                    )
-                }) { Text(if (block.renderMode == BlockRenderMode.Source) "Render" else "Advanced") }
-            }
+            Button(onClick = { onEditDiagram(block) }) { Text("Edit diagram") }
         }
         EditableEngineCard(
             blockId = block.id,
             label = "Diagram",
             source = block.code,
-            markdown = "```mermaid\n${block.code}\n```",
             mode = mode,
             editorHeightDp = block.editorHeightDp,
             onSourceChange = { onReplace(block.copy(code = it)) },
             onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
-            scrolling = scrolling,
-            showSource = block.renderMode == BlockRenderMode.Source,
+            contentKind = EngineContentKind.Diagram,
         )
     }
 }
 
 @Composable
-private fun EditableChartBlock(
-    block: ChartBlock,
-    mode: BlockSurfaceMode,
-    scrolling: Boolean,
-    onReplace: (DocumentBlock) -> Unit,
-    onEditChart: (ChartBlock) -> Unit,
-) {
+private fun EditableChartBlock(block: ChartBlock, mode: BlockSurfaceMode, onReplace: (DocumentBlock) -> Unit, onEditChart: (ChartBlock) -> Unit) {
     Column {
         if (mode == BlockSurfaceMode.Edit) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = { onEditChart(block) }) { Text("Edit chart") }
-                TextButton(onClick = {
-                    onReplace(block.copy(renderMode = if (block.renderMode == BlockRenderMode.Source) BlockRenderMode.Render else BlockRenderMode.Source))
-                }) { Text(if (block.renderMode == BlockRenderMode.Source) "Render" else "Advanced") }
-            }
+            Button(onClick = { onEditChart(block) }) { Text("Edit chart") }
         }
         EditableEngineCard(
             blockId = block.id,
             label = "Chart",
             source = block.vegaLiteSpec,
-            markdown = "```vega-lite\n${block.vegaLiteSpec}\n```",
             mode = mode,
             editorHeightDp = block.editorHeightDp,
             onSourceChange = { onReplace(block.copy(vegaLiteSpec = it)) },
             onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
-            scrolling = scrolling,
-            showSource = block.renderMode == BlockRenderMode.Source,
+            contentKind = EngineContentKind.Chart,
         )
     }
 }
@@ -3212,119 +3096,93 @@ private fun SimpleLabeledBlockField(label: String, text: String, onChange: (Stri
     }
 }
 
+private enum class EngineContentKind { Code, Math, Diagram, Chart }
+
 @Composable
 private fun EditableEngineCard(
     blockId: String,
     label: String,
     source: String,
-    markdown: String,
     mode: BlockSurfaceMode,
     editorHeightDp: Float,
     onSourceChange: (String) -> Unit,
     onHeightChange: (Float) -> Unit,
-    scrolling: Boolean,
-    nativeCode: Boolean = false,
-    showSource: Boolean = false,
+    contentKind: EngineContentKind,
 ) {
     var hidden by remember(blockId) { mutableStateOf(false) }
     var fullScreen by rememberSaveable(blockId) { mutableStateOf(false) }
     var landscape by rememberSaveable(blockId) { mutableStateOf(false) }
     var liveHeight by remember(blockId) { mutableStateOf(editorHeightDp.coerceIn(96f, 420f)) }
     var resizing by remember(blockId) { mutableStateOf(false) }
-    var refreshTick by remember(blockId) { mutableStateOf(0) }
+    var value by remember(blockId) { mutableStateOf(TextFieldValue(source)) }
+    var focused by remember(blockId) { mutableStateOf(false) }
     val density = LocalDensity.current
-    val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
-    val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
     LaunchedEffect(editorHeightDp) { if (!resizing) liveHeight = editorHeightDp.coerceIn(96f, 420f) }
-    // Clean preview: while reading, engine blocks render just their content — no bordered card, label,
-    // or Hide/Fullscreen chrome. The full editing surface only appears in Edit mode.
-    if (mode == BlockSurfaceMode.View) {
-        when {
-            nativeCode || showSource -> NativeCodeSurface(source)
-            else -> DeferredEnginePreview(markdown, accentHex, scrolling)
+    LaunchedEffect(source, focused) {
+        if (!focused && value.composition == null && source != value.text) {
+            value = value.copy(
+                text = source,
+                selection = TextRange(value.selection.start.coerceAtMost(source.length), value.selection.end.coerceAtMost(source.length)),
+                composition = null,
+            )
         }
+    }
+    if (mode == BlockSurfaceMode.View) {
+        NativeEngineSurface(label, source, contentKind)
         return
     }
     Surface(shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (!nativeCode && !showSource) {
-                    IconButton(onClick = { refreshTick++ }) { Icon(Icons.Outlined.Refresh, "Render again") }
-                }
                 TextButton(onClick = { hidden = !hidden }) { Text(if (hidden) "Show" else "Hide") }
                 IconButton(onClick = { landscape = false; fullScreen = true }) { Icon(Icons.Outlined.Fullscreen, "Full screen") }
                 IconButton(onClick = { landscape = true; fullScreen = true }) { Icon(Icons.Outlined.ScreenRotation, "Landscape") }
             }
             if (!hidden) {
-                if (showSource) {
-                    Column {
-                        var value by remember(blockId) { mutableStateOf(TextFieldValue(source)) }
-                        var focused by remember(blockId) { mutableStateOf(false) }
-                        LaunchedEffect(source, focused) {
-                            if (!focused && value.composition == null && source != value.text) {
-                                value = value.copy(text = source, selection = TextRange(value.selection.start.coerceAtMost(source.length), value.selection.end.coerceAtMost(source.length)), composition = null)
-                            }
-                        }
-                        BasicTextField(
-                            value = value,
-                            onValueChange = { changed -> if (mode == BlockSurfaceMode.Edit) { value = changed; onSourceChange(changed.text) } },
-                            readOnly = mode == BlockSurfaceMode.View,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(liveHeight.dp)
-                                .verticalScroll(rememberScrollState())
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f))
-                                .padding(12.dp)
-                                .onFocusChanged { focused = it.isFocused },
-                            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurface),
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        )
-                        if (mode == BlockSurfaceMode.Edit) {
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(30.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .22f)),
-                                horizontalArrangement = Arrangement.End,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    Icons.Outlined.DragIndicator,
-                                    "Resize block",
-                                    Modifier.size(30.dp).padding(3.dp).pointerInput(blockId) {
-                                        detectDragGestures(
-                                            onDragStart = { resizing = true },
-                                            onDragCancel = { resizing = false; liveHeight = editorHeightDp.coerceIn(96f, 420f) },
-                                            onDragEnd = { resizing = false; onHeightChange(liveHeight) },
-                                            onDrag = { change, amount ->
-                                                change.consume()
-                                                liveHeight = (liveHeight + with(density) { amount.y.toDp().value }).coerceIn(96f, 420f)
-                                            },
-                                        )
-                                    },
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                    }
-                } else if (nativeCode) {
-                    NativeCodeSurface(source)
-                } else {
-                    DeferredEnginePreview(markdown, accentHex, scrolling, refreshTick = refreshTick)
+                BasicTextField(
+                    value = value,
+                    onValueChange = { changed -> value = changed; onSourceChange(changed.text) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(liveHeight.dp)
+                        .verticalScroll(rememberScrollState())
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f))
+                        .padding(12.dp)
+                        .onFocusChanged { focused = it.isFocused },
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                )
+                Row(
+                    Modifier.fillMaxWidth().height(30.dp).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .22f)),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.DragIndicator,
+                        "Resize block",
+                        Modifier.size(30.dp).padding(3.dp).pointerInput(blockId) {
+                            detectDragGestures(
+                                onDragStart = { resizing = true },
+                                onDragCancel = { resizing = false; liveHeight = editorHeightDp.coerceIn(96f, 420f) },
+                                onDragEnd = { resizing = false; onHeightChange(liveHeight) },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    liveHeight = (liveHeight + with(density) { amount.y.toDp().value }).coerceIn(96f, 420f)
+                                },
+                            )
+                        },
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
         }
     }
     if (fullScreen) {
-        EngineFullscreenDialog(
-            label = label,
-            markdown = markdown,
-            accentHex = accentHex,
-            landscape = landscape,
-            nativeCode = source.takeIf { nativeCode },
-            onDismiss = { fullScreen = false; landscape = false },
-        )
+        EngineFullscreenDialog(label, source, contentKind, landscape) {
+            fullScreen = false
+            landscape = false
+        }
     }
 }
 
@@ -3349,16 +3207,27 @@ private fun NativeCodeSurface(source: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun EngineFullscreenDialog(
-    label: String,
-    markdown: String,
-    accentHex: String,
-    landscape: Boolean,
-    nativeCode: String? = null,
-    onDismiss: () -> Unit,
-) {
+private fun NativeEngineSurface(label: String, source: String, kind: EngineContentKind, modifier: Modifier = Modifier) {
+    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .35f)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (kind != EngineContentKind.Code) {
+                Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            }
+            Text(
+                text = source.ifBlank { when (kind) { EngineContentKind.Math -> "Empty equation"; EngineContentKind.Diagram -> "Empty diagram"; EngineContentKind.Chart -> "Empty chart"; EngineContentKind.Code -> " " } },
+                color = MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontStyle = if (kind == EngineContentKind.Math) FontStyle.Italic else FontStyle.Normal,
+                fontSize = if (kind == EngineContentKind.Math) 16.sp else 13.sp,
+                lineHeight = if (kind == EngineContentKind.Math) 24.sp else 19.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EngineFullscreenDialog(label: String, source: String, kind: EngineContentKind, landscape: Boolean, onDismiss: () -> Unit) {
     StableLandscapeOrientationEffect(landscape)
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     NorfoldFullscreenDialog(onDismissRequest = onDismiss) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -3367,105 +3236,10 @@ private fun EngineFullscreenDialog(
                     TextButton(onClick = onDismiss) { Text("Close") }
                 }
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    if (nativeCode != null) {
-                        NativeCodeSurface(nativeCode)
-                    } else {
-                        MarkdownPreview(
-                            markdown = markdown,
-                            dark = dark,
-                            accentHex = accentHex,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
+                    NativeEngineSurface(label, source, kind)
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun DeferredEnginePreview(markdown: String, accentHex: String, scrolling: Boolean, refreshTick: Int = 0) {
-    var mounted by remember(markdown) { mutableStateOf(false) }
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val textColor = MaterialTheme.colorScheme.onSurface
-    // A cached render mounts immediately — no deferral, no "Rendering…" flash.
-    val cached = remember(markdown, dark, accentHex, textColor) {
-        markdownRenderCached(markdown, dark, accentHex, textColor)
-    }
-    LaunchedEffect(markdown, scrolling) {
-        if (!mounted && (cached || !scrolling)) {
-            if (!cached) delay(300)
-            mounted = true
-        }
-    }
-    if (mounted) {
-        MarkdownPreview(
-            markdown = markdown,
-            dark = dark,
-            accentHex = accentHex,
-            modifier = Modifier.fillMaxWidth(),
-            refreshTick = refreshTick,
-        )
-    } else {
-        Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.CenterStart) {
-            Text("Rendering…", Modifier.padding(horizontal = 12.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun TableSourceBlock(
-    table: TableBlock,
-    mode: BlockSurfaceMode,
-    onReplace: (DocumentBlock) -> Unit,
-) {
-    val source = remember(table.headers, table.rows, table.columnAlignments) {
-        MarkdownBlockCodec.export(BlockDocument(listOf(table)))
-    }
-    var value by remember(table.id) { mutableStateOf(TextFieldValue(source)) }
-    var focused by remember(table.id) { mutableStateOf(false) }
-    LaunchedEffect(source, focused) {
-        if (!focused && value.composition == null && source != value.text) {
-            value = value.copy(
-                text = source,
-                selection = TextRange(value.selection.start.coerceAtMost(source.length), value.selection.end.coerceAtMost(source.length)),
-                composition = null,
-            )
-        }
-    }
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .35f),
-    ) {
-        BasicTextField(
-            value = value,
-            onValueChange = { changed ->
-                if (mode != BlockSurfaceMode.Edit) return@BasicTextField
-                value = changed
-                val parsed = runCatching { MarkdownBlockCodec.import(changed.text).blocks.singleOrNull() as? TableBlock }.getOrNull()
-                if (parsed != null) {
-                    onReplace(
-                        parsed.copy(
-                            id = table.id,
-                            columnWidthsDp = table.columnWidthsDp,
-                            columnAlignments = table.columnAlignments,
-                            renderMode = BlockRenderMode.Source,
-                        ),
-                    )
-                }
-            },
-            readOnly = mode == BlockSurfaceMode.View,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 120.dp, max = 360.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(12.dp)
-                .onFocusChanged { focused = it.isFocused },
-            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurface),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        )
     }
 }
 
@@ -3481,11 +3255,7 @@ private fun NativeTable(table: TableBlock, mode: BlockSurfaceMode, onReplace: (D
     var rowMenu by remember(table.id) { mutableStateOf(false) }
     var resizingColumn by remember(table.id) { mutableIntStateOf(-1) }
     var hidden by remember(table.id) { mutableStateOf(false) }
-    var fullScreen by rememberSaveable(table.id) { mutableStateOf(false) }
-    var landscape by rememberSaveable(table.id) { mutableStateOf(false) }
     val density = LocalDensity.current
-    val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
-    val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
     LaunchedEffect(table.columnWidthsDp, columnCount) {
         if (resizingColumn < 0 && widths != persistedWidths) widths = persistedWidths
     }
@@ -3504,8 +3274,6 @@ private fun NativeTable(table: TableBlock, mode: BlockSurfaceMode, onReplace: (D
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text("Table", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
         TextButton(onClick = { hidden = !hidden }) { Text(if (hidden) "Show" else "Hide") }
-        IconButton(onClick = { landscape = false; fullScreen = true }) { Icon(Icons.Outlined.Fullscreen, "Full screen table") }
-        IconButton(onClick = { landscape = true; fullScreen = true }) { Icon(Icons.Outlined.ScreenRotation, "Landscape table") }
     }
     if (!hidden) {
     Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
@@ -3644,15 +3412,6 @@ private fun NativeTable(table: TableBlock, mode: BlockSurfaceMode, onReplace: (D
         DropdownMenuItem({ Text("Duplicate") }, enabled = table.rows.isNotEmpty(), onClick = { replace(rows = normalizedRows().toMutableList().apply { add(row + 1, this[row]) }); rowMenu = false })
         DropdownMenuItem({ Text("Clear contents") }, enabled = table.rows.isNotEmpty(), onClick = { replace(rows = normalizedRows().toMutableList().apply { this[row] = List(columnCount) { TableCell() } }); rowMenu = false })
         DropdownMenuItem({ Text("Delete") }, enabled = table.rows.isNotEmpty(), onClick = { replace(rows = normalizedRows().toMutableList().apply { removeAt(row) }); selectedRow = -1; rowMenu = false })
-    }
-    if (fullScreen) {
-        EngineFullscreenDialog(
-            label = "Table",
-            markdown = MarkdownBlockCodec.export(BlockDocument(listOf(table))),
-            accentHex = accentHex,
-            landscape = landscape,
-            onDismiss = { fullScreen = false; landscape = false },
-        )
     }
 }
 
@@ -4011,14 +3770,14 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is CalloutBlock -> CalloutBlock(tone = block.tone, title = block.title, children = block.children)
     is ContainerBlock -> ContainerBlock(axis = block.axis, children = block.children.map(::duplicateBlock), weights = block.weights)
     is DividerBlock -> DividerBlock()
-    is CodeBlock -> CodeBlock(language = block.language, code = block.code, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
-    is TableBlock -> TableBlock(headers = block.headers, rows = block.rows, columnWidthsDp = block.columnWidthsDp, columnAlignments = block.columnAlignments, renderMode = block.renderMode)
+    is CodeBlock -> CodeBlock(language = block.language, code = block.code, editorHeightDp = block.editorHeightDp)
+    is TableBlock -> TableBlock(headers = block.headers, rows = block.rows, columnWidthsDp = block.columnWidthsDp, columnAlignments = block.columnAlignments)
     is ImageBlock -> ImageBlock(source = block.source, caption = block.caption, layout = block.layout, displayHeightDp = block.displayHeightDp)
     is FileBlock -> FileBlock(name = block.name, mimeType = block.mimeType, sizeBytes = block.sizeBytes, uri = block.uri)
     is EmbedBlock -> EmbedBlock(url = block.url, metadata = block.metadata, displayHeightDp = block.displayHeightDp)
-    is ChartBlock -> ChartBlock(vegaLiteSpec = block.vegaLiteSpec, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
-    is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
-    is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
+    is ChartBlock -> ChartBlock(vegaLiteSpec = block.vegaLiteSpec, editorHeightDp = block.editorHeightDp)
+    is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp)
+    is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp)
     is UnknownBlock -> BlockDocumentJson.reidentify(block)
 }
 
@@ -4050,38 +3809,12 @@ private fun InlineRichText(
     style: TextStyle = TextStyle.Default,
 ) {
     val colors = MaterialTheme.colorScheme
-    val dark = colors.background.luminance() < 0.5f
-    if (nodes.containsInlineMath()) {
-        val primaryArgb = colors.primary.toArgb()
-        val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
-        val markdown = remember(nodes) {
-            MarkdownBlockCodec.export(BlockDocument(listOf(ParagraphBlock(content = nodes))))
-        }
-        MarkdownPreview(
-            markdown = markdown,
-            dark = dark,
-            accentHex = accentHex,
-            modifier = modifier.fillMaxWidth(),
-        )
-    } else {
-        val annotated = rememberInlineAnnotated(nodes)
-        Text(
-            text = annotated,
-            modifier = modifier,
-            style = TextStyle(color = colors.onSurface).merge(style),
-        )
-    }
-}
-
-private fun List<InlineNode>.containsInlineMath(): Boolean = any { node ->
-    when (node) {
-        is MathInline -> true
-        is BoldInline -> node.children.containsInlineMath()
-        is ItalicInline -> node.children.containsInlineMath()
-        is StrikethroughInline -> node.children.containsInlineMath()
-        is LinkInline -> node.children.containsInlineMath()
-        else -> false
-    }
+    val annotated = rememberInlineAnnotated(nodes)
+    Text(
+        text = annotated,
+        modifier = modifier,
+        style = TextStyle(color = colors.onSurface).merge(style),
+    )
 }
 
 @Composable

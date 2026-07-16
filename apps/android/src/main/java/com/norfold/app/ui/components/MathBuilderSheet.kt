@@ -44,8 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -242,8 +241,6 @@ fun MathBuilderSheet(
     val activeValue = activeMathSelectionText(equation)
     val canInsert = equation.text.isNotBlank() && pendingSlots == 0
     val colorScheme = MaterialTheme.colorScheme
-    val dark = colorScheme.background.luminance() < 0.5f
-    val accentHex = colorScheme.primary.toMathCssHex()
 
     fun rememberEdit(next: TextFieldValue) {
         if (next.text != equation.text) {
@@ -330,14 +327,12 @@ fun MathBuilderSheet(
                 color = colorScheme.surfaceVariant.copy(alpha = 0.42f),
                 border = BorderStroke(1.dp, colorScheme.outlineVariant),
             ) {
-                MarkdownPreview(
-                    markdown = mathPreviewMarkdown(equation.text, insertionKind),
-                    dark = dark,
-                    accentHex = accentHex,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 88.dp, max = 220.dp)
-                        .padding(14.dp),
+                Text(
+                    text = mathPreviewText(equation.text, insertionKind),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp, max = 220.dp).padding(14.dp),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (equation.text.isBlank()) colorScheme.onSurfaceVariant else colorScheme.onSurface,
                 )
             }
 
@@ -613,18 +608,12 @@ internal fun pendingMathSlotCount(tex: String): Int {
     return count
 }
 
-internal fun mathPreviewMarkdown(tex: String, kind: MathInsertionKind): String {
-    val previewTex = tex.ifBlank { MathSlot }
-        .replace(MathSlot, "\\boxed{\\vphantom{0}\\phantom{0}}")
-    return when (kind) {
-        MathInsertionKind.Block -> "$$\n$previewTex\n$$"
-        MathInsertionKind.Inline -> "Inline preview: \\($previewTex\\)"
-    }
+internal fun mathPreviewText(tex: String, kind: MathInsertionKind): String {
+    val preview = tex.ifBlank { "Enter an equation" }.replace(MathSlot, "□")
+    return if (kind == MathInsertionKind.Inline && tex.isNotBlank()) "Inline · $preview" else preview
 }
 
 private fun TextRange.coerceTo(textLength: Int): TextRange = TextRange(
     start = start.coerceIn(0, textLength),
     end = end.coerceIn(0, textLength),
 )
-
-private fun Color.toMathCssHex(): String = "#%06X".format(toArgb() and 0x00FFFFFF)
