@@ -9,6 +9,7 @@ import com.norfold.app.domain.BlockCursor
 import com.norfold.app.domain.BlockEditorSession
 import com.norfold.app.domain.BoldInline
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.CalendarEventSource
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
@@ -175,6 +176,36 @@ class BlockDocumentRoomTest {
         val storedDocument = repository.documentByOwner(DocumentOwner.task(61))!!
         assertEquals("Renamed task", storedTask.title)
         assertEquals(structured.plainText(), storedTask.description)
+        assertEquals(structured, storedDocument.document)
+    }
+
+    @Test
+    fun calendarEventDocumentIsCanonicalAndDescriptionIsPlainTextProjection() = runBlocking {
+        dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
+        dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
+        val repository = DocsRepository(database)
+        val eventId = repository.createCalendarEvent(
+            title = "Planning session",
+            startAt = 1_000,
+            endAt = 2_000,
+            description = "**Legacy** agenda",
+            source = CalendarEventSource.Local,
+        )
+        val event = dao.allCalendarEvents().single { it.id == eventId }.toDomain()
+        assertEquals("Legacy agenda", repository.ensureCalendarEventDocument(event).document.plainText())
+
+        val structured = BlockDocument(
+            listOf(
+                HeadingBlock(id = "event-heading", level = 2, content = listOf(InlineText("Agenda"))),
+                ParagraphBlock(id = "event-body", content = listOf(BoldInline(listOf(InlineText("Review"))), InlineText(" milestones"))),
+            ),
+        )
+        repository.updateCalendarEventDocument(event, "Quarterly planning", structured, structured.blocks.mapTo(linkedSetOf()) { it.id })
+
+        val storedEvent = dao.allCalendarEvents().single { it.id == eventId }.toDomain()
+        val storedDocument = repository.documentByOwner(DocumentOwner.calendarEvent(eventId))!!
+        assertEquals("Quarterly planning", storedEvent.title)
+        assertEquals(structured.plainText(), storedEvent.description)
         assertEquals(structured, storedDocument.document)
     }
 
