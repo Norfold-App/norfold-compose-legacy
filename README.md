@@ -70,6 +70,17 @@ If the repo wrapper is unavailable locally, use any compatible Gradle install/wr
 - Local diagnostics records app starts, uncaught crashes, previous crash/ANR process exits on supported Android versions, and can share logs through Android's share sheet from Settings.
 - Encrypted backup/sync snapshots include workspace objects, object links, activity, history, comments, and file library records.
 
+## Major Fix In Progress: Editor Re-architecture
+
+Norfold grew from a simple note app into a note+task app and then a full
+workspace app — but the editor kept markdown as its main storage format the
+whole way. That was a mistake for a document editor: markdown cannot preserve
+fonts, colors, spacing, page layout, text boxes, complex tables, comments, or
+tracked changes. The fix, adopted 2026-07-16: the canonical document becomes a
+schema-controlled structured JSON tree, and markdown is demoted to one of
+several import/export boundaries. Full decision record and target
+architecture: [docs/EDITOR-REARCHITECTURE.md](docs/EDITOR-REARCHITECTURE.md).
+
 ## Remaining Roadmap
 
 - Real-device Google account restore validation with debug, release, and Play signing fingerprints. The checked-in client ID is public OAuth metadata; never embed the client secret in Android code.
@@ -87,3 +98,13 @@ If the repo wrapper is unavailable locally, use any compatible Gradle install/wr
 - Crop flows for profile images, workspace visuals, and note covers.
 - Compose UI/screenshot regression tests for compact phones, tablets, landscape, keyboard, and theme variants.
 - Release signing and CI APK artifact publishing.
+
+## License
+
+**Source-available, view-only. Not open source.**
+
+This code is published so it can be read, not reused. You may browse and
+fork on GitHub for viewing; you may **not** use, copy, modify, redistribute,
+or build on this code or the Norfold brand assets in any project. See
+[LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for the full terms.
+External contributions are not accepted ([CONTRIBUTING.md](CONTRIBUTING.md)).

@@ -25,7 +25,7 @@ interface NotesDao {
 
     @Query(
         "UPDATE workspaces SET permRename = :permRename, permChangeIcon = :permChangeIcon, permInviteMembers = :permInviteMembers, " +
-            "permDeleteNotes = :permDeleteNotes, permEditNotes = :permEditNotes, permCreateCanvas = :permCreateCanvas, permManageTasks = :permManageTasks WHERE id = :id",
+            "permDeleteNotes = :permDeleteNotes, permEditNotes = :permEditNotes, permManageTasks = :permManageTasks WHERE id = :id",
     )
     suspend fun updateWorkspacePermissions(
         id: Long,
@@ -34,7 +34,6 @@ interface NotesDao {
         permInviteMembers: Boolean,
         permDeleteNotes: Boolean,
         permEditNotes: Boolean,
-        permCreateCanvas: Boolean,
         permManageTasks: Boolean,
     )
 
@@ -52,12 +51,6 @@ interface NotesDao {
 
     @Query("DELETE FROM chat_messages WHERE workspaceId = :ws")
     suspend fun deleteChatForWorkspace(ws: Long)
-
-    @Query("DELETE FROM canvas_nodes WHERE workspaceId = :ws")
-    suspend fun deleteCanvasForWorkspace(ws: Long)
-
-    @Query("DELETE FROM canvas_edges WHERE workspaceId = :ws")
-    suspend fun deleteCanvasEdgesForWorkspace(ws: Long)
 
     @Query("DELETE FROM workspace_objects WHERE workspaceId = :ws")
     suspend fun deleteWorkspaceObjectsForWorkspace(ws: Long)
@@ -108,7 +101,7 @@ interface NotesDao {
         LEFT JOIN tags ON tags.id = note_tags.tagId
         WHERE notes.archived = 0 AND notes.workspaceId = :ws AND (
             notes.title LIKE '%' || :query || '%' OR
-            notes.bodyMarkdown LIKE '%' || :query || '%' OR
+            notes.searchText LIKE '%' || :query || '%' OR
             tags.name LIKE '%' || :query || '%'
         )
         ORDER BY notes.pinned DESC, notes.updatedAt DESC
@@ -226,18 +219,6 @@ interface NotesDao {
     @Query("SELECT * FROM chat_messages ORDER BY createdAt ASC")
     suspend fun allChatMessages(): List<ChatMessageEntity>
 
-    @Query("SELECT * FROM canvas_nodes WHERE workspaceId = :ws ORDER BY updatedAt ASC")
-    fun observeCanvasNodes(ws: Long): Flow<List<CanvasNodeEntity>>
-
-    @Query("SELECT * FROM canvas_nodes ORDER BY updatedAt ASC")
-    suspend fun allCanvasNodes(): List<CanvasNodeEntity>
-
-    @Query("SELECT * FROM canvas_edges WHERE workspaceId = :ws ORDER BY updatedAt ASC")
-    fun observeCanvasEdges(ws: Long): Flow<List<CanvasEdgeEntity>>
-
-    @Query("SELECT * FROM canvas_edges ORDER BY updatedAt ASC")
-    suspend fun allCanvasEdges(): List<CanvasEdgeEntity>
-
     @Query("SELECT * FROM workspace_objects WHERE workspaceId = :ws AND archived = 0 ORDER BY pinned DESC, updatedAt DESC")
     fun observeWorkspaceObjects(ws: Long): Flow<List<WorkspaceObjectEntity>>
 
@@ -317,6 +298,18 @@ interface NotesDao {
     suspend fun insertNote(entity: NoteEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertNoteBlocks(entities: List<NoteBlockEntity>)
+
+    @Query("DELETE FROM note_blocks WHERE id IN (:ids)")
+    suspend fun deleteNoteBlocks(ids: List<String>)
+
+    @Query("DELETE FROM note_blocks WHERE noteId = :noteId")
+    suspend fun deleteBlocksForNote(noteId: Long)
+
+    @Query("SELECT * FROM note_blocks WHERE noteId = :noteId ORDER BY position ASC")
+    suspend fun blocksForNote(noteId: Long): List<NoteBlockEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAttachment(entity: AttachmentEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -357,12 +350,6 @@ interface NotesDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChatMessage(entity: ChatMessageEntity): Long
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertCanvasNode(entity: CanvasNodeEntity): Long
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertCanvasEdge(entity: CanvasEdgeEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWorkspaceObject(entity: WorkspaceObjectEntity): Long
@@ -430,8 +417,8 @@ interface NotesDao {
     @Update
     suspend fun updateNote(entity: NoteEntity)
 
-    @Query("UPDATE notes SET title = :title, bodyMarkdown = :body, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateNoteContent(id: Long, title: String, body: String, updatedAt: Long)
+    @Query("UPDATE notes SET title = :title, searchText = :searchText, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateNoteContent(id: Long, title: String, searchText: String, updatedAt: Long)
 
     @Query("UPDATE notes SET coverUri = :coverUri, coverMimeType = :coverMimeType, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateNoteCover(id: Long, coverUri: String?, coverMimeType: String?, updatedAt: Long)
@@ -448,14 +435,26 @@ interface NotesDao {
     @Query("UPDATE notes SET locked = :value, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setLocked(id: Long, value: Boolean, updatedAt: Long)
 
+    @Query("UPDATE notes SET overlapMode = :mode, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setNoteOverlapMode(id: Long, mode: String, updatedAt: Long)
+
+    @Query("UPDATE notes SET freeformLayoutJson = :layoutJson, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setNoteFreeformLayout(id: Long, layoutJson: String?, updatedAt: Long)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNote(id: Long)
 
     @Query("DELETE FROM note_tags WHERE noteId = :noteId")
     suspend fun clearTagsForNote(noteId: Long)
 
-    @Query("SELECT * FROM tags WHERE name = :name LIMIT 1")
-    suspend fun tagByName(name: String): TagEntity?
+    @Query("SELECT * FROM tags WHERE scope = :scope AND normalizedName = :normalizedName LIMIT 1")
+    suspend fun tagByScopeAndNormalizedName(scope: String, normalizedName: String): TagEntity?
+
+    @Query("UPDATE tags SET name = :name, normalizedName = :normalizedName WHERE id = :id")
+    suspend fun renameTag(id: Long, name: String, normalizedName: String)
+
+    @Query("DELETE FROM tags WHERE id = :id")
+    suspend fun deleteTag(id: Long)
 
     @Query("DELETE FROM notes")
     suspend fun clearNotes()
@@ -526,24 +525,6 @@ interface NotesDao {
     @Query("DELETE FROM task_checklist_items WHERE id = :id")
     suspend fun deleteTaskChecklistItem(id: Long)
 
-    @Query("UPDATE canvas_nodes SET x = :x, y = :y, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateCanvasNodePosition(id: Long, x: Float, y: Float, updatedAt: Long)
-
-    @Query("UPDATE canvas_nodes SET title = :title, subtitle = :subtitle, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateCanvasNodeContent(id: Long, title: String, subtitle: String, updatedAt: Long)
-
-    @Query("UPDATE canvas_nodes SET targetUri = :uri, targetMimeType = :mimeType, targetName = :name, targetSizeBytes = :sizeBytes, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateCanvasNodeTarget(id: Long, uri: String?, mimeType: String?, name: String?, sizeBytes: Long?, updatedAt: Long)
-
-    @Query("DELETE FROM canvas_edges WHERE fromNodeId = :nodeId OR toNodeId = :nodeId")
-    suspend fun deleteCanvasEdgesForNode(nodeId: Long)
-
-    @Query("DELETE FROM canvas_edges WHERE id = :id")
-    suspend fun deleteCanvasEdge(id: Long)
-
-    @Query("DELETE FROM canvas_nodes WHERE id = :id")
-    suspend fun deleteCanvasNode(id: Long)
-
     @Query("DELETE FROM tasks WHERE id = :id")
     suspend fun deleteTask(id: Long)
 
@@ -561,12 +542,6 @@ interface NotesDao {
 
     @Query("DELETE FROM chat_messages")
     suspend fun clearChatMessages()
-
-    @Query("DELETE FROM canvas_nodes")
-    suspend fun clearCanvasNodes()
-
-    @Query("DELETE FROM canvas_edges")
-    suspend fun clearCanvasEdges()
 
     @Query("DELETE FROM workspace_objects")
     suspend fun clearWorkspaceObjects()

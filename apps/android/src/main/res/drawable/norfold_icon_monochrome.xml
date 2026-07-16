@@ -1,11 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108"
-    android:tint="#FFFFFFFF">
-    <path
-        android:pathData="M29,82 L29,26 L40,26 L68,63 L68,26 L79,26 L79,82 L68,82 L40,45 L40,82 Z"
-        android:fillColor="#FFFFFFFF" />
-</vector>
+<!-- Android 13+ themed-icon layer: the system tints via the glyph's alpha,
+     so this reuses the raster foreground (white Norfold glyph on alpha). -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/norfold_icon_foreground"
+    android:gravity="center" />

@@ -1,6 +1,7 @@
 package com.norfold.app.data
 
 import android.content.Context
+import com.norfold.app.BuildConfig
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -11,6 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         WorkspaceEntity::class,
         NoteEntity::class,
+        NoteBlockEntity::class,
         NotebookEntity::class,
         TagEntity::class,
         AttachmentEntity::class,
@@ -23,8 +25,6 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TaskPropertyValueEntity::class,
         TaskChecklistItemEntity::class,
         ChatMessageEntity::class,
-        CanvasNodeEntity::class,
-        CanvasEdgeEntity::class,
         WorkspaceObjectEntity::class,
         WorkspaceObjectLinkEntity::class,
         WorkspaceActivityEntity::class,
@@ -38,7 +38,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 25,
+    version = 32,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -48,8 +48,9 @@ abstract class NorfoldDatabase : RoomDatabase() {
         @Volatile private var instance: NorfoldDatabase? = null
 
         fun get(context: Context): NorfoldDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext, NorfoldDatabase::class.java, "norfold.db")
-                .addMigrations(
+            instance ?: run {
+                val builder = Room.databaseBuilder(context.applicationContext, NorfoldDatabase::class.java, "norfold.db")
+                    .addMigrations(
                     MIGRATION_1_12,
                     MIGRATION_2_12,
                     MIGRATION_3_12,
@@ -74,9 +75,19 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_22_23,
                     MIGRATION_23_24,
                     MIGRATION_24_25,
-                )
-                .build()
-                .also { instance = it }
+                    MIGRATION_25_26,
+                    MIGRATION_26_27,
+                    MIGRATION_27_28,
+                    MIGRATION_28_29,
+                    MIGRATION_29_30,
+                    MIGRATION_30_31,
+                    MIGRATION_31_32,
+                    )
+                if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
+                    builder.fallbackToDestructiveMigration(dropAllTables = true)
+                }
+                builder.build().also { instance = it }
+            }
         }
 
         private val MIGRATION_1_12 = schemaMigration(1, 12)
@@ -176,6 +187,157 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE tasks ADD COLUMN allDay INTEGER NOT NULL DEFAULT 1")
                 db.execSQL("ALTER TABLE tasks ADD COLUMN reminderMinutesBefore INTEGER")
                 db.execSQL("UPDATE tasks SET startAt = dueAt WHERE dueAt IS NOT NULL")
+            }
+        }
+
+        internal val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val legacyNotes = buildList {
+                    db.query("SELECT id, bodyMarkdown FROM notes").use { cursor ->
+                        val idIndex = cursor.getColumnIndexOrThrow("id")
+                        val bodyIndex = cursor.getColumnIndexOrThrow("bodyMarkdown")
+                        while (cursor.moveToNext()) add(cursor.getLong(idIndex) to cursor.getString(bodyIndex).orEmpty())
+                    }
+                }
+                db.execSQL("ALTER TABLE notes RENAME COLUMN bodyMarkdown TO searchText")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS note_blocks (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        noteId INTEGER NOT NULL,
+                        position INTEGER NOT NULL,
+                        payloadJson TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        FOREIGN KEY(noteId) REFERENCES notes(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_note_blocks_noteId ON note_blocks(noteId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_note_blocks_noteId_position ON note_blocks(noteId, position)")
+                val now = System.currentTimeMillis()
+                legacyNotes.forEach { (noteId, markdown) ->
+                    val document = com.norfold.app.domain.MarkdownBlockCodec.import(markdown)
+                    db.execSQL("UPDATE notes SET searchText = ? WHERE id = ?", arrayOf<Any?>(document.plainText(), noteId))
+                    document.blocks.forEachIndexed { position, block ->
+                        db.execSQL(
+                            "INSERT INTO note_blocks(id, noteId, position, payloadJson, updatedAt) VALUES(?, ?, ?, ?, ?)",
+                            arrayOf<Any?>(block.id, noteId, position, com.norfold.app.domain.BlockDocumentJson.encodeBlock(block), now),
+                        )
+                    }
+                }
+            }
+        }
+
+        internal val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN contextualMenuStyle TEXT NOT NULL DEFAULT 'Pill'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN contextualMenuColor TEXT NOT NULL DEFAULT 'FollowTheme'")
+            }
+        }
+
+        internal val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tags ADD COLUMN scope TEXT NOT NULL DEFAULT 'notes'")
+                db.execSQL("ALTER TABLE tags ADD COLUMN normalizedName TEXT NOT NULL DEFAULT ''")
+
+                // Development builds briefly stored board scope in the tag name. Preserve those tags.
+                db.execSQL(
+                    """
+                    UPDATE tags
+                    SET scope = 'board:' || substr(name, 6, instr(substr(name, 6), ':') - 1),
+                        normalizedName = lower(ltrim(trim(substr(name, 6 + instr(substr(name, 6), ':'))), '#')),
+                        name = ltrim(trim(substr(name, 6 + instr(substr(name, 6), ':'))), '#')
+                    WHERE name LIKE 'task:%:%' AND instr(substr(name, 6), ':') > 0
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "UPDATE tags SET normalizedName = lower(ltrim(trim(name), '#')) WHERE normalizedName = ''",
+                )
+
+                // Merge old case-only duplicates before enforcing the scoped unique key.
+                db.execSQL(
+                    """
+                    UPDATE OR IGNORE note_tags
+                    SET tagId = (
+                        SELECT MIN(canonical.id) FROM tags canonical
+                        WHERE canonical.scope = (SELECT source.scope FROM tags source WHERE source.id = note_tags.tagId)
+                          AND canonical.normalizedName = (SELECT source.normalizedName FROM tags source WHERE source.id = note_tags.tagId)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("DELETE FROM tags WHERE id NOT IN (SELECT MIN(id) FROM tags GROUP BY scope, normalizedName)")
+                db.execSQL("DROP INDEX IF EXISTS index_tags_name")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_tags_scope_normalizedName ON tags(scope, normalizedName)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_tags_scope ON tags(scope)")
+            }
+        }
+
+        internal val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN overlapMode TEXT NOT NULL DEFAULT 'reflow'")
+                db.execSQL("ALTER TABLE notes ADD COLUMN freeformLayoutJson TEXT")
+            }
+        }
+
+        internal val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeStartAction TEXT NOT NULL DEFAULT 'Complete'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeEndAction TEXT NOT NULL DEFAULT 'Delete'")
+            }
+        }
+
+        internal val MIGRATION_30_31 = object : Migration(30, 31) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN noteRenderEngine TEXT NOT NULL DEFAULT 'Auto'")
+            }
+        }
+
+        internal val MIGRATION_31_32 = object : Migration(31, 32) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DELETE FROM workspace_object_links WHERE fromObjectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas') OR toObjectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_activities WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_object_history WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_comments WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_files WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_objects WHERE objectType = 'Canvas'")
+                db.execSQL("DROP TABLE IF EXISTS canvas_edges")
+                db.execSQL("DROP TABLE IF EXISTS canvas_nodes")
+                db.execSQL(
+                    """
+                    CREATE TABLE workspaces_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        icon TEXT NOT NULL,
+                        iconKind TEXT NOT NULL,
+                        iconUri TEXT,
+                        backgroundUri TEXT,
+                        palette TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        permRename INTEGER NOT NULL,
+                        permChangeIcon INTEGER NOT NULL,
+                        permInviteMembers INTEGER NOT NULL,
+                        permDeleteNotes INTEGER NOT NULL,
+                        permEditNotes INTEGER NOT NULL,
+                        permManageTasks INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO workspaces_new (
+                        id, name, icon, iconKind, iconUri, backgroundUri, palette, createdAt,
+                        permRename, permChangeIcon, permInviteMembers, permDeleteNotes,
+                        permEditNotes, permManageTasks
+                    )
+                    SELECT
+                        id, name, icon, iconKind, iconUri, backgroundUri, palette, createdAt,
+                        permRename, permChangeIcon, permInviteMembers, permDeleteNotes,
+                        permEditNotes, permManageTasks
+                    FROM workspaces
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE workspaces")
+                db.execSQL("ALTER TABLE workspaces_new RENAME TO workspaces")
             }
         }
 
@@ -389,41 +551,6 @@ abstract class NorfoldDatabase : RoomDatabase() {
             )
             execSQL(
                 """
-                CREATE TABLE IF NOT EXISTS canvas_nodes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    title TEXT NOT NULL,
-                    subtitle TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    x REAL NOT NULL,
-                    y REAL NOT NULL,
-                    color INTEGER NOT NULL,
-                    linkedNoteId INTEGER,
-                    targetUri TEXT,
-                    targetMimeType TEXT,
-                    targetName TEXT,
-                    targetSizeBytes INTEGER,
-                    createdAt INTEGER NOT NULL,
-                    updatedAt INTEGER NOT NULL,
-                    workspaceId INTEGER NOT NULL DEFAULT 1
-                )
-                """.trimIndent(),
-            )
-            execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS canvas_edges (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    fromNodeId INTEGER NOT NULL,
-                    toNodeId INTEGER NOT NULL,
-                    label TEXT NOT NULL DEFAULT '',
-                    color INTEGER NOT NULL,
-                    createdAt INTEGER NOT NULL,
-                    updatedAt INTEGER NOT NULL,
-                    workspaceId INTEGER NOT NULL DEFAULT 1
-                )
-                """.trimIndent(),
-            )
-            execSQL(
-                """
                 CREATE TABLE IF NOT EXISTS workspace_objects (
                     id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                     objectType TEXT NOT NULL,
@@ -604,8 +731,8 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 CREATE TABLE IF NOT EXISTS settings (
                     id INTEGER NOT NULL,
                     themeMode TEXT NOT NULL DEFAULT 'System',
-                    themeProfile TEXT NOT NULL DEFAULT 'Neon',
-                    accentColor INTEGER NOT NULL DEFAULT 4287327478,
+                    themeProfile TEXT NOT NULL DEFAULT 'Graphite',
+                    accentColor INTEGER NOT NULL DEFAULT 4281546570,
                     activeWorkspaceId INTEGER NOT NULL DEFAULT 1,
                     backupFolderUri TEXT,
                     vaultLockEnabled INTEGER NOT NULL DEFAULT 0,
@@ -654,6 +781,8 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("notes", "coverUri", "TEXT")
             addColumnIfMissing("notes", "coverMimeType", "TEXT")
             addColumnIfMissing("notes", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
+            addColumnIfMissing("notes", "overlapMode", "TEXT NOT NULL DEFAULT 'reflow'")
+            addColumnIfMissing("notes", "freeformLayoutJson", "TEXT")
             addColumnIfMissing("tasks", "description", "TEXT NOT NULL DEFAULT ''")
             addColumnIfMissing("tasks", "assignee", "TEXT NOT NULL DEFAULT ''")
             addColumnIfMissing("tasks", "status", "TEXT NOT NULL DEFAULT 'Todo'")
@@ -675,12 +804,6 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("chat_messages", "attachmentUri", "TEXT")
             addColumnIfMissing("chat_messages", "attachmentSizeBytes", "INTEGER")
             addColumnIfMissing("chat_messages", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
-            addColumnIfMissing("canvas_nodes", "linkedNoteId", "INTEGER")
-            addColumnIfMissing("canvas_nodes", "targetUri", "TEXT")
-            addColumnIfMissing("canvas_nodes", "targetMimeType", "TEXT")
-            addColumnIfMissing("canvas_nodes", "targetName", "TEXT")
-            addColumnIfMissing("canvas_nodes", "targetSizeBytes", "INTEGER")
-            addColumnIfMissing("canvas_nodes", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
             addColumnIfMissing("settings", "themeProfile", "TEXT NOT NULL DEFAULT 'Neon'")
             addColumnIfMissing("settings", "activeWorkspaceId", "INTEGER NOT NULL DEFAULT 1")
             addColumnIfMissing("settings", "syncProvider", "TEXT NOT NULL DEFAULT 'None'")
@@ -718,6 +841,9 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("settings", "taskSortMode", "TEXT NOT NULL DEFAULT 'Manual'")
             addColumnIfMissing("settings", "taskCompactLayout", "INTEGER NOT NULL DEFAULT 1")
             addColumnIfMissing("settings", "taskKanbanEngine", "TEXT NOT NULL DEFAULT 'BoardPointer'")
+            addColumnIfMissing("settings", "taskSwipeStartAction", "TEXT NOT NULL DEFAULT 'Complete'")
+            addColumnIfMissing("settings", "taskSwipeEndAction", "TEXT NOT NULL DEFAULT 'Delete'")
+            addColumnIfMissing("settings", "noteRenderEngine", "TEXT NOT NULL DEFAULT 'Auto'")
             addColumnIfMissing("settings", "onboardingComplete", "INTEGER NOT NULL DEFAULT 0")
             addColumnIfMissing("settings", "workspacePurpose", "TEXT NOT NULL DEFAULT 'Personal'")
             addColumnIfMissing("settings", "calendarDefaultView", "TEXT NOT NULL DEFAULT 'Month'")
@@ -789,12 +915,6 @@ abstract class NorfoldDatabase : RoomDatabase() {
             execSQL("CREATE INDEX IF NOT EXISTS index_task_checklist_items_sortOrder ON task_checklist_items(sortOrder)")
             execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_createdAt ON chat_messages(createdAt)")
             execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_workspaceId ON chat_messages(workspaceId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_nodes_updatedAt ON canvas_nodes(updatedAt)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_nodes_type ON canvas_nodes(type)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_nodes_workspaceId ON canvas_nodes(workspaceId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_edges_fromNodeId ON canvas_edges(fromNodeId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_edges_toNodeId ON canvas_edges(toNodeId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_edges_workspaceId ON canvas_edges(workspaceId)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_workspaceId ON workspace_objects(workspaceId)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_objectType ON workspace_objects(objectType)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_sourceId ON workspace_objects(sourceId)")

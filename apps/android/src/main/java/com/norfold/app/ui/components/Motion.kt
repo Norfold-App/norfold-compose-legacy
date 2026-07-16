@@ -9,13 +9,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -69,6 +72,7 @@ fun GlobalSearchBar(
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
     placeholder: String = "Search everything",
+    onNavigationClick: (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     Surface(
@@ -85,6 +89,15 @@ fun GlobalSearchBar(
             Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (onNavigationClick != null) {
+                IconButton(
+                    onClick = onNavigationClick,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(Icons.Outlined.Menu, contentDescription = "Open workspace navigation", modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.size(8.dp))
+            }
             Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
             Text(
                 placeholder,

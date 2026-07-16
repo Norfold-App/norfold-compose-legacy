@@ -24,7 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Workspaces
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FilterChip
@@ -52,15 +52,15 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.norfold.app.branding.BuiltInCovers
 import com.norfold.app.domain.WorkspaceIconKind
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 
 enum class WorkspaceVisualTab { Identity, CoverPermissions }
 
 @Composable
 fun WorkspaceVisualDialog(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     initialTab: WorkspaceVisualTab = WorkspaceVisualTab.Identity,
     onDismiss: () -> Unit,
 ) {
@@ -83,7 +83,7 @@ fun WorkspaceVisualDialog(
         if (uri != null) backgroundUri = uri.toString()
     }
 
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text("Workspace visuals", fontWeight = FontWeight.Black) },
         text = {
@@ -134,7 +134,7 @@ fun WorkspaceVisualDialog(
                     BuiltInBackgroundStrip(backgroundUri) { backgroundUri = it }
                     Text("Permissions", fontWeight = FontWeight.Bold)
                     PermissionRow("Admins control visuals", adminsControlVisuals) { adminsControlVisuals = it }
-                    PermissionRow("Members create notes", membersCreateNotes) { membersCreateNotes = it }
+                    PermissionRow("Members create docs", membersCreateNotes) { membersCreateNotes = it }
                     PermissionRow("Members invite people", membersInvite) { membersInvite = it }
                 }
             }
@@ -162,8 +162,8 @@ fun WorkspaceVisualDialog(
 
 @Composable
 fun CreateWorkspaceVisualDialog(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("New Workspace") }
@@ -181,7 +181,7 @@ fun CreateWorkspaceVisualDialog(
         if (uri != null) backgroundUri = uri.toString()
     }
 
-    AlertDialog(
+    NorfoldDialog(
         onDismissRequest = onDismiss,
         title = { Text("Create workspace", fontWeight = FontWeight.Black) },
         text = {

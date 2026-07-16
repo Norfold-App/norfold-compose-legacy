@@ -11,16 +11,21 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,7 +39,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TrackChanges
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,10 +51,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,8 +74,9 @@ import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.GoalStatus
 import com.norfold.app.domain.TaskStatus
 import com.norfold.app.domain.ThemeMode
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.domain.WeekHourBands
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.NorfoldCard
 import com.norfold.app.ui.components.NorfoldMetric
 import com.norfold.app.ui.components.NorfoldPageHeader
@@ -81,10 +89,12 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.roundToInt
 
 @Composable
-fun NorfoldOnboardingScreen(state: NotesUiState, viewModel: NotesViewModel) {
+private fun LegacyNorfoldOnboardingScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var step by remember { mutableIntStateOf(0) }
     var workspaceName by remember { mutableStateOf("My Workspace") }
     var purpose by remember { mutableStateOf("Personal") }
@@ -100,7 +110,7 @@ fun NorfoldOnboardingScreen(state: NotesUiState, viewModel: NotesViewModel) {
                 0 -> {
                     Text("Norfold", style = MaterialTheme.typography.headlineLarge)
                     Text("Your own private workspace.", color = MaterialTheme.colorScheme.primary, fontSize = 15.sp)
-                    Text("Notes, tasks, projects, files, calendar, canvas and conversations stay organized in one local-first workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                    Text("Docs, tasks, projects, files, calendar and conversations stay organized in one local-first workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                     Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text("Get started") }
                     Text("Works offline. Connect an account only when you need sync or collaboration.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, textAlign = TextAlign.Center)
                 }
@@ -121,7 +131,7 @@ fun NorfoldOnboardingScreen(state: NotesUiState, viewModel: NotesViewModel) {
                     OutlinedTextField(workspaceName, { workspaceName = it.take(40) }, Modifier.fillMaxWidth(), label = { Text("Workspace name") }, singleLine = true, shape = RoundedCornerShape(10.dp))
                     Text("What will you use Norfold for?", Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("Personal" to "Notes, tasks and daily planning", "Work" to "Tasks, docs and collaboration", "Study" to "Research and assignments", "Creative" to "Ideas, drafts and inspiration").forEach { (name, detail) ->
+                        listOf("Personal" to "Docs, tasks and daily planning", "Work" to "Tasks, docs and collaboration", "Study" to "Research and assignments", "Creative" to "Ideas, drafts and inspiration").forEach { (name, detail) ->
                             Surface(
                                 Modifier.fillMaxWidth().clickable { purpose = name },
                                 shape = RoundedCornerShape(10.dp),
@@ -165,15 +175,15 @@ private fun OnboardingFact(icon: androidx.compose.ui.graphics.vector.ImageVector
 }
 
 @Composable
-fun GoalsScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun GoalsScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var createOpen by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { NorfoldPageHeader("Goals", "Turn outcomes into measurable progress.", Icons.Outlined.TrackChanges, actions = { Button(onClick = { createOpen = true }) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(6.dp)); Text("New goal") } }) }
         item {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 NorfoldMetric("Goals", state.goals.size.toString(), Icons.Outlined.TrackChanges, MaterialTheme.colorScheme.primary, Modifier.width(150.dp))
-                NorfoldMetric("In progress", state.goals.count { it.status == GoalStatus.InProgress }.toString(), Icons.Outlined.Schedule, Color(0xFF3478F6), Modifier.width(150.dp))
-                NorfoldMetric("Achieved", state.goals.count { it.status == GoalStatus.Achieved }.toString(), Icons.Outlined.CheckCircle, Color(0xFF20B26B), Modifier.width(150.dp))
+                NorfoldMetric("In progress", state.goals.count { it.status == GoalStatus.InProgress }.toString(), Icons.Outlined.Schedule, MaterialTheme.colorScheme.onSurfaceVariant, Modifier.width(150.dp))
+                NorfoldMetric("Achieved", state.goals.count { it.status == GoalStatus.Achieved }.toString(), Icons.Outlined.CheckCircle, MaterialTheme.colorScheme.primary, Modifier.width(150.dp))
             }
         }
         items(state.goals, key = { it.id }) { goal -> GoalRow(goal, viewModel) }
@@ -183,16 +193,16 @@ fun GoalsScreen(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-private fun GoalRow(goal: GoalItem, viewModel: NotesViewModel) {
+private fun GoalRow(goal: GoalItem, viewModel: DocsViewModel) {
     val fraction = if (goal.target <= 0) 0f else (goal.progress / goal.target).coerceIn(0.0, 1.0).toFloat()
     NorfoldCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) { Text(goal.title, fontWeight = FontWeight.Bold); Text(goal.description.ifBlank { "Independent goal" }, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                NorfoldStatusPill(goal.status.name.replace("NotStarted", "Not started").replace("InProgress", "In progress"), if (goal.status == GoalStatus.Achieved) Color(0xFF20B26B) else MaterialTheme.colorScheme.primary)
+                NorfoldStatusPill(goal.status.name.replace("NotStarted", "Not started").replace("InProgress", "In progress"), MaterialTheme.colorScheme.primary)
                 IconButton(onClick = { viewModel.deleteGoal(goal) }) { Icon(Icons.Outlined.Delete, "Delete goal", tint = MaterialTheme.colorScheme.error) }
             }
-            LinearProgressIndicator({ fraction }, Modifier.fillMaxWidth().height(7.dp), color = if (goal.status == GoalStatus.Achieved) Color(0xFF20B26B) else MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant)
+            LinearProgressIndicator({ fraction }, Modifier.fillMaxWidth().height(7.dp), color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("${goal.progress.roundToInt()} / ${goal.target.roundToInt()} ${goal.unit}", Modifier.weight(1f), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedButton(onClick = { viewModel.updateGoal(goal.copy(progress = (goal.progress + maxOf(goal.target * 0.1, 1.0)).coerceAtMost(goal.target), status = GoalStatus.InProgress)) }) { Text("Update") }
@@ -202,25 +212,110 @@ private fun GoalRow(goal: GoalItem, viewModel: NotesViewModel) {
 }
 
 @Composable
-fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun CalendarWorkspaceScreen(
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    embedded: Boolean = false,
+    onTaskClick: ((com.norfold.app.domain.TaskItem) -> Unit)? = null,
+) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
     var mode by remember(state.settings.calendarDefaultView) { mutableStateOf(state.settings.calendarDefaultView) }
     var createOpen by remember { mutableStateOf(false) }
-    val events = remember(state.calendarEvents, state.tasks, state.goals) { planningEvents(state) }
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { NorfoldPageHeader("Calendar", "Plan work and never miss a deadline.", Icons.Outlined.CalendarMonth, actions = { Button(onClick = { createOpen = true }) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(6.dp)); Text("New event") } }) }
-        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f)); IconButton(onClick = { month = month.minusMonths(1) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Previous month") }; IconButton(onClick = { month = month.plusMonths(1) }) { Icon(Icons.AutoMirrored.Outlined.ArrowForward, "Next month") } } }
-        item { NorfoldSegmentedControl(listOf("Month", "Week", "Day", "Agenda"), mode, { mode = it }, Modifier.horizontalScroll(rememberScrollState())) }
-        item {
-            when (mode) {
-                "Agenda" -> AgendaPanel(events.filter { !it.date.isBefore(selectedDate) }.take(12))
-                "Week" -> WeekPanel(selectedDate, events) { selectedDate = it }
-                "Day" -> AgendaPanel(events.filter { it.date == selectedDate })
-                else -> MonthPanel(month, selectedDate, events) { selectedDate = it }
+    val accent = MaterialTheme.colorScheme.primary
+    val mutedAccent = MaterialTheme.colorScheme.onSurfaceVariant
+    val events = remember(state.calendarEvents, state.tasks, state.goals, accent, mutedAccent) { planningEvents(state, accent, mutedAccent) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // Same threshold as NorfoldAppRoot: on compact widths the floating sidebar
+    // button sits over the top-start corner, so the page header shifts right.
+    val headerInset = if (!embedded && maxWidth < 720.dp) 56.dp else 0.dp
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = if (embedded) 0.dp else 18.dp, vertical = if (embedded) 10.dp else 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (!embedded) NorfoldPageHeader("Calendar", "Plan work and never miss a deadline.", Icons.Outlined.CalendarMonth, modifier = Modifier.padding(start = headerInset))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            IconButton(onClick = { createOpen = true }) { Icon(Icons.Outlined.Add, "New event") }
+            IconButton(onClick = {
+                selectedDate = when (mode) {
+                    "Month" -> selectedDate.minusMonths(1)
+                    "Week" -> selectedDate.minusWeeks(1)
+                    else -> selectedDate.minusDays(1)
+                }
+                month = YearMonth.from(selectedDate)
+            }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Previous period") }
+            IconButton(onClick = {
+                selectedDate = when (mode) {
+                    "Month" -> selectedDate.plusMonths(1)
+                    "Week" -> selectedDate.plusWeeks(1)
+                    else -> selectedDate.plusDays(1)
+                }
+                month = YearMonth.from(selectedDate)
+            }) { Icon(Icons.AutoMirrored.Outlined.ArrowForward, "Next period") }
+        }
+        Box(Modifier.fillMaxWidth()) {
+            NorfoldSegmentedControl(
+                listOf("Month", "Week", "Day", "Agenda"),
+                mode,
+                {
+                    mode = it
+                    viewModel.patchSettings { settings -> settings.copy(calendarDefaultView = it) }
+                },
+                Modifier.horizontalScroll(rememberScrollState()),
+            )
+        }
+        when (mode) {
+            "Day" -> ContinuousDayCalendar(
+                selectedDate = selectedDate,
+                events = events,
+                onVisibleDate = { selectedDate = it; month = YearMonth.from(it) },
+                modifier = Modifier.weight(1f),
+            )
+            "Week" -> WeekCalendar(
+                selectedDate = selectedDate,
+                events = events,
+                onWeekSettled = { weekStart -> month = YearMonth.from(weekStart.plusDays(3)) },
+                onSelect = { selectedDate = it; month = YearMonth.from(it) },
+                onEventClick = { event ->
+                    val task = event.taskId?.let { taskId -> state.tasks.firstOrNull { it.id == taskId } }
+                    if (task != null && onTaskClick != null) {
+                        onTaskClick(task)
+                        return@WeekCalendar
+                    }
+                    val obj = event.taskId?.let { taskId ->
+                        state.workspaceObjects.firstOrNull {
+                            it.objectType == com.norfold.app.domain.WorkspaceObjectType.Task && it.sourceId == taskId
+                        }
+                    }
+                    if (obj != null) viewModel.openWorkspaceObject(obj)
+                },
+                modifier = Modifier.weight(1f),
+            )
+            else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (mode == "Agenda") {
+                    item { AgendaPanel(events.filter { !it.date.isBefore(selectedDate) }) }
+                } else {
+                    item {
+                        PagedMonthPanel(
+                            month = month,
+                            selected = selectedDate,
+                            events = events,
+                            onMonthSettled = { settled -> month = settled },
+                            onSelect = {
+                                selectedDate = it
+                                month = YearMonth.from(it)
+                                mode = "Day"
+                                viewModel.patchSettings { settings -> settings.copy(calendarDefaultView = "Day") }
+                            },
+                        )
+                    }
+                }
+                item { DayAgenda(selectedDate, events.filter { it.date == selectedDate }) }
+                item { Spacer(Modifier.height(96.dp)) }
             }
         }
-        item { DayAgenda(selectedDate, events.filter { it.date == selectedDate }) }
+    }
     }
     if (createOpen) EventCreateDialog(selectedDate, { createOpen = false }) { title ->
         val start = selectedDate.atTime(10, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -229,22 +324,346 @@ fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
     }
 }
 
-private data class PlanningEvent(val id: String, val title: String, val detail: String, val date: LocalDate, val time: LocalTime?, val color: Color, val source: String)
+private data class PlanningEvent(val id: String, val title: String, val detail: String, val date: LocalDate, val time: LocalTime?, val color: Color, val source: String, val taskId: Long? = null)
 
-private fun planningEvents(state: NotesUiState): List<PlanningEvent> = buildList {
+private fun planningEvents(state: DocsUiState, accent: Color, mutedAccent: Color): List<PlanningEvent> = buildList {
     state.calendarEvents.forEach { event ->
         val instant = Instant.ofEpochMilli(event.startAt).atZone(ZoneId.systemDefault())
         add(PlanningEvent("event-${event.id}", event.title, event.description, instant.toLocalDate(), if (event.allDay) null else instant.toLocalTime(), Color(event.color), event.source.name))
     }
-    state.tasks.filter { it.dueAt != null }.forEach { task ->
-        val instant = Instant.ofEpochMilli(task.dueAt!!).atZone(ZoneId.systemDefault())
-        add(PlanningEvent("task-${task.id}", task.title, task.status.name, instant.toLocalDate(), instant.toLocalTime(), if (task.status == TaskStatus.Done) Color(0xFF20B26B) else Color(0xFF3478F6), "Task"))
-    }
-    state.goals.filter { it.dueAt != null }.forEach { goal ->
-        val date = Instant.ofEpochMilli(goal.dueAt!!).atZone(ZoneId.systemDefault()).toLocalDate()
-        add(PlanningEvent("goal-${goal.id}", goal.title, "Goal deadline", date, null, Color(0xFF20B26B), "Goal"))
+    state.tasks.filter { it.startAt != null || it.dueAt != null }.forEach { task ->
+        val zone = ZoneId.systemDefault()
+        val start = Instant.ofEpochMilli(task.startAt ?: task.dueAt!!).atZone(zone)
+        val end = Instant.ofEpochMilli(task.dueAt ?: task.startAt!!).atZone(zone)
+        var date = start.toLocalDate()
+        while (!date.isAfter(end.toLocalDate())) {
+            add(
+                PlanningEvent(
+                    "task-${task.id}-$date",
+                    task.title,
+                    task.status.name,
+                    date,
+                    if (task.allDay) null else if (date == start.toLocalDate()) start.toLocalTime() else LocalTime.MIDNIGHT,
+                    if (task.status == TaskStatus.Done) mutedAccent else task.colorArgb?.let { Color(it.toInt()) } ?: accent,
+                    "Task",
+                    taskId = task.id,
+                ),
+            )
+            date = date.plusDays(1)
+        }
     }
 }.sortedWith(compareBy<PlanningEvent> { it.date }.thenBy { it.time })
+
+@Composable
+private fun ContinuousDayCalendar(
+    selectedDate: LocalDate,
+    events: List<PlanningEvent>,
+    onVisibleDate: (LocalDate) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val origin = remember { LocalDate.now().minusDays(365) }
+    val dates = remember(origin) { List(731) { origin.plusDays(it.toLong()) } }
+    val initialIndex = remember(origin) { ChronoUnit.DAYS.between(origin, selectedDate).toInt().coerceIn(dates.indices) }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .collect { index -> dates.getOrNull(index)?.let(onVisibleDate) }
+    }
+    LaunchedEffect(selectedDate) {
+        val target = ChronoUnit.DAYS.between(origin, selectedDate).toInt().coerceIn(dates.indices)
+        if (target != listState.firstVisibleItemIndex) listState.animateScrollToItem(target)
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(dates, key = { it.toEpochDay() }) { date ->
+            DayTimeline(date, events.filter { it.date == date })
+        }
+        item { Spacer(Modifier.height(96.dp)) }
+    }
+}
+
+private val WeekHourRailWidth = 46.dp
+
+/**
+ * Week view rebuild (codex step 6): pager of week panels — swipe = prev/next
+ * week. Each panel = sticky 7-day header (tap selects) + sticky all-day/
+ * multi-day capsule band + vertically scrolling adaptive timed grid whose
+ * hour rail collapses empty stretches ([WeekHourBands]).
+ */
+@Composable
+private fun WeekCalendar(
+    selectedDate: LocalDate,
+    events: List<PlanningEvent>,
+    onWeekSettled: (LocalDate) -> Unit,
+    onSelect: (LocalDate) -> Unit,
+    onEventClick: (PlanningEvent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val origin = remember { LocalDate.now().with(DayOfWeek.MONDAY) }
+    CalendarPeriodPager(
+        current = selectedDate.with(DayOfWeek.MONDAY),
+        periodAt = { page -> origin.plusWeeks((page - CALENDAR_PAGER_CENTER).toLong()) },
+        indexOf = { weekStart ->
+            (CALENDAR_PAGER_CENTER + ChronoUnit.WEEKS.between(origin, weekStart))
+                .coerceIn(0L, CALENDAR_PAGER_PAGES.toLong() - 1L)
+                .toInt()
+        },
+        onSettled = onWeekSettled,
+        modifier = modifier,
+    ) { weekStart ->
+        WeekPanel(weekStart, selectedDate, events, onSelect, onEventClick)
+    }
+}
+
+@Composable
+private fun WeekPanel(
+    weekStart: LocalDate,
+    selectedDate: LocalDate,
+    events: List<PlanningEvent>,
+    onSelect: (LocalDate) -> Unit,
+    onEventClick: (PlanningEvent) -> Unit,
+) {
+    val weekDays = remember(weekStart) { (0L..6L).map { weekStart.plusDays(it) } }
+    val weekEvents = remember(events, weekStart) { events.filter { it.date in weekDays } }
+    val allDay = weekEvents.filter { it.time == null }
+    val timed = weekEvents.filter { it.time != null }
+    val bands = remember(weekEvents) {
+        WeekHourBands.computeHourBands(weekDays.map { day -> timed.filter { it.date == day }.map { it.time!!.hour } })
+    }
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Column {
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                Spacer(Modifier.width(WeekHourRailWidth))
+                weekDays.forEach { date ->
+                    val selected = date == selectedDate
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable { onSelect(date) }.padding(vertical = 5.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            date.dayOfWeek.name.take(3).lowercase().replaceFirstChar { it.uppercase() },
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Box(
+                            Modifier.padding(top = 3.dp).size(30.dp)
+                                .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                date.dayOfMonth.toString(),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
+            }
+            WeekAllDayBand(weekDays, allDay, onEventClick)
+            val gridScroll = rememberScrollState()
+            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(gridScroll)) {
+                if (bands.size == 1 && !bands[0].busy && bands[0].label == WeekHourBands.NO_TIMED_TASKS_LABEL) {
+                    Text(
+                        WeekHourBands.NO_TIMED_TASKS_LABEL,
+                        Modifier.fillMaxWidth().padding(vertical = 26.dp),
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                } else {
+                    bands.forEach { band ->
+                        val bandHeight = if (band.busy) (56 * (band.endHour - band.startHour)).dp else 24.dp
+                        Row(Modifier.fillMaxWidth().height(bandHeight)) {
+                            Text(
+                                band.label,
+                                Modifier.width(WeekHourRailWidth).padding(top = 3.dp, end = 6.dp),
+                                fontSize = 9.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.End,
+                                maxLines = 1,
+                            )
+                            weekDays.forEach { day ->
+                                Column(
+                                    Modifier.weight(1f).fillMaxHeight()
+                                        .border(BorderStroke(0.25.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)))
+                                        .padding(1.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    if (band.busy) {
+                                        timed
+                                            .filter { it.date == day && it.time!!.hour >= band.startHour && it.time!!.hour < band.endHour }
+                                            .forEach { event -> WeekEventChip(event, onEventClick) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+/** Range/all-day tasks as Gantt-style capsules; lanes capped at 3 with "+N more". */
+@Composable
+private fun WeekAllDayBand(
+    weekDays: List<LocalDate>,
+    allDay: List<PlanningEvent>,
+    onEventClick: (PlanningEvent) -> Unit,
+) {
+    if (allDay.isEmpty()) return
+    // Multi-day tasks arrive exploded into one event per day sharing taskId —
+    // regroup them so a range renders as a single capsule spanning its columns.
+    val capsules = allDay
+        .groupBy { it.taskId?.let { id -> "task-$id" } ?: it.id }
+        .map { (_, dayEvents) ->
+            val columns = dayEvents.map { weekDays.indexOf(it.date) }.filter { it >= 0 }
+            WeekCapsule(dayEvents.first(), columns.min(), columns.max())
+        }
+        .sortedWith(compareBy({ it.start }, { it.start - it.end }))
+    val lanes = mutableListOf<MutableList<WeekCapsule>>()
+    var hidden = 0
+    capsules.forEach { capsule ->
+        val lane = lanes.firstOrNull { lane -> lane.none { it.start <= capsule.end && capsule.start <= it.end } }
+        when {
+            lane != null -> lane += capsule
+            lanes.size < 3 -> lanes += mutableListOf(capsule)
+            else -> hidden++
+        }
+    }
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        lanes.forEach { lane ->
+            Row(Modifier.fillMaxWidth().height(22.dp)) {
+                Spacer(Modifier.width(WeekHourRailWidth))
+                var column = 0
+                lane.sortedBy { it.start }.forEach { capsule ->
+                    if (capsule.start > column) Spacer(Modifier.weight((capsule.start - column).toFloat()))
+                    Surface(
+                        onClick = { onEventClick(capsule.event) },
+                        modifier = Modifier.weight((capsule.end - capsule.start + 1).toFloat()).fillMaxHeight().padding(horizontal = 1.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        color = capsule.event.color.copy(alpha = 0.2f),
+                        border = BorderStroke(1.dp, capsule.event.color.copy(alpha = 0.4f)),
+                    ) {
+                        Text(
+                            capsule.event.title,
+                            Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    column = capsule.end + 1
+                }
+                if (column < 7) Spacer(Modifier.weight((7 - column).toFloat()))
+            }
+        }
+        if (hidden > 0) {
+            Text(
+                "+$hidden more",
+                Modifier.padding(start = WeekHourRailWidth + 4.dp),
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+private data class WeekCapsule(val event: PlanningEvent, val start: Int, val end: Int)
+
+@Composable
+private fun WeekEventChip(event: PlanningEvent, onEventClick: (PlanningEvent) -> Unit) {
+    Surface(
+        onClick = { onEventClick(event) },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(6.dp),
+        color = event.color.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, event.color.copy(alpha = 0.36f)),
+    ) {
+        Column(Modifier.padding(horizontal = 4.dp, vertical = 3.dp)) {
+            Text(event.title, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            event.time?.let { time ->
+                Text(
+                    time.format(DateTimeFormatter.ofPattern("h:mm a")),
+                    fontSize = 8.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Shared infinite-feel horizontal pager for calendar panels (month/week).
+ * Pages are indexed around a large center so both directions swipe freely;
+ * [periodAt] maps an index offset to the period value, [indexOf] the reverse.
+ * When [current] changes externally (chevrons, day taps) the pager animates
+ * to it; when the user settles on a page, [onSettled] reports the new period.
+ */
+@Composable
+private fun <T> CalendarPeriodPager(
+    current: T,
+    periodAt: (Int) -> T,
+    indexOf: (T) -> Int,
+    onSettled: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable (T) -> Unit,
+) {
+    val pagerState = rememberPagerState(initialPage = indexOf(current), pageCount = { CALENDAR_PAGER_PAGES })
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { page -> onSettled(periodAt(page)) }
+    }
+    LaunchedEffect(current) {
+        val target = indexOf(current)
+        if (target != pagerState.currentPage && !pagerState.isScrollInProgress) {
+            pagerState.animateScrollToPage(target)
+        }
+    }
+    HorizontalPager(state = pagerState, modifier = modifier, beyondViewportPageCount = 1) { page ->
+        content(periodAt(page))
+    }
+}
+
+private const val CALENDAR_PAGER_PAGES = 24_000
+private const val CALENDAR_PAGER_CENTER = CALENDAR_PAGER_PAGES / 2
+
+/** MonthPanel wrapped in the shared pager: swipe = prev/next month, header follows the settled page. */
+@Composable
+private fun PagedMonthPanel(
+    month: YearMonth,
+    selected: LocalDate,
+    events: List<PlanningEvent>,
+    onMonthSettled: (YearMonth) -> Unit,
+    onSelect: (LocalDate) -> Unit,
+) {
+    val origin = remember { YearMonth.now() }
+    CalendarPeriodPager(
+        current = month,
+        periodAt = { page -> origin.plusMonths((page - CALENDAR_PAGER_CENTER).toLong()) },
+        indexOf = { m ->
+            (CALENDAR_PAGER_CENTER + ChronoUnit.MONTHS.between(origin, m))
+                .coerceIn(0L, CALENDAR_PAGER_PAGES.toLong() - 1L)
+                .toInt()
+        },
+        onSettled = onMonthSettled,
+    ) { pageMonth ->
+        MonthPanel(pageMonth, selected, events, onSelect)
+    }
+}
 
 @Composable
 private fun MonthPanel(month: YearMonth, selected: LocalDate, events: List<PlanningEvent>, onSelect: (LocalDate) -> Unit) {
@@ -274,103 +693,59 @@ private fun MonthPanel(month: YearMonth, selected: LocalDate, events: List<Plann
 }
 
 @Composable
-private fun WeekPanel(selected: LocalDate, events: List<PlanningEvent>, onSelect: (LocalDate) -> Unit) {
-    val start = selected.minusDays((selected.dayOfWeek.value - 1).toLong())
-    val weekEvents = events.filter { !it.date.isBefore(start) && it.date.isBefore(start.plusDays(7)) }.take(12)
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    ) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Outlined.CalendarMonth, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    selected.format(DateTimeFormatter.ofPattern("MMMM yyyy")),
-                    Modifier.weight(1f).padding(horizontal = 10.dp),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                )
-                NorfoldStatusPill("Week", MaterialTheme.colorScheme.primary)
+private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>) {
+    val allDay = events.filter { it.time == null }
+    val timed = events.filter { it.time != null }.groupBy { it.time!!.hour }
+    NorfoldCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            if (allDay.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("All day", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    allDay.forEach { event -> EventRow(event) }
+                }
             }
-            BoxWithConstraints(
-                Modifier.fillMaxWidth().height(430.dp)
-                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.34f)),
-            ) {
-                val columnWidth = maxWidth / 7
-                val scheduleTop = 82.dp
-                val selectedIndex = (selected.toEpochDay() - start.toEpochDay()).toInt().coerceIn(0, 6)
-
-                Box(
-                    Modifier.offset(x = columnWidth * selectedIndex).width(columnWidth).height(430.dp)
-                        .padding(horizontal = 2.dp)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.72f), RoundedCornerShape(10.dp)),
-                )
-                Row(Modifier.fillMaxSize()) {
-                    (0L..6L).forEach { delta ->
-                        val date = start.plusDays(delta)
-                        val active = date == selected
+            Column(Modifier.fillMaxWidth()) {
+                repeat(24) { hour ->
+                    val hourEvents = timed[hour].orEmpty()
+                    Row(
+                        Modifier.fillMaxWidth().height(if (hourEvents.size > 1) 104.dp else 68.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            LocalTime.of(hour, 0).format(DateTimeFormatter.ofPattern("h a")),
+                            modifier = Modifier.width(52.dp).padding(top = 8.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp,
+                            textAlign = TextAlign.End,
+                        )
                         Column(
-                            Modifier.weight(1f).fillMaxSize().clickable { onSelect(date) }
-                                .border(BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f))),
-                            horizontalAlignment = Alignment.CenterHorizontally,
+                            Modifier.weight(1f).padding(start = 10.dp).border(
+                                width = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(1.dp),
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Text(
-                                date.dayOfWeek.name.take(3).lowercase().replaceFirstChar { it.uppercase() },
-                                Modifier.padding(top = 12.dp),
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Box(
-                                Modifier.padding(top = 5.dp).size(34.dp)
-                                    .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    date.dayOfMonth.toString(),
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                )
+                            if (hourEvents.isEmpty()) {
+                                Spacer(Modifier.height(66.dp))
+                            } else {
+                                hourEvents.forEach { event ->
+                                    Row(
+                                        Modifier.fillMaxWidth().height(46.dp)
+                                            .background(event.color.copy(alpha = 0.16f), RoundedCornerShape(7.dp)),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(Modifier.width(4.dp).height(46.dp).background(event.color, RoundedCornerShape(7.dp)))
+                                        Column(Modifier.padding(horizontal = 9.dp)) {
+                                            Text(event.title, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(event.time?.format(DateTimeFormatter.ofPattern("h:mm a")) ?: "All day", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                weekEvents.forEachIndexed { index, event ->
-                    val dayIndex = (event.date.toEpochDay() - start.toEpochDay()).toInt().coerceIn(0, 6)
-                    val hour = event.time?.let { it.hour + it.minute / 60f } ?: (9f + index * 0.7f)
-                    val y = scheduleTop + ((hour - 8f).coerceIn(0f, 10f) * 29f).dp
-                    val available = maxWidth - (columnWidth * dayIndex) - 8.dp
-                    val barWidth = (columnWidth * 2.45f).coerceAtMost(available).coerceAtLeast(columnWidth - 8.dp)
-                    Row(
-                        Modifier.offset(x = columnWidth * dayIndex + 5.dp, y = y)
-                            .width(barWidth).height(54.dp).clip(RoundedCornerShape(7.dp))
-                            .background(event.color.copy(alpha = 0.18f))
-                            .border(1.dp, event.color.copy(alpha = 0.34f), RoundedCornerShape(7.dp)),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.width(4.dp).height(54.dp).background(event.color))
-                        Column(Modifier.weight(1f).padding(horizontal = 9.dp)) {
-                            Text(event.title, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(
-                                event.time?.format(DateTimeFormatter.ofPattern("h:mm a")) ?: "All day",
-                                fontSize = 9.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-                if (weekEvents.isEmpty()) {
-                    Text(
-                        "No events this week",
-                        Modifier.align(Alignment.Center),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                    )
                 }
             }
         }
@@ -404,11 +779,11 @@ private fun EmptyPlanningCard(title: String, detail: String, onCreate: () -> Uni
 @Composable
 private fun GoalCreateDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     var title by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("New goal") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Goal") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    NorfoldDialog(onDismissRequest = onDismiss, title = { Text("New goal") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Goal") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @Composable
 private fun EventCreateDialog(date: LocalDate, onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     var title by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("New event") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), color = MaterialTheme.colorScheme.onSurfaceVariant); OutlinedTextField(title, { title = it }, label = { Text("Event name") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create at 10:00 AM") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    NorfoldDialog(onDismissRequest = onDismiss, title = { Text("New event") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), color = MaterialTheme.colorScheme.onSurfaceVariant); OutlinedTextField(title, { title = it }, label = { Text("Event name") }, singleLine = true) } }, confirmButton = { Button(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create at 10:00 AM") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }

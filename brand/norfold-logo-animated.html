@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Norfold — animated logo source</title>
+<!--
+  Canonical Norfold logo-animation source (successor to notes_nync_v4_adaptive.html).
+
+  The glyph is the EXACT vector trace of brand/norfold-glyph.png (potrace,
+  99.8% pixel match) — see brand/norfold-glyph.svg for the standalone asset.
+  Animation: the filled outline is revealed by three round-cap mask strokes
+  (left stem → diagonal → i-stem), then the green dot pops and the wordmark
+  rises. Because it's a reveal mask over one true path, it renders identically
+  to the raster logo on any background — no cut-colour matching needed.
+
+  Reveal capsule geometry (1688 viewBox), verified to cover 100% of glyph px:
+    left stem : (384,540)-(384,1340)  w500
+    diagonal  : (400,480)-(1150,1290) w460
+    i stem    : (1165,810)-(1178,1340) w360
+  Dot: circle (1159,436) r131 #56AA5F.
+  Splash/launcher geometry should derive from these positions (AGENTS.md rule).
+
+  Edit knobs: CSS custom properties + the timing block below.
+  Click anywhere to replay. Honors prefers-reduced-motion.
+-->
+<style>
+  :root{
+    color-scheme: light dark;
+    --bg:#f7f6f2;
+    --ink:#1e2024;          /* glyph colour, from brand raster */
+    --dot:#56aa5f;          /* Norfold green */
+    --word:#1e2024;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#070a12; --ink:#f4f4f6; --word:#f4f4f6; }
+  }
+  html,body{height:100%}
+  body{
+    margin:0; display:grid; place-items:center;
+    background:var(--bg);
+    font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  .lockup{display:flex; align-items:center; gap:26px; user-select:none; cursor:pointer}
+  .glyph{width:118px; height:118px; display:block}
+  .ink{fill:var(--ink)}
+
+  /* --- timing --- */
+  .reveal{stroke:#fff; fill:none; stroke-linecap:round;
+          stroke-dasharray:100; stroke-dashoffset:100;
+          animation:draw .55s cubic-bezier(.55,.06,.28,1) forwards}
+  #r-stem{animation-delay:0s}
+  #r-diag{animation-delay:.28s; animation-duration:.62s}
+  #r-i   {animation-delay:.92s; animation-duration:.4s}
+  .dot{fill:var(--dot); transform-box:fill-box; transform-origin:center;
+       transform:scale(0);
+       animation:pop .42s cubic-bezier(.34,1.56,.64,1) forwards 1.2s}
+  .word{
+    font-size:64px; font-weight:800; letter-spacing:-.02em; color:var(--word);
+    opacity:0; transform:translateY(10px);
+    animation:rise .5s cubic-bezier(.22,1,.36,1) forwards 1.34s;
+  }
+  .word .accent{color:var(--dot)}
+
+  /* gentle idle pulse on the dot once the intro is done */
+  .idle .dot{animation:pop 0s forwards, pulse 3.2s ease-in-out 2.2s infinite}
+
+  @keyframes draw {to{stroke-dashoffset:0}}
+  @keyframes pop  {to{transform:scale(1)}}
+  @keyframes rise {to{opacity:1; transform:translateY(0)}}
+  @keyframes pulse{0%,100%{transform:scale(1)} 50%{transform:scale(1.12)}}
+
+  @media (prefers-reduced-motion: reduce){
+    .reveal{animation:none; stroke-dashoffset:0}
+    .dot,.word{animation:none; opacity:1; transform:none}
+  }
+</style>
+</head>
+<body>
+  <div class="lockup" id="lockup" title="Click to replay">
+    <svg class="glyph" viewBox="0 0 1688 1688" role="img" aria-label="Norfold logo">
+      <defs>
+        <mask id="nf-reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="1688" height="1688">
+          <line id="r-stem" class="reveal" x1="384"  y1="540" x2="384"  y2="1340" stroke-width="500" pathLength="100"/>
+          <line id="r-diag" class="reveal" x1="400"  y1="480" x2="1150" y2="1290" stroke-width="460" pathLength="100"/>
+          <line id="r-i"    class="reveal" x1="1165" y1="810" x2="1178" y2="1340" stroke-width="360" pathLength="100"/>
+        </mask>
+      </defs>
+      <!-- exact traced outline from brand/norfold-glyph.png -->
+      <path class="ink" mask="url(#nf-reveal)" d="M 370 293.6 c -1.4 0.2 -6.5 0.9 -11.5 1.5 -66.1 7.9 -130.5 49.3 -166.3 106.9 -17.5 28 -27.9 55.1 -34.3 89 l -2.2 11.5 -0.4 433.5 c -0.3 312.5 -0.1 436.3 0.7 443.5 2.8 25.5 10.5 52.3 21.5 75.1 27.6 57.5 75.9 100.4 134.6 119.7 54 17.8 111.3 16 161.4 -5 40.9 -17.2 78.9 -49.6 103.2 -88.1 16.6 -26.3 29.5 -62.3 34.3 -95.6 2 -13.8 2 -17.8 1.7 -183.1 -0.3 -189.2 0.2 -174.6 -7.6 -191 -6.5 -13.6 -5.4 -12.3 -64.5 -75.6 -47.3 -50.6 -55 -58.3 -63.1 -63.8 -25 -16.9 -52.4 -20.5 -85.5 -11.2 -5.5 1.6 -10 2.4 -10 1.8 0 -3.4 17.3 -21.3 26.5 -27.5 32.6 -21.7 71.2 -22.8 108.5 -3.1 13.8 7.4 22.5 14.4 35.7 29.2 6.5 7.2 15.9 17.4 20.8 22.7 5 5.2 16.4 17.6 25.4 27.5 9 9.9 22.1 24.1 29 31.6 6.9 7.4 24.3 26.3 38.6 41.9 14.3 15.7 28.8 31.4 32.1 35 3.4 3.6 13.5 14.7 22.5 24.6 9 10 24.7 27.3 34.8 38.5 43.3 48 57.7 64.2 100.8 113.4 9.7 11 22.4 25.5 28.4 32.1 6 6.7 12.6 14.2 14.7 16.7 2 2.4 19.5 22.3 38.7 44.2 19.3 21.9 38.4 43.6 42.5 48.4 4.1 4.7 19.8 22.7 35 40 15.1 17.3 29.1 33.3 31 35.5 1.9 2.3 11.4 13.1 21 24 9.6 11 20.4 23.3 23.9 27.5 10.1 12.2 14 15.9 23.6 22.6 19 13.3 37.4 20.6 59.4 23.4 67.2 8.7 126.8 -34.1 142 -101.9 4.3 -19.4 4.3 -16.3 4.2 -323 -0.1 -260.6 -0.3 -295.7 -1.7 -305 -6.3 -42.8 -20.9 -71.2 -51.7 -100.6 -20.9 -20 -46.6 -32.9 -78.7 -39.5 -13.4 -2.8 -42.4 -3.3 -56.5 -1 -33.5 5.4 -62.5 18.5 -84.3 38 -18.4 16.6 -27.6 31.8 -34.5 57.4 l -2.2 8.2 -0.2 278.2 c -0.2 173.9 -0.7 278.3 -1.3 278.3 -0.5 -0 -3.4 -3.3 -6.3 -7.3 -3 -3.9 -9.2 -11.3 -13.7 -16.2 -15.5 -16.8 -22 -25.2 -24.5 -31.4 l -2.5 -6.1 0 -208.7 c 0 -128.5 -0.4 -212.4 -1 -218.1 -2 -19.1 -6.2 -33.9 -14 -49.7 -6.3 -12.7 -13.5 -22.2 -28.4 -37.7 -6.6 -6.8 -19.2 -19.7 -28 -28.8 -8.9 -9.1 -21.7 -22.4 -28.6 -29.5 -22.1 -23 -39.1 -40.6 -57 -59 -9.6 -9.9 -21.1 -21.8 -25.4 -26.5 -4.4 -4.7 -15.4 -16.2 -24.4 -25.5 -9.1 -9.4 -23.1 -23.8 -31.1 -32 -8 -8.3 -22.2 -22.9 -31.6 -32.5 -18.8 -19.4 -40.2 -41.4 -63 -65 -30.3 -31.4 -61.2 -62.4 -68 -68.3 -42.1 -36.4 -88.1 -56.9 -142 -63.2 -11.6 -1.3 -43.4 -1.9 -50.5 -0.9 Z"/>
+      <circle class="dot" cx="1159" cy="436" r="131"/>
+    </svg>
+    <div class="word">Norfold<span class="accent">.</span></div>
+  </div>
+<script>
+  // replay on click; .idle enables the soft dot pulse after the intro
+  const lockup = document.getElementById('lockup');
+  const arm = el => {
+    setTimeout(() => el.classList.add('idle'), 2000);
+    el.addEventListener('click', () => {
+      const clone = el.cloneNode(true);
+      el.replaceWith(clone);
+      arm(clone);
+    });
+  };
+  arm(lockup);
+</script>
+</body>
+</html>

@@ -16,7 +16,10 @@ class BackupCodecTest {
                 kanbanEngine = "BoardPointer",
             ),
             notebooks = listOf(Notebook(1, "Work", null, 0xFF8B5CF6, 0)),
-            tags = listOf(Tag(1, "sync", 0xFF8B5CF6)),
+            tags = listOf(
+                Tag(1, "sync", 0xFF8B5CF6),
+                Tag(2, "Planning", 0xFF8B5CF6, scope = "board:3"),
+            ),
             notes = listOf(
                 Note(
                     id = 1,
@@ -68,24 +71,6 @@ class BackupCodecTest {
             calendarEvents = listOf(
                 CalendarEventItem(73, 1, "event-sync-73", "Design review", "Review adaptive layouts", 200, 220, false, 0xFF9A48FF, CalendarEventSource.Local, null, 142, 162),
             ),
-            canvasNodes = listOf(
-                CanvasNodeItem(
-                    id = 9,
-                    title = "PDF brief",
-                    subtitle = "Spec attachment",
-                    type = CanvasNodeType.File,
-                    x = 0.2f,
-                    y = 0.3f,
-                    color = 0xFF4AADFF,
-                    linkedNoteId = null,
-                    targetUri = "content://canvas/brief.pdf",
-                    targetMimeType = "application/pdf",
-                    targetName = "brief.pdf",
-                    targetSizeBytes = 4096,
-                    createdAt = 60,
-                    updatedAt = 70,
-                ),
-            ),
             workspaceObjects = listOf(
                 WorkspaceObject(
                     id = 11,
@@ -127,7 +112,8 @@ class BackupCodecTest {
 
         assertEquals("Project", restored.notes.single().title)
         assertEquals("Work", restored.notebooks.single().name)
-        assertEquals("sync", restored.tags.single().name)
+        assertEquals("sync", restored.tags.first { it.scope == "notes" }.name)
+        assertEquals("Planning", restored.tags.first { it.scope == "board:3" }.name)
         assertEquals("image.png", restored.attachments.single().displayName)
         assertEquals("planning,review", restored.tasks.single().labels)
         assertEquals("brief.pdf", restored.tasks.single().attachmentName)
@@ -142,8 +128,6 @@ class BackupCodecTest {
         assertEquals(true, restored.taskChecklistItems.single().checked)
         assertEquals(4L, restored.tasks.single().taskColumnId)
         assertEquals(2, restored.tasks.single().sortOrder)
-        assertEquals("content://canvas/brief.pdf", restored.canvasNodes.single().targetUri)
-        assertEquals("brief.pdf", restored.canvasNodes.single().targetName)
         assertEquals("Project", restored.workspaceObjects.first().title)
         assertEquals(WorkspaceLinkType.Attachment, restored.workspaceObjectLinks.single().linkType)
         assertEquals("Updated note", restored.workspaceActivities.single().title)

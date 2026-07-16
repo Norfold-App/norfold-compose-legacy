@@ -3,15 +3,29 @@ package com.norfold.app.data
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Attachment
 import com.norfold.app.domain.BackupSnapshot
-import com.norfold.app.domain.CanvasEdgeItem
-import com.norfold.app.domain.CanvasNodeItem
-import com.norfold.app.domain.CanvasNodeType
+import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.ChatMessageItem
+import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.DocLayerOrder
+import com.norfold.app.domain.DocCanvasSpec
+import com.norfold.app.domain.DocLayoutJson
+import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.FreeformPlacement
+import com.norfold.app.domain.EmbedBlock
+import com.norfold.app.domain.EmbedMetadata
+import com.norfold.app.domain.FileBlock
+import com.norfold.app.domain.MathBlock
+import com.norfold.app.domain.MermaidBlock
+import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.Note
+import com.norfold.app.domain.MarkdownBlockCodec
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.Notebook
 import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.GoalStatus
+import com.norfold.app.domain.HeadingBlock
+import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.CalendarEventItem
 import com.norfold.app.domain.CalendarEventSource
 import com.norfold.app.domain.Tag
@@ -24,6 +38,7 @@ import com.norfold.app.domain.TaskMoveRow
 import com.norfold.app.domain.TaskPriority
 import com.norfold.app.domain.TaskPropertyDefinition
 import com.norfold.app.domain.TaskPropertyType
+import com.norfold.app.domain.TaskDateRange
 import com.norfold.app.domain.TaskDateRangeCodec
 import com.norfold.app.domain.TaskPropertyValue
 import com.norfold.app.domain.TaskStatus
@@ -50,12 +65,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
-import kotlin.math.abs
 import java.util.UUID
 import org.json.JSONObject
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class NotesRepository(private val database: NorfoldDatabase) {
+class DocsRepository(private val database: NorfoldDatabase) {
     private val dao = database.dao()
     private val cloudSyncQueue = CloudSyncQueue(database)
     // Everything except tags/settings is scoped to the active workspace.
@@ -74,8 +88,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
     val taskPropertyValues: Flow<List<TaskPropertyValue>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeTaskPropertyValues(ws).map { rows -> rows.map { it.toDomain() } } }
     val taskChecklistItems: Flow<List<TaskChecklistItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeTaskChecklistItems(ws).map { rows -> rows.map { it.toDomain() } } }
     val chatMessages: Flow<List<ChatMessageItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeChatMessages(ws).map { rows -> rows.map { it.toDomain() } } }
-    val canvasNodes: Flow<List<CanvasNodeItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeCanvasNodes(ws).map { rows -> rows.map { it.toDomain() } } }
-    val canvasEdges: Flow<List<CanvasEdgeItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeCanvasEdges(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceObjects: Flow<List<WorkspaceObject>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceObjects(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceObjectLinks: Flow<List<WorkspaceObjectLink>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceObjectLinks(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceActivities: Flow<List<WorkspaceActivity>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceActivities(ws).map { rows -> rows.map { it.toDomain() } } }
@@ -92,66 +104,191 @@ class NotesRepository(private val database: NorfoldDatabase) {
         if (dao.allWorkspaces().isNotEmpty()) {
             if (dao.settings() == null) dao.upsertSettings(AppSettingsEntity())
             ensureDefaultTaskBoard(activeWs())
+            applyWorkspaceTemplate("Norfold Guide")
             return
         }
         val wsId = dao.insertWorkspace(WorkspaceEntity(name = "Personal", icon = "N", iconKind = WorkspaceIconKind.Text.name, palette = ThemeProfile.Neon.name, createdAt = System.currentTimeMillis()))
         val existing = dao.settings()
         dao.upsertSettings((existing ?: AppSettingsEntity()).copy(activeWorkspaceId = wsId, workspaceName = "Personal"))
         ensureDefaultTaskBoard(wsId)
-        val guide = dao.insertNotebook(NotebookEntity(name = "Guide", color = 0xFF7E57FF, sortOrder = 0))
-        val work = dao.insertNotebook(NotebookEntity(name = "Work", color = 0xFF8B5CF6, sortOrder = 1))
-        val personal = dao.insertNotebook(NotebookEntity(name = "Personal", color = 0xFF35A853, sortOrder = 2))
-        val study = dao.insertNotebook(NotebookEntity(name = "Study", color = 0xFF42A5F5, sortOrder = 3))
-        seedGuideNotes(guide)
-        // A couple of light, realistic notes so Home feels lived-in.
-        createNote("Daily Thoughts", "Gratitude turns what we have into enough.\n\nA quick scratch note — try pinning it, adding a #tag, or swiping it to see the gesture actions.", personal, listOf("Personal"), pinned = true)
-        createNote(
-            "Shopping List 🛒",
-            "- [ ] Oats\n- [ ] Almond milk\n- [ ] Blueberries\n- [ ] Coffee\n- [ ] Olive oil\n\nChecklists like this render as tappable items in the editor.",
-            personal,
-            listOf("Personal"),
-        )
-        addTask("Draft project roadmap", "Outline milestones, owners, and launch notes", "@owner", TaskStatus.Todo)
-        addTask("Polish Android workspace", "Review notes, tasks, canvas, and chat screens", "@owner", TaskStatus.Doing)
-        addTask("Encrypted backup check", "Verify app data round-trip", "@team", TaskStatus.Done)
-        createGoal("Finish the product redesign", target = 100.0, progress = 36.0, unit = "%")
-        val eventStart = System.currentTimeMillis() + 86_400_000L
-        createCalendarEvent("Design review", eventStart, eventStart + 3_600_000L, color = 0xFFE54CBD)
-        sendChat("nadia", "Nadia", "Can we convert this message into a task?", 0xFF7E57FF)
-        sendChat("you", "You", "Yes. Link it to the workspace note.", 0xFF4AADFF)
-        sendChat("system", "System", "Task created: Polish mobile onboarding", 0xFF56CC98, system = true)
-        val research = addCanvasNode("Research", "Embedded note", CanvasNodeType.Note, 0.12f, 0.14f, 0xFF7E57FF)
-        val brief = addCanvasNode("PDF brief", "File block", CanvasNodeType.File, 0.58f, 0.12f, 0xFF4AADFF)
-        val tasks = addCanvasNode("Task board", "Linked tasks", CanvasNodeType.Shape, 0.34f, 0.40f, 0xFF56CC98)
-        val map = addCanvasNode("Mind map", "Shape group", CanvasNodeType.Shape, 0.66f, 0.58f, 0xFFF276E2)
-        addCanvasEdge(research, tasks, "feeds")
-        addCanvasEdge(tasks, map, "maps")
-        addCanvasEdge(brief, map, "references")
+        applyWorkspaceTemplate("Norfold Guide")
         rebuildWorkspaceIndex()
+    }
+
+    suspend fun applyWorkspaceTemplate(template: String) {
+        if (template == "Start empty") return
+        val workspaceId = activeWs()
+        val workspaceHasNotes = dao.allNotesSnapshot().any { it.note.workspaceId == workspaceId }
+        val workspaceHasTasks = dao.allTasks().any { it.workspaceId == workspaceId }
+        when (template) {
+            "Norfold Guide" -> {
+                if (!workspaceHasNotes) {
+                    val guide = dao.insertNotebook(NotebookEntity(name = "Norfold Guide", color = 0xFF6F36FF, sortOrder = 0, workspaceId = workspaceId))
+                    seedGuideNotes(guide)
+                } else repairGuideDocuments(workspaceId)
+                if (!workspaceHasTasks) seedGuideTasks()
+            }
+            "Study planner" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Study", color = 0xFF42A5F5, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Study dashboard", "# Study dashboard\n\nKeep lecture notes, readings, and revision plans together.", notebook, listOf("Study"), pinned = true)
+                addTask("Review lecture notes", "Summarize the key definitions", "@me", TaskStatus.Todo)
+                addTask("Practice problems", "Complete the current problem set", "@me", TaskStatus.Doing)
+            }
+            "Personal organizer" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Personal", color = 0xFF35A853, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Daily doc", "# Daily doc\n\nWrite down what matters today.", notebook, listOf("Personal"), pinned = true)
+                addTask("Plan the week", "Choose the three most important outcomes", "@me", TaskStatus.Todo)
+            }
+            "Team workspace" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Team", color = 0xFF8B5CF6, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Team brief", "# Team brief\n\nShared context, decisions, and next actions.", notebook, listOf("Team"), pinned = true)
+                addTask("Prepare team stand-up", "Collect updates and blockers", "@owner", TaskStatus.Todo)
+                sendChat("system", "Workspace", "Collaboration chat is ready for workspace members.", 0xFF7E57FF, system = true)
+            }
+        }
+        rebuildWorkspaceIndex()
+    }
+
+    private suspend fun repairGuideDocuments(workspaceId: Long) {
+        val guideNotes = dao.allNotesSnapshot().filter { it.note.workspaceId == workspaceId }
+        guideNotes.firstOrNull { it.note.title == "Rich blocks playground" }?.toDomain()?.let { playground ->
+            val seenMath = linkedSetOf<String>()
+            val repaired = buildList {
+                playground.document.blocks.forEach { block ->
+                    val candidate = if (block is ParagraphBlock) {
+                        val raw = block.plainText().trim()
+                        if (raw.startsWith("$$") && raw.endsWith("$$") && raw.length >= 4) {
+                            MathBlock(id = block.id, tex = raw.removePrefix("$$").removeSuffix("$$").trim())
+                        } else block
+                    } else block
+                    if (candidate !is MathBlock || seenMath.add(candidate.tex.trim())) add(candidate)
+                }
+            }
+            if (repaired != playground.document.blocks) {
+                val dirtyIds = (playground.document.blocks.map { it.id } + repaired.map { it.id }).toSet()
+                updateNote(playground, playground.title, playground.document.copy(blocks = repaired), dirtyIds)
+            }
+        }
+        if (guideNotes.none { it.note.title == "Long document performance demo" }) {
+            dao.allNotebooks().firstOrNull { it.workspaceId == workspaceId && it.name == "Norfold Guide" }?.let { guide ->
+                seedGuideStressNote(guide.id)
+            }
+        }
     }
 
     /** In-depth, built-in reference notes that teach the app's features. Seeded once on first run. */
     private suspend fun seedGuideNotes(guide: Long) {
+        val playgroundId = createNote(
+            "Rich blocks playground",
+            """
+            # Rich blocks playground :sparkles:
+
+            This doc deliberately exercises the complete Norfold document renderer. Double-tap a block to edit it, use `/` to insert another block, and long-press for its type-specific actions.
+
+            ## Inline formatting
+
+            **Bold**, *italic*, `inline code`, [Norfold support](https://sheikhti1205.github.io/Norfold/support.html), #Guide, :white_check_mark:, and inline math ${'$'}E = mc^2${'$'} all share one paragraph.
+
+            ## Checklist
+
+            - [x] Open the rendered document surface
+            - [x] Render rich inline content
+            - [ ] Reorder this item with its six-dot handle
+
+            ## Table
+
+            | Block | What to verify | Status |
+            |---|---|---|
+            | Math | KaTeX/MathJax layout | Ready |
+            | Mermaid | Diagram fallback | Ready |
+            | Chart | Editable Vega-Lite | Ready |
+
+            ## Display math
+
+            ${'$'}${'$'}
+            \int_0^1 x^2\,dx = \frac{1}{3}
+            ${'$'}${'$'}
+
+            ```mermaid
+            flowchart LR
+              Paste --> Parse
+              Parse --> Blocks
+              Blocks --> Render
+            ```
+
+            ```vega-lite
+            {"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Docs","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}
+            ```
+
+            ```kotlin
+            val workspace = Norfold.localFirst()
+            println(workspace.isPrivate)
+            ```
+
+            > Smart-paste this entire doc into a blank page to verify one atomic, structured paste and one-step undo.
+            """.trimIndent(),
+            guide,
+            listOf("Guide", "Blocks", "Demo"),
+            pinned = true,
+        )
+        dao.noteById(playgroundId)?.toDomain()?.let { playground ->
+            val current = playground.document.blocks
+            val richBlocks = buildList {
+                if (current.none { it is MathBlock }) add(MathBlock(tex = "\\int_0^1 x^2\\,dx = \\frac{1}{3}"))
+                if (current.none { it is MermaidBlock }) add(MermaidBlock(code = "flowchart LR\n  Paste --> Parse\n  Parse --> Blocks\n  Blocks --> Render"))
+                if (current.none { it is ChartBlock }) add(
+                    ChartBlock(
+                        vegaLiteSpec = """{"${'$'}schema":"https://vega.github.io/schema/vega-lite/v5.json","title":"Feature coverage","mark":{"type":"bar"},"data":{"values":[{"x":"Docs","y":12},{"x":"Tasks","y":8},{"x":"Charts","y":5}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}""",
+                    ),
+                )
+                if (current.none { it is EmbedBlock }) add(
+                    EmbedBlock(
+                        url = "https://sheikhti1205.github.io/Norfold/",
+                        metadata = EmbedMetadata(
+                            title = "Norfold product guide",
+                            description = "Privacy, support, changelog, and testing information.",
+                        ),
+                    ),
+                )
+                if (current.none { it is FileBlock }) add(
+                    FileBlock(
+                        name = "smart-paste-example.md",
+                        mimeType = "text/markdown",
+                        sizeBytes = 2_048,
+                        uri = "https://sheikhti1205.github.io/Norfold/changelog.html",
+                    ),
+                )
+            }
+            updateNote(
+                playground,
+                playground.title,
+                playground.document.copy(blocks = playground.document.blocks + richBlocks),
+                richBlocks.mapTo(linkedSetOf()) { it.id },
+            )
+        }
         createNote(
             "Welcome to Norfold",
             """
             # Welcome 👋
 
-            Norfold is your private, local-first workspace: notes, tasks, files, canvas and chat, all in one place and kept on your device.
+            Norfold is your private, local-first workspace: docs, tasks, files and chat, all in one place and kept on your device.
 
-            This **Guide** notebook is a set of real reference notes. Open any of them to learn a feature in depth, then delete them whenever you like.
+            This **Guide** notebook is a set of real reference docs. Open any of them to learn a feature in depth, then delete them whenever you like.
 
             **Start here**
-            - 📝 Notes & the Editor
+            - 📝 Docs & the Editor
             - ✓ Tasks & the Kanban board
-            - 🎨 Canvas & linking
+            - 🔗 Links, files & references
             - 🔍 Search everything
             - 🔒 Sync, Vault & Backup
             - 🏷 Tags & Notebooks
 
             **Getting around**
             - Tap the ☰ button (top-left) or swipe from the left edge to open the sidebar.
-            - The bottom bar switches between Home, Notes, Tasks, Canvas and Chat.
+            - The bottom bar switches between Home, Docs, Tasks, and Chat. Create opens context-aware actions; the rest of the workspace lives in the section menu.
             - The **Search everything** bar on every page opens one global search.
 
             Everything here is yours. Nothing leaves your device unless you turn on sync.
@@ -162,11 +299,11 @@ class NotesRepository(private val database: NorfoldDatabase) {
             starred = true,
         )
         createNote(
-            "📝 Notes & the Editor",
+            "📝 Docs & the Editor",
             """
-            # Notes & the Editor
+            # Docs & the Editor
 
-            Notes are written in **Markdown**, so formatting is just text.
+            Docs use structured blocks with Markdown-compatible import and export.
 
             **Formatting basics**
             - `# Heading`, `## Subheading`
@@ -175,21 +312,21 @@ class NotesRepository(private val database: NorfoldDatabase) {
             - `- [ ] todo` and `- [x] done` checklists
             - `> quote` blocks and `---` dividers
 
-            **Organize a note**
+            **Organize a doc**
             - **Pin** it to keep it at the top of Home.
             - **Star** favorites for quick access.
-            - **Lock** a private note behind your vault.
+            - **Lock** a private doc behind your vault.
             - Add a **cover image**, attachments, and embeds.
             - File it into a **notebook** and add **#tags**.
 
             **Gestures**
-            - Swipe a note card left/right for quick actions (pin, star, archive, delete) — the actions are configurable in Settings › Editor.
+            - Swipe a doc card left/right for quick actions (pin, star, archive, delete) — the actions are configurable in Settings › Editor.
             - Long-press a card for the full action sheet.
 
-            Create a note anytime with the ➕ button.
+            Create a doc anytime with the ➕ button.
             """.trimIndent(),
             guide,
-            listOf("Guide", "Notes"),
+            listOf("Guide", "Docs"),
         )
         createNote(
             "✓ Tasks & the Kanban board",
@@ -216,24 +353,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
             listOf("Guide", "Tasks"),
         )
         createNote(
-            "🎨 Canvas & linking",
-            """
-            # Canvas & linking
-
-            Canvas is a freeform space to think visually.
-
-            **Nodes**
-            Drop **text**, **note**, **file**, **shape**, **link** and **media** nodes anywhere and drag them to arrange your ideas.
-
-            **Connections**
-            Draw **edges** between nodes to show how things relate — feeds, references, maps to, and so on.
-
-            Everything you place on the canvas is a real workspace object, so it shows up in Search and the Database view too.
-            """.trimIndent(),
-            guide,
-            listOf("Guide", "Canvas"),
-        )
-        createNote(
             "🔍 Search everything",
             """
             # Search everything
@@ -241,15 +360,15 @@ class NotesRepository(private val database: NorfoldDatabase) {
             There is **one** search for the whole app. Open it from the **Search everything** bar on any page, or the Search item in the sidebar.
 
             **It finds**
-            - 📝 Notes and their content
+            - 📝 Docs and their content
             - ✓ Tasks
             - 📁 Files
             - 🕘 Recent activity
             - ⚙️ Settings sections
             - 🏷 Tags
-            - ⌘ Commands & destinations (Canvas, Graph, Chat, Notebooks…)
+            - ⌘ Commands & destinations (Graph, Chat, Notebooks…)
 
-            Tap any result to jump straight to it. Browsing your notes is never left in a filtered state — search lives on its own page.
+            Tap any result to jump straight to it. Browsing your docs is never left in a filtered state — search lives on its own page.
             """.trimIndent(),
             guide,
             listOf("Guide", "Search"),
@@ -262,13 +381,13 @@ class NotesRepository(private val database: NorfoldDatabase) {
             Your data is **local-first** — it lives on your device by default.
 
             **Vault & lock**
-            Lock private notes behind the vault. Manage security in Settings › Security.
+            Lock private docs behind the vault. Manage security in Settings › Security.
 
             **Sync (optional)**
             Connect **Google Drive** in Settings › Sync to back up and sync across devices. If two edits collide, the **Conflict review** screen lets you compare and choose.
 
             **Backup & import/export**
-            Export a full backup or individual notes as Markdown, and restore from a backup file in Settings › Backup & Import.
+            Export a full backup or individual docs as Markdown, and restore from a backup file in Settings › Backup & Import.
 
             You stay in control of where your data goes.
             """.trimIndent(),
@@ -282,15 +401,119 @@ class NotesRepository(private val database: NorfoldDatabase) {
 
             Two simple ways to keep things tidy.
 
-            **Notebooks** are folders — a note lives in one notebook (like this **Guide** notebook).
+            **Notebooks** are folders — a doc lives in one notebook (like this **Guide** notebook).
 
-            **Tags** are flexible labels — a note can have many. Add `#tags` to connect notes across notebooks.
+            **Tags** are flexible labels — a doc can have many. Add `#tags` to connect docs across notebooks.
 
             Filter Home by notebook, browse everything under **Tags** in the sidebar, and find any tag through global search.
             """.trimIndent(),
             guide,
             listOf("Guide", "Organize"),
         )
+        seedGuideStressNote(guide)
+    }
+
+    private suspend fun seedGuideStressNote(guide: Long) {
+        val noteId = createNote(
+            title = "Long document performance demo",
+            body = "# Long document performance demo",
+            notebookId = guide,
+            tagNames = listOf("Guide", "Performance"),
+        )
+        val note = dao.noteById(noteId)?.toDomain() ?: return
+        val blocks = buildList {
+            add(HeadingBlock(level = 1, content = listOf(InlineText("Long document performance demo"))))
+            repeat(220) { index ->
+                when {
+                    index % 70 == 0 -> add(ChartBlock(vegaLiteSpec = """{"mark":{"type":"bar"},"data":{"values":[{"x":"A","y":${index + 1}},{"x":"B","y":${index + 2}}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"""))
+                    index % 50 == 0 -> add(MermaidBlock(code = "flowchart LR\n  Block$index --> Block${index + 1}"))
+                    index % 40 == 0 -> add(MathBlock(tex = "x_{$index}^2 + \\sum_{i=1}^{n} i"))
+                    else -> add(ParagraphBlock(content = listOf(InlineText("Block ${index + 1}: lazy document rendering remains responsive while scrolling."))))
+                }
+            }
+        }
+        val document = BlockDocument(blocks)
+        updateNote(note, note.title, document, blocks.mapTo(linkedSetOf()) { it.id })
+    }
+
+    private suspend fun seedGuideTasks() {
+        val now = System.currentTimeMillis()
+        val day = 86_400_000L
+        val taskIds = listOf(
+            addTask(
+                title = "Polish Android workspace",
+                description = "Review docs, tasks, calendar, and chat screens for Android consistency.",
+                assignee = "@owner",
+                status = TaskStatus.Todo,
+                priority = TaskPriority.High,
+                dueAt = now + day * 4,
+            ),
+            addTask(
+                title = "Implement offline sync",
+                description = "Add durable outbox processing and conflict recovery for mobile.",
+                assignee = "@alex",
+                status = TaskStatus.Doing,
+                priority = TaskPriority.Urgent,
+                dueAt = now + day * 2,
+            ),
+            addTask(
+                title = "Create onboarding",
+                description = "Build the complete private-workspace onboarding flow with real persisted choices.",
+                assignee = "@nina",
+                status = TaskStatus.Done,
+                priority = TaskPriority.Low,
+                dueAt = now - day,
+            ),
+            addTask(
+                title = "Draft project roadmap",
+                description = "Outline milestones, owners, launch plan, dependencies, and delivery dates.",
+                assignee = "@product",
+                status = TaskStatus.Todo,
+                priority = TaskPriority.Normal,
+                dueAt = now + day * 10,
+            ),
+        )
+        val boardId = dao.taskById(taskIds.first())?.taskBoardId ?: return
+        val properties = dao.taskPropertyDefinitionsForBoard(boardId).map { it.toDomain() }
+        val text = properties.firstOrNull { it.type == TaskPropertyType.Text }
+        val labels = properties.firstOrNull { it.type == TaskPropertyType.Labels }
+        val date = properties.firstOrNull { it.type == TaskPropertyType.DueDate }
+        val checklist = properties.firstOrNull { it.type == TaskPropertyType.Checklist }
+        val taskLabels = listOf("Android,UI/UX", "Sync,Backend,Blocked", "Onboarding,UI/UX", "Roadmap,Planning")
+        val checklistText = listOf(
+            listOf("Review docs", "Review tasks", "Review files", "Review charts", "Document results"),
+            listOf("Design conflict model", "Build delta sync", "Integration tests"),
+            listOf("Welcome screen", "Workspace setup", "Completion state"),
+            listOf("Define goals and scope", "Gather stakeholder input", "Outline milestones", "Identify dependencies", "Draft timeline"),
+        )
+        taskIds.forEachIndexed { index, taskId ->
+            val task = dao.taskById(taskId)?.toDomain() ?: return@forEachIndexed
+            text?.let { setTaskPropertyValue(task, it, task.description) }
+            labels?.let { property ->
+                taskLabels[index].split(',').forEach { addTaskTag(boardId, it) }
+                setTaskPropertyValue(task, property, taskLabels[index])
+            }
+            date?.let { property ->
+                setTaskPropertyValue(
+                    task,
+                    property,
+                    TaskDateRangeCodec.encode(
+                        TaskDateRange(
+                            startAt = task.dueAt?.minus(day),
+                            endAt = task.dueAt,
+                            allDay = true,
+                            reminderMinutesBefore = if (task.status == TaskStatus.Done) null else 30,
+                        ),
+                    ),
+                )
+            }
+            checklist?.let { property ->
+                checklistText[index].forEach { item -> addChecklistItem(task, property, item) }
+                dao.checklistItemsForProperty(task.id, property.id).take(2).forEach { item ->
+                    dao.updateTaskChecklistItem(item.id, item.text, true, System.currentTimeMillis())
+                }
+            }
+        }
     }
 
     fun search(query: String): Flow<List<Note>> =
@@ -344,9 +567,8 @@ class NotesRepository(private val database: NorfoldDatabase) {
         permInviteMembers: Boolean,
         permDeleteNotes: Boolean,
         permEditNotes: Boolean,
-        permCreateCanvas: Boolean,
         permManageTasks: Boolean,
-    ) = dao.updateWorkspacePermissions(id, permRename, permChangeIcon, permInviteMembers, permDeleteNotes, permEditNotes, permCreateCanvas, permManageTasks)
+    ) = dao.updateWorkspacePermissions(id, permRename, permChangeIcon, permInviteMembers, permDeleteNotes, permEditNotes, permManageTasks)
 
     suspend fun setActiveWorkspace(id: Long) {
         val current = dao.settings()?.toDomain() ?: defaultSettings
@@ -360,8 +582,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
         dao.deleteNotebooksForWorkspace(id)
         dao.deleteTasksForWorkspace(id)
         dao.deleteChatForWorkspace(id)
-        dao.deleteCanvasForWorkspace(id)
-        dao.deleteCanvasEdgesForWorkspace(id)
         dao.deleteWorkspaceFilesForWorkspace(id)
         dao.deleteCalendarEventsForWorkspace(id)
         dao.deleteGoalsForWorkspace(id)
@@ -383,7 +603,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
     suspend fun noteById(id: Long): Note? = dao.noteById(id)?.toDomain()
 
     suspend fun createNote(
-        title: String = "Untitled note",
+        title: String = "Untitled doc",
         body: String = "",
         notebookId: Long? = null,
         tagNames: List<String> = emptyList(),
@@ -391,10 +611,11 @@ class NotesRepository(private val database: NorfoldDatabase) {
         starred: Boolean = false,
     ): Long {
         val now = System.currentTimeMillis()
+        val document = MarkdownBlockCodec.import(body)
         val id = dao.insertNote(
             NoteEntity(
-                title = title.ifBlank { "Untitled note" },
-                bodyMarkdown = body,
+                title = title.ifBlank { "Untitled doc" },
+                searchText = document.plainText(),
                 notebookId = notebookId,
                 coverUri = null,
                 coverMimeType = null,
@@ -407,26 +628,51 @@ class NotesRepository(private val database: NorfoldDatabase) {
                 workspaceId = activeWs(),
             ),
         )
+        dao.upsertNoteBlocks(document.blocks.mapIndexed { position, block ->
+            NoteBlockEntity(block.id, id, position, BlockDocumentJson.encodeBlock(block), now)
+        })
         setTags(id, tagNames)
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled note" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
-        recordActivity(WorkspaceActivityType.Created, "You", "Created note", title.ifBlank { "Untitled note" }, objectType = WorkspaceObjectType.Note, sourceId = id)
-        recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created note", afterValue = title.ifBlank { "Untitled note" })
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled doc" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
+        recordActivity(WorkspaceActivityType.Created, "You", "Created doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = id)
+        recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created doc", afterValue = title.ifBlank { "Untitled doc" })
         return id
     }
 
     suspend fun updateNote(note: Note, title: String, body: String) {
-        // Targeted update preserves workspaceId, flags, etc.
-        dao.updateNoteContent(note.id, title.ifBlank { "Untitled note" }, body, System.currentTimeMillis())
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled note" }, body.take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
-        recordActivity(WorkspaceActivityType.Updated, "You", "Updated note", title.ifBlank { "Untitled note" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
-        if (note.title != title || note.bodyMarkdown != body) {
+        updateNote(note, title, MarkdownBlockCodec.import(body))
+    }
+
+    suspend fun updateNote(
+        note: Note,
+        title: String,
+        document: BlockDocument,
+        dirtyBlockIds: Set<String> = document.blocks.mapTo(linkedSetOf()) { it.id },
+    ) {
+        val normalized = document.normalized()
+        val now = System.currentTimeMillis()
+        val existing = dao.blocksForNote(note.id).associateBy(NoteBlockEntity::id)
+        val next = normalized.blocks.mapIndexed { position, block ->
+            NoteBlockEntity(block.id, note.id, position, BlockDocumentJson.encodeBlock(block), now)
+        }
+        val changed = next.filter { candidate ->
+            val old = existing[candidate.id]
+            candidate.id in dirtyBlockIds || old == null || old.position != candidate.position || old.payloadJson != candidate.payloadJson
+        }
+        if (changed.isNotEmpty()) dao.upsertNoteBlocks(changed)
+        val removed = existing.keys - next.mapTo(hashSetOf(), NoteBlockEntity::id)
+        if (removed.isNotEmpty()) dao.deleteNoteBlocks(removed.toList())
+        dao.updateNoteContent(note.id, title.ifBlank { "Untitled doc" }, normalized.plainText(), now)
+        val markdown = MarkdownBlockCodec.export(normalized)
+        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled doc" }, normalized.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
+        recordActivity(WorkspaceActivityType.Updated, "You", "Updated doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
+        if (note.title != title || note.document != normalized) {
             recordHistory(
                 WorkspaceHistoryType.Updated,
                 objectId,
                 "You",
-                "Updated note",
+                "Updated doc",
                 beforeValue = note.bodyMarkdown.take(500),
-                afterValue = body.take(500),
+                afterValue = markdown.take(500),
             )
         }
     }
@@ -440,7 +686,46 @@ class NotesRepository(private val database: NorfoldDatabase) {
         return dao.insertNotebook(NotebookEntity(name = name.ifBlank { "New notebook" }, color = 0xFF8B5CF6, sortOrder = order, workspaceId = activeWs()))
     }
 
-    suspend fun addTag(name: String): Long = getOrCreateTag(name.trim().removePrefix("#")).id
+    suspend fun addTag(name: String): Long = getOrCreateTag(name.trim().removePrefix("#"), scope = "notes").id
+
+    suspend fun renameTag(tag: Tag, name: String) {
+        val displayName = name.trim().trimStart('#').replace(Regex("\\s+"), " ")
+        require(displayName.isNotBlank()) { "Tag name cannot be blank" }
+        val normalized = normalizeTagName(displayName)
+        val conflict = dao.tagByScopeAndNormalizedName(tag.scope, normalized)
+        require(conflict == null || conflict.id == tag.id) { "A tag with that name already exists" }
+        dao.renameTag(tag.id, displayName, normalized)
+    }
+
+    suspend fun deleteTag(tag: Tag) = dao.deleteTag(tag.id)
+
+    suspend fun setNoteTags(note: Note, names: List<String>) {
+        setTags(note.id, names)
+        upsertWorkspaceObject(
+            WorkspaceObjectType.Note,
+            note.id,
+            note.title,
+            note.document.plainText().take(160),
+            names.joinToString(","),
+            "note",
+            0xFF9D6CFF,
+            note.pinned,
+        )
+        recordActivity(
+            WorkspaceActivityType.Updated,
+            "You",
+            "Updated doc tags",
+            names.joinToString(", ").ifBlank { "Removed all tags" },
+            objectType = WorkspaceObjectType.Note,
+            sourceId = note.id,
+        )
+    }
+
+    suspend fun addTaskTag(boardId: Long, name: String): Long {
+        val displayName = name.trim().trimStart('#').replace(Regex("\\s+"), " ")
+        require(displayName.isNotBlank()) { "Tag name cannot be blank" }
+        return getOrCreateTag(displayName, scope = "board:$boardId").id
+    }
 
     suspend fun addAttachment(noteId: Long, displayName: String, mimeType: String, uri: String, sizeBytes: Long) {
         dao.insertAttachment(AttachmentEntity(noteId = noteId, displayName = displayName, mimeType = mimeType, uri = uri, sizeBytes = sizeBytes))
@@ -466,7 +751,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
         )
         val objectType = when (type) {
             NoteEmbedType.Task -> WorkspaceObjectType.Task
-            NoteEmbedType.Canvas -> WorkspaceObjectType.Canvas
             else -> WorkspaceObjectType.File
         }
         val linkedObjectId = upsertWorkspaceObject(objectType, null, title.ifBlank { target.take(48).ifBlank { "Embed" } }, preview.ifBlank { target }, "", type.name.lowercase(), 0xFF4AADFF)
@@ -650,9 +934,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val ws = activeWs()
         val now = System.currentTimeMillis()
         val boardId = dao.insertTaskBoard(TaskBoardEntity(name = name.trim().ifBlank { "New board" }, workspaceId = ws, createdAt = now, updatedAt = now))
-        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0xFF9D7BFF, 0)
-        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0xFF4FACFE, 1)
-        createTaskColumn(boardId, "Done", TaskStatus.Done, 0xFF56CC98, 2)
+        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0L, 0)
+        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0L, 1)
+        createTaskColumn(boardId, "Done", TaskStatus.Done, 0L, 2)
         ensureDefaultTaskProperties(boardId)
         recordActivity(WorkspaceActivityType.Created, "You", "Created task board", name.trim().ifBlank { "New board" })
         return boardId
@@ -663,7 +947,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         dao.updateTaskBoardName(boardId, nextName, System.currentTimeMillis())
         recordActivity(WorkspaceActivityType.Updated, "You", "Renamed task board", nextName)
     }
-    suspend fun createTaskColumn(boardId: Long, name: String, status: TaskStatus? = null, color: Long = 0xFF9D7BFF, sortOrder: Int? = null): Long {
+    suspend fun createTaskColumn(boardId: Long, name: String, status: TaskStatus? = null, color: Long = 0L, sortOrder: Int? = null): Long {
         val now = System.currentTimeMillis()
         val order = sortOrder ?: dao.taskColumnsForBoard(boardId).size
         return dao.insertTaskColumn(TaskColumnEntity(boardId = boardId, name = name.trim().ifBlank { "New column" }, status = status?.name, color = color, sortOrder = order, createdAt = now, updatedAt = now))
@@ -728,9 +1012,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
 
     private suspend fun ensureDefaultTaskColumns(boardId: Long) {
         if (dao.taskColumnsForBoard(boardId).isNotEmpty()) return
-        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0xFF9D7BFF, 0)
-        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0xFF4FACFE, 1)
-        createTaskColumn(boardId, "Done", TaskStatus.Done, 0xFF56CC98, 2)
+        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0L, 0)
+        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0L, 1)
+        createTaskColumn(boardId, "Done", TaskStatus.Done, 0L, 2)
     }
 
     private suspend fun ensureDefaultTaskProperties(boardId: Long) {
@@ -754,11 +1038,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
 
     private suspend fun ensureTaskColumnForStatus(boardId: Long, status: TaskStatus): Long {
         dao.taskColumnForStatus(boardId, status.name)?.let { return it.id }
-        return createTaskColumn(boardId, status.name, status, when (status) {
-            TaskStatus.Todo -> 0xFF9D7BFF
-            TaskStatus.Doing -> 0xFF4FACFE
-            TaskStatus.Done -> 0xFF56CC98
-        })
+        return createTaskColumn(boardId, status.name, status, 0L)
     }
     suspend fun updateTaskMeta(task: TaskItem, priority: TaskPriority, dueAt: Long?, assignee: String) =
         dao.updateTaskMeta(task.id, priority.name, dueAt, assignee, System.currentTimeMillis())
@@ -1009,143 +1289,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
         return id
     }
 
-    suspend fun addCanvasNode(
-        title: String,
-        subtitle: String,
-        type: CanvasNodeType,
-        x: Float,
-        y: Float,
-        color: Long,
-        linkedNoteId: Long? = null,
-        targetUri: String? = null,
-        targetMimeType: String? = null,
-        targetName: String? = null,
-        targetSizeBytes: Long? = null,
-    ): Long {
-        val now = System.currentTimeMillis()
-        val id = dao.insertCanvasNode(
-            CanvasNodeEntity(
-                title = title.ifBlank { "Untitled block" },
-                subtitle = subtitle,
-                type = type.name,
-                x = x.coerceIn(0f, 1f),
-                y = y.coerceIn(0f, 1f),
-                color = color,
-                linkedNoteId = linkedNoteId,
-                targetUri = targetUri,
-                targetMimeType = targetMimeType,
-                targetName = targetName,
-                targetSizeBytes = targetSizeBytes,
-                createdAt = now,
-                updatedAt = now,
-                workspaceId = activeWs(),
-            ),
-        )
-        val objectId = upsertWorkspaceObject(WorkspaceObjectType.Canvas, id, title.ifBlank { "Untitled block" }, subtitle, "", type.name.lowercase(), color)
-        recordActivity(WorkspaceActivityType.Created, "You", "Added canvas block", title.ifBlank { "Untitled block" }, objectType = WorkspaceObjectType.Canvas, sourceId = id)
-        recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Added canvas block", afterValue = title.ifBlank { "Untitled block" })
-        return id
-    }
-
-    suspend fun addCanvasEdge(fromNodeId: Long, toNodeId: Long, label: String = ""): Long {
-        if (fromNodeId == toNodeId) return 0
-        val now = System.currentTimeMillis()
-        return dao.insertCanvasEdge(
-            CanvasEdgeEntity(
-                fromNodeId = fromNodeId,
-                toNodeId = toNodeId,
-                label = label,
-                color = 0xFF7E57FF,
-                createdAt = now,
-                updatedAt = now,
-                workspaceId = activeWs(),
-            ),
-        )
-            .also {
-                val fromObjectId = objectIdFor(WorkspaceObjectType.Canvas, fromNodeId)
-                val toObjectId = objectIdFor(WorkspaceObjectType.Canvas, toNodeId)
-                if (fromObjectId != null && toObjectId != null) {
-                    insertObjectLinkIfMissing(fromObjectId, toObjectId, WorkspaceLinkType.Related, label.ifBlank { "canvas" })
-                }
-                recordActivity(WorkspaceActivityType.Linked, "You", "Linked canvas blocks", label.ifBlank { "Canvas connection" })
-            }
-    }
-
-    suspend fun deleteCanvasEdge(edge: CanvasEdgeItem) {
-        dao.deleteCanvasEdge(edge.id)
-    }
-
-    suspend fun moveCanvasNode(node: CanvasNodeItem, x: Float, y: Float) {
-        val ws = activeWs()
-        val worldX = x.coerceIn(CanvasMinWorld, CanvasMaxWorld)
-        val worldY = y.coerceIn(CanvasMinWorld, CanvasMaxWorld)
-        val others = dao.allCanvasNodes()
-            .filter { it.workspaceId == ws && it.id != node.id }
-        fun overlaps(px: Float, py: Float): Boolean =
-            others.any { other -> abs(other.x - px) < HardOverlapX && abs(other.y - py) < HardOverlapY }
-
-        val candidate = if (!overlaps(worldX, worldY)) {
-            worldX to worldY
-        } else {
-            buildList {
-                listOf(0.18f, 0.28f, 0.42f, 0.58f).forEach { radius ->
-                    add(worldX + radius to worldY)
-                    add(worldX - radius to worldY)
-                    add(worldX to worldY + radius)
-                    add(worldX to worldY - radius)
-                    add(worldX + radius to worldY + radius)
-                    add(worldX - radius to worldY + radius)
-                    add(worldX + radius to worldY - radius)
-                    add(worldX - radius to worldY - radius)
-                }
-            }
-                .map { (px, py) -> px.coerceIn(CanvasMinWorld, CanvasMaxWorld) to py.coerceIn(CanvasMinWorld, CanvasMaxWorld) }
-                .firstOrNull { (px, py) -> !overlaps(px, py) }
-                ?: (worldX to worldY)
-        }
-        val unresolvedOverlap = overlaps(candidate.first, candidate.second)
-        dao.updateCanvasNodePosition(node.id, candidate.first, candidate.second, System.currentTimeMillis())
-        if (unresolvedOverlap) dao.deleteCanvasEdgesForNode(node.id)
-    }
-
-    suspend fun updateCanvasNodeContent(node: CanvasNodeItem, title: String, subtitle: String) {
-        dao.updateCanvasNodeContent(
-            node.id,
-            title.ifBlank { "Untitled block" },
-            subtitle,
-            System.currentTimeMillis(),
-        )
-        val objectId = upsertWorkspaceObject(
-            type = WorkspaceObjectType.Canvas,
-            sourceId = node.id,
-            title = title.ifBlank { "Untitled block" },
-            summary = subtitle,
-            tags = "",
-            icon = node.type.name.lowercase(),
-            color = node.color,
-        )
-        recordActivity(WorkspaceActivityType.Updated, "You", "Updated canvas block", title.ifBlank { "Untitled block" }, objectId = objectId)
-        recordHistory(WorkspaceHistoryType.Updated, objectId, "You", "Updated canvas block", beforeValue = "${node.title}\n${node.subtitle}", afterValue = "${title.ifBlank { "Untitled block" }}\n$subtitle")
-    }
-
-    suspend fun updateCanvasNodeTarget(node: CanvasNodeItem, uri: String?, mimeType: String?, name: String?, sizeBytes: Long?) =
-        dao.updateCanvasNodeTarget(node.id, uri, mimeType, name, sizeBytes, System.currentTimeMillis()).also {
-            if (!uri.isNullOrBlank() && !name.isNullOrBlank()) {
-                val objectId = upsertWorkspaceObject(WorkspaceObjectType.File, null, name, mimeType.orEmpty(), "", "file", 0xFF4AADFF)
-                dao.insertWorkspaceFile(WorkspaceFileEntity(objectId = objectId, displayName = name, mimeType = mimeType.orEmpty(), uri = uri, sizeBytes = sizeBytes ?: 0, createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis(), workspaceId = activeWs()))
-                objectIdFor(WorkspaceObjectType.Canvas, node.id)?.let { canvasObjectId ->
-                    insertObjectLinkIfMissing(canvasObjectId, objectId, WorkspaceLinkType.Attachment, name)
-                }
-                recordActivity(WorkspaceActivityType.Uploaded, "You", "Attached canvas target", name, objectId = objectId)
-                recordHistory(WorkspaceHistoryType.Attachment, objectId, "You", "Attached canvas target", afterValue = "$name\n${mimeType.orEmpty()}\n$uri")
-            }
-        }
-
-    suspend fun deleteCanvasNode(node: CanvasNodeItem) {
-        dao.deleteCanvasEdgesForNode(node.id)
-        dao.deleteCanvasNode(node.id)
-    }
-
     suspend fun createGoal(
         title: String,
         description: String = "",
@@ -1278,6 +1421,17 @@ class NotesRepository(private val database: NorfoldDatabase) {
     suspend fun setStarred(note: Note) = dao.setStarred(note.id, !note.starred, System.currentTimeMillis())
     suspend fun setArchived(note: Note, value: Boolean = !note.archived) = dao.setArchived(note.id, value, System.currentTimeMillis())
     suspend fun setLocked(note: Note) = dao.setLocked(note.id, !note.locked, System.currentTimeMillis())
+    suspend fun setOverlapMode(note: Note, mode: DocOverlapMode) =
+        dao.setNoteOverlapMode(note.id, mode.name.lowercase(), System.currentTimeMillis())
+    suspend fun setFreeformLayout(note: Note, layout: Map<String, FreeformPlacement>) =
+        dao.setNoteFreeformLayout(note.id, DocLayoutJson.encode(layout, note.canvasSpec), System.currentTimeMillis())
+    suspend fun setCanvasSpec(note: Note, canvasSpec: DocCanvasSpec) =
+        dao.setNoteFreeformLayout(note.id, DocLayoutJson.encode(note.freeformLayout, canvasSpec), System.currentTimeMillis())
+    suspend fun setCanvasLayout(
+        note: Note,
+        layout: Map<String, FreeformPlacement>,
+        canvasSpec: DocCanvasSpec,
+    ) = dao.setNoteFreeformLayout(note.id, DocLayoutJson.encode(layout, canvasSpec), System.currentTimeMillis())
     suspend fun deleteNote(note: Note) = dao.deleteNote(note.id)
 
     suspend fun updateSettings(settings: AppSettings) = dao.upsertSettings(
@@ -1328,6 +1482,8 @@ class NotesRepository(private val database: NorfoldDatabase) {
             autoPairBrackets = settings.autoPairBrackets,
             syntaxColorful = settings.syntaxColorful,
             autoConvertOnPaste = settings.autoConvertOnPaste,
+            contextualMenuStyle = settings.contextualMenuStyle.name,
+            contextualMenuColor = settings.contextualMenuColor.name,
             appLockOnExit = settings.appLockOnExit,
             autoLockMinutes = settings.autoLockMinutes,
             autoBackup = settings.autoBackup,
@@ -1347,6 +1503,9 @@ class NotesRepository(private val database: NorfoldDatabase) {
             taskSortMode = settings.taskSortMode,
             taskCompactLayout = settings.taskCompactLayout,
             taskKanbanEngine = settings.taskKanbanEngine,
+            taskSwipeStartAction = settings.taskSwipeStartAction.name,
+            taskSwipeEndAction = settings.taskSwipeEndAction.name,
+            noteRenderEngine = settings.noteRenderEngine.name,
             onboardingComplete = settings.onboardingComplete,
             workspacePurpose = settings.workspacePurpose,
             calendarDefaultView = settings.calendarDefaultView,
@@ -1395,8 +1554,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
         goals = dao.allGoals().map { it.toDomain() },
         calendarEvents = dao.allCalendarEvents().map { it.toDomain() },
         chatMessages = dao.allChatMessages().map { it.toDomain() },
-        canvasNodes = dao.allCanvasNodes().map { it.toDomain() },
-        canvasEdges = dao.allCanvasEdges().map { it.toDomain() },
         workspaceObjects = dao.allWorkspaceObjects().map { it.toDomain() },
         workspaceObjectLinks = dao.allWorkspaceObjectLinks().map { it.toDomain() },
         workspaceActivities = dao.allWorkspaceActivities().map { it.toDomain() },
@@ -1419,8 +1576,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
         dao.clearWorkspaceObjects()
         dao.clearAttachments()
         dao.clearNoteEmbeds()
-        dao.clearCanvasEdges()
-        dao.clearCanvasNodes()
         dao.clearChatMessages()
         dao.clearTaskChecklistItems()
         dao.clearTaskPropertyValues()
@@ -1446,13 +1601,23 @@ class NotesRepository(private val database: NorfoldDatabase) {
             )
         }
         snapshot.notebooks.forEach { dao.insertNotebook(NotebookEntity(it.id, it.name, it.parentId, it.color, it.sortOrder)) }
-        snapshot.tags.forEach { dao.insertTag(TagEntity(it.id, it.name, it.color)) }
+        snapshot.tags.forEach {
+            dao.insertTag(
+                TagEntity(
+                    id = it.id,
+                    name = it.name,
+                    color = it.color,
+                    scope = it.scope,
+                    normalizedName = normalizeTagName(it.name),
+                ),
+            )
+        }
         snapshot.notes.forEach { note ->
             dao.insertNote(
                 NoteEntity(
                     id = note.id,
                     title = note.title,
-                    bodyMarkdown = note.bodyMarkdown,
+                    searchText = note.document.plainText(),
                     notebookId = note.notebookId,
                     coverUri = note.coverUri,
                     coverMimeType = note.coverMimeType,
@@ -1462,8 +1627,13 @@ class NotesRepository(private val database: NorfoldDatabase) {
                     locked = note.locked,
                     createdAt = note.createdAt,
                     updatedAt = note.updatedAt,
+                    overlapMode = note.overlapMode.name.lowercase(),
+                    freeformLayoutJson = DocLayoutJson.encode(note.freeformLayout, note.canvasSpec),
                 ),
             )
+            dao.upsertNoteBlocks(note.document.blocks.mapIndexed { position, block ->
+                NoteBlockEntity(block.id, note.id, position, BlockDocumentJson.encodeBlock(block), note.updatedAt)
+            })
             setTags(note.id, note.tags.map { it.name })
         }
         snapshot.attachments.forEach { dao.insertAttachment(AttachmentEntity(it.id, it.noteId, it.displayName, it.mimeType, it.uri, it.sizeBytes)) }
@@ -1531,12 +1701,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
         }
         snapshot.chatMessages.forEach {
             dao.insertChatMessage(ChatMessageEntity(it.id, it.authorUsername, it.authorDisplayName, it.body, it.color, it.createdAt, it.system, it.attachmentName, it.attachmentMimeType, it.attachmentUri, it.attachmentSizeBytes))
-        }
-        snapshot.canvasNodes.forEach {
-            dao.insertCanvasNode(CanvasNodeEntity(it.id, it.title, it.subtitle, it.type.name, it.x, it.y, it.color, it.linkedNoteId, it.targetUri, it.targetMimeType, it.targetName, it.targetSizeBytes, it.createdAt, it.updatedAt))
-        }
-        snapshot.canvasEdges.forEach {
-            dao.insertCanvasEdge(CanvasEdgeEntity(it.id, it.fromNodeId, it.toNodeId, it.label, it.color, it.createdAt, it.updatedAt))
         }
         snapshot.workspaceObjects.forEach {
             dao.insertWorkspaceObject(WorkspaceObjectEntity(it.id, it.objectType.name, it.sourceId, it.title, it.summary, it.tags, it.icon, it.color, it.pinned, it.archived, it.createdAt, it.updatedAt))
@@ -1607,7 +1771,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val ws = activeWs()
         dao.allNotesSnapshot().filter { it.note.workspaceId == ws }.forEach { row ->
             val note = row.toDomain()
-            upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, note.title, note.bodyMarkdown.take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned, note.archived)
+            upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, note.title, note.document.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned, note.archived)
         }
         dao.allTasks().filter { it.workspaceId == ws }.forEach {
             upsertWorkspaceObject(WorkspaceObjectType.Task, it.id, it.title, it.description, it.labels, "task", 0xFF56CC98, archived = it.status == TaskStatus.Done.name)
@@ -1620,25 +1784,6 @@ class NotesRepository(private val database: NorfoldDatabase) {
         }
         dao.allChatMessages().filter { it.workspaceId == ws }.forEach {
             upsertWorkspaceObject(WorkspaceObjectType.ChatMessage, it.id, it.authorDisplayName, it.body.take(160), "", "chat", it.color)
-        }
-        dao.allCanvasNodes().filter { it.workspaceId == ws }.forEach {
-            val canvasObjectId = upsertWorkspaceObject(WorkspaceObjectType.Canvas, it.id, it.title, it.subtitle, "", it.type.lowercase(), it.color)
-            it.linkedNoteId?.let { noteId ->
-                objectIdFor(WorkspaceObjectType.Note, noteId)?.let { noteObjectId ->
-                    insertObjectLinkIfMissing(canvasObjectId, noteObjectId, WorkspaceLinkType.Embed, "Linked note")
-                }
-            }
-            if (!it.targetUri.isNullOrBlank() && !it.targetName.isNullOrBlank()) {
-                val fileObjectId = upsertWorkspaceObject(WorkspaceObjectType.File, null, it.targetName, it.targetMimeType.orEmpty(), "", "file", 0xFF4AADFF)
-                insertObjectLinkIfMissing(canvasObjectId, fileObjectId, WorkspaceLinkType.Attachment, it.targetName)
-            }
-        }
-        dao.allCanvasEdges().filter { it.workspaceId == ws }.forEach {
-            val fromObjectId = objectIdFor(WorkspaceObjectType.Canvas, it.fromNodeId)
-            val toObjectId = objectIdFor(WorkspaceObjectType.Canvas, it.toNodeId)
-            if (fromObjectId != null && toObjectId != null) {
-                insertObjectLinkIfMissing(fromObjectId, toObjectId, WorkspaceLinkType.Related, it.label.ifBlank { "canvas" })
-            }
         }
         dao.allAttachments().forEach { attachment ->
             val noteObjectId = objectIdFor(WorkspaceObjectType.Note, attachment.noteId)
@@ -1759,18 +1904,28 @@ class NotesRepository(private val database: NorfoldDatabase) {
     private suspend fun setTags(noteId: Long, names: List<String>) {
         dao.clearTagsForNote(noteId)
         names.map { it.trim().removePrefix("#") }.filter { it.isNotBlank() }.distinct().forEach { name ->
-            dao.insertNoteTag(NoteTagCrossRef(noteId, getOrCreateTag(name).id))
+            dao.insertNoteTag(NoteTagCrossRef(noteId, getOrCreateTag(name, scope = "notes").id))
         }
     }
 
-    private suspend fun getOrCreateTag(name: String): TagEntity =
-        dao.tagByName(name) ?: TagEntity(id = dao.insertTag(TagEntity(name = name, color = 0xFF8B5CF6)), name = name, color = 0xFF8B5CF6)
+    private suspend fun getOrCreateTag(name: String, scope: String): TagEntity {
+        val displayName = name.trim().trimStart('#').replace(Regex("\\s+"), " ")
+        val normalized = normalizeTagName(displayName)
+        require(normalized.isNotBlank()) { "Tag name cannot be blank" }
+        return dao.tagByScopeAndNormalizedName(scope, normalized)
+            ?: TagEntity(
+                id = dao.insertTag(TagEntity(name = displayName, color = 0xFF8B5CF6, scope = scope, normalizedName = normalized)),
+                name = displayName,
+                color = 0xFF8B5CF6,
+                scope = scope,
+                normalizedName = normalized,
+            )
+    }
+
+    private fun normalizeTagName(name: String): String =
+        name.trim().trimStart('#').replace(Regex("\\s+"), " ").lowercase()
 
     companion object {
-        private const val CanvasMinWorld = -10f
-        private const val CanvasMaxWorld = 10f
-        private const val HardOverlapX = 0.16f
-        private const val HardOverlapY = 0.13f
         private val DefaultTaskProperties = listOf(
             "Name" to TaskPropertyType.Name,
             "Status" to TaskPropertyType.Status,
@@ -1813,7 +1968,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
         val defaultSettings = AppSettings(
             themeMode = ThemeMode.System,
             themeProfile = ThemeProfile.Neon,
-            accentColor = 0xFF9D50BB,
+            accentColor = 0xFF6F36FF,
             activeWorkspaceId = 1,
             backupFolderUri = null,
             vaultLockEnabled = false,
@@ -1838,7 +1993,7 @@ class NotesRepository(private val database: NorfoldDatabase) {
             adminsControlWorkspaceVisuals = true,
             allowMembersCreateNotes = true,
             allowMembersInvite = false,
-            uiScale = 0.88f,
+            uiScale = 1f,
             showMarkdownSyntax = true,
             noteLongPressAction = com.norfold.app.domain.NoteGestureAction.Actions,
             noteSwipeStartAction = com.norfold.app.domain.NoteGestureAction.Pin,

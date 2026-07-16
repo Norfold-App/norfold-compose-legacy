@@ -6,16 +6,34 @@ enum class TaskWorkspaceView(val key: String, val label: String) {
     Feed("Feed", "Feed"),
     Calendar("Calendar", "Calendar"),
     Chart("Chart", "Chart"),
-    Gallery("Gallery", "Gallery"),
     List("List", "List"),
+    Timeline("Timeline", "Timeline"),
     Matrix("Matrix", "Matrix");
 
     companion object {
         fun fromKey(key: String?): TaskWorkspaceView {
             if (key.equals("Tasks", ignoreCase = true)) return Table
+            // Legacy: the standalone Gallery view merged into Feed (grid display mode).
+            if (key.equals("Gallery", ignoreCase = true)) return Feed
             return entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: Table
         }
     }
+}
+
+enum class TaskEditorTarget {
+    Color,
+    Status,
+    Assignee,
+    Priority,
+    Labels,
+    Date,
+    Checklist,
+    Notes,
+    Files,
+    Comments,
+    NewProperty,
+    PropertySettings,
+    ReadOnlyDetails,
 }
 
 enum class TaskWorkspaceSort(val key: String, val label: String) {

@@ -3,7 +3,7 @@ package com.norfold.app.domain
 data class Note(
     val id: Long,
     val title: String,
-    val bodyMarkdown: String,
+    val document: BlockDocument,
     val notebookId: Long?,
     val pinned: Boolean,
     val starred: Boolean,
@@ -16,7 +16,52 @@ data class Note(
     val embeds: List<NoteEmbedItem> = emptyList(),
     val coverUri: String? = null,
     val coverMimeType: String? = null,
-)
+    val overlapMode: DocOverlapMode = DocOverlapMode.Reflow,
+    val freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
+    val canvasSpec: DocCanvasSpec = DocCanvasSpec(),
+) {
+    val bodyMarkdown: String get() = MarkdownBlockCodec.export(document)
+
+    constructor(
+        id: Long,
+        title: String,
+        bodyMarkdown: String,
+        notebookId: Long?,
+        pinned: Boolean,
+        starred: Boolean,
+        archived: Boolean,
+        locked: Boolean,
+        createdAt: Long,
+        updatedAt: Long,
+        tags: List<Tag> = emptyList(),
+        attachments: List<Attachment> = emptyList(),
+        embeds: List<NoteEmbedItem> = emptyList(),
+        coverUri: String? = null,
+        coverMimeType: String? = null,
+        overlapMode: DocOverlapMode = DocOverlapMode.Reflow,
+        freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
+        canvasSpec: DocCanvasSpec = DocCanvasSpec(),
+    ) : this(
+        id = id,
+        title = title,
+        document = MarkdownBlockCodec.import(bodyMarkdown),
+        notebookId = notebookId,
+        pinned = pinned,
+        starred = starred,
+        archived = archived,
+        locked = locked,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        tags = tags,
+        attachments = attachments,
+        embeds = embeds,
+        coverUri = coverUri,
+        coverMimeType = coverMimeType,
+        overlapMode = overlapMode,
+        freeformLayout = freeformLayout,
+        canvasSpec = canvasSpec,
+    )
+}
 
 data class Notebook(
     val id: Long,
@@ -30,6 +75,7 @@ data class Tag(
     val id: Long,
     val name: String,
     val color: Long,
+    val scope: String = "notes",
 )
 
 data class Attachment(
@@ -51,7 +97,7 @@ data class NoteEmbedItem(
     val createdAt: Long,
 )
 
-enum class NoteEmbedType { Link, File, Image, Video, Audio, Canvas, Task }
+enum class NoteEmbedType { Link, File, Image, Video, Audio, Task }
 
 data class TaskItem(
     val id: Long,
@@ -218,36 +264,7 @@ data class ChatMessageItem(
     val attachmentSizeBytes: Long? = null,
 )
 
-data class CanvasNodeItem(
-    val id: Long,
-    val title: String,
-    val subtitle: String,
-    val type: CanvasNodeType,
-    val x: Float,
-    val y: Float,
-    val color: Long,
-    val linkedNoteId: Long?,
-    val targetUri: String? = null,
-    val targetMimeType: String? = null,
-    val targetName: String? = null,
-    val targetSizeBytes: Long? = null,
-    val createdAt: Long,
-    val updatedAt: Long,
-)
-
-enum class CanvasNodeType { Text, Note, File, Shape, Link, Media }
-
-data class CanvasEdgeItem(
-    val id: Long,
-    val fromNodeId: Long,
-    val toNodeId: Long,
-    val label: String,
-    val color: Long,
-    val createdAt: Long,
-    val updatedAt: Long,
-)
-
-enum class WorkspaceObjectType { Note, Task, Goal, CalendarEvent, File, Canvas, ChatMessage, DatabaseRow, Workspace, System }
+enum class WorkspaceObjectType { Note, Task, Goal, CalendarEvent, File, ChatMessage, DatabaseRow, Workspace, System }
 
 data class WorkspaceObject(
     val id: Long,
@@ -337,16 +354,17 @@ data class Workspace(
     val permInviteMembers: Boolean = false,
     val permDeleteNotes: Boolean = false,
     val permEditNotes: Boolean = true,
-    val permCreateCanvas: Boolean = true,
     val permManageTasks: Boolean = true,
 )
 
 enum class WorkspaceIconKind { Text, Emoji, Image, Gif }
 enum class ThemeMode { System, Light, Dark }
-enum class ThemeProfile { Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Gold }
+enum class ThemeProfile { Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Gold, Graphite }
 enum class EditorLineWidth { Narrow, Comfortable, Wide }
 enum class EditorFontFamily { Sans, Serif }
 enum class NoteGestureAction { Actions, Pin, Star, Lock, Archive, Delete, None }
+enum class TaskGestureAction { Complete, Delete, None }
+enum class NoteRenderEngine { Auto, Native, WebView }
 enum class SyncProvider { None, GoogleDrive, OneDrive, LocalFolder }
 enum class SyncFolderAction { CreateChain, RestoreChain }
 
@@ -386,7 +404,7 @@ data class AppSettings(
     val adminsControlWorkspaceVisuals: Boolean = true,
     val allowMembersCreateNotes: Boolean = true,
     val allowMembersInvite: Boolean = false,
-    val uiScale: Float = 0.88f,
+    val uiScale: Float = 1f,
     val editorLineWidth: EditorLineWidth = EditorLineWidth.Comfortable,
     val editorFontFamily: EditorFontFamily = EditorFontFamily.Sans,
     val showMarkdownSyntax: Boolean = true,
@@ -407,6 +425,8 @@ data class AppSettings(
     val autoPairBrackets: Boolean = true,
     val syntaxColorful: Boolean = true,
     val autoConvertOnPaste: Boolean = true,
+    val contextualMenuStyle: ContextualMenuStyle = ContextualMenuStyle.Pill,
+    val contextualMenuColor: ContextualMenuColor = ContextualMenuColor.FollowTheme,
     // Security (persisted)
     val appLockOnExit: Boolean = false,
     val autoLockMinutes: Int = 5,
@@ -430,6 +450,9 @@ data class AppSettings(
     val taskSortMode: String = "Manual",
     val taskCompactLayout: Boolean = true,
     val taskKanbanEngine: String = "BoardPointer",
+    val taskSwipeStartAction: TaskGestureAction = TaskGestureAction.Complete,
+    val taskSwipeEndAction: TaskGestureAction = TaskGestureAction.Delete,
+    val noteRenderEngine: NoteRenderEngine = NoteRenderEngine.Auto,
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
@@ -441,6 +464,9 @@ data class AppSettings(
     val notificationPush: Boolean = true,
     val subscriptionTier: SubscriptionTier = SubscriptionTier.Free,
 )
+
+enum class ContextualMenuStyle { Pill, Block, Minimal }
+enum class ContextualMenuColor { FollowTheme, AppAccent }
 
 enum class SubscriptionTier { Free, Pro, Team }
 
@@ -472,7 +498,6 @@ enum class Destination {
     Tags,
     Search,
     Tasks,
-    Canvas,
     Chat,
     ConflictReview,
     SyncMonitor,
@@ -480,7 +505,6 @@ enum class Destination {
     Settings,
     ImportExport,
 }
-enum class EditorMode { Page, Edit, Preview }
 
 data class NoteDocument(
     val title: String,
