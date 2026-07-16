@@ -115,16 +115,12 @@ data class ContainerBlock(
 @Serializable @SerialName("divider")
 data class DividerBlock(override val id: String = blockId()) : DocumentBlock { override fun plainText() = "" }
 
-@Serializable
-enum class BlockRenderMode { Render, Source }
-
 @Serializable @SerialName("code")
 data class CodeBlock(
     override val id: String = blockId(),
     val language: String = "",
     val code: String = "",
     val editorHeightDp: Float = 180f,
-    val renderMode: BlockRenderMode = BlockRenderMode.Render,
 ) : DocumentBlock {
     override fun plainText() = code
 }
@@ -140,7 +136,6 @@ data class TableBlock(
     val rows: List<List<TableCell>> = emptyList(),
     val columnWidthsDp: List<Float> = emptyList(),
     val columnAlignments: List<TableAlignment> = emptyList(),
-    val renderMode: BlockRenderMode = BlockRenderMode.Render,
 ) : DocumentBlock {
     override fun plainText() = (listOf(headers) + rows).joinToString("\n") { row -> row.joinToString("\t") { it.content.plainText() } }
 }
@@ -183,7 +178,6 @@ data class ChartBlock(
     override val id: String = blockId(),
     val vegaLiteSpec: String = "{}",
     val editorHeightDp: Float = 180f,
-    val renderMode: BlockRenderMode = BlockRenderMode.Render,
 ) : DocumentBlock {
     override fun plainText() = vegaLiteSpec
 }
@@ -194,7 +188,6 @@ data class MathBlock(
     val tex: String = "",
     val display: Boolean = true,
     val editorHeightDp: Float = 140f,
-    val renderMode: BlockRenderMode = BlockRenderMode.Render,
 ) : DocumentBlock {
     override fun plainText() = tex
 }
@@ -204,7 +197,6 @@ data class MermaidBlock(
     override val id: String = blockId(),
     val code: String = "",
     val editorHeightDp: Float = 180f,
-    val renderMode: BlockRenderMode = BlockRenderMode.Render,
 ) : DocumentBlock {
     override fun plainText() = code
 }

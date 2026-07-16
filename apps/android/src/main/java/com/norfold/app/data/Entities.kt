@@ -27,7 +27,6 @@ import com.norfold.app.domain.Note
 import com.norfold.app.domain.NoteEmbedItem
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.NoteGestureAction
-import com.norfold.app.domain.NoteRenderEngine
 import com.norfold.app.domain.OwnedDocument
 import com.norfold.app.domain.Notebook
 import com.norfold.app.domain.GoalItem
@@ -576,7 +575,8 @@ data class AppSettingsEntity(
     val taskKanbanEngine: String = "BoardPointer",
     val taskSwipeStartAction: String = TaskGestureAction.Complete.name,
     val taskSwipeEndAction: String = TaskGestureAction.Delete.name,
-    val noteRenderEngine: String = NoteRenderEngine.Auto.name,
+    // Inert schema-31 compatibility column. The retired Markdown preview engine no longer reads it.
+    val noteRenderEngine: String = "Auto",
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
@@ -859,7 +859,6 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     taskKanbanEngine = taskKanbanEngine,
     taskSwipeStartAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeStartAction } ?: TaskGestureAction.Complete,
     taskSwipeEndAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeEndAction } ?: TaskGestureAction.Delete,
-    noteRenderEngine = NoteRenderEngine.entries.firstOrNull { it.name == noteRenderEngine } ?: NoteRenderEngine.Auto,
     onboardingComplete = onboardingComplete,
     workspacePurpose = workspacePurpose,
     calendarDefaultView = calendarDefaultView,
