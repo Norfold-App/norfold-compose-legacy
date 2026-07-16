@@ -19,8 +19,6 @@ data class BackupSnapshot(
     val goals: List<GoalItem> = emptyList(),
     val calendarEvents: List<CalendarEventItem> = emptyList(),
     val chatMessages: List<ChatMessageItem> = emptyList(),
-    val canvasNodes: List<CanvasNodeItem> = emptyList(),
-    val canvasEdges: List<CanvasEdgeItem> = emptyList(),
     val workspaceObjects: List<WorkspaceObject> = emptyList(),
     val workspaceObjectLinks: List<WorkspaceObjectLink> = emptyList(),
     val workspaceActivities: List<WorkspaceActivity> = emptyList(),
@@ -63,7 +61,7 @@ object BackupCodec {
             appendLine(listOf("NOTEBOOK", it.id, b64(it.name), it.parentId ?: "", it.color, it.sortOrder).joinToString("|"))
         }
         snapshot.tags.sortedBy { it.name.lowercase() }.forEach {
-            appendLine(listOf("TAG", it.id, b64(it.name), it.color).joinToString("|"))
+            appendLine(listOf("TAG", it.id, b64(it.name), it.color, b64(it.scope)).joinToString("|"))
         }
         snapshot.notes.sortedByDescending { it.updatedAt }.forEach {
             appendLine(
@@ -82,6 +80,8 @@ object BackupCodec {
                     it.createdAt,
                     it.updatedAt,
                     b64(it.tags.joinToString(",") { tag -> tag.name }),
+                    it.overlapMode.name,
+                    b64(DocLayoutJson.encode(it.freeformLayout, it.canvasSpec)),
                 ).joinToString("|"),
             )
         }
@@ -158,30 +158,6 @@ object BackupCodec {
                 ).joinToString("|"),
             )
         }
-        snapshot.canvasNodes.sortedBy { it.id }.forEach {
-            appendLine(
-                listOf(
-                    "CANVAS",
-                    it.id,
-                    b64(it.title),
-                    b64(it.subtitle),
-                    it.type.name,
-                    it.x,
-                    it.y,
-                    it.color,
-                    it.linkedNoteId ?: "",
-                    b64(it.targetUri.orEmpty()),
-                    b64(it.targetMimeType.orEmpty()),
-                    b64(it.targetName.orEmpty()),
-                    it.targetSizeBytes ?: "",
-                    it.createdAt,
-                    it.updatedAt,
-                ).joinToString("|"),
-            )
-        }
-        snapshot.canvasEdges.sortedBy { it.id }.forEach {
-            appendLine(listOf("CANVAS_EDGE", it.id, it.fromNodeId, it.toNodeId, b64(it.label), it.color, it.createdAt, it.updatedAt).joinToString("|"))
-        }
         snapshot.workspaceObjects.sortedBy { it.id }.forEach {
             appendLine(listOf("OBJECT", it.id, it.objectType.name, it.sourceId ?: "", b64(it.title), b64(it.summary), b64(it.tags), b64(it.icon), it.color, it.pinned, it.archived, it.createdAt, it.updatedAt).joinToString("|"))
         }
@@ -220,8 +196,6 @@ object BackupCodec {
         val goals = mutableListOf<GoalItem>()
         val calendarEvents = mutableListOf<CalendarEventItem>()
         val chatMessages = mutableListOf<ChatMessageItem>()
-        val canvasNodes = mutableListOf<CanvasNodeItem>()
-        val canvasEdges = mutableListOf<CanvasEdgeItem>()
         val workspaceObjects = mutableListOf<WorkspaceObject>()
         val workspaceObjectLinks = mutableListOf<WorkspaceObjectLink>()
         val workspaceActivities = mutableListOf<WorkspaceActivity>()
@@ -260,11 +234,12 @@ object BackupCodec {
                     id = cells[1].toLong(),
                     name = unb64(cells[2]),
                     color = cells[3].toLong(),
+                    scope = unb64(cells.getOrElse(4) { "" }).ifBlank { "notes" },
                 )
                 "NOTE" -> notes += Note(
                     id = cells[1].toLong(),
                     title = unb64(cells[2]),
-                    bodyMarkdown = unb64(cells[3]),
+                    document = MarkdownBlockCodec.import(unb64(cells[3])),
                     notebookId = cells[4].takeIf { it.isNotBlank() }?.toLong(),
                     coverUri = unb64(cells.getOrElse(5) { "" }).takeIf { it.isNotBlank() },
                     coverMimeType = unb64(cells.getOrElse(6) { "" }).takeIf { it.isNotBlank() },
@@ -277,6 +252,9 @@ object BackupCodec {
                     tags = unb64(cells[13]).split(",").filter { it.isNotBlank() }.mapIndexed { index, name ->
                         Tag(id = index.toLong() + 1, name = name, color = 0xFF8B5CF6)
                     },
+                    overlapMode = docOverlapModeOf(cells.getOrNull(14)),
+                    freeformLayout = DocLayoutJson.decode(unb64(cells.getOrElse(15) { "" })),
+                    canvasSpec = DocLayoutJson.decodeCanvas(unb64(cells.getOrElse(15) { "" })),
                 )
                 "ATTACHMENT" -> attachments += Attachment(
                     id = cells[1].toLong(),
@@ -393,34 +371,6 @@ object BackupCodec {
                     attachmentUri = unb64(cells.getOrElse(10) { "" }).takeIf { it.isNotBlank() },
                     attachmentSizeBytes = cells.getOrElse(11) { "" }.takeIf { it.isNotBlank() }?.toLong(),
                 )
-                "CANVAS" -> {
-                    val hasTargets = cells.size >= 15
-                    canvasNodes += CanvasNodeItem(
-                        id = cells[1].toLong(),
-                        title = unb64(cells[2]),
-                        subtitle = unb64(cells[3]),
-                        type = CanvasNodeType.entries.firstOrNull { it.name == cells[4] } ?: CanvasNodeType.Text,
-                        x = cells[5].toFloat(),
-                        y = cells[6].toFloat(),
-                        color = cells[7].toLong(),
-                        linkedNoteId = cells[8].takeIf { it.isNotBlank() }?.toLong(),
-                        targetUri = if (hasTargets) unb64(cells[9]).takeIf { it.isNotBlank() } else null,
-                        targetMimeType = if (hasTargets) unb64(cells[10]).takeIf { it.isNotBlank() } else null,
-                        targetName = if (hasTargets) unb64(cells[11]).takeIf { it.isNotBlank() } else null,
-                        targetSizeBytes = if (hasTargets) cells[12].takeIf { it.isNotBlank() }?.toLong() else null,
-                        createdAt = cells[if (hasTargets) 13 else 9].toLong(),
-                        updatedAt = cells[if (hasTargets) 14 else 10].toLong(),
-                    )
-                }
-                "CANVAS_EDGE" -> canvasEdges += CanvasEdgeItem(
-                    id = cells[1].toLong(),
-                    fromNodeId = cells[2].toLong(),
-                    toNodeId = cells[3].toLong(),
-                    label = unb64(cells[4]),
-                    color = cells[5].toLong(),
-                    createdAt = cells[6].toLong(),
-                    updatedAt = cells[7].toLong(),
-                )
                 "OBJECT" -> workspaceObjects += WorkspaceObject(
                     id = cells[1].toLong(),
                     objectType = WorkspaceObjectType.entries.firstOrNull { it.name == cells[2] } ?: WorkspaceObjectType.System,
@@ -501,8 +451,6 @@ object BackupCodec {
             goals = goals,
             calendarEvents = calendarEvents,
             chatMessages = chatMessages,
-            canvasNodes = canvasNodes,
-            canvasEdges = canvasEdges,
             workspaceObjects = workspaceObjects,
             workspaceObjectLinks = workspaceObjectLinks,
             workspaceActivities = workspaceActivities,

@@ -38,6 +38,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", buildConfigString(publicConfig("SUPABASE_URL")))
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", buildConfigString(publicConfig("SUPABASE_PUBLISHABLE_KEY")))
+        buildConfigField("String", "GOOGLE_ANDROID_CLIENT_ID", buildConfigString(publicConfig("GOOGLE_ANDROID_CLIENT_ID")))
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", buildConfigString(publicConfig("GOOGLE_SERVER_CLIENT_ID")))
         buildConfigField("String", "GOOGLE_CLOUD_PROJECT_ID", buildConfigString(publicConfig("GOOGLE_CLOUD_PROJECT_ID")))
         buildConfigField("String", "FIREBASE_PROJECT_ID", buildConfigString(publicConfig("FIREBASE_PROJECT_ID")))
@@ -59,7 +60,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // PRE_BETA only: schema mismatches may reset developer/test data. This must be false
+            // before any Beta/RC build leaves the development environment.
+            buildConfigField("boolean", "ALLOW_DESTRUCTIVE_SCHEMA_RESET", "true")
+        }
         release {
+            buildConfigField("boolean", "ALLOW_DESTRUCTIVE_SCHEMA_RESET", "false")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -67,7 +74,14 @@ android {
                 "proguard-rules.pro",
             )
         }
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
+
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 
 }
 
@@ -110,6 +124,8 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:storage-kt")
     implementation("io.github.jan-tennert.supabase:functions-kt")
     implementation("io.ktor:ktor-client-okhttp:3.5.1")
+    implementation("org.jetbrains:markdown:0.7.7")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation(platform("com.google.firebase:firebase-bom:34.16.0"))
     implementation("com.google.firebase:firebase-messaging")
     ksp("androidx.room:room-compiler:2.8.4")
@@ -119,4 +135,7 @@ dependencies {
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }

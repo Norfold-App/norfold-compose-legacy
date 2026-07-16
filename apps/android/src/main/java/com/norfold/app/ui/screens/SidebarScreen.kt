@@ -13,9 +13,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,27 +36,33 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.TrackChanges
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,26 +71,38 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.norfold.app.branding.palette
-import com.norfold.app.branding.NorfoldLogo
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.norfold.app.domain.Destination
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.domain.DocOutline
+import com.norfold.app.domain.DocSectionAction
+import com.norfold.app.domain.Note
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 
 @Composable
-fun SectionSidebarOverlay(state: NotesUiState, viewModel: NotesViewModel) {
+fun SectionSidebarOverlay(state: DocsUiState, viewModel: DocsViewModel) {
     val panelEnter = if (state.settings.reduceMotion) {
         fadeIn(tween(150))
     } else {
@@ -126,12 +148,12 @@ fun SectionSidebarOverlay(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-fun Sidebar(state: NotesUiState, viewModel: NotesViewModel, modifier: Modifier) {
+fun Sidebar(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier) {
     SidebarContent(state, viewModel, modifier)
 }
 
 @Composable
-private fun WorkspaceSwitcher(state: NotesUiState, viewModel: NotesViewModel) {
+private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
     var expanded by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
     if (creating) {
@@ -163,7 +185,10 @@ private fun WorkspaceSwitcher(state: NotesUiState, viewModel: NotesViewModel) {
             }
             Column(Modifier.weight(1f)) {
                 Text(active?.name ?: state.settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${state.notes.size} notes · ${state.workspaces.size} workspaces", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${state.notes.size} docs · ${state.workspaces.size} workspaces", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = { viewModel.go(Destination.Inbox) }, modifier = Modifier.size(30.dp)) {
+                Icon(Icons.Outlined.NotificationsNone, "Inbox", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
             }
             Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
         }
@@ -203,128 +228,551 @@ private fun WorkspaceSwitcher(state: NotesUiState, viewModel: NotesViewModel) {
     }
 }
 
+/** Sticky workspace identity and cross-object search share one visual region in every sidebar. */
 @Composable
-private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modifier: Modifier) {
+private fun UnifiedSidebarHeader(
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    query: String,
+    onQueryChange: (String) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            WorkspaceSwitcher(state, viewModel)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.78f))
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Search, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.weight(1f)) {
+                    if (query.isBlank()) {
+                        Text("Search workspace", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (query.isNotEmpty()) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        "Clear search",
+                        Modifier.size(18.dp).clip(CircleShape).clickable { onQueryChange("") },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text("Ctrl K", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarSearchResults(
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    query: String,
+    modifier: Modifier = Modifier,
+) {
+    val results = buildSearchResults(state, viewModel, query).take(30)
     Column(
-        modifier
-            .fillMaxHeight()
-            .verticalScroll(rememberScrollState()),
+        modifier.verticalScroll(rememberScrollState()).padding(top = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "${results.size} result${if (results.size == 1) "" else "s"}",
+            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (results.isEmpty()) {
+            Text(
+                "Nothing in this workspace matches “${query.trim()}”.",
+                Modifier.padding(12.dp),
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            results.forEach { result ->
+                SearchResultRow(result, onActivated = viewModel::closeSidebar)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier) {
+    var sidebarQuery by remember { mutableStateOf("") }
+    // While a doc is open, the sidebar *becomes* the document's table of contents —
+    // the workspace nav is reachable again via the editor's back button.
+    val docNote = state.selectedNote
+    if (state.destination == Destination.NoteEditor && docNote != null) {
+        DocSidebarContent(docNote, state, viewModel, sidebarQuery, { sidebarQuery = it }, modifier)
+        return
+    }
+    var notesExpanded by remember { mutableStateOf(state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) }
+    var notesShowAll by remember { mutableStateOf(false) }
+    var tasksExpanded by remember { mutableStateOf(state.destination in setOf(Destination.Tasks, Destination.Calendar)) }
+    var notebooksExpanded by remember { mutableStateOf(state.destination == Destination.Notebooks) }
+    val publicName = state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Local owner" } }
+    Column(
+        modifier.fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            NorfoldLogo(34.dp)
-            Text("Norfold", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-        }
-        WorkspaceSwitcher(state, viewModel)
+        UnifiedSidebarHeader(state, viewModel, sidebarQuery, { sidebarQuery = it })
 
-        Spacer(Modifier.height(4.dp))
-
-        Button(onClick = { viewModel.go(Destination.CommandPalette) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-            Icon(Icons.Outlined.Add, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Command / New")
-        }
-
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        SideNavItem("Home", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
-        SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
-        SideNavItem("Calendar", Icons.Outlined.CalendarMonth, state.destination == Destination.Calendar) { viewModel.go(Destination.Calendar) }
-        SideNavItem("Notes", Icons.Outlined.Folder, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
-        SideNavItem("Tasks", Icons.Outlined.Check, state.destination == Destination.Tasks) { viewModel.go(Destination.Tasks) }
-        SideNavItem("Goals", Icons.Outlined.TrackChanges, state.destination == Destination.Goals) { viewModel.go(Destination.Goals) }
-        SideNavItem("Canvas", Icons.Outlined.GridView, state.destination == Destination.Canvas) { viewModel.go(Destination.Canvas) }
-        SideNavItem("Files", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
-        SideNavItem("Chat", Icons.Outlined.ChatBubbleOutline, state.destination == Destination.Chat) { viewModel.go(Destination.Chat) }
-        SideNavItem("Database", Icons.Outlined.GridView, state.destination == Destination.Database) { viewModel.go(Destination.Database) }
-        SideNavItem("Graph", Icons.Outlined.Difference, state.destination == Destination.Graph) { viewModel.go(Destination.Graph) }
-        SideNavItem("Activity", Icons.Outlined.Star, state.destination == Destination.Activity) { viewModel.go(Destination.Activity) }
-        SideNavItem("Templates", Icons.Outlined.Tag, state.destination == Destination.Templates) { viewModel.go(Destination.Templates) }
-
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        // Animated section content
-        AnimatedContent(
-            targetState = state.destination,
-            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
-            label = "section",
-        ) { dest ->
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    sectionTitle(dest),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp),
-                )
-                sectionItems(dest).forEach { item ->
-                    SideNavItem(item.label, item.icon, false) { viewModel.go(item.destination) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(
+                onClick = viewModel::createNote,
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = RoundedCornerShape(9.dp),
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Doc", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Surface(
+                onClick = viewModel::createTaskAndOpen,
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = RoundedCornerShape(9.dp),
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Task", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
 
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        Text(
-            "Library",
-            fontWeight = FontWeight.Bold,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp),
-        )
-        SideNavItem("Notebooks", Icons.Outlined.Folder, state.destination == Destination.Notebooks) { viewModel.go(Destination.Notebooks) }
-        SideNavItem("Tags", Icons.Outlined.Tag, state.destination == Destination.Tags) { viewModel.go(Destination.Tags) }
-        SideNavItem("Search", Icons.Outlined.Search, state.destination == Destination.Search) { viewModel.go(Destination.Search) }
-
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
-
-        SideNavItem("Sync", Icons.Outlined.CloudSync, state.destination == Destination.SyncMonitor) { viewModel.go(Destination.SyncMonitor) }
-        SideNavItem("Conflicts", Icons.Outlined.Difference, state.destination == Destination.ConflictReview) { viewModel.go(Destination.ConflictReview) }
-        SideNavItem("Vault", Icons.Outlined.Lock, state.destination == Destination.Vault) { viewModel.go(Destination.Vault) }
-        SideNavItem("Settings", Icons.Outlined.Settings, state.destination == Destination.Settings) { viewModel.go(Destination.Settings) }
-
-        if (state.notebooks.isNotEmpty()) {
+        if (sidebarQuery.isNotBlank()) {
+            SidebarSearchResults(state, viewModel, sidebarQuery, Modifier.weight(1f))
+        } else Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
             Spacer(Modifier.height(4.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+            SideNavItem("Dashboard", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
+            SideNavItem("Today", Icons.Outlined.CalendarMonth, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView == "Day") {
+                viewModel.openTaskCalendar("Day")
+            }
+            SideNavItem("Upcoming", Icons.Outlined.CalendarMonth, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView == "Agenda") {
+                viewModel.openTaskCalendar("Agenda")
+            }
+            SideNavItem("Favorites", Icons.Outlined.Star, state.destination == Destination.NotesHome && state.tab == com.norfold.app.domain.HomeTab.Pinned) {
+                viewModel.selectTab(com.norfold.app.domain.HomeTab.Pinned)
+                viewModel.go(Destination.NotesHome)
+            }
+
+            SidebarDropdownHeader(
+                label = "Docs",
+                icon = Icons.Outlined.Description,
+                expanded = notesExpanded,
+                selected = state.destination in setOf(Destination.NotesHome, Destination.NoteEditor),
+                onToggle = { notesExpanded = !notesExpanded },
+                onClick = { viewModel.go(Destination.NotesHome) },
+            )
+            AnimatedVisibility(notesExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    SideNavItem("All docs", Icons.Outlined.Description, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
+                    SideNavItem("Tags", Icons.Outlined.Tag, state.destination == Destination.Tags) { viewModel.go(Destination.Tags) }
+                    val recents = state.notes.sortedByDescending { it.updatedAt }
+                    val shown = if (notesShowAll) recents else recents.take(3)
+                    shown.forEach { note ->
+                        SideNavItem(note.title.ifBlank { "Untitled" }, Icons.Outlined.Description, state.destination == Destination.NoteEditor && state.selectedNote?.id == note.id) {
+                            viewModel.select(note)
+                        }
+                    }
+                    if (recents.size > 3) {
+                        SideNavItem(if (notesShowAll) "Show less" else "…", Icons.Outlined.UnfoldMore, false) { notesShowAll = !notesShowAll }
+                    }
+                }
+            }
+
+            SidebarDropdownHeader(
+                label = "Tasks",
+                icon = Icons.Outlined.Check,
+                expanded = tasksExpanded,
+                selected = state.destination == Destination.Tasks,
+                onToggle = { tasksExpanded = !tasksExpanded },
+                onClick = { viewModel.go(Destination.Tasks) },
+            )
+            AnimatedVisibility(tasksExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    SideNavItem("Board", Icons.Outlined.GridView, state.destination == Destination.Tasks && state.settings.taskViewMode == "Board") {
+                        viewModel.patchSettings { it.copy(taskViewMode = "Board") }; viewModel.go(Destination.Tasks)
+                    }
+                    SideNavItem("Table", Icons.Outlined.Check, state.destination == Destination.Tasks && state.settings.taskViewMode == "Table") {
+                        viewModel.patchSettings { it.copy(taskViewMode = "Table") }; viewModel.go(Destination.Tasks)
+                    }
+                    SideNavItem("Calendar", Icons.Outlined.CalendarMonth, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView !in setOf("Day", "Agenda")) { viewModel.openTaskCalendar() }
+                    SideNavItem("Agenda", Icons.Outlined.CalendarMonth, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView == "Agenda") {
+                        viewModel.openTaskCalendar("Agenda")
+                    }
+                }
+            }
+
+            SideNavItem("Files", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
+            SideNavItem("Chat", Icons.Outlined.ChatBubbleOutline, state.destination == Destination.Chat) { viewModel.go(Destination.Chat) }
+            SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
+
+            SidebarDropdownHeader(
+                label = "Notebooks",
+                icon = Icons.Outlined.Folder,
+                expanded = notebooksExpanded,
+                selected = state.destination == Destination.Notebooks || state.selectedNotebookId != null,
+                onToggle = { notebooksExpanded = !notebooksExpanded },
+                onClick = { viewModel.go(Destination.Notebooks) },
+            )
+            AnimatedVisibility(notebooksExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    SideNavItem("Manage notebooks", Icons.Outlined.Folder, state.destination == Destination.Notebooks) { viewModel.go(Destination.Notebooks) }
+                    state.notebooks.forEach { notebook ->
+                        SideNavItem(notebook.name, Icons.Outlined.Description, state.selectedNotebookId == notebook.id) {
+                            viewModel.filterByNotebook(notebook.id)
+                        }
+                    }
+                }
+            }
+
             Spacer(Modifier.height(4.dp))
             Text(
-                "Notebooks",
+                "WORKSPACE",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
+            )
+            SideNavItem("Database", Icons.Outlined.GridView, state.destination == Destination.Database) { viewModel.go(Destination.Database) }
+            SideNavItem("Graph", Icons.Outlined.Difference, state.destination == Destination.Graph) { viewModel.go(Destination.Graph) }
+            SideNavItem("Activity", Icons.Outlined.Star, state.destination == Destination.Activity) { viewModel.go(Destination.Activity) }
+            SideNavItem("Templates", Icons.Outlined.Tag, state.destination == Destination.Templates) { viewModel.go(Destination.Templates) }
+
+            Spacer(Modifier.height(6.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+            SideNavItem("Settings", Icons.Outlined.Settings, state.destination == Destination.Settings) { viewModel.go(Destination.Settings) }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { viewModel.go(Destination.Settings) }.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
+                Text(publicName.take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(publicName, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("@${state.settings.syncUserName.ifBlank { "owner" }}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1)
+            }
+            Icon(Icons.Outlined.UnfoldMore, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * Sidebar body while a Doc is open: workspace switcher + the doc's table of contents,
+ * replacing the workspace nav entirely. The editor's back button restores the nav.
+ */
+@Composable
+private fun DocSidebarContent(
+    note: Note,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    modifier: Modifier,
+) {
+    Column(
+        modifier.fillMaxHeight(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        UnifiedSidebarHeader(state, viewModel, searchQuery, onSearchQueryChange)
+        Text(
+            note.title.ifBlank { "Untitled" },
+            Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 2.dp),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (searchQuery.isNotBlank()) {
+            SidebarSearchResults(state, viewModel, searchQuery, Modifier.weight(1f))
+        } else Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Spacer(Modifier.height(2.dp))
+            DocTableOfContents(note, viewModel)
+        }
+    }
+}
+
+/**
+ * The open Doc's table of contents — the sidebar's whole body while inside a Doc (viewing or
+ * editing). Tapping a heading fires [DocsViewModel.scrollToBlock]; the editor observes the
+ * request and scrolls (or, in free-canvas mode, pans) to the heading's top-level block.
+ *
+ * Interactions: a caret collapses/expands a heading's run of deeper headings (UI-only state);
+ * long-pressing a section heading (top-level, unlocked note) opens a move/duplicate/delete menu;
+ * the trailing drag handle reorders whole sections. Mutations go through
+ * [DocsViewModel.requestSectionAction] so the editor applies them to its live session — the
+ * sidebar only ever sees the persisted note, which trails the session by the autosave debounce.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DocTableOfContents(note: Note, viewModel: DocsViewModel) {
+    val headings = remember(note.id, note.document) { DocOutline.extract(note.document) }
+    // Heading ids that own deeper headings right after them — only these get a caret.
+    val hasChildren = remember(headings) {
+        headings.mapIndexedNotNull { i, h ->
+            h.blockId.takeIf { i + 1 < headings.size && headings[i + 1].level > h.level }
+        }.toSet()
+    }
+    var collapsed by remember(note.id) { mutableStateOf(setOf<String>()) }
+    var query by remember(note.id) { mutableStateOf("") }
+    val filtering = query.isNotBlank()
+    var menuFor by remember(note.id) { mutableStateOf<String?>(null) }
+    // Section drag state: row bounds in the ToC column's space + the dragged row's finger offset.
+    val rowBounds = remember(note.id) { mutableStateMapOf<String, Rect>() }
+    var draggedId by remember(note.id) { mutableStateOf<String?>(null) }
+    var dragOffsetY by remember(note.id) { mutableFloatStateOf(0f) }
+
+    // While filtering: matches plus their ancestors (so context survives), collapse ignored.
+    // Otherwise: walk the flat list skipping runs hidden under a collapsed heading.
+    val visibleHeadings = remember(headings, query, collapsed) {
+        if (query.isNotBlank()) {
+            val q = query.trim()
+            val keep = BooleanArray(headings.size)
+            val ancestors = ArrayDeque<Int>()
+            headings.forEachIndexed { i, h ->
+                while (ancestors.isNotEmpty() && headings[ancestors.last()].level >= h.level) ancestors.removeLast()
+                if (h.label.contains(q, ignoreCase = true)) {
+                    keep[i] = true
+                    ancestors.forEach { keep[it] = true }
+                }
+                ancestors.addLast(i)
+            }
+            headings.filterIndexed { i, _ -> keep[i] }
+        } else {
+            buildList {
+                var skipDeeper: Int? = null
+                for (h in headings) {
+                    if (skipDeeper != null && h.level > skipDeeper) continue
+                    skipDeeper = null
+                    add(h)
+                    if (h.blockId in collapsed) skipDeeper = h.level
+                }
+            }
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .padding(vertical = 6.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "On this page",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (headings.size > 4) {
+            Row(
+                Modifier
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Search, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                Box(Modifier.weight(1f)) {
+                    if (query.isEmpty()) {
+                        Text("Filter headings", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (query.isNotEmpty()) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        "Clear filter",
+                        Modifier.size(16.dp).clip(CircleShape).clickable { query = "" },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        if (headings.isEmpty()) {
+            Text(
+                "No headings yet",
+                Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp),
             )
-            state.notebooks.forEach { notebook ->
-                val selected = state.selectedNotebookId == notebook.id
-                Row(
+        } else if (visibleHeadings.isEmpty()) {
+            Text(
+                "No matching headings",
+                Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            visibleHeadings.forEach { heading ->
+                val id = heading.blockId
+                // Only top-level headings own a contiguous section (nested ones live inside a
+                // quote/callout/container and share their ancestor's range) — only they get
+                // the long-press actions and the reorder handle.
+                val isSection = id == heading.topLevelId
+                val isDragged = draggedId == id
+                Box(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                        .clickable { viewModel.filterByNotebook(notebook.id) }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .onGloballyPositioned { rowBounds[id] = it.boundsInParent() }
+                        .zIndex(if (isDragged) 1f else 0f)
+                        .graphicsLayer { translationY = if (isDragged) dragOffsetY else 0f },
                 ) {
-                    Icon(Icons.Outlined.Folder, null, tint = Color(notebook.color), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        notebook.name,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 14.sp,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    )
-                    if (selected) {
-                        Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isDragged) MaterialTheme.colorScheme.surface else Color.Transparent)
+                            .combinedClickable(
+                                onClick = {
+                                    viewModel.scrollToBlock(id)
+                                    viewModel.closeSidebar()
+                                },
+                                onLongClick = if (isSection && !note.locked) ({ menuFor = id }) else null,
+                            )
+                            .padding(start = (6 + (heading.level.coerceAtMost(4) - 1) * 12).dp, end = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (id in hasChildren) {
+                            Icon(
+                                if (id in collapsed) Icons.Outlined.ChevronRight else Icons.Outlined.ExpandMore,
+                                if (id in collapsed) "Expand" else "Collapse",
+                                Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .clickable(enabled = !filtering) {
+                                        collapsed = if (id in collapsed) collapsed - id else collapsed + id
+                                    }
+                                    .padding(3.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Spacer(Modifier.width(22.dp))
+                        }
+                        Text(
+                            heading.label,
+                            Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 7.dp),
+                            fontSize = 13.sp,
+                            fontWeight = if (heading.level <= 1) FontWeight.SemiBold else FontWeight.Normal,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (isSection && !note.locked && !filtering) {
+                            Icon(
+                                Icons.Outlined.DragIndicator,
+                                "Reorder section",
+                                Modifier
+                                    .size(20.dp)
+                                    .pointerInput(id) {
+                                        detectDragGestures(
+                                            onDragStart = {
+                                                draggedId = id
+                                                dragOffsetY = 0f
+                                            },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                dragOffsetY += amount.y
+                                            },
+                                            onDragCancel = {
+                                                draggedId = null
+                                                dragOffsetY = 0f
+                                            },
+                                            onDragEnd = {
+                                                val bounds = rowBounds[id]
+                                                if (bounds != null) {
+                                                    val center = bounds.center.y + dragOffsetY
+                                                    // Drop before the first visible section row whose center
+                                                    // sits below the dragged row's center; none = move to end.
+                                                    // The editor resolves ids against its live session, so a
+                                                    // stale sidebar document can't corrupt indices.
+                                                    val target = visibleHeadings.firstOrNull { h ->
+                                                        h.blockId != id && h.blockId == h.topLevelId &&
+                                                            (rowBounds[h.blockId]?.center?.y ?: Float.NEGATIVE_INFINITY) > center
+                                                    }
+                                                    viewModel.requestSectionAction(id, DocSectionAction.MoveBefore(target?.blockId))
+                                                }
+                                                draggedId = null
+                                                dragOffsetY = 0f
+                                            },
+                                        )
+                                    },
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isDragged) 1f else 0.55f),
+                            )
+                        }
+                    }
+                    DropdownMenu(expanded = menuFor == id, onDismissRequest = { menuFor = null }) {
+                        DropdownMenuItem(text = { Text("Move up") }, onClick = {
+                            menuFor = null
+                            viewModel.requestSectionAction(id, DocSectionAction.MoveUp)
+                        })
+                        DropdownMenuItem(text = { Text("Move down") }, onClick = {
+                            menuFor = null
+                            viewModel.requestSectionAction(id, DocSectionAction.MoveDown)
+                        })
+                        DropdownMenuItem(text = { Text("Duplicate") }, onClick = {
+                            menuFor = null
+                            viewModel.requestSectionAction(id, DocSectionAction.Duplicate)
+                        })
+                        DropdownMenuItem(text = { Text("Delete") }, onClick = {
+                            menuFor = null
+                            viewModel.requestSectionAction(id, DocSectionAction.Delete)
+                        })
                     }
                 }
             }
@@ -332,81 +780,46 @@ private fun SidebarContent(state: NotesUiState, viewModel: NotesViewModel, modif
     }
 }
 
-private data class SidebarEntry(val label: String, val icon: ImageVector, val destination: Destination)
-
-private fun sectionTitle(destination: Destination): String = when (destination) {
-    Destination.WorkspaceHub, Destination.Inbox -> "Workspace"
-    Destination.Calendar -> "Calendar"
-    Destination.Goals -> "Goals"
-    Destination.Files -> "Files"
-    Destination.Database -> "Database"
-    Destination.Graph, Destination.ObjectDetail -> "Relationships"
-    Destination.Activity -> "Activity"
-    Destination.Templates -> "Templates"
-    Destination.CommandPalette -> "Command"
-    Destination.Tasks -> "Task views"
-    Destination.Canvas -> "Canvas tools"
-    Destination.Chat -> "Chat"
-    Destination.Settings, Destination.SyncMonitor, Destination.ConflictReview -> "System"
-    else -> "Note views"
-}
-
-private fun sectionItems(destination: Destination): List<SidebarEntry> = when (destination) {
-    Destination.WorkspaceHub, Destination.Inbox -> listOf(
-        SidebarEntry("Dashboard", Icons.Outlined.Home, Destination.WorkspaceHub),
-        SidebarEntry("Inbox", Icons.Outlined.Folder, Destination.Inbox),
-        SidebarEntry("Activity", Icons.Outlined.Star, Destination.Activity),
-    )
-    Destination.Tasks -> listOf(
-        SidebarEntry("Workspace tasks", Icons.Outlined.Check, Destination.Tasks),
-        SidebarEntry("Database view", Icons.Outlined.GridView, Destination.Database),
-        SidebarEntry("Sync monitor", Icons.Outlined.CloudSync, Destination.SyncMonitor),
-    )
-    Destination.Canvas -> listOf(
-        SidebarEntry("Canvas board", Icons.Outlined.GridView, Destination.Canvas),
-        SidebarEntry("Linked notes", Icons.Outlined.Folder, Destination.NotesHome),
-    )
-    Destination.Chat -> listOf(
-        SidebarEntry("Workspace chat", Icons.Outlined.ChatBubbleOutline, Destination.Chat),
-        SidebarEntry("Files", Icons.Outlined.Folder, Destination.Files),
-        SidebarEntry("People", Icons.Outlined.Person, Destination.Settings),
-    )
-    Destination.Files -> listOf(
-        SidebarEntry("All files", Icons.Outlined.Folder, Destination.Files),
-        SidebarEntry("Recent activity", Icons.Outlined.Star, Destination.Activity),
-    )
-    Destination.Database -> listOf(
-        SidebarEntry("Table", Icons.Outlined.GridView, Destination.Database),
-        SidebarEntry("Board", Icons.Outlined.Check, Destination.Tasks),
-        SidebarEntry("Graph", Icons.Outlined.Difference, Destination.Graph),
-    )
-    Destination.Graph, Destination.ObjectDetail -> listOf(
-        SidebarEntry("Knowledge graph", Icons.Outlined.Difference, Destination.Graph),
-        SidebarEntry("Database", Icons.Outlined.GridView, Destination.Database),
-        SidebarEntry("Backlinks", Icons.Outlined.Folder, Destination.NotesHome),
-    )
-    Destination.Activity -> listOf(
-        SidebarEntry("Workspace activity", Icons.Outlined.Star, Destination.Activity),
-        SidebarEntry("Sync history", Icons.Outlined.CloudSync, Destination.SyncMonitor),
-    )
-    Destination.Templates -> listOf(
-        SidebarEntry("Workspace templates", Icons.Outlined.Tag, Destination.Templates),
-        SidebarEntry("New workspace", Icons.Outlined.Add, Destination.Settings),
-    )
-    Destination.CommandPalette -> listOf(
-        SidebarEntry("Search everything", Icons.Outlined.Search, Destination.Search),
-        SidebarEntry("New note", Icons.Outlined.Add, Destination.NotesHome),
-    )
-    Destination.Settings, Destination.SyncMonitor, Destination.ConflictReview -> listOf(
-        SidebarEntry("Settings", Icons.Outlined.Settings, Destination.Settings),
-        SidebarEntry("Sync", Icons.Outlined.CloudSync, Destination.SyncMonitor),
-        SidebarEntry("Conflicts", Icons.Outlined.Difference, Destination.ConflictReview),
-    )
-    else -> listOf(
-        SidebarEntry("Favorites", Icons.Outlined.Star, Destination.NotesHome),
-        SidebarEntry("Archive", Icons.Outlined.Archive, Destination.NotesHome),
-        SidebarEntry("Trash", Icons.Outlined.Delete, Destination.NotesHome),
-    )
+/**
+ * Top-level nav row with an expandable child list: tapping the row navigates,
+ * tapping the trailing chevron only toggles the dropdown.
+ */
+@Composable
+private fun SidebarDropdownHeader(
+    label: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(start = 14.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, Modifier.size(22.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            label,
+            Modifier.weight(1f),
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        )
+        IconButton(onClick = onToggle, modifier = Modifier.size(34.dp)) {
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore,
+                if (expanded) "Collapse $label" else "Expand $label",
+                Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable

@@ -1,13 +1,22 @@
 package com.norfold.app.ui.screens
 
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -18,6 +27,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -53,7 +63,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Workspaces
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.AlertDialog
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -82,20 +92,24 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import com.norfold.app.R
 import com.norfold.app.BuildConfig
 import com.norfold.app.branding.BuiltInCovers
 import com.norfold.app.branding.NorfoldLogo
 import com.norfold.app.branding.palette
 import com.norfold.app.domain.Destination
-import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
+import com.norfold.app.domain.ContextualMenuColor
+import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.domain.NoteGestureAction
 import com.norfold.app.domain.SyncFolderAction
 import com.norfold.app.domain.SyncFolderRequest
@@ -103,8 +117,9 @@ import com.norfold.app.domain.SyncProvider
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.cloud.ExternalServiceConfig
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.data.BiometricVaultKeyStore
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.AccentDot
 import com.norfold.app.ui.components.EditFieldDialog
 import com.norfold.app.ui.components.GlobalSearchBar
@@ -117,19 +132,22 @@ import com.norfold.app.ui.components.SettingsGroup
 import com.norfold.app.ui.components.SettingsRow
 import com.norfold.app.ui.components.SettingsSectionLabel
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 
 private enum class SettingsSection(val title: String, val subtitle: String, val icon: ImageVector) {
     Profile("Profile", "Username, public name and device", Icons.Outlined.Person),
     Workspace("Workspace", "Name, visuals and member defaults", Icons.Outlined.Workspaces),
     Appearance("Appearance", "Theme, palette, density and type", Icons.Outlined.Palette),
-    Editor("Editor & Markdown", "Line width, font and syntax", Icons.Outlined.Code),
+    Editor("Editor & Markdown", "Line width, syntax and writing behavior", Icons.Outlined.Code),
     Security("Security & Vault", "Vault, biometrics and screenshots", Icons.Outlined.Security),
     Sync("Account & Restore", "Account, sync, backup and recovery", Icons.Outlined.CloudSync),
+    Backup("Backup & Import", "Encrypted exports, restore and Markdown import", Icons.Outlined.Backup),
     App("App Info", "Version, identity and build details", Icons.Outlined.Settings),
-    SyncEngine("Sync Settings", "Auto sync, interval and network rules", Icons.Outlined.CloudSync),
+    SyncEngine("Sync Settings", "Exit sync, provider status and manual controls", Icons.Outlined.CloudSync),
     Conflicts("Conflict Resolution", "Merge strategy and conflict records", Icons.Outlined.Difference),
     WorkspaceMembers("Members", "Local workspace membership", Icons.Outlined.Groups),
     WorkspaceAdvanced("Advanced", "Export or delete this workspace", Icons.Outlined.Tune),
+    Permissions("Permissions", "Workspace roles and access control", Icons.Outlined.Security),
     Diagnostics("Diagnostics", "Crash logs and local reports", Icons.Outlined.Settings),
 }
 
@@ -140,24 +158,32 @@ private val RootSettingsSections = setOf(
     SettingsSection.Editor,
     SettingsSection.Security,
     SettingsSection.Sync,
+    SettingsSection.Backup,
+    SettingsSection.SyncEngine,
+    SettingsSection.Conflicts,
     SettingsSection.App,
     SettingsSection.Diagnostics,
 )
 
 @Composable
 fun SettingsScreen(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onPickMarkdown: () -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
 ) {
     var section by remember { mutableStateOf<SettingsSection?>(null) }
     var showWorkspaceDialog by remember { mutableStateOf(false) }
     var workspaceDialogTab by remember { mutableStateOf(WorkspaceVisualTab.Identity) }
     if (showWorkspaceDialog) WorkspaceVisualDialog(state, viewModel, workspaceDialogTab) { showWorkspaceDialog = false }
+
+    BackHandler(enabled = section != null || showWorkspaceDialog) {
+        if (showWorkspaceDialog) showWorkspaceDialog = false else section = null
+    }
 
     val pendingSection by viewModel.pendingSettingsSection.collectAsState()
     LaunchedEffect(pendingSection) {
@@ -166,9 +192,16 @@ fun SettingsScreen(
             viewModel.consumeSettingsSection()
         }
     }
+    LaunchedEffect(state.destination) {
+        section = when (state.destination) {
+            Destination.Vault -> SettingsSection.Security
+            Destination.ImportExport -> SettingsSection.Backup
+            else -> section
+        }
+    }
 
     LazyColumn(
-        Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 58.dp, bottom = 12.dp),
+        Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -188,7 +221,7 @@ fun SettingsScreen(
             }
         }
         if (section == null) {
-            item { Box(Modifier.fillMaxWidth().widthIn(max = 1040.dp)) { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }) } }
+            item { Box(Modifier.fillMaxWidth().widthIn(max = 1040.dp)) { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar) } }
             item { SettingsIndex { section = it } }
         } else {
             item {
@@ -200,15 +233,17 @@ fun SettingsScreen(
                         onVisuals = { workspaceDialogTab = WorkspaceVisualTab.Identity; showWorkspaceDialog = true },
                         onDetails = { workspaceDialogTab = WorkspaceVisualTab.Identity; showWorkspaceDialog = true },
                         onMembers = { section = SettingsSection.WorkspaceMembers },
-                        onPermissions = { workspaceDialogTab = WorkspaceVisualTab.CoverPermissions; showWorkspaceDialog = true },
+                        onPermissions = { section = SettingsSection.Permissions },
                         onAdvanced = { section = SettingsSection.WorkspaceAdvanced },
                     )
                     SettingsSection.Appearance -> AppearanceSettings(state, viewModel)
                     SettingsSection.Editor -> EditorSettings(state, viewModel)
                     SettingsSection.Security -> SecuritySettings(state, viewModel)
-                    SettingsSection.Sync -> SyncSettings(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onPickMarkdown, onPickBackupFolder, onPickBackupFile) { section = it }
-                    SettingsSection.SyncEngine -> SyncEngineSettings(state, viewModel)
+                    SettingsSection.Sync -> SyncSettings(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive) { section = it }
+                    SettingsSection.Backup -> BackupImportSettings(state, viewModel, onPickMarkdown, onPickBackupFolder, onPickBackupFile)
+                    SettingsSection.SyncEngine -> SyncEngineSettings(state, viewModel) { section = SettingsSection.Sync }
                     SettingsSection.Conflicts -> ConflictSettings(state, viewModel)
+                    SettingsSection.Permissions -> PermissionsSettings(state, viewModel)
                     SettingsSection.WorkspaceMembers -> WorkspaceMembersSettings(state)
                     SettingsSection.WorkspaceAdvanced -> WorkspaceAdvancedSettings(state, viewModel) { section = SettingsSection.Sync }
                     SettingsSection.Diagnostics -> DiagnosticsSettings(state, viewModel)
@@ -237,7 +272,7 @@ private fun SettingsIndex(onOpen: (SettingsSection) -> Unit) {
                 SettingsSectionGroup("Account & Workspace", account, onOpen)
                 SettingsSectionGroup("Privacy & Security", privacy, onOpen)
             }
-            SettingsSectionGroup("Backup & Data", listOf(SettingsSection.Sync), onOpen)
+            SettingsSectionGroup("Backup & Data", listOf(SettingsSection.Sync, SettingsSection.SyncEngine, SettingsSection.Backup, SettingsSection.Conflicts), onOpen)
             SettingsSectionGroup("About", listOf(SettingsSection.App, SettingsSection.Diagnostics), onOpen)
         }
     }
@@ -259,7 +294,7 @@ private fun SettingsSectionGroup(
 }
 
 @Composable
-private fun ProfileSettings(state: NotesUiState, viewModel: NotesViewModel) {
+private fun ProfileSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val username = state.settings.syncUserName.ifBlank { "owner" }
     val publicName = state.settings.syncPublicName
     val deviceName = state.settings.syncDeviceName
@@ -317,7 +352,7 @@ private fun ProfileSettings(state: NotesUiState, viewModel: NotesViewModel) {
                 ) { Text("Remove cover", maxLines = 1) }
             }
             RowDivider()
-            SettingsRow("Accent color", subtitle = state.settings.themeProfile.name, icon = Icons.Outlined.Palette, trailing = { RowChevron() })
+            SettingsRow("Accent color", subtitle = state.settings.themeProfile.name, icon = Icons.Outlined.Palette, trailing = { RowValue("Selected", accent = true) })
         }
     }
 }
@@ -329,7 +364,7 @@ private fun EditPencil() {
 
 @Composable
 private fun WorkspaceSettings(
-    state: NotesUiState,
+    state: DocsUiState,
     onVisuals: () -> Unit,
     onDetails: () -> Unit,
     onMembers: () -> Unit,
@@ -359,7 +394,7 @@ private fun WorkspaceSettings(
 }
 
 @Composable
-private fun WorkspaceMembersSettings(state: NotesUiState) {
+private fun WorkspaceMembersSettings(state: DocsUiState) {
     SettingsGroup(header = "Members") {
         SettingsRow(
             title = state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Local owner" } },
@@ -371,11 +406,11 @@ private fun WorkspaceMembersSettings(state: NotesUiState) {
 }
 
 @Composable
-private fun WorkspaceAdvancedSettings(state: NotesUiState, viewModel: NotesViewModel, onOpenExport: () -> Unit) {
+private fun WorkspaceAdvancedSettings(state: DocsUiState, viewModel: DocsViewModel, onOpenExport: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     val active = state.workspaces.firstOrNull { it.id == state.settings.activeWorkspaceId }
     if (confirmDelete && active != null) {
-        AlertDialog(
+        NorfoldDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Delete workspace?") },
             text = { Text("This permanently removes ${active.name} and its local content. The final workspace cannot be deleted.") },
@@ -421,7 +456,7 @@ private fun ProfileBannerCard(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Brush.linearGradient(listOf(Color(0xFF20124A), Color(0xFF081426), MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)))),
+                        .background(Brush.linearGradient(listOf(Color(0xFF1B1E28), Color(0xFF10131B), MaterialTheme.colorScheme.primary.copy(alpha = 0.60f)))),
                 )
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.58f)))))
@@ -459,7 +494,7 @@ private fun WorkspaceBannerCard(name: String, icon: String, backgroundUri: Strin
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Brush.linearGradient(listOf(Color(0xFF0C1430), Color(0xFF20124A), Color(0xFF4F2DB8)))),
+                        .background(Brush.linearGradient(listOf(Color(0xFF14161F), Color(0xFF1B1E28), MaterialTheme.colorScheme.primary.copy(alpha = 0.70f)))),
                 )
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.62f)))))
@@ -482,10 +517,10 @@ private fun WorkspaceBannerCard(name: String, icon: String, backgroundUri: Strin
 }
 
 @Composable
-private fun AppearanceSettings(state: NotesUiState, viewModel: NotesViewModel) {
+private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val s = state.settings
     var showFontPicker by remember { mutableStateOf(false) }
-    if (showFontPicker) OptionPickerDialog("Font", listOf("Inter", "System", "Serif", "Mono"), s.appFont, { showFontPicker = false }) { picked -> viewModel.patchSettings { it.copy(appFont = picked) } }
+    if (showFontPicker) OptionPickerDialog("App font", listOf("Inter", "System", "Serif", "Mono"), s.appFont, { showFontPicker = false }) { picked -> viewModel.patchSettings { it.copy(appFont = picked) } }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         // Theme tiles
@@ -497,16 +532,31 @@ private fun AppearanceSettings(state: NotesUiState, viewModel: NotesViewModel) {
                 ThemeTile("Dark", Icons.Outlined.DarkMode, state.settings.themeMode == ThemeMode.Dark, Modifier.weight(1f)) { viewModel.setTheme(ThemeMode.Dark) }
             }
         }
-        // Accent color dots (wired to palette)
+        // Accent color dots (wired to palette). Graphite (the neutral default) is shown first.
         Column {
             SettingsSectionLabel("Accent color")
+            var showAllPalettes by remember { mutableStateOf(false) }
+            val accentProfiles = listOf(ThemeProfile.Graphite) + ThemeProfile.entries.filter { it != ThemeProfile.Graphite }
             SettingsGroup {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ThemeProfile.entries.take(6).forEach { profile ->
-                        AccentDot(profile.palette().accent, profile == state.settings.themeProfile) { viewModel.setThemeProfile(profile) }
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        accentProfiles.take(6).forEach { profile ->
+                            AccentDot(profile.palette().accent, profile == state.settings.themeProfile) { viewModel.setThemeProfile(profile) }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (showAllPalettes) "Less" else "More",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { showAllPalettes = !showAllPalettes },
+                        )
                     }
-                    Spacer(Modifier.weight(1f))
-                    Text("More", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    if (showAllPalettes) {
+                        Box(Modifier.padding(horizontal = 14.dp).padding(bottom = 14.dp)) {
+                            PaletteGrid(state.settings.themeProfile) { viewModel.setThemeProfile(it) }
+                        }
+                    }
                 }
             }
         }
@@ -517,17 +567,20 @@ private fun AppearanceSettings(state: NotesUiState, viewModel: NotesViewModel) {
             SettingsRow("Font", trailing = { RowValue(s.appFont, accent = true) }, onClick = { showFontPicker = true })
             RowDivider(inset = false)
             Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-                Text("Font size", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text("App size", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("A", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Slider(s.editorFontSize, { v -> viewModel.patchSettings { it.copy(editorFontSize = v) } }, modifier = Modifier.weight(1f))
+                    Slider(
+                        value = s.uiScale,
+                        onValueChange = viewModel::setUiScale,
+                        modifier = Modifier.weight(1f),
+                        valueRange = 0.9f..1.12f,
+                    )
                     Text("A", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             RowDivider(inset = false)
-            SettingsRow("Animations", trailing = { RowSwitch(!s.reduceMotion) { viewModel.setPrivacyOption(reduceMotion = !it) } })
-            RowDivider(inset = false)
-            SettingsRow("Reduce motion", trailing = { RowSwitch(s.reduceMotion) { viewModel.setPrivacyOption(reduceMotion = it) } })
+            SettingsRow("Reduce motion", subtitle = "Minimize navigation and content animations", trailing = { RowSwitch(s.reduceMotion) { viewModel.setPrivacyOption(reduceMotion = it) } })
         }
     }
 }
@@ -554,25 +607,25 @@ private fun ThemeTile(label: String, icon: ImageVector, selected: Boolean, modif
 }
 
 @Composable
-private fun EditorSettings(state: NotesUiState, viewModel: NotesViewModel) {
+private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val s = state.settings
     val lineWidths = EditorLineWidth.entries
-    var showModePicker by remember { mutableStateOf(false) }
     var showLinePicker by remember { mutableStateOf(false) }
-    var showFontPicker by remember { mutableStateOf(false) }
-    if (showModePicker) OptionPickerDialog("Default mode", listOf("Edit", "Preview"), if (s.defaultEditMode) "Edit" else "Preview", { showModePicker = false }) { p -> viewModel.patchSettings { it.copy(defaultEditMode = p == "Edit") } }
+    var showMenuStylePicker by remember { mutableStateOf(false) }
+    var showMenuColorPicker by remember { mutableStateOf(false) }
     if (showLinePicker) OptionPickerDialog("Line width", lineWidths.map { it.name }, s.editorLineWidth.name, { showLinePicker = false }) { p -> viewModel.setEditorLineWidth(EditorLineWidth.valueOf(p)) }
-    if (showFontPicker) OptionPickerDialog("Editor font", EditorFontFamily.entries.map { it.name }, s.editorFontFamily.name, { showFontPicker = false }) { p -> viewModel.setEditorFontFamily(EditorFontFamily.valueOf(p)) }
+    if (showMenuStylePicker) OptionPickerDialog("Contextual menu", ContextualMenuStyle.entries.map { it.name }, s.contextualMenuStyle.name, { showMenuStylePicker = false }) { p -> viewModel.patchSettings { it.copy(contextualMenuStyle = ContextualMenuStyle.valueOf(p)) } }
+    if (showMenuColorPicker) OptionPickerDialog("Menu color", listOf("Follow theme", "App accent"), if (s.contextualMenuColor == ContextualMenuColor.AppAccent) "App accent" else "Follow theme", { showMenuColorPicker = false }) { p -> viewModel.patchSettings { it.copy(contextualMenuColor = if (p == "App accent") ContextualMenuColor.AppAccent else ContextualMenuColor.FollowTheme) } }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Editor") {
-            SettingsRow("Default mode", trailing = { RowChevron(if (s.defaultEditMode) "Edit" else "Preview") }, onClick = { showModePicker = true })
+            SettingsRow(
+                "Document surface",
+                subtitle = "Tap to select, tap again to edit, then drag to move",
+                trailing = { RowValue("View + Edit", accent = true) },
+            )
             RowDivider(inset = false)
             SettingsRow("Line width", trailing = { RowChevron(s.editorLineWidth.name) }, onClick = { showLinePicker = true })
-            RowDivider(inset = false)
-            SettingsRow("Font", trailing = { RowChevron(s.editorFontFamily.name) }, onClick = { showFontPicker = true })
-            RowDivider(inset = false)
-            SliderRow("Font size", s.editorFontSize) { v -> viewModel.patchSettings { it.copy(editorFontSize = v) } }
             RowDivider(inset = false)
             SliderRow("Tab size", (s.tabSize - 2) / 6f) { v -> viewModel.patchSettings { it.copy(tabSize = (2 + (v * 6)).toInt().coerceIn(2, 8)) } }
             RowDivider(inset = false)
@@ -581,18 +634,23 @@ private fun EditorSettings(state: NotesUiState, viewModel: NotesViewModel) {
             SettingsRow("Auto pair brackets", trailing = { RowSwitch(s.autoPairBrackets) { v -> viewModel.patchSettings { it.copy(autoPairBrackets = v) } } })
         }
         SettingsGroup(header = "Markdown") {
-            SettingsRow("Live preview", trailing = { RowSwitch(s.showMarkdownSyntax) { viewModel.setShowMarkdownSyntax(it) } })
+            SettingsRow("Inline rendering", subtitle = "Markdown, math, diagrams and embeds render in place", trailing = { RowValue("Always on", accent = true) })
             RowDivider(inset = false)
             SettingsRow("Syntax highlight", trailing = { RowValue(if (s.syntaxColorful) "Colorful" else "Minimal", accent = true) }, onClick = { viewModel.patchSettings { it.copy(syntaxColorful = !it.syntaxColorful) } })
             RowDivider(inset = false)
             SettingsRow("Auto convert on paste", trailing = { RowSwitch(s.autoConvertOnPaste) { v -> viewModel.patchSettings { it.copy(autoConvertOnPaste = v) } } })
         }
-        SettingsGroup(header = "Note interactions") {
+        SettingsGroup(header = "Doc interactions") {
             GestureRow("Long press", state.settings.noteLongPressAction) { viewModel.setNoteGestureActions(longPress = it) }
             RowDivider(inset = false)
             GestureRow("Swipe right", state.settings.noteSwipeStartAction) { viewModel.setNoteGestureActions(swipeStart = it) }
             RowDivider(inset = false)
             GestureRow("Swipe left", state.settings.noteSwipeEndAction) { viewModel.setNoteGestureActions(swipeEnd = it) }
+        }
+        SettingsGroup(header = "Contextual menus") {
+            SettingsRow("Menu treatment", subtitle = "Pill is the compact default", trailing = { RowChevron(s.contextualMenuStyle.name) }, onClick = { showMenuStylePicker = true })
+            RowDivider(inset = false)
+            SettingsRow("Color behavior", subtitle = "System light/dark or the app accent", trailing = { RowChevron(if (s.contextualMenuColor == ContextualMenuColor.AppAccent) "App accent" else "Follow theme") }, onClick = { showMenuColorPicker = true })
         }
     }
 }
@@ -627,112 +685,214 @@ private fun GestureActionRow(selected: NoteGestureAction, onSelect: (NoteGesture
 }
 
 @Composable
-private fun SecuritySettings(state: NotesUiState, viewModel: NotesViewModel) {
+private fun SecuritySettings(state: DocsUiState, viewModel: DocsViewModel) {
     val s = state.settings
+    val context = LocalContext.current
+    val biometricAuthenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG
+    val biometricVault = remember(context) { BiometricVaultKeyStore(context) }
     var vaultSecret by remember { mutableStateOf("") }
     var showPasswordField by remember { mutableStateOf(false) }
     var showAutoLockPicker by remember { mutableStateOf(false) }
+    val biometricEnrollmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val available = BiometricManager.from(context).canAuthenticate(biometricAuthenticators) == BiometricManager.BIOMETRIC_SUCCESS
+        if (available) viewModel.showMessage("Biometric enrollment is ready. Tap Biometric unlock again to bind it to the Vault.")
+        else viewModel.showMessage("Biometric enrollment is not complete yet")
+    }
     val autoLockOptions = mapOf("Immediately" to 0, "After 1 minute" to 1, "After 5 minutes" to 5, "After 15 minutes" to 15)
     fun autoLockLabel(m: Int) = autoLockOptions.entries.firstOrNull { it.value == m }?.key ?: "After 5 minutes"
     if (showAutoLockPicker) OptionPickerDialog("Auto lock", autoLockOptions.keys.toList(), autoLockLabel(s.autoLockMinutes), { showAutoLockPicker = false }) { p -> viewModel.patchSettings { it.copy(autoLockMinutes = autoLockOptions[p] ?: 5) } }
+
+    fun updateBiometric(enabled: Boolean) {
+        if (!enabled) {
+            biometricVault.clear()
+            viewModel.setPrivacyOption(biometricOnOpen = false)
+            return
+        }
+        if (!s.vaultLockEnabled) {
+            showPasswordField = true
+            viewModel.showMessage("Set up the Vault before enabling biometric unlock")
+            return
+        }
+        when (BiometricManager.from(context).canAuthenticate(biometricAuthenticators)) {
+            BiometricManager.BIOMETRIC_SUCCESS -> {
+                val activity = context.findSettingsFragmentActivity()
+                if (activity == null) {
+                    viewModel.showMessage("Biometric setup is unavailable in this window")
+                    return
+                }
+                val cryptoObject = runCatching { biometricVault.enrollmentCryptoObject() }.getOrElse {
+                    viewModel.showMessage(it.localizedMessage ?: "Could not prepare biometric Vault protection")
+                    return
+                }
+                val prompt = BiometricPrompt(
+                    activity,
+                    ContextCompat.getMainExecutor(activity),
+                    object : BiometricPrompt.AuthenticationCallback() {
+                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                            if (biometricVault.completeEnrollment(result.cryptoObject)) {
+                                viewModel.setPrivacyOption(biometricOnOpen = true)
+                                viewModel.showMessage("Biometric Vault unlock enabled")
+                            } else {
+                                biometricVault.clear()
+                                viewModel.setPrivacyOption(biometricOnOpen = false)
+                                viewModel.showMessage("Biometric Vault setup could not be verified")
+                            }
+                        }
+
+                        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                            biometricVault.clear()
+                            viewModel.setPrivacyOption(biometricOnOpen = false)
+                            viewModel.showMessage(errString.toString())
+                        }
+
+                        override fun onAuthenticationFailed() {
+                            viewModel.showMessage("Biometric check failed")
+                        }
+                    },
+                )
+                runCatching {
+                    prompt.authenticate(
+                        BiometricPrompt.PromptInfo.Builder()
+                            .setTitle("Protect Norfold Vault")
+                            .setSubtitle("Confirm your biometric to create a device-bound unlock key")
+                            .setNegativeButtonText("Cancel")
+                            .setAllowedAuthenticators(biometricAuthenticators)
+                            .build(),
+                        cryptoObject,
+                    )
+                }.onFailure {
+                    biometricVault.clear()
+                    viewModel.showMessage(it.localizedMessage ?: "Biometric setup failed")
+                }
+            }
+            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Intent(Settings.ACTION_BIOMETRIC_ENROLL).putExtra(
+                        Settings.EXTRA_BIOMETRIC_AUTHENTICATORS_ALLOWED,
+                        biometricAuthenticators,
+                    )
+                } else {
+                    Intent(Settings.ACTION_SECURITY_SETTINGS)
+                }
+                runCatching { biometricEnrollmentLauncher.launch(intent) }
+                    .onFailure { viewModel.showMessage("Open Android Security settings and enroll a fingerprint") }
+            }
+            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> viewModel.showMessage("This device has no biometric hardware")
+            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> viewModel.showMessage("Biometric hardware is temporarily unavailable")
+            else -> viewModel.showMessage("Biometric unlock is unavailable on this device")
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Vault") {
             SettingsRow(
                 "Vault status",
-                subtitle = if (s.vaultLockEnabled) "Locked" else "Not set up",
+                subtitle = if (s.vaultLockEnabled) "Ready · tap to lock now" else "Not set up · tap to create",
                 icon = Icons.Outlined.Lock,
                 trailing = { RowChevron() },
-                onClick = { viewModel.lock() },
+                onClick = { if (s.vaultLockEnabled) viewModel.lock() else showPasswordField = true },
             )
             RowDivider()
-            SettingsRow("Change vault password", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { showPasswordField = !showPasswordField })
+            SettingsRow(if (s.vaultLockEnabled) "Change vault password" else "Create vault password", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { showPasswordField = !showPasswordField })
             RowDivider()
-            SettingsRow("Biometric unlock", icon = Icons.Outlined.PhoneAndroid, trailing = { RowSwitch(s.requireBiometricOnOpen) { viewModel.setPrivacyOption(biometricOnOpen = it) } })
+            SettingsRow(
+                "Biometric unlock",
+                subtitle = if (s.vaultLockEnabled) "Use an enrolled fingerprint or face after Vault setup" else "Set up Vault first",
+                icon = Icons.Outlined.PhoneAndroid,
+                trailing = { RowSwitch(s.requireBiometricOnOpen, ::updateBiometric) },
+                onClick = { updateBiometric(!s.requireBiometricOnOpen) },
+            )
             RowDivider()
             SettingsRow("Auto lock", subtitle = autoLockLabel(s.autoLockMinutes), icon = Icons.Outlined.Lock, trailing = { RowChevron() }, onClick = { showAutoLockPicker = true })
         }
         if (showPasswordField) {
             SettingsGroup {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(vaultSecret, { vaultSecret = it }, label = { Text("PIN or password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    OutlinedTextField(vaultSecret, { vaultSecret = it }, label = { Text("PIN or password") }, supportingText = { Text("Use at least 6 characters. This protects locked Docs and encrypted backups.") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { viewModel.setVaultSecret(vaultSecret); showPasswordField = false }) { Text("Enable") }
-                        ElevatedButton(onClick = viewModel::disableVault) { Text("Disable") }
+                        Button(onClick = { viewModel.setVaultSecret(vaultSecret); if (vaultSecret.length >= 6) { vaultSecret = ""; showPasswordField = false } }, enabled = vaultSecret.length >= 6) { Text(if (s.vaultLockEnabled) "Update" else "Enable") }
+                        if (s.vaultLockEnabled) ElevatedButton(onClick = viewModel::disableVault) { Text("Disable") }
                     }
                 }
             }
         }
         SettingsGroup(header = "Security") {
-            SettingsRow("Allow screenshots", subtitle = "Prevents screenshots in the app", trailing = { RowSwitch(!s.blockScreenshots) { viewModel.setPrivacyOption(blockScreenshots = !it) } })
-            RowDivider(inset = false)
-            SettingsRow("Hide content in recents", trailing = { RowSwitch(s.blockScreenshots) { viewModel.setPrivacyOption(blockScreenshots = it) } })
+            SettingsRow("Protect screenshots & recents", subtitle = "Block screen captures and hide the app preview", trailing = { RowSwitch(s.blockScreenshots) { viewModel.setPrivacyOption(blockScreenshots = it) } })
             RowDivider(inset = false)
             SettingsRow("App lock on exit", trailing = { RowSwitch(s.appLockOnExit) { v -> viewModel.patchSettings { it.copy(appLockOnExit = v) } } })
             RowDivider(inset = false)
-            SettingsRow("Advanced", subtitle = "Manage encryption, keys, and sessions", icon = Icons.Outlined.Settings, trailing = { RowChevron() })
+            SettingsRow("Encryption", subtitle = "Local vault and sync payloads use device-backed protection", icon = Icons.Outlined.Settings, trailing = { RowValue("Local") })
         }
     }
+}
+
+private tailrec fun Context.findSettingsFragmentActivity(): FragmentActivity? = when (this) {
+    is FragmentActivity -> this
+    is ContextWrapper -> baseContext.findSettingsFragmentActivity()
+    else -> null
 }
 
 @Composable
 private fun SyncSettings(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onConnectGoogleDrive: () -> Unit,
-    onPickMarkdown: () -> Unit,
-    onPickBackupFolder: () -> Unit,
-    onPickBackupFile: (String) -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
     onNavigate: (SettingsSection) -> Unit,
 ) {
-    var showManual by remember { mutableStateOf(false) }
-    val googleDriveEnabled = ExternalServiceConfig.capabilities.googleDrive
+    val capabilities = ExternalServiceConfig.capabilities
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Account") {
             SettingsRow(
                 state.settings.syncUserName.ifBlank { "Local owner" },
-                subtitle = if (googleDriveEnabled) "Local workspace with optional cloud restore" else "Local workspace",
+                subtitle = if (capabilities.googleIdentity) "Google identity is ready" else "Local-first workspace · cloud account backend not configured",
                 icon = Icons.Outlined.Person,
             )
-        }
-        if (googleDriveEnabled) {
-            SettingsGroup {
-                SettingsRow(
-                    "Google Drive app data",
-                    subtitle = if (state.googleDriveConnected) "Connected · Hidden sync file · Last sync: ${relativeSyncStatus(state)}" else "Not connected",
-                    icon = Icons.Outlined.CloudSync,
-                    onClick = onConnectGoogleDrive,
-                    trailing = { RowChevron() },
-                )
-                RowDivider()
-                SettingsRow("Create or restore chain", subtitle = "Use encrypted norfold-sync.json in appDataFolder", icon = Icons.Outlined.CloudSync, trailing = { RowChevron() }, onClick = { showManual = true })
-            }
-        }
-        SettingsGroup(header = "Restore & Sync") {
-            SettingsRow("Restore from backup", icon = Icons.Outlined.Backup, trailing = { RowChevron() }, onClick = { showManual = true })
             RowDivider()
-            SettingsRow("Sync settings", icon = Icons.Outlined.CloudSync, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.SyncEngine) })
+            SettingsRow(
+                "Google configuration",
+                subtitle = if (capabilities.googleDrive) "Android client and Drive app-data project are configured" else "Add the Android OAuth client and Google project ID",
+                icon = if (capabilities.googleDrive) Icons.Outlined.Check else Icons.Outlined.CloudOff,
+                trailing = { RowValue(if (capabilities.googleDrive) "Ready" else "Needs setup", accent = capabilities.googleDrive) },
+            )
+        }
+        ManualSyncCard(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive)
+        SettingsGroup(header = "Sync") {
+            SettingsRow(
+                "Last synced",
+                subtitle = state.settings.lastSyncAt?.let { relativeSettingsTime(it) + " ago" } ?: "Never",
+                icon = Icons.Outlined.CloudSync,
+            )
             RowDivider()
-            SettingsRow("Conflict resolution", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.Conflicts) })
+            SettingsRow(
+                "Open Sync Settings",
+                subtitle = "Provider status, Sync now, cooldown and background behavior",
+                icon = Icons.Outlined.CloudSync,
+                trailing = { RowChevron() },
+                onClick = { onNavigate(SettingsSection.SyncEngine) },
+            )
         }
-        if (showManual) {
-            SettingsSectionLabel("Manual sync & restore")
-            ManualSyncCard(state, viewModel, onPickSyncFolder, onConnectGoogleDrive)
+        SettingsGroup(header = "Manage") {
+            SettingsRow("Sync behavior", subtitle = "Interval, network and battery rules", icon = Icons.Outlined.CloudSync, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.SyncEngine) })
+            RowDivider()
+            SettingsRow("Backup & Import", subtitle = "Encrypted exports, restore and Markdown", icon = Icons.Outlined.Backup, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.Backup) })
+            RowDivider()
+            SettingsRow("Conflict Resolution", subtitle = "Defaults, reports and keep-both behavior", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.Conflicts) })
         }
-        BackupImportSettings(state, viewModel, onPickMarkdown, onPickBackupFolder, onPickBackupFile)
     }
 }
 
-private fun relativeSyncStatus(state: NotesUiState): String =
+private fun relativeSyncStatus(state: DocsUiState): String =
     state.settings.lastSyncAt?.let { relativeSettingsTime(it) + " ago" } ?: "Just now"
 
 @Composable
 private fun ManualSyncCard(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
 ) = SettingsCard {
     val googleDriveEnabled = ExternalServiceConfig.capabilities.googleDrive
     var syncSecret by remember { mutableStateOf("") }
@@ -757,13 +917,14 @@ private fun ManualSyncCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 12.sp,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = onConnectGoogleDrive, enabled = !state.syncing) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onConnectGoogleDrive, enabled = !state.syncing, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Outlined.CloudSync, null)
+                Spacer(Modifier.size(8.dp))
                 Text(if (state.googleDriveConnected) "Reconnect Google" else "Continue with Google")
             }
-            ElevatedButton(onClick = viewModel::disconnectGoogleDrive, enabled = state.googleDriveConnected && !state.syncing) {
-                Text("Sign out")
+            ElevatedButton(onClick = onDisconnectGoogleDrive, enabled = state.googleDriveConnected && !state.syncing, modifier = Modifier.fillMaxWidth()) {
+                Text("Disconnect and revoke Drive access")
             }
         }
         Text(
@@ -790,7 +951,7 @@ private fun ManualSyncCard(
     OutlinedTextField(syncDeviceName, { syncDeviceName = it }, label = { Text("Device name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
     Text("Advanced manual sync", fontWeight = FontWeight.Bold)
     Text("Use this only when you want Norfold to write encrypted sync files into a folder you choose yourself.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
         if (googleDriveEnabled) FilterChip(syncProvider == SyncProvider.GoogleDrive, { syncProvider = SyncProvider.GoogleDrive }, label = { Text("Google folder") })
         FilterChip(syncProvider == SyncProvider.OneDrive, { syncProvider = SyncProvider.OneDrive }, label = { Text("OneDrive folder") })
         FilterChip(syncProvider == SyncProvider.LocalFolder, { syncProvider = SyncProvider.LocalFolder }, label = { Text("Local folder") })
@@ -799,38 +960,69 @@ private fun ManualSyncCard(
         Button(modifier = Modifier.fillMaxWidth(), enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { onPickSyncFolder(SyncFolderRequest(syncProvider, SyncFolderAction.CreateChain, syncSecret, syncUsername, syncPublicName, syncDeviceName)) }) { Text("Create manual chain") }
         ElevatedButton(modifier = Modifier.fillMaxWidth(), enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { onPickSyncFolder(SyncFolderRequest(syncProvider, SyncFolderAction.RestoreChain, syncSecret, syncUsername, syncPublicName, syncDeviceName)) }) { Text("Restore manual chain") }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        Button(enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { viewModel.syncNow(syncSecret) }) { Icon(Icons.Outlined.CloudSync, null); Text("Sync now") }
-        ElevatedButton(onClick = { viewModel.go(Destination.ConflictReview) }) { Icon(Icons.Outlined.Difference, null); Text("Conflicts") }
-    }
+    ElevatedButton(modifier = Modifier.fillMaxWidth(), onClick = { viewModel.go(Destination.ConflictReview) }) { Icon(Icons.Outlined.Difference, null); Text("Open conflicts") }
 }
 
 // ---------- Mockup 13: Sync Settings ----------
 @Composable
-private fun SyncEngineSettings(state: NotesUiState, viewModel: NotesViewModel) {
+private fun SyncEngineSettings(state: DocsUiState, viewModel: DocsViewModel, onSetUpSync: () -> Unit) {
     val s = state.settings
-    var showInterval by remember { mutableStateOf(false) }
-    val intervals = mapOf("15 minutes" to 15, "30 minutes" to 30, "1 hour" to 60, "6 hours" to 360, "Manual only" to 0)
-    fun intervalLabel(m: Int) = intervals.entries.firstOrNull { it.value == m }?.key ?: "30 minutes"
-    if (showInterval) OptionPickerDialog("Sync interval", intervals.keys.toList(), intervalLabel(s.syncIntervalMinutes), { showInterval = false }) { p -> viewModel.patchSettings { it.copy(syncIntervalMinutes = intervals[p] ?: 30) } }
+    var cooldownSeconds by remember { mutableStateOf(viewModel.syncCooldownRemainingSeconds()) }
+    LaunchedEffect(state.syncing, state.message, s.lastSyncAt) {
+        do {
+            cooldownSeconds = viewModel.syncCooldownRemainingSeconds()
+            if (cooldownSeconds > 0L) delay(250L)
+        } while (cooldownSeconds > 0L)
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        SettingsGroup(header = "Sync status") {
+            SettingsRow(
+                "Provider",
+                subtitle = when (s.syncProvider) {
+                    SyncProvider.GoogleDrive -> "Encrypted Google Drive app-data chain"
+                    SyncProvider.OneDrive -> "Encrypted OneDrive folder chain"
+                    SyncProvider.LocalFolder -> "Encrypted local folder chain"
+                    SyncProvider.None -> "Create or restore a chain in Account & Restore"
+                },
+                icon = Icons.Outlined.CloudSync,
+                trailing = { RowValue(if (s.syncProvider == SyncProvider.None) "Not configured" else s.syncProvider.name) },
+            )
+            RowDivider()
+            SettingsRow(
+                "Last synced",
+                subtitle = s.lastSyncAt?.let { relativeSettingsTime(it) + " ago" } ?: "Never",
+                trailing = { RowValue(if (state.syncing) "Syncing…" else s.lastSyncStatus.take(28)) },
+            )
+            RowDivider()
+            Button(
+                onClick = viewModel::syncConfiguredNow,
+                enabled = !state.syncing && cooldownSeconds == 0L && s.syncProvider != SyncProvider.None,
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+            ) {
+                Icon(Icons.Outlined.CloudSync, null)
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    when {
+                        state.syncing -> "Syncing…"
+                        cooldownSeconds > 0L -> "Sync again in ${cooldownSeconds}s"
+                        else -> "Sync now"
+                    },
+                )
+            }
+            if (s.syncProvider == SyncProvider.None) {
+                ElevatedButton(
+                    onClick = onSetUpSync,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                ) { Text("Set up sync") }
+            }
+        }
         SettingsGroup(header = "Sync behavior") {
-            SettingsRow("Auto sync", subtitle = "Sync on app exit and network return", trailing = { RowSwitch(s.autoSync) { v -> viewModel.patchSettings { it.copy(autoSync = v) } } })
+            SettingsRow("Sync when leaving the app", subtitle = "Runs only after a chain is unlocked in this session", trailing = { RowSwitch(s.autoSync) { v -> viewModel.patchSettings { it.copy(autoSync = v) } } })
             RowDivider(inset = false)
-            SettingsRow("Background sync", subtitle = "Sync periodically in background", trailing = { RowSwitch(s.backgroundSync) { v -> viewModel.patchSettings { it.copy(backgroundSync = v) } } })
-            RowDivider(inset = false)
-            SettingsRow("Sync interval", trailing = { RowChevron(intervalLabel(s.syncIntervalMinutes)) }, onClick = { showInterval = true })
-            RowDivider(inset = false)
-            SettingsRow("Sync on mobile data", trailing = { RowSwitch(s.syncOnMobileData) { v -> viewModel.patchSettings { it.copy(syncOnMobileData = v) } } })
-            RowDivider(inset = false)
-            SettingsRow("Sync on battery saver", trailing = { RowSwitch(s.syncOnBatterySaver) { v -> viewModel.patchSettings { it.copy(syncOnBatterySaver = v) } } })
-            RowDivider(inset = false)
-            SettingsRow("Notify on errors", trailing = { RowSwitch(s.notifyOnErrors) { v -> viewModel.patchSettings { it.copy(notifyOnErrors = v) } } })
+            SettingsRow("Background scheduling", subtitle = "Not enabled in this pre-beta build", trailing = { RowValue("Off") })
         }
         SettingsGroup(header = "Advanced") {
-            SettingsRow("Selective sync", subtitle = "Choose what to sync", icon = Icons.Outlined.CloudSync, trailing = { RowSwitch(s.selectiveSync) { v -> viewModel.patchSettings { it.copy(selectiveSync = v) } } })
-            RowDivider()
             SettingsRow("Rebuild local index", subtitle = "Re-index all content", icon = Icons.Outlined.Settings, trailing = { RowChevron() }, onClick = { viewModel.go(Destination.SyncMonitor) })
         }
     }
@@ -838,7 +1030,7 @@ private fun SyncEngineSettings(state: NotesUiState, viewModel: NotesViewModel) {
 
 // ---------- Mockup 12: Permissions (per-workspace) ----------
 @Composable
-private fun PermissionsSettings(state: NotesUiState, viewModel: NotesViewModel) {
+private fun PermissionsSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val ws = state.workspaces.firstOrNull { it.id == state.settings.activeWorkspaceId }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         Text("Manage who can do what in this workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(start = 6.dp))
@@ -854,18 +1046,17 @@ private fun PermissionsSettings(state: NotesUiState, viewModel: NotesViewModel) 
                 RowDivider()
                 SettingsRow("Invite members", subtitle = "Members", icon = Icons.Outlined.Person, trailing = { RowSwitch(ws.permInviteMembers) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permInviteMembers = v) } } })
                 RowDivider()
-                SettingsRow("Delete notes", subtitle = "Members", icon = Icons.Outlined.Difference, trailing = { RowSwitch(ws.permDeleteNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permDeleteNotes = v) } } })
+                SettingsRow("Delete docs", subtitle = "Members", icon = Icons.Outlined.Difference, trailing = { RowSwitch(ws.permDeleteNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permDeleteNotes = v) } } })
                 RowDivider()
-                SettingsRow("Edit notes", subtitle = "Members", icon = Icons.Outlined.Code, trailing = { RowSwitch(ws.permEditNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permEditNotes = v) } } })
+                SettingsRow("Edit docs", subtitle = "Members", icon = Icons.Outlined.Code, trailing = { RowSwitch(ws.permEditNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permEditNotes = v) } } })
                 RowDivider()
-                SettingsRow("Create canvas boards", subtitle = "Members", icon = Icons.Outlined.Palette, trailing = { RowSwitch(ws.permCreateCanvas) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permCreateCanvas = v) } } })
                 RowDivider()
                 SettingsRow("Manage tasks", subtitle = "Members", icon = Icons.Outlined.Check, trailing = { RowSwitch(ws.permManageTasks) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permManageTasks = v) } } })
             }
             ElevatedButton(
                 onClick = {
                     viewModel.patchActiveWorkspacePermissions {
-                        it.copy(permRename = false, permChangeIcon = false, permInviteMembers = false, permDeleteNotes = false, permEditNotes = true, permCreateCanvas = true, permManageTasks = true)
+                        it.copy(permRename = false, permChangeIcon = false, permInviteMembers = false, permDeleteNotes = false, permEditNotes = true, permManageTasks = true)
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -876,23 +1067,15 @@ private fun PermissionsSettings(state: NotesUiState, viewModel: NotesViewModel) 
 
 // ---------- Mockup 14: Conflict Resolution ----------
 @Composable
-private fun ConflictSettings(state: NotesUiState, viewModel: NotesViewModel) {
-    val s = state.settings
-    var showAction by remember { mutableStateOf(false) }
-    if (showAction) OptionPickerDialog("Default conflict action", listOf("Ask me", "Keep local", "Keep remote", "Keep both"), s.conflictDefaultAction, { showAction = false }) { p -> viewModel.patchSettings { it.copy(conflictDefaultAction = p) } }
-
+private fun ConflictSettings(state: DocsUiState, viewModel: DocsViewModel) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup {
-            SettingsRow("Default conflict action", trailing = { RowChevron(s.conflictDefaultAction) }, onClick = { showAction = true })
-            RowDivider(inset = false)
-            SettingsRow("Auto-merge", subtitle = "Automatically merge non-conflicting changes", trailing = { RowSwitch(s.autoMergeNonConflicting) { v -> viewModel.patchSettings { it.copy(autoMergeNonConflicting = v) } } })
-            RowDivider(inset = false)
-            SettingsRow("Keep both copies", subtitle = "Keep a copy when conflicts occur", trailing = { RowSwitch(s.keepBothCopies) { v -> viewModel.patchSettings { it.copy(keepBothCopies = v) } } })
+            SettingsRow("Current behavior", subtitle = "Conflicts stop sync and require review", icon = Icons.Outlined.Security, trailing = { RowValue("Ask") })
+            RowDivider()
+            SettingsRow("Available resolution", subtitle = "Use the local snapshot on the next sync", icon = Icons.Outlined.Check, trailing = { RowValue("Local") })
         }
         SettingsGroup {
             SettingsRow("Conflict records", subtitle = "View history of resolved conflicts", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { viewModel.go(Destination.ConflictReview) })
-            RowDivider()
-            SettingsRow("Ignored files", subtitle = "Manage files to ignore in conflicts", icon = Icons.Outlined.CloudOff, trailing = { RowChevron() })
         }
         ElevatedButton(onClick = { viewModel.go(Destination.ConflictReview) }, modifier = Modifier.fillMaxWidth()) { Text("Open detailed conflict report") }
     }
@@ -900,25 +1083,19 @@ private fun ConflictSettings(state: NotesUiState, viewModel: NotesViewModel) {
 
 @Composable
 private fun BackupImportSettings(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickMarkdown: () -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
 ) {
     val s = state.settings
     var showAdvanced by remember { mutableStateOf(false) }
-    var showFreqPicker by remember { mutableStateOf(false) }
-    if (showFreqPicker) OptionPickerDialog("Backup frequency", listOf("Daily", "Weekly", "Monthly"), s.backupFrequency, { showFreqPicker = false }) { p -> viewModel.patchSettings { it.copy(backupFrequency = p) } }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Backup & Import") {
             SettingsRow("Create encrypted backup", subtitle = "Manual backup to device", icon = Icons.Outlined.Backup, trailing = { RowChevron() }, onClick = { showAdvanced = true })
             RowDivider()
-            SettingsRow("Auto backup", icon = Icons.Outlined.CloudSync, trailing = { RowSwitch(s.autoBackup) { v -> viewModel.patchSettings { it.copy(autoBackup = v) } } })
-            RowDivider()
-            SettingsRow("Backup frequency", icon = Icons.Outlined.Settings, trailing = { RowChevron(s.backupFrequency) }, onClick = { showFreqPicker = true })
-            RowDivider()
-            SettingsRow("Backup location", subtitle = if (s.backupFolderUri.isNullOrBlank()) "Internal storage" else "Custom folder", icon = Icons.Outlined.PhoneAndroid, trailing = { RowChevron() }, onClick = onPickBackupFolder)
+            SettingsRow("Backup location", subtitle = if (s.backupFolderUri.isNullOrBlank()) "Choose a folder for encrypted .enc files" else "Custom folder authorized", icon = Icons.Outlined.PhoneAndroid, trailing = { RowChevron() }, onClick = onPickBackupFolder)
         }
         SettingsGroup {
             SettingsRow("Import from Markdown", subtitle = ".md files and folders", icon = Icons.Outlined.ImportExport, trailing = { RowChevron() }, onClick = onPickMarkdown)
@@ -931,8 +1108,8 @@ private fun BackupImportSettings(
 
 @Composable
 private fun BackupAdvancedCard(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickMarkdown: () -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
@@ -973,7 +1150,7 @@ private fun BackupAdvancedCard(
 }
 
 @Composable
-private fun DiagnosticsSettings(state: NotesUiState, viewModel: NotesViewModel) = SettingsCard {
+private fun DiagnosticsSettings(state: DocsUiState, viewModel: DocsViewModel) = SettingsCard {
     val diagnostics = state.diagnostics
     Text("Local diagnostics", fontWeight = FontWeight.Black, fontSize = 18.sp)
     Text(
@@ -1017,11 +1194,15 @@ private fun DiagnosticsSettings(state: NotesUiState, viewModel: NotesViewModel) 
 private fun AppInfoSettings() {
     var showChangelog by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val changelog = remember(context) {
+        context.resources.openRawResource(com.norfold.app.R.raw.changelog).bufferedReader().use { it.readText() }
+    }
     if (showChangelog) {
-        AlertDialog(
+        NorfoldDialog(
             onDismissRequest = { showChangelog = false },
             title = { Text("Changelog") },
-            text = { Text("Norfold alpha\n\n• Rebuilt workspace settings\n• Adaptive task table and Kanban workspace\n• Local-first encrypted backup and sync\n• Improved note page and preview editing") },
+            text = { Text(changelog, Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) },
             confirmButton = { TextButton(onClick = { showChangelog = false }) { Text("Close") } },
         )
     }

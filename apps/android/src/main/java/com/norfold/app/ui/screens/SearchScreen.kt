@@ -41,13 +41,13 @@ import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.EmptyNotes
 import com.norfold.app.ui.components.SearchField
 import com.norfold.app.ui.components.pressScale
 
-private data class SearchResult(
+internal data class SearchResult(
     val title: String,
     val detail: String,
     val type: String,
@@ -57,7 +57,7 @@ private data class SearchResult(
 )
 
 @Composable
-fun SearchScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun SearchScreen(state: DocsUiState, viewModel: DocsViewModel) {
     val query = state.searchQuery.trim()
     val results = buildSearchResults(state, viewModel, query)
     Column(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -78,15 +78,15 @@ fun SearchScreen(state: NotesUiState, viewModel: NotesViewModel) {
     }
 }
 
-private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, query: String): List<SearchResult> {
+internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, query: String): List<SearchResult> {
     fun matches(vararg values: String): Boolean = query.isBlank() || values.any { it.contains(query, ignoreCase = true) }
     val objectResults = state.workspaceObjects
         .filter { matches(it.title, it.summary, it.tags, it.objectType.name) }
         .map { obj ->
             SearchResult(
                 title = obj.title,
-                detail = "${obj.objectType.name} · ${obj.summary.ifBlank { obj.tags.ifBlank { "Workspace object" } }}",
-                type = obj.objectType.name,
+                detail = "${obj.objectType.searchLabel()} · ${obj.summary.ifBlank { obj.tags.ifBlank { "Workspace object" } }}",
+                type = obj.objectType.searchLabel(),
                 icon = iconFor(obj),
                 weight = when {
                     obj.pinned -> 0
@@ -96,12 +96,12 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
                 action = { viewModel.openWorkspaceObject(obj) },
             )
         }
-    val tagResults = state.tags
+    val tagResults = state.tags.filter { it.scope == "notes" }
         .filter { matches(it.name, "tag") }
         .map {
             SearchResult(
                 title = "#${it.name}",
-                detail = "${state.notes.count { note -> note.tags.any { tag -> tag.name == it.name } }} notes",
+                detail = "${state.notes.count { note -> note.tags.any { tag -> tag.name == it.name } }} docs",
                 type = "Tag",
                 icon = Icons.Outlined.Tag,
                 weight = 4,
@@ -137,10 +137,9 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
     val settingsResults = listOf(
         Triple("Appearance", Destination.Settings, "Theme, colors and layout"),
         Triple("Profile", Destination.Settings, "Your identity and workspace name"),
-        Triple("Editor", Destination.Settings, "Writing and note behavior"),
+        Triple("Editor", Destination.Settings, "Writing and doc behavior"),
         Triple("Security & Vault", Destination.Settings, "Lock, encryption and privacy"),
-        Triple("Sync settings", Destination.Settings, "Google Drive and folders"),
-        Triple("Backup & Import", Destination.ImportExport, "Export, restore and backups"),
+        Triple("Account & Restore", Destination.Settings, "Sync, export, restore and backups"),
         Triple("Diagnostics", Destination.Settings, "Logs and app health"),
     ).filter { matches(it.first, it.third, "settings") }
         .map {
@@ -154,9 +153,7 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
             )
         }
     val commandResults = listOf(
-        Triple("Command Palette", Destination.CommandPalette, Icons.Outlined.Code),
         Triple("Knowledge Graph", Destination.Graph, Icons.Outlined.GridView),
-        Triple("Canvas", Destination.Canvas, Icons.Outlined.GridView),
         Triple("Chat", Destination.Chat, Icons.Outlined.ChatBubbleOutline),
         Triple("Tasks", Destination.Tasks, Icons.Outlined.Check),
         Triple("Notebooks", Destination.Notebooks, Icons.Outlined.Folder),
@@ -177,14 +174,23 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
         .take(120)
 }
 
+private fun WorkspaceObjectType.searchLabel(): String = if (this == WorkspaceObjectType.Note) "Doc" else name
+
 @Composable
-private fun SearchResultRow(result: SearchResult, modifier: Modifier = Modifier) {
+internal fun SearchResultRow(
+    result: SearchResult,
+    modifier: Modifier = Modifier,
+    onActivated: () -> Unit = {},
+) {
     val interaction = remember { MutableInteractionSource() }
     Surface(
         modifier
             .fillMaxWidth()
             .pressScale(interaction)
-            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), onClick = result.action),
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
+                result.action()
+                onActivated()
+            },
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
     ) {
@@ -214,7 +220,6 @@ private fun iconFor(obj: WorkspaceObject): ImageVector = when (obj.objectType) {
     WorkspaceObjectType.Goal -> Icons.Outlined.Check
     WorkspaceObjectType.CalendarEvent -> Icons.Outlined.Settings
     WorkspaceObjectType.File -> Icons.Outlined.Folder
-    WorkspaceObjectType.Canvas -> Icons.Outlined.GridView
     WorkspaceObjectType.ChatMessage -> Icons.Outlined.ChatBubbleOutline
     WorkspaceObjectType.DatabaseRow -> Icons.Outlined.GridView
     WorkspaceObjectType.Workspace -> Icons.Outlined.Folder
