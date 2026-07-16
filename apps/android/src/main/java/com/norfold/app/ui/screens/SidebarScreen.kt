@@ -70,6 +70,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -95,8 +96,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.DocOutline
 import com.norfold.app.domain.DocSectionAction
+import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.Note
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
@@ -320,9 +323,17 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
     var sidebarQuery by remember { mutableStateOf("") }
     // While a doc is open, the sidebar *becomes* the document's table of contents —
     // the workspace nav is reachable again via the editor's back button.
-    val docNote = state.selectedNote
-    if (state.destination == Destination.NoteEditor && docNote != null) {
-        DocSidebarContent(docNote, state, viewModel, sidebarQuery, { sidebarQuery = it }, modifier)
+    val activeDocument by viewModel.activeDocument.collectAsState()
+    val editorDocument = activeDocument
+    if (state.destination == Destination.NoteEditor && editorDocument != null) {
+        val title = when (editorDocument.owner.type) {
+            DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == editorDocument.owner.id }?.title
+            DocumentOwnerType.Task -> state.tasks.firstOrNull { it.id == editorDocument.owner.id }?.title
+            DocumentOwnerType.CalendarEvent -> state.calendarEvents.firstOrNull { it.id == editorDocument.owner.id }?.title
+        }.orEmpty().ifBlank { "Untitled" }
+        val locked = editorDocument.owner.type == DocumentOwnerType.Note &&
+            state.notes.firstOrNull { it.id == editorDocument.owner.id }?.locked == true
+        DocSidebarContent(editorDocument.owner.documentId, title, editorDocument.document, locked, state, viewModel, sidebarQuery, { sidebarQuery = it }, modifier)
         return
     }
     var notesExpanded by remember { mutableStateOf(state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) }
@@ -499,7 +510,10 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
  */
 @Composable
 private fun DocSidebarContent(
-    note: Note,
+    documentKey: String,
+    title: String,
+    document: BlockDocument,
+    locked: Boolean,
     state: DocsUiState,
     viewModel: DocsViewModel,
     searchQuery: String,
@@ -512,7 +526,7 @@ private fun DocSidebarContent(
     ) {
         UnifiedSidebarHeader(state, viewModel, searchQuery, onSearchQueryChange)
         Text(
-            note.title.ifBlank { "Untitled" },
+            title,
             Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 2.dp),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
@@ -526,7 +540,7 @@ private fun DocSidebarContent(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Spacer(Modifier.height(2.dp))
-            DocTableOfContents(note, viewModel)
+            DocTableOfContents(documentKey, document, locked, viewModel)
         }
     }
 }
@@ -544,22 +558,22 @@ private fun DocSidebarContent(
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DocTableOfContents(note: Note, viewModel: DocsViewModel) {
-    val headings = remember(note.id, note.document) { DocOutline.extract(note.document) }
+private fun DocTableOfContents(documentKey: String, document: BlockDocument, locked: Boolean, viewModel: DocsViewModel) {
+    val headings = remember(documentKey, document) { DocOutline.extract(document) }
     // Heading ids that own deeper headings right after them — only these get a caret.
     val hasChildren = remember(headings) {
         headings.mapIndexedNotNull { i, h ->
             h.blockId.takeIf { i + 1 < headings.size && headings[i + 1].level > h.level }
         }.toSet()
     }
-    var collapsed by remember(note.id) { mutableStateOf(setOf<String>()) }
-    var query by remember(note.id) { mutableStateOf("") }
+    var collapsed by remember(documentKey) { mutableStateOf(setOf<String>()) }
+    var query by remember(documentKey) { mutableStateOf("") }
     val filtering = query.isNotBlank()
-    var menuFor by remember(note.id) { mutableStateOf<String?>(null) }
+    var menuFor by remember(documentKey) { mutableStateOf<String?>(null) }
     // Section drag state: row bounds in the ToC column's space + the dragged row's finger offset.
-    val rowBounds = remember(note.id) { mutableStateMapOf<String, Rect>() }
-    var draggedId by remember(note.id) { mutableStateOf<String?>(null) }
-    var dragOffsetY by remember(note.id) { mutableFloatStateOf(0f) }
+    val rowBounds = remember(documentKey) { mutableStateMapOf<String, Rect>() }
+    var draggedId by remember(documentKey) { mutableStateOf<String?>(null) }
+    var dragOffsetY by remember(documentKey) { mutableFloatStateOf(0f) }
 
     // While filtering: matches plus their ancestors (so context survives), collapse ignored.
     // Otherwise: walk the flat list skipping runs hidden under a collapsed heading.
@@ -684,7 +698,7 @@ private fun DocTableOfContents(note: Note, viewModel: DocsViewModel) {
                                     viewModel.scrollToBlock(id)
                                     viewModel.closeSidebar()
                                 },
-                                onLongClick = if (isSection && !note.locked) ({ menuFor = id }) else null,
+                                onLongClick = if (isSection && !locked) ({ menuFor = id }) else null,
                             )
                             .padding(start = (6 + (heading.level.coerceAtMost(4) - 1) * 12).dp, end = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -713,7 +727,7 @@ private fun DocTableOfContents(note: Note, viewModel: DocsViewModel) {
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (isSection && !note.locked && !filtering) {
+                        if (isSection && !locked && !filtering) {
                             Icon(
                                 Icons.Outlined.DragIndicator,
                                 "Reorder section",

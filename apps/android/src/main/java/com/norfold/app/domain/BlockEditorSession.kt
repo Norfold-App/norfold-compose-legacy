@@ -620,6 +620,7 @@ private fun DocumentBlock.withId(nextId: String): DocumentBlock = when (this) {
     is ChartBlock -> copy(id = nextId)
     is MathBlock -> copy(id = nextId)
     is MermaidBlock -> copy(id = nextId)
+    is UnknownBlock -> BlockDocumentJson.reidentify(this, nextId)
 }
 
 private fun splitInline(nodes: List<InlineNode>, offset: Int): Pair<List<InlineNode>, List<InlineNode>> {

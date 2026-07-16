@@ -60,8 +60,12 @@ npx supabase db push
 ```
 
 4. Confirm the migration in `supabase/migrations` completes locally and remotely.
-5. In Authentication > URL Configuration, set Site URL and an exact additional redirect URL to `norfold://auth/callback`.
+5. In Authentication > URL Configuration, set Site URL and an exact additional redirect URL to `norfold://auth/callback` (used only by Google OAuth fallback paths; email auth no longer depends on links).
 6. Keep anonymous authentication disabled. Enable email and Google for Alpha; Azure and Apple remain disabled until their credentials and end-to-end tests are complete.
+7. Email auth uses in-app 6-digit codes, not confirmation links. In Authentication > Emails (templates):
+   - **Confirm signup**: replace the `{{ .ConfirmationURL }}` link with the code `{{ .Token }}` (e.g. "Your Norfold verification code is: `{{ .Token }}`").
+   - **Reset password**: same — the body must present `{{ .Token }}` as a 6-digit code, no link.
+   - Keep "Confirm email" enabled under Authentication > Sign In / Providers > Email. Normal logins are password-only; codes are sent only at signup and during password recovery.
 
 ### Function secrets
 

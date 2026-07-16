@@ -12,7 +12,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         WorkspaceEntity::class,
         NoteEntity::class,
-        NoteBlockEntity::class,
+        DocumentEntity::class,
+        DocumentBlockEntity::class,
         NotebookEntity::class,
         TagEntity::class,
         AttachmentEntity::class,
@@ -38,7 +39,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 32,
+    version = 33,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -82,6 +83,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_29_30,
                     MIGRATION_30_31,
                     MIGRATION_31_32,
+                    MIGRATION_32_33,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -338,6 +340,55 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 )
                 db.execSQL("DROP TABLE workspaces")
                 db.execSQL("ALTER TABLE workspaces_new RENAME TO workspaces")
+            }
+        }
+
+        internal val MIGRATION_32_33 = object : Migration(32, 33) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS documents (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        owner_type TEXT NOT NULL,
+                        owner_id INTEGER NOT NULL,
+                        layout_mode TEXT NOT NULL,
+                        layout_json TEXT,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_documents_owner_type_owner_id ON documents(owner_type, owner_id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_documents_updated_at ON documents(updated_at)")
+                db.execSQL(
+                    """
+                    INSERT INTO documents(id, owner_type, owner_id, layout_mode, layout_json, created_at, updated_at)
+                    SELECT 'note:' || id, 'note', id, overlapMode, freeformLayoutJson, createdAt, updatedAt
+                    FROM notes
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS document_blocks (
+                        block_id TEXT NOT NULL,
+                        document_id TEXT NOT NULL,
+                        position INTEGER NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        PRIMARY KEY(document_id, block_id),
+                        FOREIGN KEY(document_id) REFERENCES documents(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO document_blocks(block_id, document_id, position, payload_json, updated_at)
+                    SELECT id, 'note:' || noteId, position, payloadJson, updatedAt FROM note_blocks
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE note_blocks")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_document_blocks_document_id ON document_blocks(document_id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_document_blocks_document_id_position ON document_blocks(document_id, position)")
             }
         }
 

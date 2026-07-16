@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -41,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -660,7 +660,6 @@ fun DiagramBuilderSheet(
     var showAdvanced by remember(initialSource) { mutableStateOf(false) }
     val errors = remember(model) { MermaidDiagramCodec.validate(model) }
     val sourceKind = remember(source) { MermaidDiagramCodec.detectKind(source) }
-    val dark = colors.surface.luminance() < 0.5f
 
     LaunchedEffect(source) {
         delay(300)
@@ -720,7 +719,7 @@ fun DiagramBuilderSheet(
                 onSelect = ::selectTemplate,
             )
 
-            DiagramPreview(source = previewSource, dark = dark, accentHex = defaultColor)
+            DiagramPreview(source = previewSource)
 
             when (model.kind) {
                 DiagramKind.Flowchart -> FlowchartForm(
@@ -832,7 +831,7 @@ private fun TemplatePicker(templates: List<DiagramTemplate>, onSelect: (DiagramT
 }
 
 @Composable
-private fun DiagramPreview(source: String, dark: Boolean, accentHex: String) {
+private fun DiagramPreview(source: String) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Live preview", fontWeight = FontWeight.SemiBold)
         Surface(
@@ -841,11 +840,12 @@ private fun DiagramPreview(source: String, dark: Boolean, accentHex: String) {
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
-            MarkdownPreview(
-                markdown = "```mermaid\n${source.trim()}\n```",
-                dark = dark,
-                accentHex = accentHex,
-                modifier = Modifier.fillMaxWidth().padding(10.dp),
+            Text(
+                text = source.trim().ifBlank { "Add diagram nodes to preview its structure" },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp, max = 240.dp).padding(12.dp),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (source.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
             )
         }
     }

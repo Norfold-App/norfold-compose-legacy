@@ -44,6 +44,7 @@ sealed interface DocSectionAction {
 
 /** Deep copy of a block tree with fresh ids everywhere (blocks, list items, todo items). */
 fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
+    is UnknownBlock -> BlockDocumentJson.reidentify(this, freshId())
     is ParagraphBlock -> copy(id = freshId())
     is HeadingBlock -> copy(id = freshId())
     is BulletListBlock -> copy(id = freshId(), items = items.map { it.withFreshIds() })

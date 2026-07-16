@@ -1,115 +1,73 @@
-# Editor re-architecture: retiring markdown as the canonical format
+# Android structured-document architecture
 
-**Status:** direction adopted 2026-07-16 · implementation not started
-**Severity:** major fix — this corrects a foundational decision, not a feature bug
+**Status:** active implementation since 2026-07-16
+**Authority:** Android is the primary product; the web app remains a visual prototype.
 
-## How we got here
+## Decision
 
-Norfold did not start as what it is today, and the editor's storage format never
-caught up with that growth:
+Norfold stores editable content as a versioned tree of typed blocks. Markdown is not an editor mode or a persistence model. It is supported only at import, export, print, clipboard, and interoperability boundaries.
 
-1. **Simple note app.** The original goal. Markdown was the obvious and correct
-   choice — notes, headings, lists, links, code. Nothing more was needed.
-2. **Note + task app.** Tasks, boards, and views were added around the notes.
-   Markdown still held, but the editor was already being asked to do more than
-   markdown models.
-3. **Workspace app.** Shared objects, databases, canvas, calendar, collaboration
-   surfaces, and a full document editor with a designed toolbar. At this point
-   markdown-as-source-of-truth became the wrong foundation.
+This corrects the earlier architecture, where Markdown remained canonical after Norfold had grown from a notes app into a workspace operating system. Markdown cannot faithfully preserve page geometry, structured tables, layout containers, media metadata, comments, or future document capabilities.
 
-The mistake: **markdown stayed the editor's main storage format** while the
-product became a document editor. That is now being fixed. Markdown is demoted
-to an **import/export format**; the canonical document becomes a
-**schema-controlled structured JSON tree**.
-
-## Why markdown cannot be the canonical format
-
-Markdown is great for notes, articles, and anything that should stay readable
-as plain text. It cannot reliably preserve what a Word/Canva-grade editor
-produces:
-
-- Fonts, sizes, colors, highlighting, letter/line spacing
-- Page sizes, margins, orientation, headers and footers
-- Text boxes, floating images, object positioning and z-order
-- Complex tables (merged cells, per-cell fill, column ops)
-- Columns and sections
-- Comments, suggestions, tracked changes
-- Custom embedded components
-
-Every workaround is a nonstandard extension or raw HTML, at which point the
-format stops being predictable — the worst of both worlds.
-
-## Target architecture
+## Active Android contract
 
 ```text
-Responsive editor interface (phone / tablet / desktop / web)
-          ↓
-ProseMirror-style structured editor (Tiptap is the leading candidate)
-          ↓
-Structured JSON document (versioned schema)
-          ↓
-Database + offline cache
-          ↓
-HTML / Markdown / DOCX / PDF exporters
+Jetpack Compose structured editor
+              ↓
+BlockDocument + typed DocumentBlock payloads
+              ↓
+versioned block envelope with unknown-block preservation
+              ↓
+Room documents + document_blocks
+              ↓
+encrypted Backup V3 / sync snapshots
 ```
 
-Key rules:
+The editor and persistence layers follow these rules:
 
-- **One editor engine across all screen sizes.** Only the chrome changes:
-  phone gets the two-bar layout (top document bar + bottom formatting bar with
-  anchored popup cards — see the approved toolbar contract below), tablet gets
-  a wider single arrangement, desktop expands into toolbar + inspectors +
-  shortcuts.
-- **Structured JSON is the single source of truth.** Store `content_json` with
-  a `schema_version`, plus a plain-text extraction for search, media as
-  references (never base64), and version snapshots.
-- **Formats are boundaries, not storage:**
+- `BlockDocument` is the canonical editable payload.
+- Every block has a stable ID. Room uses `(document_id, block_id)` as the block key so IDs cannot collide across owners.
+- A generic `DocumentOwner` attaches the same document contract to notes, tasks, and calendar events.
+- `documents` stores owner identity, layout mode, canvas metadata, and timestamps. `document_blocks` stores ordered, independently writable block envelopes.
+- Saving writes dirty block rows without rebuilding the whole document.
+- Unknown or future block payloads round-trip byte-for-byte as `UnknownBlock` instead of being discarded.
+- Note search text, task descriptions, calendar-event descriptions, and workspace-object previews are derived plain-text projections. They are not editable sources of truth.
+- Backup V3 and encrypted sync snapshots preserve exact owner documents, stable block IDs, block payloads, layout, canvas specification, and timestamps.
+- Docs retain Flow and the bounded Document Canvas with explicit page/artboard sizes and export. The retired standalone workspace Canvas is not part of this architecture.
 
-  | Format | Purpose |
-  | --- | --- |
-  | Structured JSON | Canonical editable document |
-  | HTML | Rendering, clipboard, email |
-  | Markdown | Simple import/export, technical content |
-  | DOCX | Word interchange |
-  | PDF | Final fixed-layout output |
-  | Plain text | Search, indexing, accessibility |
+## Format boundaries
 
-  Exporting a complex document to markdown warns that unsupported formatting
-  will be simplified.
-- **Schema before toolbar.** Define the supported block nodes (paragraph,
-  heading, lists, checklist, table, image, video, divider, page break, text
-  box, callout, columns, embed), inline marks (bold/italic/underline/strike,
-  link, color, highlight, font family/size, super/subscript, comment anchor,
-  change tracking), and document-level attributes (page size, orientation,
-  margins, header/footer, theme, default font, language) — then build toolbar
-  commands only for what the schema can preserve. No button whose result the
-  document format cannot store.
-- **Web-first delivery.** Responsive PWA first (offline via service worker +
-  IndexedDB autosave); wrap with Capacitor for store distribution when native
-  capabilities are needed. ProseMirror/Tiptap depend on the DOM, so a
-  WebView/browser host is the realistic path — not a parallel native rewrite
-  of the editor per platform.
-- **Collaboration later, deliberately.** Yjs (CRDT) + websocket provider is
-  the plan for real-time collaboration, but only after single-user saving,
-  recovery, and schema migrations are reliable.
+| Format | Purpose |
+| --- | --- |
+| Structured block envelope | Canonical editing and persistence |
+| Plain text | Search, summaries, accessibility, object previews |
+| Markdown | Import/export and technical interchange |
+| HTML | Print/export generation and clipboard boundaries |
+| DOCX | Editable office interchange |
+| PDF | Fixed-layout output |
 
-## Rollout shape
+Markdown import is a one-time conversion into blocks. Markdown export is a lossy projection and may simplify features that Markdown cannot represent.
 
-1. **First:** structured editor + JSON storage + responsive two-bar UI +
-   offline autosave + HTML/markdown export. Existing markdown notes import
-   into the new model.
-2. **Second:** store packaging (Capacitor), image/file uploads, tables and
-   custom blocks, PDF generation, DOCX import/export, version history.
-3. **Third:** Yjs collaboration, comments, presence, suggestions/track
-   changes, advanced page layout.
+## Owner behavior
 
-## Relationship to existing work
+- **Note:** opening a note selects its note-owned document.
+- **Task:** the task Docs section opens the same full structured editor. Existing description text is converted once when a task document is first ensured.
+- **Calendar event:** event rows in Day, Week, and Agenda views open an event-owned structured document. Event description remains a derived summary for calendar cards and cloud payloads.
 
-- The **approved toolbar contract** (two lavender pill bars, anchored popup
-  cards, sticky/armed toggles, sidebar ToC with the document name) is the UI
-  for this editor. Interactive demos: `Editor_Floating_Bar_plan/`
-  (`norfold-floating-bar-demo.html`, `norfold-two-bar-editor-demo.html`).
-- The current Android markdown/block editor keeps working until the structured
-  editor replaces it; nothing is deleted before the import path is proven.
-- `MarkdownExporter`, backup codecs, and sync snapshots survive — they move
-  from "the format" to "one of the exporters/boundaries".
+Deleting an owner deletes its document transactionally. Workspace deletion clears note, task, and calendar-event documents before their owners.
+
+## Retired implementation
+
+The following paths were removed from the Android build and preserved under `codex-handoffs/archive/legacy-markdown-editor-2026-07-16/`:
+
+- WebView Markdown/MathJax/Mermaid/Vega preview
+- render cache and rerender controls
+- task-property live Markdown field
+- per-block Render/Source persistence
+- bundled JavaScript rendering engines
+
+Typed code, equation, diagram, and chart payloads remain editable through their structured blocks and builders. Their current read surface is native Compose. Reintroducing a renderer requires a new contract decision; it must not restore Markdown as canonical storage.
+
+## Verification status
+
+Unit tests, debug APK assembly, and Android-test APK compilation pass. Real-device interaction, Light/Dark visual review, compact/adaptive layouts, accessibility, IME behavior, reopen persistence, and installed backup/restore remain required before this area can be called complete.
