@@ -28,7 +28,9 @@ data class BackupSnapshot(
 )
 
 object BackupCodec {
-    const val Header = "NORFOLD-BACKUP-V1"
+    // V2: NOTE rows carry the exact structured document (per-block envelope payloads with stable
+    // block ids) instead of a lossy markdown round trip. V1 backups are not readable (pre-beta).
+    const val Header = "NORFOLD-BACKUP-V2"
 
     fun encode(snapshot: BackupSnapshot): String = buildString {
         appendLine(Header)
@@ -69,7 +71,7 @@ object BackupCodec {
                     "NOTE",
                     it.id,
                     b64(it.title),
-                    b64(it.bodyMarkdown),
+                    b64(BlockDocumentJson.encodeDocumentPayload(it.document)),
                     it.notebookId ?: "",
                     b64(it.coverUri.orEmpty()),
                     b64(it.coverMimeType.orEmpty()),
@@ -239,7 +241,7 @@ object BackupCodec {
                 "NOTE" -> notes += Note(
                     id = cells[1].toLong(),
                     title = unb64(cells[2]),
-                    document = MarkdownBlockCodec.import(unb64(cells[3])),
+                    document = BlockDocumentJson.decodeDocumentPayload(unb64(cells[3])),
                     notebookId = cells[4].takeIf { it.isNotBlank() }?.toLong(),
                     coverUri = unb64(cells.getOrElse(5) { "" }).takeIf { it.isNotBlank() },
                     coverMimeType = unb64(cells.getOrElse(6) { "" }).takeIf { it.isNotBlank() },
