@@ -16,6 +16,7 @@ data class BackupSnapshot(
     val taskPropertyDefinitions: List<TaskPropertyDefinition> = emptyList(),
     val taskPropertyValues: List<TaskPropertyValue> = emptyList(),
     val taskChecklistItems: List<TaskChecklistItem> = emptyList(),
+    val ownedDocuments: List<OwnedDocument> = emptyList(),
     val goals: List<GoalItem> = emptyList(),
     val calendarEvents: List<CalendarEventItem> = emptyList(),
     val chatMessages: List<ChatMessageItem> = emptyList(),
@@ -28,7 +29,9 @@ data class BackupSnapshot(
 )
 
 object BackupCodec {
-    const val Header = "NORFOLD-BACKUP-V1"
+    // V3 adds structured documents owned by Tasks and Calendar events. NOTE rows keep carrying
+    // their exact document payload so the pre-beta V2 shape remains straightforward to inspect.
+    const val Header = "NORFOLD-BACKUP-V3"
 
     fun encode(snapshot: BackupSnapshot): String = buildString {
         appendLine(Header)
@@ -69,7 +72,7 @@ object BackupCodec {
                     "NOTE",
                     it.id,
                     b64(it.title),
-                    b64(it.bodyMarkdown),
+                    b64(BlockDocumentJson.encodeDocumentPayload(it.document)),
                     it.notebookId ?: "",
                     b64(it.coverUri.orEmpty()),
                     b64(it.coverMimeType.orEmpty()),
@@ -134,6 +137,23 @@ object BackupCodec {
         snapshot.taskChecklistItems.sortedWith(compareBy<TaskChecklistItem> { it.taskId }.thenBy { it.propertyId }.thenBy { it.sortOrder }).forEach {
             appendLine(listOf("TASK_CHECKLIST_ITEM", it.id, it.taskId, it.propertyId, b64(it.text), it.checked, it.sortOrder, it.createdAt, it.updatedAt).joinToString("|"))
         }
+        snapshot.ownedDocuments
+            .filter { it.owner.type != DocumentOwnerType.Note }
+            .sortedWith(compareBy<OwnedDocument> { it.owner.type.storageValue }.thenBy { it.owner.id })
+            .forEach {
+                appendLine(
+                    listOf(
+                        "OWNED_DOCUMENT",
+                        it.owner.type.storageValue,
+                        it.owner.id,
+                        b64(BlockDocumentJson.encodeDocumentPayload(it.document)),
+                        it.layoutMode.name,
+                        b64(DocLayoutJson.encode(it.freeformLayout, it.canvasSpec)),
+                        it.createdAt,
+                        it.updatedAt,
+                    ).joinToString("|"),
+                )
+            }
         snapshot.goals.sortedBy { it.id }.forEach {
             appendLine(listOf("GOAL", it.id, it.workspaceId, b64(it.syncId), b64(it.title), b64(it.description), b64(it.owner), it.target, it.progress, b64(it.unit), it.dueAt ?: "", it.status.name, it.createdAt, it.updatedAt).joinToString("|"))
         }
@@ -193,6 +213,7 @@ object BackupCodec {
         val taskPropertyDefinitions = mutableListOf<TaskPropertyDefinition>()
         val taskPropertyValues = mutableListOf<TaskPropertyValue>()
         val taskChecklistItems = mutableListOf<TaskChecklistItem>()
+        val ownedDocuments = mutableListOf<OwnedDocument>()
         val goals = mutableListOf<GoalItem>()
         val calendarEvents = mutableListOf<CalendarEventItem>()
         val chatMessages = mutableListOf<ChatMessageItem>()
@@ -239,7 +260,7 @@ object BackupCodec {
                 "NOTE" -> notes += Note(
                     id = cells[1].toLong(),
                     title = unb64(cells[2]),
-                    document = MarkdownBlockCodec.import(unb64(cells[3])),
+                    document = BlockDocumentJson.decodeDocumentPayload(unb64(cells[3])),
                     notebookId = cells[4].takeIf { it.isNotBlank() }?.toLong(),
                     coverUri = unb64(cells.getOrElse(5) { "" }).takeIf { it.isNotBlank() },
                     coverMimeType = unb64(cells.getOrElse(6) { "" }).takeIf { it.isNotBlank() },
@@ -341,6 +362,19 @@ object BackupCodec {
                     createdAt = cells.getOrElse(7) { "0" }.toLong(),
                     updatedAt = cells.getOrElse(8) { "0" }.toLong(),
                 )
+                "OWNED_DOCUMENT" -> {
+                    val ownerType = DocumentOwnerType.fromStorage(cells[1])
+                        ?: error("Unsupported document owner type: ${cells[1]}")
+                    ownedDocuments += OwnedDocument(
+                        owner = DocumentOwner(ownerType, cells[2].toLong()),
+                        document = BlockDocumentJson.decodeDocumentPayload(unb64(cells[3])),
+                        layoutMode = docOverlapModeOf(cells.getOrNull(4)),
+                        freeformLayout = DocLayoutJson.decode(unb64(cells.getOrElse(5) { "" })),
+                        canvasSpec = DocLayoutJson.decodeCanvas(unb64(cells.getOrElse(5) { "" })),
+                        createdAt = cells.getOrElse(6) { "0" }.toLong(),
+                        updatedAt = cells.getOrElse(7) { "0" }.toLong(),
+                    )
+                }
                 // Legacy PROJECT rows from pre-v24 backups are ignored (feature removed).
                 "PROJECT" -> Unit
                 "GOAL" -> goals += GoalItem(
@@ -448,6 +482,7 @@ object BackupCodec {
             taskPropertyDefinitions = taskPropertyDefinitions,
             taskPropertyValues = taskPropertyValues,
             taskChecklistItems = taskChecklistItems,
+            ownedDocuments = ownedDocuments,
             goals = goals,
             calendarEvents = calendarEvents,
             chatMessages = chatMessages,

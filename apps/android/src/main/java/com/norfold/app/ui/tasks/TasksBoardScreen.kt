@@ -143,8 +143,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -164,8 +162,6 @@ import com.norfold.app.ui.components.NorfoldContentDialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
-import com.norfold.app.ui.components.LiveMarkdownField
-import com.norfold.app.ui.components.MarkdownPreview
 import com.norfold.app.ui.screens.CalendarWorkspaceScreen
 import com.norfold.app.ui.dnd.DropSlot
 import com.norfold.app.ui.dnd.animatePlacement
@@ -2266,12 +2262,6 @@ private fun TaskChartView(
             }
         }
     }
-    val spec = remember(slices, chartConfig) {
-        TaskChartSpecBuilder.build("Tasks by ${chartConfig.groupBy.label}", slices, chartConfig)
-    }
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val primaryArgb = MaterialTheme.colorScheme.primary.toArgb()
-    val accentHex = remember(primaryArgb) { "#%06X".format(primaryArgb and 0xFFFFFF) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -2295,14 +2285,7 @@ private fun TaskChartView(
             hint != null -> Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                 Text(hint, modifier = Modifier.padding(18.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            else -> Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                MarkdownPreview(
-                    markdown = "```vega-lite\n$spec\n```",
-                    dark = dark,
-                    accentHex = accentHex,
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                )
-            }
+            else -> NativeTaskChart(slices)
         }
     }
     if (showConfig) {
@@ -2358,6 +2341,31 @@ private fun TaskChartView(
         }
     }
 }
+
+@Composable
+private fun NativeTaskChart(slices: List<TaskChartSpecBuilder.Slice>) {
+    val maximum = slices.maxOfOrNull { it.value }?.takeIf { it > 0.0 } ?: 1.0
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            slices.forEach { slice ->
+                val label = listOf(slice.group, slice.stack).filter(String::isNotBlank).joinToString(" · ")
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, Modifier.widthIn(min = 88.dp, max = 150.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                    Box(Modifier.weight(1f).padding(horizontal = 10.dp).height(12.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(999.dp))) {
+                        Box(
+                            Modifier.fillMaxWidth((slice.value / maximum).toFloat().coerceIn(0.02f, 1f))
+                                .fillMaxHeight()
+                                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(999.dp)),
+                        )
+                    }
+                    Text(slice.value.toTaskChartLabel(), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+private fun Double.toTaskChartLabel(): String = if (this % 1.0 == 0.0) toLong().toString() else "%.1f".format(this)
 
 @Composable
 private fun TaskGalleryView(
@@ -2806,9 +2814,6 @@ private fun AdaptiveTaskPage(
                     TaskNotesSection(
                         task = task,
                         property = property,
-                        value = propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == property.id },
-                        columns = columns,
-                        tags = tags,
                         viewModel = viewModel,
                     )
                 }
@@ -3391,14 +3396,10 @@ private fun TaskChecklistSummaryCard(
 private fun TaskNotesSection(
     task: TaskItem,
     property: TaskPropertyDefinition,
-    value: TaskPropertyValue?,
-    columns: List<TaskColumnItem>,
-    tags: List<Tag>,
     viewModel: DocsViewModel,
 ) {
-    val displayed = property.displayValue(task, value?.valueJson.orEmpty())
+    val displayed = task.description
     if (property.hiddenWhenEmpty && displayed.isBlank()) return
-    var editing by remember(task.id, property.id) { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(18.dp),
@@ -3414,7 +3415,7 @@ private fun TaskNotesSection(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().clickable { editing = true },
+                modifier = Modifier.fillMaxWidth().clickable { viewModel.openTaskDocument(task) },
             ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(displayed.ifBlank { "Add notes" }, modifier = Modifier.weight(1f), color = if (displayed.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, maxLines = 4, overflow = TextOverflow.Ellipsis)
@@ -3422,20 +3423,6 @@ private fun TaskNotesSection(
                 }
             }
         }
-    }
-    if (editing) {
-        FocusedTaskPropertyDialog(
-            task = task,
-            property = property,
-            value = value,
-            checklistItems = emptyList(),
-            columns = columns,
-            tags = tags,
-            anchor = null,
-            viewModel = viewModel,
-            onPickAttachment = {},
-            onDismiss = { editing = false },
-        )
     }
 }
 
@@ -3677,26 +3664,18 @@ private fun VerticalReorderHandle(enabled: Boolean = true, rowHeight: Dp = 64.dp
 
 @Composable
 private fun PropertyPreviewCard(value: String, property: TaskPropertyDefinition) {
-    val isMarkdown = property.type == TaskPropertyType.Text && value.isNotBlank()
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val accentHex = String.format("#%06X", 0xFFFFFF and MaterialTheme.colorScheme.primary.toArgb())
     Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.68f),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        if (isMarkdown) {
-            // Saved text blocks preview as rendered Markdown, matching the polished note editor.
-            MarkdownPreview(markdown = value, dark = dark, accentHex = accentHex, modifier = Modifier.fillMaxWidth().padding(10.dp))
-        } else {
-            Text(
-                value.ifBlank { "Empty" },
-                modifier = Modifier.padding(12.dp),
-                color = if (value.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            value.ifBlank { "Empty" },
+            modifier = Modifier.padding(12.dp),
+            color = if (value.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -3714,24 +3693,14 @@ private fun TextPropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
         return
     }
     if (property.type == TaskPropertyType.Text) {
-        val engine = remember { viewModel.state.value.settings.noteRenderEngine }
-        LiveMarkdownField(
+        OutlinedTextField(
             value = text,
             onValueChange = { text = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = property.type.defaultPropertyName(),
-            engine = engine,
+            placeholder = { Text(property.type.defaultPropertyName()) },
+            minLines = 4,
+            colors = taskTextFieldColors(),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistChip(
-                onClick = { text += "\n| Column | Value |\n| --- | --- |\n" },
-                label = { Text("Table") },
-            )
-            AssistChip(
-                onClick = { text += "\n---\n" },
-                label = { Text("Divider") },
-            )
-        }
     } else {
         OutlinedTextField(
             value = text,

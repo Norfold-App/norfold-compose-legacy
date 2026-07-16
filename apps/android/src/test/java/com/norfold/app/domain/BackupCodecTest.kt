@@ -145,6 +145,82 @@ class BackupCodecTest {
     }
 
     @Test
+    fun documentBackupRoundTripIsExactAndLayoutKeysStayLive() {
+        val blocks = listOf(
+            ParagraphBlock(
+                content = listOf(
+                    InlineText("plain "),
+                    BoldInline(listOf(InlineText("bold"))),
+                    ItalicInline(listOf(InlineText("it"))),
+                    StrikethroughInline(listOf(InlineText("st"))),
+                    CodeInline("code"),
+                    LinkInline("https://x.y", listOf(InlineText("link"))),
+                    EmojiInline("smile", "😄"),
+                    MathInline("a^2"),
+                    TagInline("tag"),
+                    MentionInline("me"),
+                ),
+            ),
+            HeadingBlock(level = 2, content = listOf(InlineText("Heading"))),
+            BulletListBlock(items = listOf(ListItem(content = listOf(InlineText("a")), children = listOf(ListItem(content = listOf(InlineText("a.1"))))))),
+            NumberedListBlock(start = 4, items = listOf(ListItem(content = listOf(InlineText("n"))))),
+            TodoListBlock(items = listOf(TodoItem(checked = true, content = listOf(InlineText("done"))))),
+            QuoteBlock(children = listOf(ParagraphBlock(content = listOf(InlineText("q"))))),
+            CalloutBlock(tone = "warning", title = "Careful", children = listOf(ParagraphBlock(content = listOf(InlineText("c"))))),
+            ContainerBlock(
+                axis = ContainerAxis.Row,
+                children = listOf(ParagraphBlock(content = listOf(InlineText("left"))), ParagraphBlock(content = listOf(InlineText("right")))),
+                weights = listOf(2f, 1f),
+            ),
+            DividerBlock(),
+            CodeBlock(language = "kotlin", code = "fun x() = 1", editorHeightDp = 240f),
+            TableBlock(
+                headers = listOf(TableCell(listOf(InlineText("H")))),
+                rows = listOf(listOf(TableCell(listOf(InlineText("v"))))),
+                columnWidthsDp = listOf(148f),
+                columnAlignments = listOf(TableAlignment.Center),
+            ),
+            ImageBlock(source = "content://img", caption = "cap", layout = ImageLayout.Wide, displayHeightDp = 321f),
+            FileBlock(name = "f.bin", mimeType = "application/octet-stream", sizeBytes = 9, uri = "content://f"),
+            EmbedBlock(url = "https://e", metadata = EmbedMetadata("t", "d", "fav"), displayHeightDp = 99f),
+            ChartBlock(vegaLiteSpec = "{\"mark\":\"bar\"}", editorHeightDp = 200f),
+            MathBlock(tex = "x^2", display = false, editorHeightDp = 150f),
+            MermaidBlock(code = "graph TD; A-->B", editorHeightDp = 190f),
+            UnknownBlock(id = "future-1", rawJson = """{"v":9,"block":{"kind":"hologram","id":"future-1","beam":1}}"""),
+        )
+        val layout = blocks.mapIndexed { index, block ->
+            block.id to FreeformPlacement(x = index * 10f, y = index * 20f, width = 300f, height = 120f, z = index)
+        }.toMap()
+        val note = Note(
+            id = 1,
+            title = "Everything",
+            document = BlockDocument(blocks),
+            notebookId = null,
+            pinned = false,
+            starred = false,
+            archived = false,
+            locked = false,
+            createdAt = 1,
+            updatedAt = 2,
+            overlapMode = DocOverlapMode.Overlap,
+            freeformLayout = layout,
+        )
+        val snapshot = BackupSnapshot(notes = listOf(note), notebooks = emptyList(), tags = emptyList(), attachments = emptyList())
+
+        val restored = BackupCodec.decode(BackupCodec.encode(snapshot)).notes.single()
+
+        // Exact structured equality — same blocks, same ids, no markdown laundering.
+        assertEquals(
+            BlockDocumentJson.encode(note.document.normalized()),
+            BlockDocumentJson.encode(restored.document),
+        )
+        // Every layout key must still resolve to a live block id after the round trip.
+        val restoredIds = restored.document.blocks.map { it.id }.toSet()
+        assertEquals(restored.freeformLayout.keys, restored.freeformLayout.keys.intersect(restoredIds))
+        assertEquals(layout, restored.freeformLayout)
+    }
+
+    @Test
     fun nonNorfoldBackupHeaderIsRejected() {
         val current = BackupCodec.encode(
             BackupSnapshot(
@@ -157,6 +233,37 @@ class BackupCodecTest {
         val legacy = current.replaceFirst(BackupCodec.Header, "NOTESNYNC-BACKUP-V1")
 
         assertThrows(IllegalArgumentException::class.java) { BackupCodec.decode(legacy) }
+    }
+
+    @Test
+    fun taskOwnedDocumentRoundTripsWithLayoutAndStableBlockIds() {
+        val owner = DocumentOwner.task(91)
+        val block = ParagraphBlock(id = "task-doc-block", content = listOf(InlineText("Structured task notes")))
+        val document = OwnedDocument(
+            owner = owner,
+            document = BlockDocument(listOf(block)),
+            layoutMode = DocOverlapMode.Bounded,
+            freeformLayout = mapOf(block.id to FreeformPlacement(x = 20f, y = 40f, width = 420f, height = 120f)),
+            canvasSpec = DocCanvasSpec.letter(),
+            createdAt = 10,
+            updatedAt = 20,
+        )
+        val snapshot = BackupSnapshot(
+            notes = emptyList(),
+            notebooks = emptyList(),
+            tags = emptyList(),
+            attachments = emptyList(),
+            ownedDocuments = listOf(document),
+        )
+
+        val restored = BackupCodec.decode(BackupCodec.encode(snapshot)).ownedDocuments.single()
+
+        assertEquals(owner, restored.owner)
+        assertEquals("task-doc-block", restored.document.blocks.single().id)
+        assertEquals("Structured task notes", restored.document.plainText())
+        assertEquals(DocOverlapMode.Bounded, restored.layoutMode)
+        assertEquals(document.freeformLayout, restored.freeformLayout)
+        assertEquals(DocPagePreset.Letter, restored.canvasSpec.preset)
     }
 
     @Test

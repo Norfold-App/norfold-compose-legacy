@@ -94,22 +94,21 @@ class MathBuilderSheetTest {
 
     @Test
     fun `visual preview replaces private slots and preserves valid square command`() {
-        val markdown = mathPreviewMarkdown(
+        val preview = mathPreviewText(
             "$MathSlot + \\square",
             MathInsertionKind.Block,
         )
 
-        assertFalse(markdown.contains(MathSlot))
-        assertTrue(markdown.contains("\\boxed{\\vphantom{0}\\phantom{0}}"))
-        assertTrue(markdown.contains("\\square"))
-        assertTrue(markdown.startsWith("$$\n"))
+        assertFalse(preview.contains(MathSlot))
+        assertTrue(preview.contains("□"))
+        assertTrue(preview.contains("\\square"))
     }
 
     @Test
-    fun `inline preview uses inline math delimiters`() {
-        val markdown = mathPreviewMarkdown("E = mc^2", MathInsertionKind.Inline)
+    fun `inline preview is labelled without markdown delimiters`() {
+        val preview = mathPreviewText("E = mc^2", MathInsertionKind.Inline)
 
-        assertEquals("Inline preview: \\(E = mc^2\\)", markdown)
+        assertEquals("Inline · E = mc^2", preview)
     }
 
     @Test

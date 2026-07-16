@@ -15,7 +15,11 @@ import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocLayoutJson
+import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentOwner
+import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
 import com.norfold.app.domain.docOverlapModeOf
@@ -23,7 +27,7 @@ import com.norfold.app.domain.Note
 import com.norfold.app.domain.NoteEmbedItem
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.NoteGestureAction
-import com.norfold.app.domain.NoteRenderEngine
+import com.norfold.app.domain.OwnedDocument
 import com.norfold.app.domain.Notebook
 import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.GoalStatus
@@ -123,23 +127,44 @@ data class NoteEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val workspaceId: Long = 1,
+    // Schema-32 compatibility only. Generic documents is the authoritative layout store.
     val overlapMode: String = "reflow",
     val freeformLayoutJson: String? = null,
 )
 
 @Entity(
-    tableName = "note_blocks",
-    foreignKeys = [
-        ForeignKey(entity = NoteEntity::class, parentColumns = ["id"], childColumns = ["noteId"], onDelete = ForeignKey.CASCADE),
-    ],
-    indices = [Index("noteId"), Index(value = ["noteId", "position"])],
+    tableName = "documents",
+    indices = [Index(value = ["owner_type", "owner_id"], unique = true), Index("updated_at")],
 )
-data class NoteBlockEntity(
+data class DocumentEntity(
     @PrimaryKey val id: String,
-    val noteId: Long,
+    @ColumnInfo(name = "owner_type") val ownerType: String,
+    @ColumnInfo(name = "owner_id") val ownerId: Long,
+    @ColumnInfo(name = "layout_mode") val layoutMode: String = "reflow",
+    @ColumnInfo(name = "layout_json") val layoutJson: String? = null,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long,
+)
+
+@Entity(
+    tableName = "document_blocks",
+    primaryKeys = ["document_id", "block_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = DocumentEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["document_id"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("document_id"), Index(value = ["document_id", "position"])],
+)
+data class DocumentBlockEntity(
+    @ColumnInfo(name = "block_id") val blockId: String,
+    @ColumnInfo(name = "document_id") val documentId: String,
     val position: Int,
-    val payloadJson: String,
-    val updatedAt: Long,
+    @ColumnInfo(name = "payload_json") val payloadJson: String,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long,
 )
 
 @Entity(
@@ -550,7 +575,8 @@ data class AppSettingsEntity(
     val taskKanbanEngine: String = "BoardPointer",
     val taskSwipeStartAction: String = TaskGestureAction.Complete.name,
     val taskSwipeEndAction: String = TaskGestureAction.Delete.name,
-    val noteRenderEngine: String = NoteRenderEngine.Auto.name,
+    // Inert schema-31 compatibility column. The retired Markdown preview engine no longer reads it.
+    val noteRenderEngine: String = "Auto",
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
@@ -833,7 +859,6 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     taskKanbanEngine = taskKanbanEngine,
     taskSwipeStartAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeStartAction } ?: TaskGestureAction.Complete,
     taskSwipeEndAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeEndAction } ?: TaskGestureAction.Delete,
-    noteRenderEngine = NoteRenderEngine.entries.firstOrNull { it.name == noteRenderEngine } ?: NoteRenderEngine.Auto,
     onboardingComplete = onboardingComplete,
     workspacePurpose = workspacePurpose,
     calendarDefaultView = calendarDefaultView,
@@ -846,16 +871,31 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     subscriptionTier = SubscriptionTier.entries.firstOrNull { it.name == subscriptionTier } ?: SubscriptionTier.Free,
 )
 
+fun DocumentWithBlocks.toDomain(): OwnedDocument {
+    val ownerType = requireNotNull(DocumentOwnerType.fromStorage(document.ownerType)) {
+        "Unsupported document owner type: ${document.ownerType}"
+    }
+    return OwnedDocument(
+        owner = DocumentOwner(ownerType, document.ownerId),
+        document = BlockDocument(
+            blocks.sortedBy(DocumentBlockEntity::position).map { BlockDocumentJson.decodeBlock(it.payloadJson) },
+        ).normalized(),
+        layoutMode = docOverlapModeOf(document.layoutMode),
+        freeformLayout = DocLayoutJson.decode(document.layoutJson),
+        canvasSpec = DocLayoutJson.decodeCanvas(document.layoutJson),
+        createdAt = document.createdAt,
+        updatedAt = document.updatedAt,
+    )
+}
+
 fun NoteEntity.toDomain(
-    blocks: List<NoteBlockEntity> = emptyList(),
+    ownedDocument: OwnedDocument? = null,
     tags: List<Tag> = emptyList(),
     attachments: List<Attachment> = emptyList(),
 ) = Note(
     id = id,
     title = title,
-    document = BlockDocument(
-        blocks.sortedBy(NoteBlockEntity::position).mapNotNull { runCatching { BlockDocumentJson.decodeBlock(it.payloadJson) }.getOrNull() },
-    ).normalized(),
+    document = ownedDocument?.document ?: BlockDocument().normalized(),
     notebookId = notebookId,
     coverUri = coverUri,
     coverMimeType = coverMimeType,
@@ -867,15 +907,21 @@ fun NoteEntity.toDomain(
     updatedAt = updatedAt,
     tags = tags,
     attachments = attachments,
-    overlapMode = docOverlapModeOf(overlapMode),
-    freeformLayout = DocLayoutJson.decode(freeformLayoutJson),
-    canvasSpec = DocLayoutJson.decodeCanvas(freeformLayoutJson),
+    overlapMode = ownedDocument?.layoutMode ?: DocOverlapMode.Reflow,
+    freeformLayout = ownedDocument?.freeformLayout.orEmpty(),
+    canvasSpec = ownedDocument?.canvasSpec ?: DocCanvasSpec(),
+)
+
+data class DocumentWithBlocks(
+    @Embedded val document: DocumentEntity,
+    @Relation(parentColumn = "id", entityColumn = "document_id")
+    val blocks: List<DocumentBlockEntity>,
 )
 
 data class NoteWithRelations(
     @Embedded val note: NoteEntity,
-    @Relation(parentColumn = "id", entityColumn = "noteId")
-    val blocks: List<NoteBlockEntity>,
+    @Relation(parentColumn = "id", entityColumn = "owner_id", entity = DocumentEntity::class)
+    val ownedDocuments: List<DocumentWithBlocks>,
     @Relation(
         parentColumn = "id",
         entityColumn = "id",
@@ -888,7 +934,9 @@ data class NoteWithRelations(
     val embeds: List<NoteEmbedEntity>,
 ) {
     fun toDomain(): Note = note.toDomain(
-        blocks = blocks,
+        ownedDocument = ownedDocuments
+            .firstOrNull { it.document.ownerType == DocumentOwnerType.Note.storageValue }
+            ?.toDomain(),
         tags = tags.map { it.toDomain() },
         attachments = attachments.map { it.toDomain() },
     ).copy(embeds = embeds.map { it.toDomain() })
