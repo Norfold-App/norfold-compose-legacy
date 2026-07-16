@@ -854,7 +854,8 @@ fun NoteEntity.toDomain(
     id = id,
     title = title,
     document = BlockDocument(
-        blocks.sortedBy(NoteBlockEntity::position).mapNotNull { runCatching { BlockDocumentJson.decodeBlock(it.payloadJson) }.getOrNull() },
+        // decodeBlock never throws — undecodable payloads surface as UnknownBlock instead of vanishing.
+        blocks.sortedBy(NoteBlockEntity::position).map { BlockDocumentJson.decodeBlock(it.payloadJson) },
     ).normalized(),
     notebookId = notebookId,
     coverUri = coverUri,

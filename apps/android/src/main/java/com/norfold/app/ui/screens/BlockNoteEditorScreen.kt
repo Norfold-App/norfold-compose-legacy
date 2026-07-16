@@ -18,6 +18,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -189,6 +190,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import com.norfold.app.domain.BlockCursor
 import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.BlockDocumentJson
+import com.norfold.app.domain.UnknownBlock
 import com.norfold.app.domain.BlockEditorSession
 import com.norfold.app.domain.BlockRenderMode
 import com.norfold.app.domain.BoldInline
@@ -2374,6 +2377,21 @@ private fun RenderBlock(
     renderChild: (@Composable (DocumentBlock) -> Unit)? = null,
 ) {
     when (block) {
+        is UnknownBlock -> Surface(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Unsupported block", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text(
+                    "Created with a newer version of Norfold. It stays saved exactly as-is and will show once the app updates.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         is ParagraphBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface))
         is HeadingBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = when (block.level) { 1 -> 30.sp; 2 -> 24.sp; else -> 20.sp }, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface))
         is BulletListBlock -> if (mode == BlockSurfaceMode.View) ListBlock(block.items.map { it.content }, "•") else EditableList(
@@ -3968,6 +3986,7 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is ChartBlock -> ChartBlock(vegaLiteSpec = block.vegaLiteSpec, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
     is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
     is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp, renderMode = block.renderMode)
+    is UnknownBlock -> BlockDocumentJson.reidentify(block)
 }
 
 private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
@@ -3988,6 +4007,7 @@ private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
     is ChartBlock -> copy(id = id)
     is MathBlock -> copy(id = id)
     is MermaidBlock -> copy(id = id)
+    is UnknownBlock -> BlockDocumentJson.reidentify(this, id)
 }
 
 @Composable
