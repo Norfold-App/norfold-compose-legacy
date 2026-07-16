@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -272,6 +273,21 @@ object BlockDocumentJson {
     }
 
     private fun JsonObject.blockIdOrNew() = (this["id"] as? JsonPrimitive)?.contentOrNull ?: blockId()
+
+    /**
+     * Whole-document payload for backup/sync: a JSON array of per-block envelope payloads. Block
+     * ids travel exactly as stored, so freeform-layout keys stay valid across a round trip.
+     */
+    fun encodeDocumentPayload(document: BlockDocument): String =
+        JsonArray(document.normalized().blocks.map { format.parseToJsonElement(encodeBlock(it)) }).toString()
+
+    /** Never throws; undecodable content degrades to [UnknownBlock]s rather than being dropped. */
+    fun decodeDocumentPayload(json: String): BlockDocument {
+        if (json.isBlank()) return BlockDocument().normalized()
+        val array = runCatching { format.parseToJsonElement(json) }.getOrNull() as? JsonArray
+            ?: return BlockDocument(listOf(UnknownBlock(rawJson = json))).normalized()
+        return BlockDocument(array.map { decodeBlock(it.toString()) }).normalized()
+    }
 
     /**
      * Copy of [block] under [newId], rewriting the id inside the preserved payload too so the new
