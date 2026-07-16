@@ -78,6 +78,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.TableRows
@@ -165,6 +166,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import com.norfold.app.ui.components.LiveMarkdownField
 import com.norfold.app.ui.components.MarkdownPreview
+import com.norfold.app.ui.screens.CalendarWorkspaceScreen
 import com.norfold.app.ui.dnd.DropSlot
 import com.norfold.app.ui.dnd.animatePlacement
 import com.norfold.app.ui.dnd.dragLift
@@ -188,13 +190,12 @@ import com.norfold.app.domain.TaskDateRangeCodec
 import com.norfold.app.domain.WorkspaceComment
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.WorkspaceFileItem
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.LocalContextualMenuColor
 import com.norfold.app.ui.LocalContextualMenuStyle
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
-import com.norfold.app.domain.Destination
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -235,8 +236,8 @@ private data class PendingTaskSwipe(
 
 @Composable
 fun TasksBoardScreen(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickTaskAttachment: (TaskItem) -> Unit = {},
     onTaskDetailOpenChange: (Boolean) -> Unit = {},
 ) {
@@ -267,13 +268,6 @@ fun TasksBoardScreen(
     var newColumnName by remember { mutableStateOf("") }
     var interactionStatus by remember { mutableStateOf(TaskInteractionStatus(engine = kanbanEngine)) }
     LaunchedEffect(editingTask?.id, creatingTask) { onTaskDetailOpenChange(editingTask != null || creatingTask) }
-    LaunchedEffect(currentView) {
-        if (currentView == TaskWorkspaceView.Calendar) {
-            viewModel.patchSettings { it.copy(taskViewMode = TaskWorkspaceView.Board.key) }
-            viewModel.go(Destination.Calendar)
-        }
-    }
-
     val selectedBoard = state.taskBoards.firstOrNull { it.id == state.settings.taskSelectedBoardId }
         ?: state.taskBoards.firstOrNull()
     val selectedBoardId = selectedBoard?.id ?: 1L
@@ -391,13 +385,8 @@ fun TasksBoardScreen(
                 feedGridMode = feedGridMode,
                 onToggleFeedMode = { feedGridMode = !feedGridMode },
                 onChartConfig = { showChartConfig = true },
-                onViewChange = { next ->
-                    if (next == TaskWorkspaceView.Calendar) {
-                        viewModel.go(Destination.Calendar)
-                    } else {
-                        viewModel.patchSettings { it.copy(taskViewMode = next.key) }
-                    }
-                },
+                onNavigationClick = viewModel::toggleSidebar,
+                onViewChange = { next -> viewModel.patchSettings { it.copy(taskViewMode = next.key) } },
                 modifier = Modifier.padding(start = 18.dp, top = 8.dp, end = 18.dp),
             )
             Box(
@@ -442,10 +431,17 @@ fun TasksBoardScreen(
                             createSeedColumn = null
                             creatingTask = true
                         },
-                        modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 112.dp),
+                        modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 16.dp),
                         swipeStartAction = swipeStartAction,
                         swipeEndAction = swipeEndAction,
                         onSwipeAction = runSwipeAction,
+                    )
+                } else if (currentView == TaskWorkspaceView.Calendar) {
+                    CalendarWorkspaceScreen(
+                        state = state,
+                        viewModel = viewModel,
+                        embedded = true,
+                        onTaskClick = { editingTask = it },
                     )
                 } else {
                     Column(
@@ -639,6 +635,7 @@ private fun TaskHeader(
     feedGridMode: Boolean,
     onToggleFeedMode: () -> Unit,
     onChartConfig: () -> Unit,
+    onNavigationClick: () -> Unit,
     onViewChange: (TaskWorkspaceView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -669,7 +666,11 @@ private fun TaskHeader(
             onValueChange = onQueryChange,
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            leadingIcon = { Icon(Icons.Outlined.Search, null) },
+            leadingIcon = {
+                IconButton(onClick = onNavigationClick) {
+                    Icon(Icons.Outlined.Menu, contentDescription = "Open workspace navigation")
+                }
+            },
             trailingIcon = {
                 // Shared adaptive header hook: Feed toggles list/grid, Chart opens its config
                 // picker, every other view opens the rail.
@@ -1154,7 +1155,7 @@ private fun TaskDatabaseTable(
     checklistItems: List<TaskChecklistItem>,
     filesByTask: Map<Long, List<WorkspaceFileItem>>,
     tags: List<Tag>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
     onPickAttachment: (TaskItem) -> Unit,
     onTaskClick: (TaskItem) -> Unit,
     onNewTask: () -> Unit,
@@ -1416,9 +1417,13 @@ private fun MultiPropertyPickerDialog(
     }
 }
 
-private fun parseTaskDraftDate(value: String): Long? = runCatching {
-    SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }.parse(value.trim())?.time
-}.getOrNull()
+private fun parseTaskDraftDate(value: String): Long? {
+    val input = value.trim()
+    if (input.isBlank()) return null
+    return listOf("yyyy-MM-dd HH:mm", "yyyy-MM-dd").firstNotNullOfOrNull { pattern ->
+        runCatching { SimpleDateFormat(pattern, Locale.US).apply { isLenient = false }.parse(input)?.time }.getOrNull()
+    }
+}
 
 @Composable
 private fun TaskTableHeaderCell(column: TaskTableColumn, compact: Boolean) {
@@ -1605,7 +1610,7 @@ private fun CompactGroupedTaskTable(
     properties: List<TaskPropertyDefinition>,
     propertyValues: List<TaskPropertyValue>,
     checklistItems: List<TaskChecklistItem>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
     onPropertyClick: (TaskItem, TaskPropertyDefinition) -> Unit,
     onTaskClick: (TaskItem) -> Unit,
     onNewTask: (TaskColumnItem) -> Unit,
@@ -1707,7 +1712,7 @@ private fun FocusedTaskPropertyDialog(
     columns: List<TaskColumnItem>,
     tags: List<Tag>,
     anchor: Rect?,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
     onPickAttachment: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1794,7 +1799,7 @@ private fun TaskLabelsPropertyEditor(
     property: TaskPropertyDefinition,
     raw: String,
     tags: List<Tag>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
 ) {
     var query by remember(task.id, property.id) { mutableStateOf("") }
     val initial = raw.ifBlank { task.labels }
@@ -2053,6 +2058,13 @@ private fun TaskSwipeRow(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
+    // Do not introduce a swipe background when both gestures are disabled. The previous
+    // implementation still painted the enum label "None" behind every row; narrow table cells
+    // then exposed that text around their edges and made row numbers look like clipped labels.
+    if (startAction == TaskGestureAction.None && endAction == TaskGestureAction.None) {
+        Box(modifier = modifier) { content() }
+        return
+    }
     val accent = MaterialTheme.colorScheme.primary
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
@@ -2075,6 +2087,7 @@ private fun TaskSwipeRow(
                 SwipeToDismissBoxValue.EndToStart -> endAction
                 SwipeToDismissBoxValue.Settled -> TaskGestureAction.None
             }
+            if (action == TaskGestureAction.None) return@SwipeToDismissBox
             val tint = if (action == TaskGestureAction.Delete) MaterialTheme.colorScheme.error else accent
             Box(
                 Modifier
@@ -2205,6 +2218,29 @@ private fun formatTaskTimeRange(startAt: Long?, dueAt: Long?, allDay: Boolean): 
     val start = startAt ?: dueAt!!
     val end = dueAt ?: start
     return "${fmt.format(Date(start))} – ${fmt.format(Date(end))}"
+}
+
+private fun formatClockField(timestamp: Long?): String = timestamp?.let {
+    SimpleDateFormat("HH:mm", Locale.US).format(Date(it))
+}.orEmpty()
+
+private fun parseClock(value: String): Pair<Int, Int>? {
+    val parts = value.trim().split(':')
+    if (parts.size != 2) return null
+    val hour = parts[0].toIntOrNull() ?: return null
+    val minute = parts[1].toIntOrNull() ?: return null
+    return if (hour in 0..23 && minute in 0..59) hour to minute else null
+}
+
+private fun withClockTime(timestamp: Long, value: String): Long {
+    val (hour, minute) = parseClock(value) ?: return timestamp
+    return Calendar.getInstance().apply {
+        timeInMillis = timestamp
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
 }
 
 @Composable
@@ -2607,7 +2643,7 @@ private fun AdaptiveTaskPage(
     taskObjectId: Long?,
     comments: List<WorkspaceComment>,
     files: List<WorkspaceFileItem>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
     onPickAttachment: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -2877,16 +2913,17 @@ private fun NewTaskPageContent(
         val startAt = parseTaskDraftDate(start)
         val endAt = parseTaskDraftDate(end)
         val dueAt = parseTaskDraftDate(due)
+        val timed = listOf(start, end, due).any { it.contains(':') }
         val values = buildMap {
             put(TaskPropertyType.Status, selectedColumn.name)
             put(TaskPropertyType.Priority, priority.name)
             if (note.isNotBlank()) put(TaskPropertyType.Text, note.trim())
             if (startAt != null || endAt != null) {
                 val type = if (properties.any { it.type == TaskPropertyType.Date }) TaskPropertyType.Date else TaskPropertyType.DueDate
-                put(type, TaskDateRangeCodec.encode(TaskDateRange(startAt, endAt, allDay = true)))
+                put(type, TaskDateRangeCodec.encode(TaskDateRange(startAt, endAt, allDay = !timed)))
             }
             if (dueAt != null) {
-                put(TaskPropertyType.DueDate, TaskDateRangeCodec.encode(TaskDateRange(startAt ?: dueAt, dueAt, allDay = true)))
+                put(TaskPropertyType.DueDate, TaskDateRangeCodec.encode(TaskDateRange(startAt ?: dueAt, dueAt, allDay = !timed)))
             }
         }
         onCreate(
@@ -2960,12 +2997,12 @@ private fun NewTaskPageContent(
                         }
                     }
                     Text("Dates", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        CompactTaskDraftField("Start", start, { start = it }, Modifier.weight(1f))
-                        CompactTaskDraftField("End", end, { end = it }, Modifier.weight(1f))
-                        CompactTaskDraftField("Due", due, { due = it }, Modifier.weight(1f))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        CompactTaskDraftField("Start", start, { start = it }, Modifier.fillMaxWidth())
+                        CompactTaskDraftField("End", end, { end = it }, Modifier.fillMaxWidth())
+                        CompactTaskDraftField("Due", due, { due = it }, Modifier.fillMaxWidth())
                     }
-                    Text("Use YYYY-MM-DD", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Use YYYY-MM-DD for all-day work or YYYY-MM-DD HH:mm for an exact time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -3101,7 +3138,7 @@ private fun TaskItem.resolveAccent(fallback: Color): Color =
     colorArgb?.let { Color(it.toInt()) } ?: fallback
 
 @Composable
-private fun TaskColorPalette(task: TaskItem, viewModel: NotesViewModel) {
+private fun TaskColorPalette(task: TaskItem, viewModel: DocsViewModel) {
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(14.dp),
@@ -3156,7 +3193,7 @@ private fun MainPropertiesCard(
     propertyValues: List<TaskPropertyValue>,
     columns: List<TaskColumnItem>,
     tags: List<Tag>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
 ) {
     var editing by remember(task.id) { mutableStateOf<TaskPropertyDefinition?>(null) }
     var expanded by remember(task.id) { mutableStateOf(true) }
@@ -3273,7 +3310,7 @@ private fun TaskChecklistSummaryCard(
     propertyIndex: Int,
     propertyCount: Int,
     items: List<TaskChecklistItem>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
 ) {
     if (property.hiddenWhenEmpty && items.isEmpty()) return
     var newItem by remember(task.id, property.id) { mutableStateOf("") }
@@ -3357,7 +3394,7 @@ private fun TaskNotesSection(
     value: TaskPropertyValue?,
     columns: List<TaskColumnItem>,
     tags: List<Tag>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
 ) {
     val displayed = property.displayValue(task, value?.valueJson.orEmpty())
     if (property.hiddenWhenEmpty && displayed.isBlank()) return
@@ -3372,7 +3409,7 @@ private fun TaskNotesSection(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Outlined.TextFields, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                Text("Notes", fontWeight = FontWeight.Bold)
+                Text("Docs", fontWeight = FontWeight.Bold)
             }
             Surface(
                 shape = RoundedCornerShape(12.dp),
@@ -3430,7 +3467,7 @@ private fun MainPropertyEditDialog(
     property: TaskPropertyDefinition,
     value: TaskPropertyValue?,
     columns: List<TaskColumnItem>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
     onDismiss: () -> Unit,
 ) {
     when (property.type) {
@@ -3537,7 +3574,7 @@ private fun TaskPropertyBlock(
     value: TaskPropertyValue?,
     checklistItems: List<TaskChecklistItem>,
     columns: List<TaskColumnItem>,
-    viewModel: NotesViewModel,
+    viewModel: DocsViewModel,
     onPickAttachment: () -> Unit,
 ) {
     if (property.hiddenWhenEmpty && value?.valueJson.isNullOrBlank() && checklistItems.isEmpty()) return
@@ -3664,7 +3701,7 @@ private fun PropertyPreviewCard(value: String, property: TaskPropertyDefinition)
 }
 
 @Composable
-private fun TextPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, initial: String, viewModel: NotesViewModel) {
+private fun TextPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, initial: String, viewModel: DocsViewModel) {
     var editing by remember(task.id, property.id, initial) { mutableStateOf(initial.isBlank()) }
     var text by remember(task.id, property.id, initial) { mutableStateOf(initial) }
     if (!editing) {
@@ -3717,7 +3754,7 @@ private fun TextPropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
 }
 
 @Composable
-private fun DatePropertyEditor(task: TaskItem, property: TaskPropertyDefinition, raw: String, viewModel: NotesViewModel) {
+private fun DatePropertyEditor(task: TaskItem, property: TaskPropertyDefinition, raw: String, viewModel: DocsViewModel) {
     val initial = remember(raw, task.startAt, task.dueAt) {
         TaskDateRangeCodec.decode(raw, task.dueAt).let { range ->
             range.copy(startAt = range.startAt ?: task.startAt ?: task.dueAt, endAt = range.endAt ?: task.dueAt)
@@ -3726,6 +3763,8 @@ private fun DatePropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
     var draft by remember(task.id, property.id, initial) { mutableStateOf(initial) }
     var showPicker by remember { mutableStateOf(false) }
     var pickingStart by remember { mutableStateOf(true) }
+    var startTime by remember(task.id, property.id, draft.startAt) { mutableStateOf(formatClockField(draft.startAt)) }
+    var endTime by remember(task.id, property.id, draft.endAt) { mutableStateOf(formatClockField(draft.endAt)) }
 
     fun persist(next: TaskDateRange) {
         draft = next.normalized()
@@ -3762,6 +3801,45 @@ private fun DatePropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
         Text("All day", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
         Switch(checked = draft.allDay, onCheckedChange = { persist(draft.copy(allDay = it)) })
     }
+    if (!draft.allDay) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = startTime,
+                onValueChange = { startTime = it.take(5) },
+                modifier = Modifier.weight(1f),
+                label = { Text("Start time") },
+                placeholder = { Text("09:00") },
+                singleLine = true,
+                isError = startTime.isNotBlank() && parseClock(startTime) == null,
+                colors = taskTextFieldColors(),
+            )
+            OutlinedTextField(
+                value = endTime,
+                onValueChange = { endTime = it.take(5) },
+                modifier = Modifier.weight(1f),
+                label = { Text("End time") },
+                placeholder = { Text("10:00") },
+                singleLine = true,
+                isError = endTime.isNotBlank() && parseClock(endTime) == null,
+                colors = taskTextFieldColors(),
+            )
+            FilledTonalButton(
+                enabled = parseClock(startTime) != null && parseClock(endTime) != null && (draft.startAt != null || draft.endAt != null),
+                onClick = {
+                    val startBase = draft.startAt ?: draft.endAt ?: return@FilledTonalButton
+                    val endBase = draft.endAt ?: draft.startAt ?: return@FilledTonalButton
+                    persist(
+                        draft.copy(
+                            startAt = withClockTime(startBase, startTime),
+                            endAt = withClockTime(endBase, endTime),
+                            allDay = false,
+                        ),
+                    )
+                },
+            ) { Text("Apply") }
+        }
+        Text("Use 24-hour HH:mm time. Reminders use the exact saved time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(listOf(null to "No reminder", 0 to "At time", 60 to "1 hour", 1440 to "1 day")) { (minutes, label) ->
             AssistChip(
@@ -3791,7 +3869,7 @@ private fun DatePropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
 }
 
 @Composable
-private fun ChoicePropertyEditor(task: TaskItem, property: TaskPropertyDefinition, selected: String, choices: List<String>, viewModel: NotesViewModel) {
+private fun ChoicePropertyEditor(task: TaskItem, property: TaskPropertyDefinition, selected: String, choices: List<String>, viewModel: DocsViewModel) {
     var editing by remember(task.id, property.id, selected) { mutableStateOf(selected.isBlank()) }
     var draft by remember(task.id, property.id, selected) { mutableStateOf(selected) }
     if (!editing) {
@@ -3825,7 +3903,7 @@ private fun ChoicePropertyEditor(task: TaskItem, property: TaskPropertyDefinitio
 }
 
 @Composable
-private fun CheckboxPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, raw: String, viewModel: NotesViewModel) {
+private fun CheckboxPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, raw: String, viewModel: DocsViewModel) {
     val checked = raw.toBoolean()
     var editing by remember(task.id, property.id, raw) { mutableStateOf(raw.isBlank()) }
     var draft by remember(task.id, property.id, raw) { mutableStateOf(checked) }
@@ -3859,7 +3937,7 @@ private fun CheckboxPropertyEditor(task: TaskItem, property: TaskPropertyDefinit
 }
 
 @Composable
-private fun FilesPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, raw: String, viewModel: NotesViewModel, onPickAttachment: () -> Unit) {
+private fun FilesPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, raw: String, viewModel: DocsViewModel, onPickAttachment: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Icon(Icons.Outlined.AttachFile, null)
         Text(task.attachmentName ?: raw.ifBlank { "Empty" }, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -3871,7 +3949,7 @@ private fun FilesPropertyEditor(task: TaskItem, property: TaskPropertyDefinition
 }
 
 @Composable
-private fun ChecklistPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, items: List<TaskChecklistItem>, viewModel: NotesViewModel) {
+private fun ChecklistPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, items: List<TaskChecklistItem>, viewModel: DocsViewModel) {
     var newItem by remember(task.id, property.id) { mutableStateOf("") }
     items.progressPercent()?.let {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -3954,7 +4032,7 @@ private fun TaskDetailDialog(
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Task", fontWeight = FontWeight.Black, fontSize = 24.sp)
                 OutlinedTextField(title, { title = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Name") }, colors = taskTextFieldColors())
-                OutlinedTextField(description, { description = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp), label = { Text("Notes") }, colors = taskTextFieldColors())
+                OutlinedTextField(description, { description = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp), label = { Text("Docs") }, colors = taskTextFieldColors())
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(TaskStatus.entries) { value -> AssistChip(onClick = { status = value }, label = { Text(if (status == value) "${value.label()} ✓" else value.label()) }) }
                 }

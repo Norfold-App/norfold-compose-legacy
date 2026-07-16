@@ -48,14 +48,14 @@ import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.TaskPriority
 import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 @Composable
-fun ObjectDetailScreen(state: NotesUiState, viewModel: NotesViewModel, modifier: Modifier = Modifier) {
+fun ObjectDetailScreen(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier = Modifier) {
     val obj = state.selectedObject
     if (obj == null) {
         EmptyObjectDetail(viewModel, modifier)
@@ -138,7 +138,7 @@ fun ObjectDetailScreen(state: NotesUiState, viewModel: NotesViewModel, modifier:
                                 detail = "${it.historyType.name} · ${it.actor} · ${relative(it.createdAt)}",
                                 icon = Icons.Outlined.History,
                                 color = obj.color,
-                                onClick = {},
+                                onClick = null,
                             )
                         }
                     }
@@ -149,7 +149,7 @@ fun ObjectDetailScreen(state: NotesUiState, viewModel: NotesViewModel, modifier:
 }
 
 @Composable
-private fun EmptyObjectDetail(viewModel: NotesViewModel, modifier: Modifier) {
+private fun EmptyObjectDetail(viewModel: DocsViewModel, modifier: Modifier) {
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("No object selected", fontWeight = FontWeight.Black, fontSize = 22.sp)
@@ -160,7 +160,7 @@ private fun EmptyObjectDetail(viewModel: NotesViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun ObjectHero(obj: WorkspaceObject, state: NotesUiState, viewModel: NotesViewModel) {
+private fun ObjectHero(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
     Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f), tonalElevation = 2.dp) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -199,7 +199,7 @@ private fun ObjectHero(obj: WorkspaceObject, state: NotesUiState, viewModel: Not
 }
 
 @Composable
-private fun SourcePreview(obj: WorkspaceObject, state: NotesUiState, viewModel: NotesViewModel) {
+private fun SourcePreview(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
     ObjectSection("Source", "Live data behind this object", iconFor(obj.objectType)) {
         when (obj.objectType) {
             WorkspaceObjectType.Note -> {
@@ -236,13 +236,6 @@ private fun SourcePreview(obj: WorkspaceObject, state: NotesUiState, viewModel: 
                 val file = state.workspaceFiles.firstOrNull { it.objectId == obj.id }
                 MutedText(file?.let { "${it.displayName}\n${it.mimeType} · ${bytes(it.sizeBytes)}\n${it.uri}" } ?: obj.summary.ifBlank { "File metadata object." })
             }
-            WorkspaceObjectType.Canvas -> {
-                val node = state.canvasNodes.firstOrNull { it.id == obj.sourceId }
-                if (node == null) MutedText("Source canvas block is unavailable.") else {
-                    Text("${if (node.type == com.norfold.app.domain.CanvasNodeType.Note) "Doc" else node.type.name} · x ${"%.2f".format(node.x)} · y ${"%.2f".format(node.y)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                    Text(node.subtitle.ifBlank { "No block text." }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
             WorkspaceObjectType.ChatMessage -> {
                 val message = state.chatMessages.firstOrNull { it.id == obj.sourceId }
                 if (message == null) MutedText("Source chat message is unavailable.") else {
@@ -274,9 +267,9 @@ private fun ObjectSection(title: String, subtitle: String, icon: ImageVector, co
 }
 
 @Composable
-private fun ObjectMiniRow(title: String, detail: String, icon: ImageVector, color: Long, onClick: () -> Unit) {
+private fun ObjectMiniRow(title: String, detail: String, icon: ImageVector, color: Long, onClick: (() -> Unit)?) {
     Surface(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
     ) {
@@ -320,7 +313,6 @@ private fun iconFor(type: WorkspaceObjectType): ImageVector = when (type) {
     WorkspaceObjectType.Goal -> Icons.Outlined.Check
     WorkspaceObjectType.CalendarEvent -> Icons.Outlined.History
     WorkspaceObjectType.File -> Icons.Outlined.Folder
-    WorkspaceObjectType.Canvas -> Icons.Outlined.GridView
     WorkspaceObjectType.ChatMessage -> Icons.Outlined.ChatBubbleOutline
     WorkspaceObjectType.DatabaseRow -> Icons.Outlined.Tag
     WorkspaceObjectType.Workspace -> Icons.Outlined.Folder

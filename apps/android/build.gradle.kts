@@ -38,6 +38,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", buildConfigString(publicConfig("SUPABASE_URL")))
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", buildConfigString(publicConfig("SUPABASE_PUBLISHABLE_KEY")))
+        buildConfigField("String", "GOOGLE_ANDROID_CLIENT_ID", buildConfigString(publicConfig("GOOGLE_ANDROID_CLIENT_ID")))
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", buildConfigString(publicConfig("GOOGLE_SERVER_CLIENT_ID")))
         buildConfigField("String", "GOOGLE_CLOUD_PROJECT_ID", buildConfigString(publicConfig("GOOGLE_CLOUD_PROJECT_ID")))
         buildConfigField("String", "FIREBASE_PROJECT_ID", buildConfigString(publicConfig("FIREBASE_PROJECT_ID")))
@@ -59,7 +60,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // PRE_BETA only: schema mismatches may reset developer/test data. This must be false
+            // before any Beta/RC build leaves the development environment.
+            buildConfigField("boolean", "ALLOW_DESTRUCTIVE_SCHEMA_RESET", "true")
+        }
         release {
+            buildConfigField("boolean", "ALLOW_DESTRUCTIVE_SCHEMA_RESET", "false")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

@@ -1,0 +1,97 @@
+Norfold Source-Available View-Only License
+Version 1.0, 15 July 2026
+
+Copyright (c) 2025-2026 Sheikh (github.com/sheikhti1205). All rights reserved.
+
+1. DEFINITIONS
+
+   "Software" means the source code, object code, assets, brand materials,
+   documentation, and all other files in this repository, in whole or in
+   part, in any form.
+
+   "You" means any individual or legal entity accessing the Software.
+
+   "Licensor" means the copyright holder named above.
+
+2. GRANT
+
+   Subject to the terms of this license, the Licensor grants You a
+   limited, worldwide, royalty-free, non-exclusive, non-transferable,
+   revocable license to:
+
+   a. VIEW and READ the Software for personal reference and evaluation;
+   b. CLONE or FORK the Software solely as necessary to view it through
+      the hosting platform's standard features (e.g. GitHub forks), and
+      solely for the purposes permitted in (a).
+
+3. RESTRICTIONS
+
+   Except as expressly permitted in Section 2, You may NOT, and may not
+   permit or assist others to:
+
+   a. use the Software, or any portion of it, in any product, service,
+      application, or project, whether commercial or non-commercial;
+   b. copy, reproduce, or redistribute the Software or any portion of it
+      outside the hosting platform's standard viewing/forking features;
+   c. modify, adapt, translate, or create derivative works of the
+      Software;
+   d. compile, build, run, or deploy the Software other than for brief
+      local evaluation of whether the code functions as described;
+   e. sublicense, sell, rent, lease, or otherwise transfer rights in the
+      Software;
+   f. use the Software, in whole or in part, to train, fine-tune, or
+      evaluate any machine-learning or artificial-intelligence model or
+      dataset;
+   g. use the "Norfold" name, logo, glyph, or any brand asset in the
+      `brand/`, `docs/assets/`, or `assets/` directories for any purpose;
+   h. remove or alter any copyright, license, or attribution notice.
+
+4. CONTRIBUTIONS
+
+   No license is granted to You to contribute to the Software. If You
+   nevertheless submit any material (including pull requests, patches,
+   issues, or suggestions), You assign all right, title, and interest in
+   that material to the Licensor, and You represent that You have the
+   right to do so. The Licensor is under no obligation to accept, review,
+   or credit any submission.
+
+5. NO TRADEMARK OR PATENT LICENSE
+
+   This license grants no rights to any trademarks, service marks, trade
+   names, or patents of the Licensor.
+
+6. TERMINATION
+
+   This license terminates automatically and immediately if You breach
+   any of its terms. Upon termination You must destroy all copies of the
+   Software in Your possession, including forks and clones. The Licensor
+   may also revoke this license as applied to You at any time by written
+   notice, including notice via the repository.
+
+7. RESERVATION OF RIGHTS
+
+   All rights not expressly granted are reserved by the Licensor. The
+   Software is licensed, not sold. This repository being publicly
+   visible does not make the Software open source, public domain, or
+   free to use.
+
+8. DISCLAIMER OF WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NON-INFRINGEMENT.
+
+9. LIMITATION OF LIABILITY
+
+   IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
+   OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE
+   OR THE USE OF OR OTHER DEALINGS IN THE SOFTWARE.
+
+10. THIRD-PARTY COMPONENTS
+
+    Third-party dependencies referenced by the build files (e.g. via
+    Gradle, npm, or Deno imports) are NOT part of the Software and
+    remain under their own licenses. This license applies only to the
+    original material in this repository.

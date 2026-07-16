@@ -87,3 +87,13 @@ If the repo wrapper is unavailable locally, use any compatible Gradle install/wr
 - Crop flows for profile images, workspace visuals, and note covers.
 - Compose UI/screenshot regression tests for compact phones, tablets, landscape, keyboard, and theme variants.
 - Release signing and CI APK artifact publishing.
+
+## License
+
+**Source-available, view-only. Not open source.**
+
+This code is published so it can be read, not reused. You may browse and
+fork on GitHub for viewing; you may **not** use, copy, modify, redistribute,
+or build on this code or the Norfold brand assets in any project. See
+[LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for the full terms.
+External contributions are not accepted ([CONTRIBUTING.md](CONTRIBUTING.md)).

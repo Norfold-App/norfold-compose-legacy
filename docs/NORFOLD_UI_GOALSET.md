@@ -61,7 +61,7 @@ This goalset is complete only after every visible acceptance item above is imple
 
 ## Active Side Tasks (July 12 Emulator Notes)
 
-These remain subordinate to the ordered hard gates in `CODEX_PROMPT.md`, but must be completed alongside the related destination work.
+These remain subordinate to the ordered hard gates in `codex-handoffs/tasks-board-calendar/CODEX_PROMPT.md`, but must be completed alongside the related destination work.
 
 - [x] Rename the current compact Tasks "Table" presentation to `List`; reserve `Table` for the AppFlowy spreadsheet implementation from `Table view of tasks (2).png`.
 - [ ] Add positional, animated drag feedback before drop for note blocks, table rows/columns, task rows, Kanban cards/columns, checklist rows, sidebar nodes, and every other reorderable surface.
@@ -82,7 +82,7 @@ These remain subordinate to the ordered hard gates in `CODEX_PROMPT.md`, but mus
 - [x] Give every block type a long-press/context menu with actions specific to that block instead of one generic menu for everything; match the latest popup screenshot in `C:\Users\sheik\Downloads\Update`.
 - [ ] Restore a compact phone/tablet formatting bar for text-compatible blocks alongside slash insertion, with keyboard-safe positioning and no duplicate commands.
 - [ ] Add Editor & Markdown settings that let users enable or disable individual block types, slash suggestions, the compact formatting bar, automatic rich inline rendering, and other per-block editing affordances.
-- [ ] Treat the rich-inline menus, formatting bar, and per-block settings as follow-up work after the ordered `CODEX_PROMPT.md` gates; they remain mandatory and must not interrupt Area 0 stabilization.
+- [ ] Treat the rich-inline menus, formatting bar, and per-block settings as follow-up work after the ordered `codex-handoffs/tasks-board-calendar/CODEX_PROMPT.md` gates; they remain mandatory and must not interrupt Area 0 stabilization.
 - [x] Replace plain Material three-dot menus with a polished, adaptive pill treatment by default. Menus must use system light/dark surfaces and restrained borders/shadows, without adding decorative page backgrounds.
 - [x] Add organized Editor & Markdown appearance controls for contextual menus and toolbars: `Pill` (default), `Block`, and `Minimal`, plus color behavior `App accent` or `Follow theme`.
 - [ ] Apply the selected contextual-menu treatment consistently to editor blocks, task cells/cards, checklist rows, sidebar nodes, files, comments, and other three-dot/long-press surfaces so the premium interaction language is shared across the app.

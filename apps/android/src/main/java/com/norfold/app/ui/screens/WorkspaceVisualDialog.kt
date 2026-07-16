@@ -52,15 +52,15 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.norfold.app.branding.BuiltInCovers
 import com.norfold.app.domain.WorkspaceIconKind
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 
 enum class WorkspaceVisualTab { Identity, CoverPermissions }
 
 @Composable
 fun WorkspaceVisualDialog(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     initialTab: WorkspaceVisualTab = WorkspaceVisualTab.Identity,
     onDismiss: () -> Unit,
 ) {
@@ -162,8 +162,8 @@ fun WorkspaceVisualDialog(
 
 @Composable
 fun CreateWorkspaceVisualDialog(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("New Workspace") }

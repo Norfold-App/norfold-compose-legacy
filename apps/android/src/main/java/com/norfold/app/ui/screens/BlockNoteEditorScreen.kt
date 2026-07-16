@@ -8,7 +8,11 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.net.Uri
+import android.print.PrintAttributes
+import android.print.PrintManager
 import android.provider.OpenableColumns
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +42,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,7 +51,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.norfold.app.ui.components.NorfoldBottomSheet
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -76,15 +81,12 @@ import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.HorizontalRule
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.ScreenRotation
-import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.material.icons.outlined.Title
 import com.norfold.app.ui.components.NorfoldDialog
@@ -95,6 +97,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -107,6 +110,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -121,6 +126,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -131,6 +137,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.Key
@@ -140,6 +148,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -166,6 +175,8 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -194,10 +205,15 @@ import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.Edge
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.EmbedMetadata
+import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EmojiInline
 import com.norfold.app.domain.FileBlock
 import com.norfold.app.domain.DocOutline
+import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocPagination
+import com.norfold.app.domain.DocSectionAction
+import com.norfold.app.domain.DocSections
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.HeadingBlock
@@ -215,6 +231,8 @@ import com.norfold.app.domain.pathOf
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MathInline
 import com.norfold.app.domain.MarkdownBlockCodec
+import com.norfold.app.domain.MarkdownExporter
+import com.norfold.app.domain.DocxExporter
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.MentionInline
 import com.norfold.app.domain.NumberedListBlock
@@ -228,8 +246,8 @@ import com.norfold.app.domain.TableCell
 import com.norfold.app.domain.TagInline
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.TodoItem
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.LocalContextualMenuColor
 import com.norfold.app.ui.LocalContextualMenuStyle
 import com.norfold.app.domain.ContextualMenuColor
@@ -251,8 +269,8 @@ import kotlin.math.roundToInt
 
 @Composable
 fun BlockNoteEditorScreen(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     modifier: Modifier,
     onOpenSidebar: () -> Unit,
 ) {
@@ -275,23 +293,48 @@ fun BlockNoteEditorScreen(
     var activeSelection by remember(note.id) { mutableStateOf<EditorSelection?>(null) }
     var linkEditorRequest by remember(note.id) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
-    val overlapScrollState = rememberScrollState()
-    val outlineScope = rememberCoroutineScope()
-    var showOutline by remember { mutableStateOf(false) }
+    val overlapViewport = remember(note.id) { FreeformViewport() }
+    // Page-mode paginated render path (a render path within Reflow, not a third mode): opt-in
+    // WYSIWYG preview toggled from the doc-settings menu. Session-local by design — the reflow
+    // list below stays the default and the only editing surface.
+    var paginatedView by remember(note.id) { mutableStateOf(false) }
+    // The print-source WebView must outlive the composable frame that created it: the print
+    // framework pulls pages from it asynchronously after the menu closes.
+    var printSource by remember { mutableStateOf<WebView?>(null) }
+    var pendingDocx by remember { mutableStateOf<ByteArray?>(null) }
+    val docxLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ) { uri ->
+        val bytes = pendingDocx
+        pendingDocx = null
+        if (uri != null && bytes != null) {
+            context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+        }
+    }
     // Sidebar ToC taps: resolve the heading to its top-level ancestor, then scroll the Reflow list
-    // (or pan the free-overlap canvas to the block's stored y) and consume the one-shot request.
+    // (or pan the free-canvas viewport to the block's stored position) and consume the request.
     val scrollRequest by viewModel.scrollToBlockRequest.collectAsState()
     val screenDensity = LocalDensity.current
     LaunchedEffect(scrollRequest) {
         val request = scrollRequest ?: return@LaunchedEffect
         val entry = DocOutline.extract(renderedDocument).firstOrNull { it.blockId == request.blockId }
         val topId = entry?.topLevelId ?: request.blockId
-        if (note.overlapMode == DocOverlapMode.Overlap) {
+        if (note.overlapMode != DocOverlapMode.Reflow) {
             val y = (note.freeformLayout[topId]?.y ?: 0f) - 12f
-            overlapScrollState.animateScrollTo(with(screenDensity) { y.coerceAtLeast(0f).dp.roundToPx() })
+            val yPx = with(screenDensity) { y.coerceAtLeast(0f).dp.toPx() }
+            overlapViewport.offset = Offset(overlapViewport.offset.x, -yPx * overlapViewport.scale)
         } else {
             val index = renderedDocument.blocks.indexOfFirst { it.id == topId }
-            if (index >= 0) listState.animateScrollToItem(index)
+            if (index >= 0) {
+                if (paginatedView) {
+                    // The paginated preview has no per-block scroll target: drop back to the
+                    // reflow list, which honors the pending position on its next composition.
+                    paginatedView = false
+                    listState.scrollToItem(index)
+                } else {
+                    listState.animateScrollToItem(index)
+                }
+            }
         }
         viewModel.consumeScrollToBlock()
     }
@@ -318,6 +361,33 @@ fun BlockNoteEditorScreen(
         renderedDocument = session.document
         revision++
         focusTarget = cursor
+    }
+
+    // Sidebar ToC section actions: applied to the live session (not the repository) so the
+    // mutation joins the normal undo/redo + debounced autosave path and can't be clobbered
+    // by the session's next flush.
+    val sectionRequest by viewModel.sectionActionRequest.collectAsState()
+    LaunchedEffect(sectionRequest) {
+        val request = sectionRequest ?: return@LaunchedEffect
+        val headingId = request.headingId
+        val applied = when (val action = request.action) {
+            DocSectionAction.Delete -> session.deleteSection(headingId)
+            DocSectionAction.Duplicate -> session.duplicateSection(headingId)
+            DocSectionAction.MoveUp -> {
+                val ids = DocSections.sectionHeadingIds(session.document)
+                val index = ids.indexOf(headingId)
+                if (index > 0) session.moveSectionBefore(headingId, ids[index - 1]) else false
+            }
+            DocSectionAction.MoveDown -> {
+                val ids = DocSections.sectionHeadingIds(session.document)
+                val index = ids.indexOf(headingId)
+                // Insert before the section after next (null = end) to land one slot lower.
+                if (index in 0 until ids.size - 1) session.moveSectionBefore(headingId, ids.getOrNull(index + 2)) else false
+            }
+            is DocSectionAction.MoveBefore -> session.moveSectionBefore(headingId, action.targetHeadingId)
+        }
+        if (applied) changed()
+        viewModel.consumeSectionAction()
     }
 
     // --- Cross-container drag hit-testing (window coordinates) ---
@@ -469,16 +539,22 @@ fun BlockNoteEditorScreen(
         }
     }
 
-    CompositionLocalProvider(LocalEmojiShortcodes provides emojiShortcodes) {
+    val baseEditorDensity = LocalDensity.current
+    val editorFontScale = 0.85f + state.settings.editorFontSize.coerceIn(0f, 1f) * 0.45f
+    val editorFamily = when (state.settings.editorFontFamily) {
+        EditorFontFamily.Sans -> FontFamily.SansSerif
+        EditorFontFamily.Serif -> FontFamily.Serif
+    }
+    CompositionLocalProvider(
+        LocalEmojiShortcodes provides emojiShortcodes,
+        LocalDensity provides Density(baseEditorDensity.density, baseEditorDensity.fontScale * editorFontScale),
+        LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = editorFamily),
+    ) {
     Box(modifier.fillMaxSize().onGloballyPositioned { editorRootOrigin = it.positionInWindow() }) {
     Column(Modifier.fillMaxSize()) {
         BlockEditorHeader(
             title = title,
-            saveLabel = if (savedRevision == revision) "Saved · ${renderedDocument.plainText().split(Regex("\\s+")).count(String::isNotBlank)} words" else "Saving…",
             editMode = editMode,
-            pinned = note.pinned,
-            starred = note.starred,
-            locked = note.locked,
             canUndo = session.canUndo(),
             canRedo = session.canRedo(),
             onTitleChange = { title = it; revision++ },
@@ -495,12 +571,66 @@ fun BlockNoteEditorScreen(
             },
             onUndo = { if (session.undo()) changed() },
             onRedo = { if (session.redo()) changed() },
-            onStar = { viewModel.toggleStar(note) },
-            onPin = { viewModel.togglePin(note) },
-            onLock = { viewModel.toggleLock(note) },
-            onOutline = { showOutline = true },
             overlapMode = note.overlapMode,
-            onSetOverlapMode = { viewModel.setOverlapMode(note, it) },
+            onSetOverlapMode = { mode ->
+                if (mode == DocOverlapMode.Bounded) {
+                    val required = note.canvasSpec.pagesRequiredFor(note.freeformLayout)
+                    if (required > note.canvasSpec.pageCount) {
+                        viewModel.setCanvasSpec(note, note.canvasSpec.copy(pageCount = required))
+                    }
+                }
+                viewModel.setOverlapMode(note, mode)
+            },
+            canvasSpec = note.canvasSpec,
+            minimumCanvasPages = note.canvasSpec.pagesRequiredFor(note.freeformLayout),
+            onSetCanvasSpec = { viewModel.setCanvasSpec(note, it) },
+            paginatedView = paginatedView,
+            onTogglePaginatedView = { paginatedView = !paginatedView },
+            onExportPdf = {
+                // Deterministic print source: Kotlin-side HTML (no async JS render) fed to the
+                // system print service, which owns pagination and the save-as-PDF UI. Uses the
+                // live session document so unsaved edits are included.
+                val jobName = title.ifBlank { "Norfold document" }
+                val web = WebView(context)
+                web.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String?) {
+                        val printManager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
+                        printManager.print(
+                            jobName,
+                            view.createPrintDocumentAdapter(jobName),
+                            PrintAttributes.Builder().setMediaSize(
+                                if (note.overlapMode == DocOverlapMode.Bounded) {
+                                    PrintAttributes.MediaSize(
+                                        "NORFOLD_DOCUMENT",
+                                        "Norfold document",
+                                        (note.canvasSpec.width / 72f * 1000f).roundToInt(),
+                                        (note.canvasSpec.height / 72f * 1000f).roundToInt(),
+                                    )
+                                } else {
+                                    PrintAttributes.MediaSize.ISO_A4
+                                },
+                            ).build(),
+                        )
+                    }
+                }
+                web.loadDataWithBaseURL(
+                    null,
+                    if (note.overlapMode == DocOverlapMode.Bounded) {
+                        MarkdownExporter.canvasPrintHtml(jobName, session.document, note.freeformLayout, note.canvasSpec)
+                    } else {
+                        MarkdownExporter.printHtml(jobName, MarkdownBlockCodec.export(session.document))
+                    },
+                    "text/html",
+                    "utf-8",
+                    null,
+                )
+                printSource = web
+            },
+            onExportDocx = {
+                pendingDocx = DocxExporter.export(title, session.document)
+                val safeName = title.ifBlank { "Norfold document" }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                docxLauncher.launch("$safeName.docx")
+            },
         )
         if (rangeAnchorId != null) {
             DocumentRangeToolbar(
@@ -527,12 +657,18 @@ fun BlockNoteEditorScreen(
         // locally so it can call itself while still capturing the session + editor state. `index` is the
         // top-level lazy index (or -1 when nested); `nested` gates drag/reorder chrome.
         @Composable
-        fun BlockNode(block: DocumentBlock, index: Int, nested: Boolean, rowModifier: Modifier) {
+        fun BlockNode(
+            block: DocumentBlock,
+            index: Int,
+            nested: Boolean,
+            rowModifier: Modifier,
+            contentEditing: Boolean = editMode,
+        ) {
             SharedBlockRow(
                 modifier = rowModifier,
                 block = block,
                 index = index,
-                mode = if (editMode) BlockSurfaceMode.Edit else BlockSurfaceMode.View,
+                mode = if (contentEditing) BlockSurfaceMode.Edit else BlockSurfaceMode.View,
                 focus = focusTarget?.takeIf { it.blockId == block.id },
                 onFocusConsumed = { focusTarget = null },
                 onReplace = { session.replaceBlock(it); changed() },
@@ -637,17 +773,31 @@ fun BlockNoteEditorScreen(
                 isBeingDragged = draggingId == block.id,
                 isDragHovered = dragHoverId == block.id && draggingId != null && !previewReorderActive(),
                 dragHoverEdge = if (dragHoverId == block.id && !previewReorderActive()) dragHoverEdge else null,
-                renderChild = { child -> BlockNode(child, index = -1, nested = true, rowModifier = Modifier) },
+                renderChild = { child ->
+                    BlockNode(child, index = -1, nested = true, rowModifier = Modifier, contentEditing = contentEditing)
+                },
             )
         }
-        if (note.overlapMode == DocOverlapMode.Overlap) {
+        if (note.overlapMode != DocOverlapMode.Reflow) {
             // Free-overlap mode: a completely freeform canvas (absolute x/y, explicit size, z-layers)
             // replaces the stacked list; the Reflow LazyColumn path below is untouched.
             FreeformDocCanvas(
                 blocks = renderedDocument.blocks,
                 layout = note.freeformLayout,
+                canvasSpec = note.canvasSpec.takeIf { note.overlapMode == DocOverlapMode.Bounded },
                 editMode = editMode,
-                onSeedLayout = { viewModel.updateFreeformLayout(note, it) },
+                onSeedLayout = { seeded ->
+                    if (note.overlapMode == DocOverlapMode.Bounded) {
+                        val required = note.canvasSpec.pagesRequiredFor(seeded)
+                        viewModel.updateCanvasLayout(
+                            note,
+                            seeded,
+                            note.canvasSpec.copy(pageCount = maxOf(required, note.canvasSpec.pageCount)),
+                        )
+                    } else {
+                        viewModel.updateFreeformLayout(note, seeded)
+                    }
+                },
                 onCommitPlacement = { id, placement -> viewModel.updateBlockPlacement(note, id, placement) },
                 onBringToFront = { viewModel.bringBlockToFront(note, it) },
                 onBringForward = { viewModel.bringBlockForward(note, it) },
@@ -655,8 +805,18 @@ fun BlockNoteEditorScreen(
                 onSendToBack = { viewModel.sendBlockToBack(note, it) },
                 onBackgroundTap = { if (editMode) { editMode = false; activeSelection = null } },
                 onBackgroundDoubleTap = { if (!editMode) editMode = true },
-                scrollState = overlapScrollState,
+                viewport = overlapViewport,
                 modifier = Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally).imePadding(),
+            ) { block, contentEditing ->
+                BlockNode(block, index = -1, nested = true, rowModifier = Modifier, contentEditing = contentEditing)
+            }
+        } else if (paginatedView && !editMode) {
+            // Page-mode paginated render path: read-only A4 pages; double-tap drops into edit
+            // mode, which always uses the reflow list below — that path stays authoritative.
+            PaginatedDocPages(
+                blocks = renderedDocument.blocks,
+                onBackgroundDoubleTap = { editMode = true },
+                modifier = Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally),
             ) { block -> BlockNode(block, index = -1, nested = true, rowModifier = Modifier) }
         } else {
         // Live reorder preview: while dragging over a top-level Top/Bottom edge, render the list with
@@ -777,6 +937,10 @@ fun BlockNoteEditorScreen(
                     }
                 }
             },
+            fontFamily = state.settings.editorFontFamily,
+            fontSize = state.settings.editorFontSize,
+            onFontFamily = viewModel::setEditorFontFamily,
+            onFontSize = { size -> viewModel.patchSettings { it.copy(editorFontSize = size.coerceIn(0f, 1f)) } },
         )
     }
     }
@@ -857,51 +1021,6 @@ fun BlockNoteEditorScreen(
             },
         )
     }
-    if (showOutline) {
-        val headings = DocOutline.extract(renderedDocument)
-        NorfoldBottomSheet(onDismissRequest = { showOutline = false }) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
-                Text(
-                    "Outline",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                )
-                if (headings.isEmpty()) {
-                    Text(
-                        "No headings yet. Add a heading to build an outline.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 12.dp),
-                    )
-                } else {
-                    headings.forEach { heading ->
-                        val depth = heading.level
-                        Text(
-                            text = heading.label,
-                            fontSize = (17 - (depth.coerceAtMost(4) - 1)).sp,
-                            fontWeight = if (depth <= 1) FontWeight.SemiBold else FontWeight.Normal,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    showOutline = false
-                                    outlineScope.launch {
-                                        if (note.overlapMode == DocOverlapMode.Overlap) {
-                                            val y = (note.freeformLayout[heading.topLevelId]?.y ?: 0f) - 12f
-                                            overlapScrollState.animateScrollTo(with(screenDensity) { y.coerceAtLeast(0f).dp.roundToPx() })
-                                        } else {
-                                            listState.animateScrollToItem(heading.topLevelIndex)
-                                        }
-                                    }
-                                }
-                                .padding(start = ((depth - 1) * 14).dp, top = 10.dp, bottom = 10.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
     linkEditorRequest?.let { request ->
         LinkEditorDialog(
             request = request,
@@ -979,9 +1098,14 @@ private fun FloatingFormattingToolbar(
     onTurnInto: (TextBlockTarget) -> Unit,
     onInsert: (InsertBlockType) -> Unit,
     onMove: (Int) -> Unit,
+    fontFamily: EditorFontFamily,
+    fontSize: Float,
+    onFontFamily: (EditorFontFamily) -> Unit,
+    onFontSize: (Float) -> Unit,
 ) {
     var turnIntoOpen by remember { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     var dragY by remember { mutableStateOf(0f) }
     Surface(
         modifier = modifier.fillMaxWidth().widthIn(max = 720.dp).focusProperties { canFocus = false },
@@ -991,10 +1115,12 @@ private fun FloatingFormattingToolbar(
         tonalElevation = 8.dp,
         shadowElevation = 10.dp,
     ) {
+        Column(Modifier.fillMaxWidth().animateContentSize()) {
         LazyRow(
             modifier = Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            item("expand") { ToolbarTextButton(if (expanded) "⌄" else "⌃", if (expanded) "Collapse formatting bar" else "Expand formatting bar") { expanded = !expanded } }
             item("drag") {
                 Icon(
                     Icons.Outlined.DragIndicator,
@@ -1049,6 +1175,34 @@ private fun FloatingFormattingToolbar(
                     }
                 }
             }
+        }
+        if (expanded) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                item("font-sans") {
+                    ToolbarTextButton("Aa", "Use sans-serif document font", if (fontFamily == EditorFontFamily.Sans) FontWeight.Black else FontWeight.Normal) {
+                        onFontFamily(EditorFontFamily.Sans)
+                    }
+                }
+                item("font-serif") {
+                    ToolbarTextButton("Ag", "Use serif document font", if (fontFamily == EditorFontFamily.Serif) FontWeight.Black else FontWeight.Normal, fontFamily = FontFamily.Serif) {
+                        onFontFamily(EditorFontFamily.Serif)
+                    }
+                }
+                item("font-smaller") { ToolbarTextButton("A−", "Decrease document font size") { onFontSize(fontSize - 0.1f) } }
+                item("font-size") { Text("${(85 + fontSize.coerceIn(0f, 1f) * 45).roundToInt()}%", Modifier.padding(horizontal = 8.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                item("font-larger") { ToolbarTextButton("A+", "Increase document font size") { onFontSize(fontSize + 0.1f) } }
+                item("h1") { ToolbarTextButton("H1", "Heading 1") { onTurnInto(TextBlockTarget.Heading1) } }
+                item("h2") { ToolbarTextButton("H2", "Heading 2") { onTurnInto(TextBlockTarget.Heading2) } }
+                item("quote-expanded") { ToolbarIconButton(Icons.Outlined.FormatQuote, "Quote") { onTurnInto(TextBlockTarget.Quote) } }
+                item("table-expanded") { ToolbarIconButton(Icons.Outlined.TableChart, "Insert table") { onInsert(InsertBlockType.Table) } }
+                item("image-expanded") { ToolbarIconButton(Icons.Outlined.Image, "Insert image") { onInsert(InsertBlockType.Image) } }
+            }
+        }
         }
     }
 }
@@ -1282,17 +1436,36 @@ private fun DocumentBlock.withRenderMode(mode: BlockRenderMode): DocumentBlock =
 private const val FreeformSnapThresholdDp = 6f
 
 /**
- * Free-overlap canvas ([DocOverlapMode.Overlap]): top-level blocks float at absolute dp positions
+ * Pan/zoom viewport for the Infinite-page canvas: [offset] is the world origin's screen position
+ * in px, [scale] the zoom factor. World coordinates stay in dp (matching [FreeformPlacement]).
+ * Hoisted to the editor so the sidebar ToC scroll bridge can pan it from outside the canvas.
+ */
+@Stable
+class FreeformViewport {
+    var offset by mutableStateOf(Offset.Zero)
+    var scale by mutableFloatStateOf(1f)
+}
+
+/**
+ * Infinite-page canvas ([DocOverlapMode.Overlap]): top-level blocks float at absolute dp positions
  * with explicit size and z-order instead of the stacked Reflow list, so anything can be dropped on
- * top of anything (a callout positioned over an image *is* the overlay). Move/resize gestures update
- * a transient local map (same pattern as the workspace canvas) and persist on gesture end; z always
- * comes from the stored layout so the layer menu applies instantly. While a block moves, other
- * blocks' edges/centers within [FreeformSnapThresholdDp] snap the drag and draw dashed guides.
+ * top of anything (a callout positioned over an image *is* the overlay). The whole canvas pans and
+ * pinch-zooms through [FreeformViewport] (same transform machinery as the workspace canvas board).
+ *
+ * Manipulation is selection-based: in edit mode a tap selects a block (an input overlay keeps the
+ * tap from reaching the block's content), dragging anywhere on the selected block moves it, and the
+ * resize handle + layer menu render only on the selection. Tapping the selected block again
+ * "enters" it — the overlay lifts so its content becomes editable; the background tap clears the
+ * selection before it exits edit mode. Move/resize gestures update a transient local map and
+ * persist on gesture end; z always comes from the stored layout so the layer menu applies
+ * instantly. While a block moves, other blocks' edges/centers within [FreeformSnapThresholdDp]
+ * snap the drag and draw dashed guides.
  */
 @Composable
 private fun FreeformDocCanvas(
     blocks: List<DocumentBlock>,
     layout: Map<String, FreeformPlacement>,
+    canvasSpec: DocCanvasSpec?,
     editMode: Boolean,
     onSeedLayout: (Map<String, FreeformPlacement>) -> Unit,
     onCommitPlacement: (String, FreeformPlacement) -> Unit,
@@ -1302,9 +1475,9 @@ private fun FreeformDocCanvas(
     onSendToBack: (String) -> Unit,
     onBackgroundTap: () -> Unit,
     onBackgroundDoubleTap: () -> Unit,
-    scrollState: ScrollState,
+    viewport: FreeformViewport,
     modifier: Modifier = Modifier,
-    renderBlock: @Composable (DocumentBlock) -> Unit,
+    renderBlock: @Composable (DocumentBlock, contentEditing: Boolean) -> Unit,
 ) {
     // Blocks without a stored placement (first entry into Overlap mode, or newly inserted) cascade
     // down the page below the lowest existing block, each on its own fresh top layer.
@@ -1343,6 +1516,15 @@ private fun FreeformDocCanvas(
         return (localPlacements[id] ?: stored).copy(z = stored.z)
     }
     var movingId by remember { mutableStateOf<String?>(null) }
+    // Selection: tap selects, tapping the selection again enters it for content editing.
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    var enteredId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(editMode) {
+        if (!editMode) {
+            selectedId = null
+            enteredId = null
+        }
+    }
     val verticalGuides = remember { mutableStateListOf<Float>() }
     val horizontalGuides = remember { mutableStateListOf<Float>() }
     fun clearGuides() {
@@ -1361,23 +1543,62 @@ private fun FreeformDocCanvas(
         return best
     }
     val zOrder = effectiveLayout.entries.sortedWith(compareBy({ it.value.z }, { it.key })).map { it.key }
-    val contentHeight = ((blocks.maxOfOrNull { block -> displayed(block.id).let { it.y + it.height } } ?: 480f) + 320f).dp
+    val bounded = canvasSpec?.normalized()
+    val contentWidth = (bounded?.width ?: ((blocks.maxOfOrNull { block -> displayed(block.id).let { it.x + it.width } } ?: 480f) + 320f)).dp
+    val contentHeight = (bounded?.totalHeight ?: ((blocks.maxOfOrNull { block -> displayed(block.id).let { it.y + it.height } } ?: 480f) + 320f)).dp
     val guideColor = MaterialTheme.colorScheme.primary
+    val pageColor = MaterialTheme.colorScheme.surface
+    val pageOutline = MaterialTheme.colorScheme.outlineVariant
     Box(
         modifier
-            .verticalScroll(scrollState)
+            .clipToBounds()
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { onBackgroundTap() },
+                    onTap = {
+                        // First tap calms the canvas (clears selection); only a tap on an already
+                        // calm background exits edit mode.
+                        if (selectedId != null || enteredId != null) {
+                            selectedId = null
+                            enteredId = null
+                        } else {
+                            onBackgroundTap()
+                        }
+                    },
                     onDoubleTap = { onBackgroundDoubleTap() },
                 )
+            }
+            .pointerInput(Unit) {
+                // Screen-space pinch-zoom + pan; zoom anchors at the gesture centroid so the point
+                // under the fingers stays put. Block-level drags consume their events first, which
+                // cancels this detector for that gesture.
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    val oldScale = viewport.scale
+                    val newScale = (oldScale * zoom).coerceIn(0.5f, 2.5f)
+                    viewport.offset = centroid - (centroid - viewport.offset) * (newScale / oldScale) + pan
+                    viewport.scale = newScale
+                }
             },
     ) {
         Box(
             Modifier
-                .fillMaxWidth()
-                .height(contentHeight)
+                .wrapContentSize(align = Alignment.TopStart, unbounded = true)
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0f)
+                    translationX = viewport.offset.x
+                    translationY = viewport.offset.y
+                    scaleX = viewport.scale
+                    scaleY = viewport.scale
+                }
+                .size(contentWidth, contentHeight)
                 .drawBehind {
+                    bounded?.let { spec ->
+                        repeat(spec.pageCount) { pageIndex ->
+                            val top = (pageIndex * (spec.height + spec.pageGap)).dp.toPx()
+                            val height = spec.height.dp.toPx()
+                            drawRect(pageColor, topLeft = Offset(0f, top), size = androidx.compose.ui.geometry.Size(size.width, height))
+                            drawRect(pageOutline, topLeft = Offset(0f, top), size = androidx.compose.ui.geometry.Size(size.width, height), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+                        }
+                    }
                     if (verticalGuides.isEmpty() && horizontalGuides.isEmpty()) return@drawBehind
                     val dash = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 6.dp.toPx()))
                     verticalGuides.forEach { x ->
@@ -1392,9 +1613,11 @@ private fun FreeformDocCanvas(
                 key(block.id) {
                     val placement = displayed(block.id)
                     val moving = movingId == block.id
+                    val selected = selectedId == block.id
+                    val entered = enteredId == block.id
                     var layerMenu by remember { mutableStateOf(false) }
                     Surface(
-                        color = MaterialTheme.colorScheme.surface,
+                        color = if (editMode) MaterialTheme.colorScheme.surface.copy(alpha = 0.96f) else Color.Transparent,
                         shape = RoundedCornerShape(10.dp),
                         tonalElevation = if (editMode) 1.dp else 0.dp,
                         modifier = Modifier
@@ -1403,8 +1626,11 @@ private fun FreeformDocCanvas(
                             .zIndex(placement.z.toFloat() + if (moving) 1000f else 0f)
                             .dragLift(lifted = moving, cornerRadius = 10.dp)
                             .then(
-                                if (editMode) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-                                else Modifier,
+                                when {
+                                    selected || entered -> Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
+                                    editMode -> Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                    else -> Modifier
+                                },
                             ),
                     ) {
                         Box(Modifier.fillMaxSize()) {
@@ -1412,89 +1638,98 @@ private fun FreeformDocCanvas(
                                 Modifier
                                     .fillMaxSize()
                                     .clip(RoundedCornerShape(10.dp))
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                            ) { renderBlock(block) }
-                            if (editMode) {
-                                Row(
-                                    Modifier.align(Alignment.TopEnd).padding(2.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Box {
-                                        Icon(
-                                            Icons.Outlined.Layers,
-                                            contentDescription = "Layer options",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .size(26.dp)
-                                                .clip(CircleShape)
-                                                .clickable { layerMenu = true }
-                                                .padding(4.dp),
-                                        )
-                                        DropdownMenu(expanded = layerMenu, onDismissRequest = { layerMenu = false }) {
-                                            Text(
-                                                "Layer ${zOrder.indexOf(block.id) + 1} of ${zOrder.size}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                            )
-                                            DropdownMenuItem(text = { Text("Bring to front") }, onClick = { layerMenu = false; onBringToFront(block.id) })
-                                            DropdownMenuItem(text = { Text("Bring forward") }, onClick = { layerMenu = false; onBringForward(block.id) })
-                                            DropdownMenuItem(text = { Text("Send backward") }, onClick = { layerMenu = false; onSendBackward(block.id) })
-                                            DropdownMenuItem(text = { Text("Send to back") }, onClick = { layerMenu = false; onSendToBack(block.id) })
+                                    .padding(horizontal = if (editMode) 8.dp else 0.dp, vertical = if (editMode) 6.dp else 0.dp),
+                            ) { renderBlock(block, entered) }
+                            if (editMode && !entered) {
+                                // Input overlay: intercepts pointer input so a tap selects (then enters)
+                                // the block instead of reaching its content, and dragging anywhere on the
+                                // selected block moves it. Lifts once the block is entered for editing.
+                                Box(
+                                    Modifier
+                                        .matchParentSize()
+                                        .pointerInput(block.id) {
+                                            detectTapGestures {
+                                                if (selectedId == block.id) {
+                                                    enteredId = block.id
+                                                } else {
+                                                    selectedId = block.id
+                                                    enteredId = null
+                                                }
+                                            }
                                         }
-                                    }
+                                        .pointerInput(block.id, selected) {
+                                            if (!selected) return@pointerInput
+                                            detectDragGestures(
+                                                onDragStart = { movingId = block.id },
+                                                onDragEnd = {
+                                                    movingId = null
+                                                    clearGuides()
+                                                    localPlacements[block.id]?.let { onCommitPlacement(block.id, it) }
+                                                },
+                                                onDragCancel = {
+                                                    movingId = null
+                                                    clearGuides()
+                                                    localPlacements.remove(block.id)
+                                                },
+                                            ) { change, dragAmount ->
+                                                change.consume()
+                                                val stored = latestLayout.value[block.id] ?: FreeformPlacement()
+                                                val current = localPlacements[block.id] ?: stored
+                                                var nx = current.x + dragAmount.x.toDp().value
+                                                var ny = (current.y + dragAmount.y.toDp().value).coerceAtLeast(0f)
+                                                clearGuides()
+                                                val others = latestBlocks.value
+                                                    .filter { it.id != block.id }
+                                                    .map { displayed(it.id, latestLayout.value) }
+                                                snapDelta(
+                                                    listOf(nx, nx + current.width / 2f, nx + current.width),
+                                                    others.flatMap { listOf(it.x, it.x + it.width / 2f, it.x + it.width) },
+                                                )?.let { (d, guide) ->
+                                                    nx += d
+                                                    verticalGuides.add(guide)
+                                                }
+                                                snapDelta(
+                                                    listOf(ny, ny + current.height / 2f, ny + current.height),
+                                                    others.flatMap { listOf(it.y, it.y + it.height / 2f, it.y + it.height) },
+                                                )?.let { (d, guide) ->
+                                                    ny += d
+                                                    horizontalGuides.add(guide)
+                                                }
+                                                bounded?.let { spec ->
+                                                    nx = nx.coerceIn(0f, (spec.width - current.width).coerceAtLeast(0f))
+                                                    ny = ny.coerceIn(0f, (spec.totalHeight - current.height).coerceAtLeast(0f))
+                                                }
+                                                localPlacements[block.id] = current.copy(x = nx, y = ny)
+                                            }
+                                        },
+                                )
+                            }
+                            if (selected || entered) {
+                                Box(Modifier.align(Alignment.TopEnd).padding(2.dp)) {
                                     Icon(
-                                        Icons.Outlined.DragIndicator,
-                                        contentDescription = "Move block",
+                                        Icons.Outlined.Layers,
+                                        contentDescription = "Layer options",
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier
                                             .size(26.dp)
                                             .clip(CircleShape)
-                                            .pointerInput(block.id) {
-                                                detectDragGestures(
-                                                    onDragStart = { movingId = block.id },
-                                                    onDragEnd = {
-                                                        movingId = null
-                                                        clearGuides()
-                                                        localPlacements[block.id]?.let { onCommitPlacement(block.id, it) }
-                                                    },
-                                                    onDragCancel = {
-                                                        movingId = null
-                                                        clearGuides()
-                                                        localPlacements.remove(block.id)
-                                                    },
-                                                ) { change, dragAmount ->
-                                                    change.consume()
-                                                    val stored = latestLayout.value[block.id] ?: FreeformPlacement()
-                                                    val current = localPlacements[block.id] ?: stored
-                                                    var nx = current.x + dragAmount.x.toDp().value
-                                                    var ny = (current.y + dragAmount.y.toDp().value).coerceAtLeast(0f)
-                                                    clearGuides()
-                                                    val others = latestBlocks.value
-                                                        .filter { it.id != block.id }
-                                                        .map { displayed(it.id, latestLayout.value) }
-                                                    snapDelta(
-                                                        listOf(nx, nx + current.width / 2f, nx + current.width),
-                                                        others.flatMap { listOf(it.x, it.x + it.width / 2f, it.x + it.width) },
-                                                    )?.let { (d, guide) ->
-                                                        nx += d
-                                                        verticalGuides.add(guide)
-                                                    }
-                                                    snapDelta(
-                                                        listOf(ny, ny + current.height / 2f, ny + current.height),
-                                                        others.flatMap { listOf(it.y, it.y + it.height / 2f, it.y + it.height) },
-                                                    )?.let { (d, guide) ->
-                                                        ny += d
-                                                        horizontalGuides.add(guide)
-                                                    }
-                                                    localPlacements[block.id] = current.copy(x = nx, y = ny)
-                                                }
-                                            }
+                                            .clickable { layerMenu = true }
                                             .padding(4.dp),
                                     )
+                                    DropdownMenu(expanded = layerMenu, onDismissRequest = { layerMenu = false }) {
+                                        Text(
+                                            "Layer ${zOrder.indexOf(block.id) + 1} of ${zOrder.size}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                        )
+                                        DropdownMenuItem(text = { Text("Bring to front") }, onClick = { layerMenu = false; onBringToFront(block.id) })
+                                        DropdownMenuItem(text = { Text("Bring forward") }, onClick = { layerMenu = false; onBringForward(block.id) })
+                                        DropdownMenuItem(text = { Text("Send backward") }, onClick = { layerMenu = false; onSendBackward(block.id) })
+                                        DropdownMenuItem(text = { Text("Send to back") }, onClick = { layerMenu = false; onSendToBack(block.id) })
+                                    }
                                 }
-                                // Corner resize handle.
+                                // Corner resize handle, shown only on the selection.
                                 Box(
                                     Modifier
                                         .align(Alignment.BottomEnd)
@@ -1511,9 +1746,11 @@ private fun FreeformDocCanvas(
                                                 change.consume()
                                                 val stored = latestLayout.value[block.id] ?: FreeformPlacement()
                                                 val current = localPlacements[block.id] ?: stored
+                                                val maxWidth = bounded?.let { (it.width - current.x).coerceAtLeast(120f) } ?: Float.MAX_VALUE
+                                                val maxHeight = bounded?.let { (it.totalHeight - current.y).coerceAtLeast(64f) } ?: Float.MAX_VALUE
                                                 localPlacements[block.id] = current.copy(
-                                                    width = (current.width + dragAmount.x.toDp().value).coerceAtLeast(120f),
-                                                    height = (current.height + dragAmount.y.toDp().value).coerceAtLeast(64f),
+                                                    width = (current.width + dragAmount.x.toDp().value).coerceIn(120f, maxWidth),
+                                                    height = (current.height + dragAmount.y.toDp().value).coerceIn(64f, maxHeight),
                                                 )
                                             }
                                         },
@@ -1527,14 +1764,92 @@ private fun FreeformDocCanvas(
     }
 }
 
+/** ISO A4 portrait aspect: page height = width × √2. */
+private const val PageAspectRatio = 1.41421f
+
+/**
+ * Page-mode paginated render path (WYSIWYG preview): every top-level block is measured once at
+ * the page content width, then packed onto fixed A4-proportioned pages by [DocPagination] —
+ * breaks fall only between blocks, and a block taller than a page gets its own page clipped to
+ * the page bounds. Read-only by design: double-tap enters edit mode, which always falls back to
+ * the reflow list, keeping that proven path authoritative for every mutation.
+ */
+@Composable
+private fun PaginatedDocPages(
+    blocks: List<DocumentBlock>,
+    onBackgroundDoubleTap: () -> Unit,
+    modifier: Modifier = Modifier,
+    renderBlock: @Composable (DocumentBlock) -> Unit,
+) {
+    val pageColor = MaterialTheme.colorScheme.surface
+    val pageOutline = MaterialTheme.colorScheme.outlineVariant
+    val pageLabel = MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier
+            .verticalScroll(rememberScrollState())
+            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { onBackgroundDoubleTap() }) }
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        SubcomposeLayout(Modifier.fillMaxWidth()) { constraints ->
+            val pageWidth = constraints.maxWidth
+            val pageHeight = (pageWidth * PageAspectRatio).roundToInt()
+            val margin = 32.dp.roundToPx()
+            val pageGap = 20.dp.roundToPx()
+            val spacing = 6.dp.roundToPx()
+            val contentWidth = (pageWidth - margin * 2).coerceAtLeast(1)
+            val contentHeight = (pageHeight - margin * 2).coerceAtLeast(1)
+
+            // One measurement per block; the clipToBounds wrapper caps oversized blocks at the
+            // page content bounds instead of letting them bleed across the page gap.
+            val blockPlaceables = blocks.map { block ->
+                subcompose("block-${block.id}") {
+                    Box(Modifier.clipToBounds()) { renderBlock(block) }
+                }.first().measure(Constraints(maxWidth = contentWidth, maxHeight = contentHeight))
+            }
+            val pages = DocPagination.paginate(
+                heights = blockPlaceables.map { it.height.toFloat() },
+                pageHeight = contentHeight.toFloat(),
+                spacing = spacing.toFloat(),
+            )
+            val pagePlaceables = pages.indices.map { index ->
+                subcompose("page-$index") {
+                    Surface(
+                        color = pageColor,
+                        shape = RoundedCornerShape(6.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, pageOutline),
+                        shadowElevation = 2.dp,
+                    ) {
+                        Box(Modifier.fillMaxSize()) {
+                            Text(
+                                "${index + 1} / ${pages.size}",
+                                Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+                                fontSize = 11.sp,
+                                color = pageLabel,
+                            )
+                        }
+                    }
+                }.first().measure(Constraints.fixed(pageWidth, pageHeight))
+            }
+            val totalHeight = if (pages.isEmpty()) 0 else pages.size * pageHeight + (pages.size - 1) * pageGap
+            layout(pageWidth, totalHeight) {
+                pages.forEachIndexed { index, range ->
+                    val pageTop = index * (pageHeight + pageGap)
+                    pagePlaceables[index].place(0, pageTop)
+                    var y = pageTop + margin
+                    for (blockIndex in range) {
+                        blockPlaceables[blockIndex].place(margin, y)
+                        y += blockPlaceables[blockIndex].height + spacing
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun BlockEditorHeader(
     title: String,
-    saveLabel: String,
     editMode: Boolean,
-    pinned: Boolean,
-    starred: Boolean,
-    locked: Boolean,
     canUndo: Boolean,
     canRedo: Boolean,
     onTitleChange: (String) -> Unit,
@@ -1543,12 +1858,15 @@ private fun BlockEditorHeader(
     onToggleEdit: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
-    onStar: () -> Unit,
-    onPin: () -> Unit,
-    onLock: () -> Unit,
-    onOutline: () -> Unit,
     overlapMode: DocOverlapMode,
     onSetOverlapMode: (DocOverlapMode) -> Unit,
+    canvasSpec: DocCanvasSpec,
+    minimumCanvasPages: Int,
+    onSetCanvasSpec: (DocCanvasSpec) -> Unit,
+    paginatedView: Boolean,
+    onTogglePaginatedView: () -> Unit,
+    onExportPdf: () -> Unit,
+    onExportDocx: () -> Unit,
 ) {
     var titleValue by remember { mutableStateOf(TextFieldValue(title)) }
     var titleFocused by remember { mutableStateOf(false) }
@@ -1578,122 +1896,188 @@ private fun BlockEditorHeader(
             } else {
                 Text(title, Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 3)
             }
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = if (overlapMode == DocOverlapMode.Overlap) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Text(
-                    if (overlapMode == DocOverlapMode.Overlap) "Overlap On" else "Reflow",
-                    Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    color = if (overlapMode == DocOverlapMode.Overlap) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            AnimatedContent(editMode, label = "editor-mode") { editing ->
+                if (editing) Row {
+                    IconButton(onClick = onUndo, enabled = canUndo) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") }
+                    IconButton(onClick = onRedo, enabled = canRedo) { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") }
+                } else IconButton(onClick = onToggleEdit) { Icon(Icons.Outlined.Edit, "Edit document") }
             }
-        }
-        Box(Modifier.fillMaxWidth().height(48.dp)) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(end = 112.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AnimatedContent(editMode, label = "editor-mode") { editing ->
-                    if (editing) Row {
-                        IconButton(onClick = onUndo, enabled = canUndo) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") }
-                        IconButton(onClick = onRedo, enabled = canRedo) { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") }
-                    } else IconButton(onClick = onToggleEdit) { Icon(Icons.Outlined.Edit, "Edit document") }
-                }
-                IconButton(onClick = onStar) { Icon(Icons.Outlined.Star, "Star", tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
-                IconButton(onClick = onPin) { Icon(Icons.Outlined.PushPin, "Pin", tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
-                IconButton(onClick = onLock) { Icon(if (locked) Icons.Outlined.Lock else Icons.Outlined.LockOpen, "Lock") }
-                IconButton(onClick = onOutline) { Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, "Outline") }
-                Box {
-                    var showDocSettings by remember { mutableStateOf(false) }
-                    IconButton(onClick = { showDocSettings = true }) { Icon(Icons.Outlined.MoreVert, "Document settings") }
-                    DropdownMenu(expanded = showDocSettings, onDismissRequest = { showDocSettings = false }) {
+            Box {
+                var showDocSettings by remember { mutableStateOf(false) }
+                IconButton(onClick = { showDocSettings = true }) { Icon(Icons.Outlined.MoreVert, "Document settings") }
+                DropdownMenu(expanded = showDocSettings, onDismissRequest = { showDocSettings = false }) {
+                    Text(
+                        "Document settings",
+                        Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Flow document")
+                                Text(
+                                    "Blocks flow in order and adapt to new space",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            if (overlapMode == DocOverlapMode.Reflow) {
+                                Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
+                            } else Spacer(Modifier.size(24.dp))
+                        },
+                        onClick = {
+                            showDocSettings = false
+                            if (overlapMode != DocOverlapMode.Reflow) onSetOverlapMode(DocOverlapMode.Reflow)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Document canvas")
+                                Text(
+                                    "Fixed-size pages with movable, resizable layers",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            if (overlapMode == DocOverlapMode.Bounded) {
+                                Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
+                            } else Spacer(Modifier.size(24.dp))
+                        },
+                        onClick = {
+                            showDocSettings = false
+                            if (overlapMode != DocOverlapMode.Bounded) onSetOverlapMode(DocOverlapMode.Bounded)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Infinite canvas")
+                                Text(
+                                    "Free canvas — place and overlap blocks anywhere",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            if (overlapMode == DocOverlapMode.Overlap) {
+                                Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
+                            } else Spacer(Modifier.size(24.dp))
+                        },
+                        onClick = {
+                            showDocSettings = false
+                            if (overlapMode != DocOverlapMode.Overlap) onSetOverlapMode(DocOverlapMode.Overlap)
+                        },
+                    )
+                    if (overlapMode == DocOverlapMode.Bounded) {
+                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
                         Text(
-                            "Document settings",
-                            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            "Canvas · ${canvasSpec.width.roundToInt()} × ${canvasSpec.height.roundToInt()} pt · ${canvasSpec.pageCount} page${if (canvasSpec.pageCount == 1) "" else "s"}",
+                            Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        DropdownMenuItem(text = { Text("A4 portrait") }, onClick = { showDocSettings = false; onSetCanvasSpec(DocCanvasSpec.a4().copy(pageCount = canvasSpec.pageCount)) })
+                        DropdownMenuItem(text = { Text("US Letter portrait") }, onClick = { showDocSettings = false; onSetCanvasSpec(DocCanvasSpec.letter().copy(pageCount = canvasSpec.pageCount)) })
+                        DropdownMenuItem(text = { Text("US Legal portrait") }, onClick = { showDocSettings = false; onSetCanvasSpec(DocCanvasSpec.legal().copy(pageCount = canvasSpec.pageCount)) })
+                        DropdownMenuItem(
+                            text = { Text("Swap portrait / landscape") },
+                            onClick = { showDocSettings = false; onSetCanvasSpec(canvasSpec.copy(width = canvasSpec.height, height = canvasSpec.width)) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add page") },
+                            onClick = { showDocSettings = false; onSetCanvasSpec(canvasSpec.copy(pageCount = canvasSpec.pageCount + 1).normalized()) },
+                        )
+                        if (canvasSpec.pageCount > minimumCanvasPages) {
+                            DropdownMenuItem(
+                                text = { Text("Remove last page") },
+                                onClick = { showDocSettings = false; onSetCanvasSpec(canvasSpec.copy(pageCount = canvasSpec.pageCount - 1).normalized()) },
+                            )
+                        }
+                    }
+                    if (overlapMode == DocOverlapMode.Reflow) {
                         DropdownMenuItem(
                             text = {
                                 Column {
-                                    Text("Reflow")
+                                    Text("Paginated view")
                                     Text(
-                                        "Blocks push down and adapt to new space",
+                                        "Preview the document as fixed A4 pages",
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                             },
                             leadingIcon = {
-                                if (overlapMode == DocOverlapMode.Reflow) {
+                                if (paginatedView) {
                                     Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
                                 } else Spacer(Modifier.size(24.dp))
                             },
                             onClick = {
                                 showDocSettings = false
-                                if (overlapMode != DocOverlapMode.Reflow) onSetOverlapMode(DocOverlapMode.Reflow)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Free overlap")
-                                    Text(
-                                        "Allow overlapping blocks — permit blocks to\nbe dropped on top of existing content",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                            leadingIcon = {
-                                if (overlapMode == DocOverlapMode.Overlap) {
-                                    Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
-                                } else Spacer(Modifier.size(24.dp))
-                            },
-                            onClick = {
-                                showDocSettings = false
-                                if (overlapMode != DocOverlapMode.Overlap) onSetOverlapMode(DocOverlapMode.Overlap)
-                            },
-                        )
-                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Re-render all blocks")
-                                    Text(
-                                        "Clears the render cache and redraws every engine block",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                            onClick = {
-                                showDocSettings = false
-                                RenderCache.rerenderAll()
+                                onTogglePaginatedView()
                             },
                         )
                     }
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Export PDF")
+                                Text(
+                                    "Print or save via the system print dialog",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.PictureAsPdf, null) },
+                        onClick = {
+                            showDocSettings = false
+                            onExportPdf()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Export editable DOCX")
+                                Text(
+                                    "Preserves headings and text flow; free positioning is flattened",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        onClick = {
+                            showDocSettings = false
+                            onExportDocx()
+                        },
+                    )
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Re-render all blocks")
+                                Text(
+                                    "Clears the render cache and redraws every engine block",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                        onClick = {
+                            showDocSettings = false
+                            RenderCache.rerenderAll()
+                        },
+                    )
                 }
-            }
-            Surface(
-                modifier = Modifier.align(Alignment.CenterEnd).width(108.dp),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = .96f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Text(
-                    saveLabel,
-                    Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    color = if (saveLabel.startsWith("Saved")) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                )
             }
         }
     }

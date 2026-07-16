@@ -87,14 +87,21 @@ private fun darkScheme(accent: Color): androidx.compose.material3.ColorScheme {
     )
 }
 
-private val NorfoldTypography = Typography(
-    headlineLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 28.sp),
-    headlineMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 22.sp),
-    titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 18.sp),
-    titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
-    bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 15.sp),
-    bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 13.sp),
-    labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 13.sp),
+private fun appFontFamily(name: String): FontFamily = when (name.lowercase()) {
+    "serif" -> FontFamily.Serif
+    "mono", "monospace" -> FontFamily.Monospace
+    "system", "default" -> FontFamily.Default
+    else -> FontFamily.SansSerif
+}
+
+private fun norfoldTypography(family: FontFamily) = Typography(
+    headlineLarge = TextStyle(fontFamily = family, fontWeight = FontWeight.Bold, fontSize = 28.sp),
+    headlineMedium = TextStyle(fontFamily = family, fontWeight = FontWeight.Bold, fontSize = 22.sp),
+    titleLarge = TextStyle(fontFamily = family, fontWeight = FontWeight.SemiBold, fontSize = 18.sp),
+    titleMedium = TextStyle(fontFamily = family, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
+    bodyLarge = TextStyle(fontFamily = family, fontSize = 15.sp),
+    bodyMedium = TextStyle(fontFamily = family, fontSize = 13.sp),
+    labelLarge = TextStyle(fontFamily = family, fontWeight = FontWeight.SemiBold, fontSize = 13.sp),
 )
 
 private val NorfoldShapes = Shapes(
@@ -135,9 +142,11 @@ fun NorfoldTheme(settings: AppSettings, content: @Composable () -> Unit) {
     val widthDp = LocalConfiguration.current.screenWidthDp
     val minimumScale = if (widthDp >= 720) 0.98f else 0.90f
     val scale = settings.uiScale.coerceIn(minimumScale, 1.12f)
+    val layoutScale = scale * if (settings.uiDensityCompact) 0.92f else 1f
+    val typography = norfoldTypography(appFontFamily(settings.appFont))
     CompositionLocalProvider(
         LocalDensity provides Density(
-            density = density.density * scale,
+            density = density.density * layoutScale,
             fontScale = density.fontScale * scale,
         ),
         LocalContextualMenuStyle provides settings.contextualMenuStyle,
@@ -146,7 +155,7 @@ fun NorfoldTheme(settings: AppSettings, content: @Composable () -> Unit) {
     ) {
         MaterialTheme(
             colorScheme = if (dark) darkScheme(accent) else lightScheme(accent),
-            typography = NorfoldTypography,
+            typography = typography,
             shapes = NorfoldShapes,
             content = content,
         )

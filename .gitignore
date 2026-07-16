@@ -12,6 +12,7 @@ apps/web/dist/
 
 # Android/Gradle
 .gradle/
+gradle-user-home/
 .kotlin/
 local.properties
 norfold.properties
@@ -21,8 +22,12 @@ norfold.properties
 service-account*.json
 supabase/.env
 supabase/.env.*
+supabase/.temp/
 apps/android/build/
 apps/android/.gradle/
+
+# Local agent/tool indexes
+.serena/
 
 # Parallel mission runtime state
 codex-handoffs/coordination/locks/
@@ -44,3 +49,4 @@ build/
 .idea/
 .metadata
 *.iml
+apps/android/google-services.json

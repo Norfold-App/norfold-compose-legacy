@@ -9,8 +9,11 @@ import io.github.jan.supabase.auth.providers.builtin.IDToken
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.functions.Functions
 import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.storage.Storage
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 object NorfoldSupabase {
     val clientOrNull: SupabaseClient? by lazy {
@@ -53,5 +56,19 @@ object NorfoldSupabase {
             this.email = email
             this.password = password
         }
+    }
+
+    /** Returns false when the app is operating locally without an authenticated cloud account. */
+    suspend fun claimProfileHandleIfSignedIn(handle: String, displayName: String): Boolean {
+        val configuredClient = clientOrNull ?: return false
+        if (configuredClient.auth.currentUserOrNull() == null) return false
+        configuredClient.postgrest.rpc(
+            function = "claim_profile_handle",
+            parameters = buildJsonObject {
+                put("p_handle", handle)
+                put("p_display_name", displayName)
+            },
+        )
+        return true
     }
 }

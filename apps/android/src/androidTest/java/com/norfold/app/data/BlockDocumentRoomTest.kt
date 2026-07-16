@@ -9,6 +9,7 @@ import com.norfold.app.domain.BlockCursor
 import com.norfold.app.domain.BlockEditorSession
 import com.norfold.app.domain.BoldInline
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.FileBlock
 import com.norfold.app.domain.HeadingBlock
@@ -72,7 +73,7 @@ class BlockDocumentRoomTest {
         val loaded = dao.noteById(8)!!.toDomain()
         val changed = original.copy(blocks = listOf(first.copy(content = listOf(InlineText("changed"))), second))
 
-        NotesRepository(database).updateNote(loaded, loaded.title, changed, setOf(first.id))
+        DocsRepository(database).updateNote(loaded, loaded.title, changed, setOf(first.id))
 
         val rows = dao.blocksForNote(8).associateBy(NoteBlockEntity::id)
         assertTrue(rows.getValue("first").updatedAt > 100)
@@ -81,12 +82,26 @@ class BlockDocumentRoomTest {
     }
 
     @Test
+    fun overlapModeDefaultsToReflowAndRoundTripsThroughRoom() = runBlocking {
+        dao.insertNote(note(id = 20, searchText = ""))
+        val stored = dao.noteById(20)!!.toDomain()
+        assertEquals(DocOverlapMode.Reflow, stored.overlapMode)
+
+        DocsRepository(database).setOverlapMode(stored, DocOverlapMode.Overlap)
+
+        assertEquals(DocOverlapMode.Overlap, dao.noteById(20)!!.toDomain().overlapMode)
+        // The stored literal is the lowercase enum name — the compat contract docOverlapModeOf
+        // decodes ("reflow"/"overlap"), never the UI labels ("Page"/"Infinite page").
+        assertEquals("overlap", dao.noteById(20)!!.note.overlapMode)
+    }
+
+    @Test
     fun newBlankNoteHasOneEmptyParagraphAndNoDuplicateHeading() = runBlocking {
         dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
         dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
-        val id = NotesRepository(database).createNote(title = "Untitled note", body = "")
+        val id = DocsRepository(database).createNote(title = "Untitled doc", body = "")
         val note = dao.noteById(id)!!.toDomain()
-        assertEquals("Untitled note", note.title)
+        assertEquals("Untitled doc", note.title)
         assertEquals(1, note.document.blocks.size)
         assertTrue(note.document.blocks.single() is ParagraphBlock)
         assertEquals("", note.document.blocks.single().plainText())
@@ -108,7 +123,7 @@ class BlockDocumentRoomTest {
         val session = BlockEditorSession(loaded.document)
 
         session.replaceSelection(BlockCursor(first.id, 2), BlockCursor(third.id, 2), "X")
-        NotesRepository(database).updateNote(loaded, loaded.title, session.document, session.dirtyBlockIds)
+        DocsRepository(database).updateNote(loaded, loaded.title, session.document, session.dirtyBlockIds)
 
         assertEquals(listOf("first"), dao.blocksForNote(9).map(NoteBlockEntity::id))
         assertEquals("alXmma", dao.noteById(9)!!.toDomain().document.plainText())
@@ -119,7 +134,7 @@ class BlockDocumentRoomTest {
     fun taskTagsAreCaseInsensitiveWithinBoardAndIndependentAcrossBoards() = runBlocking {
         dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
         dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
-        val repository = NotesRepository(database)
+        val repository = DocsRepository(database)
 
         val first = repository.addTaskTag(7, "#Planning")
         val same = repository.addTaskTag(7, "planning")
@@ -133,7 +148,7 @@ class BlockDocumentRoomTest {
 
     @Test
     fun emptyDatabaseSeedsCompleteGuideExactlyOnce() = runBlocking {
-        val repository = NotesRepository(database)
+        val repository = DocsRepository(database)
 
         repository.ensureSeedData()
         val notesAfterFirstSeed = dao.allNotesSnapshot().map { it.toDomain() }
@@ -162,7 +177,7 @@ class BlockDocumentRoomTest {
         dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
         dao.insertTask(TaskEntity(title = "Keep this task", workspaceId = 1, createdAt = 1, updatedAt = 1))
 
-        NotesRepository(database).ensureSeedData()
+        DocsRepository(database).ensureSeedData()
 
         assertTrue(dao.allNotesSnapshot().any { it.note.title == "Rich blocks playground" })
         assertEquals(listOf("Keep this task"), dao.allTasks().map { it.title })

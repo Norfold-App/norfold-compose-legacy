@@ -416,6 +416,49 @@ class BlockEditorSession(initial: BlockDocument) {
         moveInto(blockId, parentId = null, index = rootIndex + 1)
     }
 
+    // --- Sidebar ToC section operations (top-level heading + its following blocks) ---
+
+    /** Removes a whole section. No-op if [headingId] is not a top-level heading. */
+    fun deleteSection(headingId: String): Boolean {
+        val range = DocSections.rangeFor(document, headingId) ?: return false
+        val removed = document.blocks.slice(range)
+        markRemoved(removed.map { it.id })
+        mutate(emptySet()) { blocks -> blocks.filterIndexed { i, _ -> i !in range } }
+        return true
+    }
+
+    /** Duplicates a section (fresh ids) directly after itself. */
+    fun duplicateSection(headingId: String): Boolean {
+        val range = DocSections.rangeFor(document, headingId) ?: return false
+        val copies = document.blocks.slice(range).map { it.withFreshIds() }
+        mutate(copies.mapTo(linkedSetOf()) { it.id }) { blocks ->
+            blocks.subList(0, range.last + 1) + copies + blocks.subList(range.last + 1, blocks.size)
+        }
+        return true
+    }
+
+    /**
+     * Moves a whole section so it starts where [targetHeadingId]'s section starts (or to the end of
+     * the document when null). Both ids must be top-level headings; no-op otherwise or when the
+     * target sits inside the moving section.
+     */
+    fun moveSectionBefore(headingId: String, targetHeadingId: String?): Boolean {
+        val range = DocSections.rangeFor(document, headingId) ?: return false
+        val insertAt = if (targetHeadingId == null) document.blocks.size else {
+            val targetRange = DocSections.rangeFor(document, targetHeadingId) ?: return false
+            if (targetRange.first in range) return false
+            targetRange.first
+        }
+        if (insertAt in range.first..(range.last + 1)) return false
+        val section = document.blocks.slice(range)
+        mutate(document.blocks.mapTo(linkedSetOf()) { it.id }) { blocks ->
+            val without = blocks.filterIndexed { i, _ -> i !in range }
+            val adjusted = if (insertAt > range.last) insertAt - section.size else insertAt
+            without.subList(0, adjusted) + section + without.subList(adjusted, without.size)
+        }
+        return true
+    }
+
     fun undo(): Boolean {
         val previous = undo.removeLastOrNull() ?: return false
         redo += document
