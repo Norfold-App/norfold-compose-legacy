@@ -2,6 +2,7 @@ package com.norfold.app.cloud
 
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.OtpType
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.providers.builtin.Email
@@ -56,6 +57,33 @@ object NorfoldSupabase {
             this.email = email
             this.password = password
         }
+    }
+
+    /** Confirms a signup with the 6-digit code from the "Confirm signup" email and starts the session. */
+    suspend fun verifySignupCode(email: String, code: String) {
+        ExternalServiceConfig.requireSupabase()
+        client.auth.verifyEmailOtp(type = OtpType.Email.SIGNUP, email = email, token = code)
+    }
+
+    suspend fun resendSignupCode(email: String) {
+        ExternalServiceConfig.requireSupabase()
+        client.auth.resendEmail(OtpType.Email.SIGNUP, email)
+    }
+
+    suspend fun requestPasswordReset(email: String) {
+        ExternalServiceConfig.requireSupabase()
+        client.auth.resetPasswordForEmail(email)
+    }
+
+    /** Confirms a password reset with the 6-digit code from the "Reset password" email and starts a recovery session. */
+    suspend fun verifyRecoveryCode(email: String, code: String) {
+        ExternalServiceConfig.requireSupabase()
+        client.auth.verifyEmailOtp(type = OtpType.Email.RECOVERY, email = email, token = code)
+    }
+
+    suspend fun updatePassword(newPassword: String) {
+        ExternalServiceConfig.requireSupabase()
+        client.auth.updateUser { password = newPassword }
     }
 
     /** Returns false when the app is operating locally without an authenticated cloud account. */
