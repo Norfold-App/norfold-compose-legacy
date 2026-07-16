@@ -317,6 +317,8 @@ object MarkdownBlockCodec {
     }
 
     private fun blockMarkdown(block: DocumentBlock): String = when (block) {
+        // Unknown blocks have no markdown form; they exist only in structured storage.
+        is UnknownBlock -> ""
         is ParagraphBlock -> block.content.markdown()
         is HeadingBlock -> "${"#".repeat(block.level.coerceIn(1, 6))} ${block.content.markdown()}"
         is BulletListBlock -> listMarkdown(block.items, "- ")
