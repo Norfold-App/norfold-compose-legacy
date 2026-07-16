@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,14 +50,14 @@ import com.norfold.app.branding.NorfoldLogo
 import com.norfold.app.branding.palette
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.ThemeMode
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MobileTopBar(state: NotesUiState, viewModel: NotesViewModel) {
+fun MobileTopBar(state: DocsUiState, viewModel: DocsViewModel) {
     CenterAlignedTopAppBar(
         title = {
             Text(destinationTitle(state.destination), fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1)
@@ -83,7 +86,6 @@ private fun destinationTitle(d: Destination): String = when (d) {
     Destination.Tags -> "Tags"
     Destination.Search -> "Search"
     Destination.Tasks -> "Tasks"
-    Destination.Canvas -> "Canvas"
     Destination.Chat -> "Chat"
     Destination.ConflictReview -> "Conflicts"
     Destination.SyncMonitor -> "Sync"
@@ -93,7 +95,7 @@ private fun destinationTitle(d: Destination): String = when (d) {
 }
 
 @Composable
-fun DesktopTopBar(state: NotesUiState, viewModel: NotesViewModel) {
+fun DesktopTopBar(state: DocsUiState, viewModel: DocsViewModel) {
     Row(
         Modifier.fillMaxWidth().padding(WindowInsets.statusBars.asPaddingValues()).padding(18.dp, 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -115,49 +117,56 @@ fun DesktopTopBar(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-fun MobileBottomBar(state: NotesUiState, viewModel: NotesViewModel) {
+fun MobileBottomBar(state: DocsUiState, viewModel: DocsViewModel) {
     Box(
         Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .height(88.dp)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(0.dp),
-            shadowElevation = 0.dp,
-            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth().height(68.dp).align(Alignment.BottomCenter),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            shape = RoundedCornerShape(28.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)),
+            shadowElevation = 14.dp,
+            tonalElevation = 3.dp,
         ) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 7.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 NavBarItem("Home", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub, Modifier.weight(1f)) { viewModel.go(Destination.WorkspaceHub) }
                 NavBarItem("Docs", Icons.Outlined.Description, state.destination in setOf(Destination.NotesHome, Destination.NoteEditor, Destination.Notebooks, Destination.Tags), Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Surface(
-                        modifier = Modifier.size(48.dp),
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primary,
-                        shadowElevation = 8.dp,
-                        onClick = {
-                            when (state.destination) {
-                                Destination.Tasks -> viewModel.createTaskAndOpen()
-                                Destination.Calendar -> {
-                                    val start = System.currentTimeMillis() + 3_600_000L
-                                    viewModel.createCalendarEvent("New event", start, start + 3_600_000L)
-                                }
-                                else -> viewModel.createNote()
-                            }
-                        },
-                    ) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Add, "Create", tint = MaterialTheme.colorScheme.onPrimary) } }
-                    Text("Create", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                Spacer(Modifier.weight(1f))
                 NavBarItem("Tasks", Icons.Outlined.Checklist, state.destination in setOf(Destination.Tasks, Destination.Calendar), Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
                 NavBarItem("Chat", Icons.Outlined.ChatBubbleOutline, state.destination == Destination.Chat, Modifier.weight(1f)) { viewModel.go(Destination.Chat) }
             }
+        }
+        Column(
+            modifier = Modifier.align(Alignment.TopCenter).offset(y = (-4).dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Surface(
+                modifier = Modifier.size(62.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                border = BorderStroke(5.dp, MaterialTheme.colorScheme.background),
+                shadowElevation = 16.dp,
+                onClick = {
+                    when (state.destination) {
+                        Destination.Tasks, Destination.Calendar -> viewModel.createTaskAndOpen()
+                        else -> viewModel.createNote()
+                    }
+                },
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Add, "Create", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(30.dp))
+                }
+            }
+            Text("Create", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

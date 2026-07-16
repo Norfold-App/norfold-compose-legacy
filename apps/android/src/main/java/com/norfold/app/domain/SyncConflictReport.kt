@@ -25,8 +25,6 @@ data class ConflictSideSummary(
     val goals: Int,
     val calendarEvents: Int,
     val chatMessages: Int,
-    val canvasNodes: Int,
-    val canvasEdges: Int,
     val workspaceObjects: Int,
     val objectLinks: Int,
     val files: Int,
@@ -96,8 +94,6 @@ object SyncConflictReport {
             goals = json.optInt("goals"),
             calendarEvents = json.optInt("calendarEvents"),
             chatMessages = json.optInt("chatMessages"),
-            canvasNodes = json.optInt("canvasNodes"),
-            canvasEdges = json.optInt("canvasEdges"),
             workspaceObjects = json.optInt("workspaceObjects"),
             objectLinks = json.optInt("objectLinks"),
             files = json.optInt("files"),
@@ -139,8 +135,6 @@ object SyncConflictReport {
         .put("goals", goals.size)
         .put("calendarEvents", calendarEvents.size)
         .put("chatMessages", chatMessages.size)
-        .put("canvasNodes", canvasNodes.size)
-        .put("canvasEdges", canvasEdges.size)
         .put("workspaceObjects", workspaceObjects.size)
         .put("objectLinks", workspaceObjectLinks.size)
         .put("files", workspaceFiles.size)
@@ -160,7 +154,6 @@ object SyncConflictReport {
         goals.maxOfOrNull { it.updatedAt } ?: 0L,
         calendarEvents.maxOfOrNull { it.updatedAt } ?: 0L,
         chatMessages.maxOfOrNull { it.createdAt } ?: 0L,
-        canvasNodes.maxOfOrNull { it.updatedAt } ?: 0L,
         workspaceObjects.maxOfOrNull { it.updatedAt } ?: 0L,
         workspaceFiles.maxOfOrNull { it.updatedAt } ?: 0L,
         workspaceComments.maxOfOrNull { it.updatedAt } ?: 0L,
@@ -176,7 +169,6 @@ object SyncConflictReport {
         addAll(taskChecklistItems.map { SnapshotObject("Task checklist", it.id.toString(), it.text, it.updatedAt, if (it.checked) "checked" else "open") })
         addAll(goals.map { SnapshotObject("Goal", it.syncId, it.title, it.updatedAt, "${it.progress}/${it.target} ${it.unit}") })
         addAll(calendarEvents.map { SnapshotObject("Calendar event", it.syncId, it.title, it.updatedAt, it.description.take(120)) })
-        addAll(canvasNodes.map { SnapshotObject("Canvas", it.id.toString(), it.title, it.updatedAt, it.subtitle.take(120)) })
         addAll(workspaceFiles.map { SnapshotObject("File", it.id.toString(), it.displayName, it.updatedAt, it.mimeType) })
         addAll(workspaceObjects.map { SnapshotObject(if (it.objectType == WorkspaceObjectType.Note) "Doc" else it.objectType.name, it.sourceId?.toString() ?: "object-${it.id}", it.title, it.updatedAt, it.summary.take(120)) })
     }
@@ -214,7 +206,6 @@ object SyncConflictReport {
         addAll(goals.map { SnapshotObject("Goal", it.syncId, it.title, it.updatedAt, "${it.workspaceId}\n${it.title}\n${it.description}\n${it.owner}\n${it.target}\n${it.progress}\n${it.unit}\n${it.dueAt}\n${it.status}") })
         addAll(calendarEvents.map { SnapshotObject("Calendar event", it.syncId, it.title, it.updatedAt, "${it.workspaceId}\n${it.title}\n${it.description}\n${it.startAt}\n${it.endAt}\n${it.allDay}\n${it.color}\n${it.source}\n${it.externalId}") })
         addAll(chatMessages.map { SnapshotObject("Chat", it.id.toString(), it.authorDisplayName, it.createdAt, "${it.authorUsername}\n${it.body}\n${it.attachmentName.orEmpty()}") })
-        addAll(canvasNodes.map { SnapshotObject("Canvas", it.id.toString(), it.title, it.updatedAt, "${it.title}\n${it.subtitle}\n${it.type}\n${it.targetUri.orEmpty()}") })
         addAll(workspaceFiles.map { SnapshotObject("File", it.id.toString(), it.displayName, it.updatedAt, "${it.displayName}\n${it.mimeType}\n${it.uri}\n${it.sizeBytes}") })
         addAll(workspaceComments.map { SnapshotObject("Comment", it.id.toString(), it.authorDisplayName, it.updatedAt, "${it.objectId}\n${it.body}\n${it.resolved}") })
     }

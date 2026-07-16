@@ -3,26 +3,27 @@ package com.norfold.app.ui
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.data.BackupFolderStore
+import com.norfold.app.data.BiometricVaultKeyStore
 import com.norfold.app.data.CloudFolderSyncStore
 import com.norfold.app.data.DiagnosticsState
 import com.norfold.app.data.DiagnosticsStore
 import com.norfold.app.data.GoogleDriveApiSyncStore
 import com.norfold.app.data.GoogleDriveAuthStore
 import com.norfold.app.data.NorfoldDatabase
-import com.norfold.app.data.NotesRepository
+import com.norfold.app.data.DocsRepository
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.BackupCodec
-import com.norfold.app.domain.CanvasEdgeItem
-import com.norfold.app.domain.CanvasNodeItem
-import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.DocLayerOrder
+import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocSectionAction
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
@@ -73,7 +74,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class NotesUiState(
+data class DocsUiState(
     val notes: List<Note> = emptyList(),
     val notebooks: List<Notebook> = emptyList(),
     val tags: List<Tag> = emptyList(),
@@ -84,8 +85,6 @@ data class NotesUiState(
     val taskPropertyValues: List<TaskPropertyValue> = emptyList(),
     val taskChecklistItems: List<TaskChecklistItem> = emptyList(),
     val chatMessages: List<ChatMessageItem> = emptyList(),
-    val canvasNodes: List<CanvasNodeItem> = emptyList(),
-    val canvasEdges: List<CanvasEdgeItem> = emptyList(),
     val workspaceObjects: List<WorkspaceObject> = emptyList(),
     val workspaceObjectLinks: List<WorkspaceObjectLink> = emptyList(),
     val workspaceActivities: List<WorkspaceActivity> = emptyList(),
@@ -95,13 +94,14 @@ data class NotesUiState(
     val goals: List<GoalItem> = emptyList(),
     val calendarEvents: List<CalendarEventItem> = emptyList(),
     val workspaces: List<Workspace> = emptyList(),
-    val settings: AppSettings = NotesRepository.defaultSettings,
+    val settings: AppSettings = DocsRepository.defaultSettings,
     val selectedNote: Note? = null,
     val selectedObject: WorkspaceObject? = null,
     val destination: Destination = Destination.WorkspaceHub,
     val tab: HomeTab = HomeTab.AllNotes,
     val searchQuery: String = "",
     val selectedNotebookId: Long? = null,
+    val selectedTagId: Long? = null,
     val locked: Boolean = false,
     val syncing: Boolean = false,
     val googleDriveConnected: Boolean = false,
@@ -114,6 +114,13 @@ data class NotesUiState(
 /** A one-shot request from the sidebar ToC to scroll the open Doc to a block. */
 data class ScrollToBlockRequest(val blockId: String, val serial: Long)
 
+/**
+ * A one-shot request from the sidebar ToC to mutate a section of the open Doc. Applied by the
+ * editor against its live [BlockEditorSession] (never the repository directly) so undo/redo and
+ * the debounced autosave path stay authoritative.
+ */
+data class SectionActionRequest(val headingId: String, val action: DocSectionAction, val serial: Long)
+
 private data class NavigationState(
     val selectedNoteId: Long?,
     val selectedObjectId: Long?,
@@ -121,6 +128,7 @@ private data class NavigationState(
     val tab: HomeTab,
     val searchQuery: String,
     val selectedNotebookId: Long?,
+    val selectedTagId: Long?,
     val locked: Boolean,
     val syncing: Boolean,
     val sidebarOpen: Boolean,
@@ -143,8 +151,6 @@ private data class WorkspaceDataState(
     val taskPropertyValues: List<TaskPropertyValue>,
     val taskChecklistItems: List<TaskChecklistItem>,
     val chatMessages: List<ChatMessageItem>,
-    val canvasNodes: List<CanvasNodeItem>,
-    val canvasEdges: List<CanvasEdgeItem>,
     val workspaceObjects: List<WorkspaceObject>,
     val workspaceObjectLinks: List<WorkspaceObjectLink>,
     val workspaceActivities: List<WorkspaceActivity>,
@@ -157,9 +163,9 @@ private data class WorkspaceDataState(
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class NotesViewModel(application: Application) : AndroidViewModel(application) {
+class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
-    private val repository = NotesRepository(NorfoldDatabase.get(application))
+    private val repository = DocsRepository(NorfoldDatabase.get(application))
     private val syncStore = CloudFolderSyncStore(application)
     private val googleDriveAuthStore = GoogleDriveAuthStore(application)
     private val googleDriveApiSyncStore = GoogleDriveApiSyncStore(application, googleDriveAuthStore)
@@ -169,6 +175,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private val tab = MutableStateFlow(HomeTab.AllNotes)
     private val searchQuery = MutableStateFlow("")
     private val selectedNotebookFilterId = MutableStateFlow<Long?>(null)
+    private val selectedTagFilterId = MutableStateFlow<Long?>(null)
     private val selectedNoteId = MutableStateFlow<Long?>(null)
     private val selectedObjectId = MutableStateFlow<Long?>(null)
     private val locked = MutableStateFlow(false)
@@ -180,17 +187,24 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private var scrollToBlockSerial = 0L
     private val _scrollToBlockRequest = MutableStateFlow<ScrollToBlockRequest?>(null)
     val scrollToBlockRequest: StateFlow<ScrollToBlockRequest?> = _scrollToBlockRequest.asStateFlow()
+    private var sectionActionSerial = 0L
+    private val _sectionActionRequest = MutableStateFlow<SectionActionRequest?>(null)
+    val sectionActionRequest: StateFlow<SectionActionRequest?> = _sectionActionRequest.asStateFlow()
     private val conflictReport = MutableStateFlow<ParsedSyncConflictReport?>(null)
     private val diagnostics = MutableStateFlow(diagnosticsStore.state())
     private val message = MutableStateFlow<String?>(null)
     private var sessionSyncSecret: String? = null
+    private var syncCooldownDeadlineElapsedMs = 0L
+    private var backgroundedAtElapsedMs: Long? = null
+    private var failedUnlockAttempts = 0
+    private var unlockBlockedUntilElapsedMs = 0L
 
     // The notes list always shows every active note; search lives on the dedicated Search page
     // (driven by searchQuery) so browsing the list is never left in a filtered state.
     private val notes = repository.activeNotes
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val primaryNavigation = combine<Any?, NavigationState>(selectedNoteId, selectedObjectId, destination, tab, searchQuery, selectedNotebookFilterId) { values ->
+    private val primaryNavigation = combine<Any?, NavigationState>(selectedNoteId, selectedObjectId, destination, tab, searchQuery, selectedNotebookFilterId, selectedTagFilterId) { values ->
         @Suppress("UNCHECKED_CAST")
         val selectedId = values[0] as Long?
         val selectedObjId = values[1] as Long?
@@ -198,6 +212,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         val currentTab = values[3] as HomeTab
         val query = values[4] as String
         val currentNotebookFilter = values[5] as Long?
+        val currentTagFilter = values[6] as Long?
         NavigationState(
             selectedNoteId = selectedId,
             selectedObjectId = selectedObjId,
@@ -205,6 +220,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             tab = currentTab,
             searchQuery = query,
             selectedNotebookId = currentNotebookFilter,
+            selectedTagId = currentTagFilter,
             locked = false,
             syncing = false,
             sidebarOpen = false,
@@ -234,8 +250,6 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         repository.taskPropertyValues,
         repository.taskChecklistItems,
         repository.chatMessages,
-        repository.canvasNodes,
-        repository.canvasEdges,
         repository.workspaceObjects,
         repository.workspaceObjectLinks,
         repository.workspaceActivities,
@@ -255,22 +269,20 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             taskPropertyValues = values[4] as List<TaskPropertyValue>,
             taskChecklistItems = values[5] as List<TaskChecklistItem>,
             chatMessages = values[6] as List<ChatMessageItem>,
-            canvasNodes = values[7] as List<CanvasNodeItem>,
-            canvasEdges = values[8] as List<CanvasEdgeItem>,
-            workspaceObjects = values[9] as List<WorkspaceObject>,
-            workspaceObjectLinks = values[10] as List<WorkspaceObjectLink>,
-            workspaceActivities = values[11] as List<WorkspaceActivity>,
-            workspaceObjectHistory = values[12] as List<WorkspaceObjectHistory>,
-            workspaceComments = values[13] as List<WorkspaceComment>,
-            workspaceFiles = values[14] as List<WorkspaceFileItem>,
-            workspaces = values[15] as List<Workspace>,
-            goals = values[16] as List<GoalItem>,
-            calendarEvents = values[17] as List<CalendarEventItem>,
+            workspaceObjects = values[7] as List<WorkspaceObject>,
+            workspaceObjectLinks = values[8] as List<WorkspaceObjectLink>,
+            workspaceActivities = values[9] as List<WorkspaceActivity>,
+            workspaceObjectHistory = values[10] as List<WorkspaceObjectHistory>,
+            workspaceComments = values[11] as List<WorkspaceComment>,
+            workspaceFiles = values[12] as List<WorkspaceFileItem>,
+            workspaces = values[13] as List<Workspace>,
+            goals = values[14] as List<GoalItem>,
+            calendarEvents = values[15] as List<CalendarEventItem>,
         )
     }
 
     val state = combine(baseState, workspaceData, googleDriveConnected, conflictReport, diagnostics) { base, workspace, isGoogleDriveConnected, currentConflictReport, diagnosticsState ->
-        NotesUiState(
+        DocsUiState(
             notes = base.notes,
             notebooks = base.notebooks,
             tags = base.tags,
@@ -281,8 +293,6 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             taskPropertyValues = workspace.taskPropertyValues,
             taskChecklistItems = workspace.taskChecklistItems,
             chatMessages = workspace.chatMessages,
-            canvasNodes = workspace.canvasNodes,
-            canvasEdges = workspace.canvasEdges,
             workspaceObjects = workspace.workspaceObjects,
             workspaceObjectLinks = workspace.workspaceObjectLinks,
             workspaceActivities = workspace.workspaceActivities,
@@ -299,6 +309,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             tab = base.navigation.tab,
             searchQuery = base.navigation.searchQuery,
             selectedNotebookId = base.navigation.selectedNotebookId,
+            selectedTagId = base.navigation.selectedTagId,
             locked = base.navigation.locked,
             syncing = base.navigation.syncing,
             googleDriveConnected = isGoogleDriveConnected,
@@ -307,7 +318,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             diagnostics = diagnosticsState,
             message = base.navigation.message,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NotesUiState())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DocsUiState())
 
     init {
         viewModelScope.launch {
@@ -340,6 +351,19 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun go(next: Destination) = navigateTo(next)
 
+    fun openTaskCalendar(calendarView: String? = null) {
+        viewModelScope.launch {
+            val current = state.value.settings
+            repository.updateSettings(
+                current.copy(
+                    taskViewMode = "Calendar",
+                    calendarDefaultView = calendarView ?: current.calendarDefaultView,
+                ),
+            )
+        }
+        navigateTo(Destination.Tasks)
+    }
+
     fun goToProfile() { _pendingSettingsSection.value = "Profile"; go(Destination.Settings) }
     fun consumeSettingsSection() { _pendingSettingsSection.value = null }
     fun toggleSidebar() { sidebarOpen.value = !sidebarOpen.value }
@@ -348,7 +372,14 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     fun search(query: String) { searchQuery.value = query }
     fun filterByNotebook(notebookId: Long?) {
         selectedNotebookFilterId.value = notebookId
+        selectedTagFilterId.value = null
         tab.value = HomeTab.AllNotes
+        navigateTo(Destination.NotesHome)
+    }
+    fun filterByTag(tagId: Long?) {
+        selectedTagFilterId.value = tagId
+        selectedNotebookFilterId.value = null
+        if (tagId != null) tab.value = HomeTab.Tags
         navigateTo(Destination.NotesHome)
     }
     fun select(note: Note) {
@@ -460,23 +491,11 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             WorkspaceObjectType.Note -> state.value.notes.firstOrNull { it.id == obj.sourceId }?.let { select(it) } ?: go(Destination.NotesHome)
             WorkspaceObjectType.Task -> go(Destination.Tasks)
             WorkspaceObjectType.Goal -> go(Destination.Goals)
-            WorkspaceObjectType.CalendarEvent -> go(Destination.Calendar)
+            WorkspaceObjectType.CalendarEvent -> openTaskCalendar()
             WorkspaceObjectType.File -> go(Destination.Files)
-            WorkspaceObjectType.Canvas -> go(Destination.Canvas)
             WorkspaceObjectType.ChatMessage -> go(Destination.Chat)
             WorkspaceObjectType.DatabaseRow -> go(Destination.Database)
             WorkspaceObjectType.Workspace, WorkspaceObjectType.System -> go(Destination.WorkspaceHub)
-        }
-    }
-
-    fun openCanvasNodeObject(node: CanvasNodeItem) {
-        val obj = state.value.workspaceObjects.firstOrNull {
-            it.objectType == WorkspaceObjectType.Canvas && it.sourceId == node.id
-        }
-        if (obj != null) {
-            openWorkspaceObject(obj)
-        } else {
-            message.value = "Canvas object is not indexed yet. Rebuild the workspace index."
         }
     }
 
@@ -502,11 +521,6 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         navigateTo(Destination.Tasks)
     }
 
-    fun createCanvasAndOpen() = viewModelScope.launch {
-        addCanvasNode(CanvasNodeType.Text)
-        navigateTo(Destination.Canvas)
-    }
-
     fun updateNote(note: Note, title: String, body: String) = viewModelScope.launch {
         repository.updateNote(note, title, body)
     }
@@ -520,6 +534,16 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleLock(note: Note) = viewModelScope.launch { repository.setLocked(note) }
 
     fun setOverlapMode(note: Note, mode: DocOverlapMode) = viewModelScope.launch { repository.setOverlapMode(note, mode) }
+
+    fun setCanvasSpec(note: Note, canvasSpec: DocCanvasSpec) = viewModelScope.launch {
+        repository.setCanvasSpec(note, canvasSpec)
+    }
+
+    fun updateCanvasLayout(
+        note: Note,
+        layout: Map<String, FreeformPlacement>,
+        canvasSpec: DocCanvasSpec,
+    ) = viewModelScope.launch { repository.setCanvasLayout(note, layout, canvasSpec) }
 
     fun updateBlockPlacement(note: Note, blockId: String, placement: FreeformPlacement) = viewModelScope.launch {
         repository.setFreeformLayout(note, note.freeformLayout + (blockId to placement))
@@ -554,11 +578,37 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         _scrollToBlockRequest.value = null
     }
 
+    /** Sidebar ToC → editor section mutation (delete / duplicate / reorder), applied to the live session. */
+    fun requestSectionAction(headingId: String, action: DocSectionAction) {
+        _sectionActionRequest.value = SectionActionRequest(headingId, action, ++sectionActionSerial)
+    }
+
+    fun consumeSectionAction() {
+        _sectionActionRequest.value = null
+    }
+
     fun archive(note: Note) = viewModelScope.launch { repository.setArchived(note, true) }
     fun delete(note: Note) = viewModelScope.launch { repository.deleteNote(note) }
 
     fun addNotebook(name: String) = viewModelScope.launch { repository.addNotebook(name) }
     fun addTag(name: String) = viewModelScope.launch { repository.addTag(name) }
+
+    fun renameTag(tag: Tag, name: String) = viewModelScope.launch {
+        runCatching { repository.renameTag(tag, name) }
+            .onSuccess { message.value = "Tag renamed" }
+            .onFailure { message.value = it.message ?: "Could not rename tag" }
+    }
+
+    fun deleteTag(tag: Tag) = viewModelScope.launch {
+        repository.deleteTag(tag)
+        if (selectedTagFilterId.value == tag.id) selectedTagFilterId.value = null
+        message.value = "Tag deleted and removed from Docs"
+    }
+
+    fun setNoteTags(note: Note, names: List<String>) = viewModelScope.launch {
+        repository.setNoteTags(note, names)
+        message.value = if (names.isEmpty()) "Tags removed" else "Tags updated"
+    }
     fun addTaskTag(boardId: Long, name: String) = viewModelScope.launch { repository.addTaskTag(boardId, name) }
     fun addTask(title: String, assignee: String = state.value.settings.syncUserName) = viewModelScope.launch { repository.addTask(title, assignee = assignee.ifBlank { "@owner" }) }
     fun addTaskToStatus(title: String, status: TaskStatus) = viewModelScope.launch {
@@ -734,75 +784,6 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         repository.rebuildWorkspaceIndex()
         message.value = "Workspace index rebuilt"
     }
-    fun addCanvasNode(type: CanvasNodeType) = viewModelScope.launch {
-        val count = state.value.canvasNodes.size
-        val newId = repository.addCanvasNode(
-            title = when (type) {
-                CanvasNodeType.Text -> "Text block"
-                CanvasNodeType.Note -> "Linked doc"
-                CanvasNodeType.File -> "File block"
-                CanvasNodeType.Shape -> "Shape"
-                CanvasNodeType.Link -> "Link"
-                CanvasNodeType.Media -> "Media"
-            },
-            subtitle = "Embedded block",
-            type = type,
-            x = 0.16f + (count % 3) * 0.23f,
-            y = 0.16f + (count % 5) * 0.13f,
-            color = listOf(0xFF7E57FF, 0xFF4AADFF, 0xFF56CC98, 0xFFF276E2, 0xFFFFCF52)[count % 5],
-            linkedNoteId = state.value.selectedNote?.id.takeIf { type == CanvasNodeType.Note },
-        )
-        state.value.canvasNodes.maxByOrNull { it.updatedAt }?.let { previous ->
-            repository.addCanvasEdge(previous.id, newId, "link")
-        }
-    }
-
-    fun addCanvasEdge(fromNodeId: Long, toNodeId: Long, label: String = "link") = viewModelScope.launch {
-        runCatching {
-            repository.addCanvasEdge(fromNodeId, toNodeId, label)
-        }.onSuccess {
-            message.value = "Canvas connection added"
-        }.onFailure {
-            message.value = it.message ?: "Connection failed"
-        }
-    }
-
-    fun moveCanvasNode(node: CanvasNodeItem, x: Float, y: Float) = viewModelScope.launch {
-        repository.moveCanvasNode(node, x, y)
-    }
-
-    fun updateCanvasNodeContent(node: CanvasNodeItem, title: String, subtitle: String) = viewModelScope.launch {
-        repository.updateCanvasNodeContent(node, title, subtitle)
-    }
-
-    fun attachTargetToCanvasNode(node: CanvasNodeItem, uri: Uri?) {
-        if (uri == null) return
-        persistReadPermission(uri)
-        viewModelScope.launch {
-            repository.updateCanvasNodeTarget(
-                node = node,
-                uri = uri.toString(),
-                mimeType = app.contentResolver.getType(uri) ?: "application/octet-stream",
-                name = displayName(uri),
-                sizeBytes = displaySize(uri),
-            )
-            message.value = "Canvas block attached"
-        }
-    }
-
-    fun updateCanvasNodeTarget(node: CanvasNodeItem, uri: String?, mimeType: String?, name: String?, sizeBytes: Long?) = viewModelScope.launch {
-        repository.updateCanvasNodeTarget(node, uri?.takeIf { it.isNotBlank() }, mimeType, name?.takeIf { it.isNotBlank() }, sizeBytes)
-    }
-
-    fun deleteCanvasNode(node: CanvasNodeItem) = viewModelScope.launch {
-        repository.deleteCanvasNode(node)
-    }
-
-    fun deleteCanvasEdge(edge: CanvasEdgeItem) = viewModelScope.launch {
-        repository.deleteCanvasEdge(edge)
-        message.value = "Canvas connection removed"
-    }
-
     fun importMarkdown(uri: Uri?) {
         if (uri == null) return
         persistReadPermission(uri)
@@ -962,7 +943,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         val w = block(active)
         repository.updateWorkspacePermissions(
             w.id, w.permRename, w.permChangeIcon, w.permInviteMembers,
-            w.permDeleteNotes, w.permEditNotes, w.permCreateCanvas, w.permManageTasks,
+            w.permDeleteNotes, w.permEditNotes, w.permManageTasks,
         )
     }
 
@@ -1018,6 +999,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPrivacyOption(blockScreenshots: Boolean? = null, biometricOnOpen: Boolean? = null, reduceMotion: Boolean? = null) = viewModelScope.launch {
         val current = state.value.settings
+        if (biometricOnOpen == false) BiometricVaultKeyStore(app).clear()
         repository.updateSettings(
             current.copy(
                 blockScreenshots = blockScreenshots ?: current.blockScreenshots,
@@ -1041,7 +1023,30 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateProfile(username: String, publicName: String, deviceName: String) = viewModelScope.launch {
-        repository.updateSettings(state.value.settings.copy(syncUserName = username, syncPublicName = publicName, syncDeviceName = deviceName))
+        val handle = username.trim().removePrefix("@").lowercase()
+        if (!handle.matches(Regex("^[a-z][a-z0-9_]{2,29}$"))) {
+            message.value = "Handle must be 3–30 characters, start with a letter, and use only letters, numbers, or underscores"
+            return@launch
+        }
+        runCatching { NorfoldSupabase.claimProfileHandleIfSignedIn(handle, publicName.trim()) }
+            .onSuccess { verifiedOnline ->
+                repository.updateSettings(
+                    state.value.settings.copy(
+                        syncUserName = handle,
+                        syncPublicName = publicName.trim().take(80),
+                        syncDeviceName = deviceName.trim().ifBlank { "Android device" }.take(80),
+                    ),
+                )
+                message.value = if (verifiedOnline) "Profile updated · @$handle is reserved" else "Profile updated locally · sign in to reserve @$handle"
+            }
+            .onFailure { error ->
+                val detail = error.message.orEmpty()
+                message.value = if (detail.contains("handle_taken", ignoreCase = true) || detail.contains("23505")) {
+                    "@$handle is already taken"
+                } else {
+                    detail.ifBlank { "Could not verify that handle" }
+                }
+            }
     }
 
     fun updateProfileVisuals(profileImageUri: String?, profileBackgroundUri: String?) = viewModelScope.launch {
@@ -1236,7 +1241,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         }.onSuccess {
             message.value = it
         }.onFailure {
-            message.value = it.message ?: "Google Drive sync failed"
+            message.value = googleDriveFailureMessage(it, "Google Drive sync failed")
         }
         syncing.value = false
     }
@@ -1267,13 +1272,22 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         }.onSuccess {
             message.value = it
         }.onFailure {
-            message.value = it.message ?: "Google Drive restore failed"
+            message.value = googleDriveFailureMessage(it, "Google Drive restore failed")
         }
         syncing.value = false
     }
 
     fun syncNow(secret: String) = viewModelScope.launch {
-        sessionSyncSecret = secret
+        if (syncing.value) {
+            message.value = "Sync is already running"
+            return@launch
+        }
+        val now = SystemClock.elapsedRealtime()
+        val remainingMs = syncCooldownDeadlineElapsedMs - now
+        if (remainingMs > 0L) {
+            message.value = "Please wait ${(remainingMs + 999L) / 1_000L}s before syncing again"
+            return@launch
+        }
         val current = state.value.settings
         val folder = current.syncFolderUri
         val chainId = current.syncChainId
@@ -1281,7 +1295,9 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             message.value = "Create or restore a sync chain first"
             return@launch
         }
+        sessionSyncSecret = secret
         syncing.value = true
+        var consumeCooldown = true
         runCatching {
             val (remoteSnapshot, result) =
                 if (current.syncProvider == SyncProvider.GoogleDrive && folder == GoogleDriveApiSyncStore.AppDataFolderUri) {
@@ -1321,9 +1337,40 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         }.onSuccess {
             message.value = it
         }.onFailure {
-            message.value = it.message ?: "Sync failed"
+            consumeCooldown = !it.isLikelyOfflineSyncFailure()
+            message.value = if (current.syncProvider == SyncProvider.GoogleDrive) {
+                googleDriveFailureMessage(it, "Google Drive sync failed")
+            } else {
+                it.message ?: "Sync failed"
+            }
+        }
+        syncCooldownDeadlineElapsedMs = if (consumeCooldown) {
+            SystemClock.elapsedRealtime() + SyncRequestCooldownMs
+        } else {
+            0L
         }
         syncing.value = false
+    }
+
+    fun syncCooldownRemainingSeconds(): Long =
+        ((syncCooldownDeadlineElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L) + 999L) / 1_000L
+
+    private fun Throwable.isLikelyOfflineSyncFailure(): Boolean {
+        val detail = generateSequence(this) { it.cause }
+            .joinToString(" ") { it.message.orEmpty() }
+            .lowercase()
+        return listOf("unable to resolve host", "network is unreachable", "no network", "offline", "failed to connect")
+            .any(detail::contains)
+    }
+
+    private fun googleDriveFailureMessage(error: Throwable, fallback: String): String {
+        val detail = error.message.orEmpty()
+        if (detail.contains("Google Drive", ignoreCase = true) && detail.contains("(401)")) {
+            googleDriveAuthStore.clear()
+            googleDriveConnected.value = false
+            return "Google Drive authorization expired. Reconnect Google, then retry."
+        }
+        return detail.ifBlank { fallback }
     }
 
     fun loadConflictReport() = viewModelScope.launch {
@@ -1362,6 +1409,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun autoSyncIfPossible() {
+        if (!state.value.settings.autoSync) return
         val secret = sessionSyncSecret?.takeIf { it.isNotBlank() } ?: return
         if (!syncing.value) syncNow(secret)
     }
@@ -1392,17 +1440,40 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setVaultSecret(secret: String) = viewModelScope.launch {
+        if (secret.length < 6) {
+            message.value = "Vault password must be at least 6 characters"
+            return@launch
+        }
         repository.setVaultSecret(secret.toCharArray())
         message.value = "Vault lock enabled"
     }
 
     fun disableVault() = viewModelScope.launch {
+        BiometricVaultKeyStore(app).clear()
         repository.disableVaultLock()
+        repository.updateSettings(state.value.settings.copy(vaultLockEnabled = false, vaultSecretHash = null, requireBiometricOnOpen = false))
         locked.value = false
+        message.value = "Vault lock disabled"
     }
 
     fun lock() {
         if (state.value.settings.vaultLockEnabled) locked.value = true
+    }
+
+    fun onAppBackgrounded() {
+        val settings = state.value.settings
+        if (!settings.vaultLockEnabled) return
+        backgroundedAtElapsedMs = SystemClock.elapsedRealtime()
+        if (settings.appLockOnExit || settings.autoLockMinutes == 0) locked.value = true
+    }
+
+    fun onAppForegrounded() {
+        val settings = state.value.settings
+        val backgroundedAt = backgroundedAtElapsedMs ?: return
+        backgroundedAtElapsedMs = null
+        if (!settings.vaultLockEnabled || locked.value) return
+        val timeoutMs = settings.autoLockMinutes.coerceAtLeast(0) * 60_000L
+        if (settings.appLockOnExit || SystemClock.elapsedRealtime() - backgroundedAt >= timeoutMs) locked.value = true
     }
 
     fun handleBack() {
@@ -1417,8 +1488,27 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun unlock(secret: String) {
-        locked.value = !VaultCrypto.verifySecret(secret.toCharArray(), state.value.settings.vaultSecretHash)
-        message.value = if (locked.value) "Wrong password" else null
+        val now = SystemClock.elapsedRealtime()
+        if (now < unlockBlockedUntilElapsedMs) {
+            message.value = "Too many attempts. Try again in ${(unlockBlockedUntilElapsedMs - now + 999L) / 1_000L}s"
+            return
+        }
+        val verified = VaultCrypto.verifySecret(secret.toCharArray(), state.value.settings.vaultSecretHash)
+        locked.value = !verified
+        if (verified) {
+            failedUnlockAttempts = 0
+            unlockBlockedUntilElapsedMs = 0L
+            message.value = null
+        } else {
+            failedUnlockAttempts++
+            if (failedUnlockAttempts >= 5) {
+                failedUnlockAttempts = 0
+                unlockBlockedUntilElapsedMs = now + UnlockFailureCooldownMs
+                message.value = "Too many attempts. Vault unlock is paused for 30 seconds"
+            } else {
+                message.value = "Wrong password · ${5 - failedUnlockAttempts} attempts before a short pause"
+            }
+        }
     }
 
     fun unlockWithBiometric() {
@@ -1427,6 +1517,11 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             locked.value = false
             message.value = null
         }
+    }
+
+    private companion object {
+        const val SyncRequestCooldownMs = 15_000L
+        const val UnlockFailureCooldownMs = 30_000L
     }
 
     fun exportBackup(secret: String, write: (String) -> Unit) = viewModelScope.launch {

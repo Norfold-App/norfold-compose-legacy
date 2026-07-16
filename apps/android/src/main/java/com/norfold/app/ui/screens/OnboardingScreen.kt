@@ -71,6 +71,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -78,21 +79,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.ThemeMode
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import coil.compose.AsyncImage
+import com.norfold.app.BuildConfig
+import com.norfold.app.branding.NorfoldLogo
 
 private const val OnboardingPreferences = "norfold_onboarding_draft"
 
 @Composable
 fun NorfoldOnboardingScreen(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onRestoreBackup: (String) -> Unit = {},
     onGoogleSignIn: () -> Unit = {},
     onEmailSignIn: (String, String, Boolean) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     val preferences = remember { context.getSharedPreferences(OnboardingPreferences, 0) }
     var step by rememberSaveable { mutableStateOf(preferences.getInt("step", 0).coerceIn(0, 9)) }
     var fullName by rememberSaveable { mutableStateOf(preferences.getString("full_name", "") ?: "") }
@@ -164,7 +168,14 @@ fun NorfoldOnboardingScreen(
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                 when (visibleStep) {
-                    0 -> WelcomeStep(onNext = { step = 1 }, onRestore = { step = 4 }, onGoogle = onGoogleSignIn, onOffline = { step = 5 })
+                    0 -> WelcomeStep(
+                        onNext = { step = 1 },
+                        onRestore = { step = 4 },
+                        onGoogle = onGoogleSignIn,
+                        onOffline = { step = 5 },
+                        onTerms = { uriHandler.openUri(BuildConfig.TERMS_URL) },
+                        onPrivacy = { uriHandler.openUri(BuildConfig.PRIVACY_URL) },
+                    )
                     1 -> ProductStep(
                         title = "Everything in one place",
                         subtitle = "Docs, tasks, calendar, files, and chat - all connected to keep you in flow.",
@@ -216,7 +227,14 @@ fun NorfoldOnboardingScreen(
 }
 
 @Composable
-private fun WelcomeStep(onNext: () -> Unit, onRestore: () -> Unit, onGoogle: () -> Unit, onOffline: () -> Unit) {
+private fun WelcomeStep(
+    onNext: () -> Unit,
+    onRestore: () -> Unit,
+    onGoogle: () -> Unit,
+    onOffline: () -> Unit,
+    onTerms: () -> Unit,
+    onPrivacy: () -> Unit,
+) {
     NorfoldWordmark()
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .35f), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -248,7 +266,7 @@ private fun WelcomeStep(onNext: () -> Unit, onRestore: () -> Unit, onGoogle: () 
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = {}) { Text("Terms") }; Text("•"); TextButton(onClick = {}) { Text("Privacy") }; Text("•"); TextButton(onClick = onOffline) { Text("Continue offline") }
+        TextButton(onClick = onTerms) { Text("Terms") }; Text("•"); TextButton(onClick = onPrivacy) { Text("Privacy") }; Text("•"); TextButton(onClick = onOffline) { Text("Continue offline") }
     }
 }
 
@@ -270,7 +288,10 @@ private fun WorkspacePreview() {
     Surface(Modifier.fillMaxWidth().height(360.dp), shape = RoundedCornerShape(22.dp), border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = .18f))) {
         Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(Modifier.widthIn(min = 92.dp).fillMaxSize().weight(.32f), verticalArrangement = Arrangement.spacedBy(15.dp)) {
-                Text("N  Norfold", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    NorfoldLogo(22.dp)
+                    Text("Norfold", fontWeight = FontWeight.Bold)
+                }
                 listOf("Home", "Docs", "Tasks", "Calendar", "Chat", "Files", "More").forEach { Text(it, color = if (it == "Home") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
             }
             Column(Modifier.weight(.68f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -405,7 +426,15 @@ private fun CompletionStep(workspace: String) {
     }
 }
 
-@Composable private fun NorfoldWordmark() { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("N  Norfold", fontSize = 28.sp, fontWeight = FontWeight.Black); Text("Your private workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+@Composable private fun NorfoldWordmark() {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            NorfoldLogo(42.dp)
+            Text("Norfold", fontSize = 28.sp, fontWeight = FontWeight.Black)
+        }
+        Text("Your private workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 @Composable private fun StepIcon(icon: ImageVector) { Surface(Modifier.size(72.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) { Icon(icon, null, Modifier.padding(20.dp), tint = MaterialTheme.colorScheme.primary) } }
 @Composable private fun FeatureCard(icon: ImageVector, title: String, detail: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Column { Text(title, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp) } } } }
 @Composable private fun PreviewTile(text: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .6f)) { Text(text, Modifier.padding(9.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) } }

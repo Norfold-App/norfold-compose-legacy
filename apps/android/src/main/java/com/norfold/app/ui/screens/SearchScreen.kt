@@ -41,13 +41,13 @@ import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.EmptyNotes
 import com.norfold.app.ui.components.SearchField
 import com.norfold.app.ui.components.pressScale
 
-private data class SearchResult(
+internal data class SearchResult(
     val title: String,
     val detail: String,
     val type: String,
@@ -57,7 +57,7 @@ private data class SearchResult(
 )
 
 @Composable
-fun SearchScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun SearchScreen(state: DocsUiState, viewModel: DocsViewModel) {
     val query = state.searchQuery.trim()
     val results = buildSearchResults(state, viewModel, query)
     Column(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -78,7 +78,7 @@ fun SearchScreen(state: NotesUiState, viewModel: NotesViewModel) {
     }
 }
 
-private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, query: String): List<SearchResult> {
+internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, query: String): List<SearchResult> {
     fun matches(vararg values: String): Boolean = query.isBlank() || values.any { it.contains(query, ignoreCase = true) }
     val objectResults = state.workspaceObjects
         .filter { matches(it.title, it.summary, it.tags, it.objectType.name) }
@@ -177,13 +177,20 @@ private fun buildSearchResults(state: NotesUiState, viewModel: NotesViewModel, q
 private fun WorkspaceObjectType.searchLabel(): String = if (this == WorkspaceObjectType.Note) "Doc" else name
 
 @Composable
-private fun SearchResultRow(result: SearchResult, modifier: Modifier = Modifier) {
+internal fun SearchResultRow(
+    result: SearchResult,
+    modifier: Modifier = Modifier,
+    onActivated: () -> Unit = {},
+) {
     val interaction = remember { MutableInteractionSource() }
     Surface(
         modifier
             .fillMaxWidth()
             .pressScale(interaction)
-            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), onClick = result.action),
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
+                result.action()
+                onActivated()
+            },
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
     ) {
@@ -213,7 +220,6 @@ private fun iconFor(obj: WorkspaceObject): ImageVector = when (obj.objectType) {
     WorkspaceObjectType.Goal -> Icons.Outlined.Check
     WorkspaceObjectType.CalendarEvent -> Icons.Outlined.Settings
     WorkspaceObjectType.File -> Icons.Outlined.Folder
-    WorkspaceObjectType.Canvas -> Icons.Outlined.GridView
     WorkspaceObjectType.ChatMessage -> Icons.Outlined.ChatBubbleOutline
     WorkspaceObjectType.DatabaseRow -> Icons.Outlined.GridView
     WorkspaceObjectType.Workspace -> Icons.Outlined.Folder

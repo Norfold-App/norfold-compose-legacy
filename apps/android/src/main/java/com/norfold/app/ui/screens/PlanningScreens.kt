@@ -75,8 +75,8 @@ import com.norfold.app.domain.GoalStatus
 import com.norfold.app.domain.TaskStatus
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.WeekHourBands
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.NorfoldCard
 import com.norfold.app.ui.components.NorfoldMetric
 import com.norfold.app.ui.components.NorfoldPageHeader
@@ -94,7 +94,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.roundToInt
 
 @Composable
-private fun LegacyNorfoldOnboardingScreen(state: NotesUiState, viewModel: NotesViewModel) {
+private fun LegacyNorfoldOnboardingScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var step by remember { mutableIntStateOf(0) }
     var workspaceName by remember { mutableStateOf("My Workspace") }
     var purpose by remember { mutableStateOf("Personal") }
@@ -110,7 +110,7 @@ private fun LegacyNorfoldOnboardingScreen(state: NotesUiState, viewModel: NotesV
                 0 -> {
                     Text("Norfold", style = MaterialTheme.typography.headlineLarge)
                     Text("Your own private workspace.", color = MaterialTheme.colorScheme.primary, fontSize = 15.sp)
-                    Text("Docs, tasks, projects, files, calendar, canvas and conversations stay organized in one local-first workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                    Text("Docs, tasks, projects, files, calendar and conversations stay organized in one local-first workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                     Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text("Get started") }
                     Text("Works offline. Connect an account only when you need sync or collaboration.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, textAlign = TextAlign.Center)
                 }
@@ -175,7 +175,7 @@ private fun OnboardingFact(icon: androidx.compose.ui.graphics.vector.ImageVector
 }
 
 @Composable
-fun GoalsScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun GoalsScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var createOpen by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { NorfoldPageHeader("Goals", "Turn outcomes into measurable progress.", Icons.Outlined.TrackChanges, actions = { Button(onClick = { createOpen = true }) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(6.dp)); Text("New goal") } }) }
@@ -193,7 +193,7 @@ fun GoalsScreen(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-private fun GoalRow(goal: GoalItem, viewModel: NotesViewModel) {
+private fun GoalRow(goal: GoalItem, viewModel: DocsViewModel) {
     val fraction = if (goal.target <= 0) 0f else (goal.progress / goal.target).coerceIn(0.0, 1.0).toFloat()
     NorfoldCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -212,7 +212,12 @@ private fun GoalRow(goal: GoalItem, viewModel: NotesViewModel) {
 }
 
 @Composable
-fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun CalendarWorkspaceScreen(
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    embedded: Boolean = false,
+    onTaskClick: ((com.norfold.app.domain.TaskItem) -> Unit)? = null,
+) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
     var mode by remember(state.settings.calendarDefaultView) { mutableStateOf(state.settings.calendarDefaultView) }
@@ -223,9 +228,12 @@ fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
     // Same threshold as NorfoldAppRoot: on compact widths the floating sidebar
     // button sits over the top-start corner, so the page header shifts right.
-    val headerInset = if (maxWidth < 720.dp) 56.dp else 0.dp
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        NorfoldPageHeader("Calendar", "Plan work and never miss a deadline.", Icons.Outlined.CalendarMonth, modifier = Modifier.padding(start = headerInset))
+    val headerInset = if (!embedded && maxWidth < 720.dp) 56.dp else 0.dp
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = if (embedded) 0.dp else 18.dp, vertical = if (embedded) 10.dp else 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (!embedded) NorfoldPageHeader("Calendar", "Plan work and never miss a deadline.", Icons.Outlined.CalendarMonth, modifier = Modifier.padding(start = headerInset))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
             IconButton(onClick = { createOpen = true }) { Icon(Icons.Outlined.Add, "New event") }
@@ -270,6 +278,11 @@ fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
                 onWeekSettled = { weekStart -> month = YearMonth.from(weekStart.plusDays(3)) },
                 onSelect = { selectedDate = it; month = YearMonth.from(it) },
                 onEventClick = { event ->
+                    val task = event.taskId?.let { taskId -> state.tasks.firstOrNull { it.id == taskId } }
+                    if (task != null && onTaskClick != null) {
+                        onTaskClick(task)
+                        return@WeekCalendar
+                    }
                     val obj = event.taskId?.let { taskId ->
                         state.workspaceObjects.firstOrNull {
                             it.objectType == com.norfold.app.domain.WorkspaceObjectType.Task && it.sourceId == taskId
@@ -313,7 +326,7 @@ fun CalendarWorkspaceScreen(state: NotesUiState, viewModel: NotesViewModel) {
 
 private data class PlanningEvent(val id: String, val title: String, val detail: String, val date: LocalDate, val time: LocalTime?, val color: Color, val source: String, val taskId: Long? = null)
 
-private fun planningEvents(state: NotesUiState, accent: Color, mutedAccent: Color): List<PlanningEvent> = buildList {
+private fun planningEvents(state: DocsUiState, accent: Color, mutedAccent: Color): List<PlanningEvent> = buildList {
     state.calendarEvents.forEach { event ->
         val instant = Instant.ofEpochMilli(event.startAt).atZone(ZoneId.systemDefault())
         add(PlanningEvent("event-${event.id}", event.title, event.description, instant.toLocalDate(), if (event.allDay) null else instant.toLocalTime(), Color(event.color), event.source.name))

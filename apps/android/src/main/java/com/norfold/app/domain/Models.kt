@@ -18,6 +18,7 @@ data class Note(
     val coverMimeType: String? = null,
     val overlapMode: DocOverlapMode = DocOverlapMode.Reflow,
     val freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
+    val canvasSpec: DocCanvasSpec = DocCanvasSpec(),
 ) {
     val bodyMarkdown: String get() = MarkdownBlockCodec.export(document)
 
@@ -39,6 +40,7 @@ data class Note(
         coverMimeType: String? = null,
         overlapMode: DocOverlapMode = DocOverlapMode.Reflow,
         freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
+        canvasSpec: DocCanvasSpec = DocCanvasSpec(),
     ) : this(
         id = id,
         title = title,
@@ -57,6 +59,7 @@ data class Note(
         coverMimeType = coverMimeType,
         overlapMode = overlapMode,
         freeformLayout = freeformLayout,
+        canvasSpec = canvasSpec,
     )
 }
 
@@ -94,7 +97,7 @@ data class NoteEmbedItem(
     val createdAt: Long,
 )
 
-enum class NoteEmbedType { Link, File, Image, Video, Audio, Canvas, Task }
+enum class NoteEmbedType { Link, File, Image, Video, Audio, Task }
 
 data class TaskItem(
     val id: Long,
@@ -261,36 +264,7 @@ data class ChatMessageItem(
     val attachmentSizeBytes: Long? = null,
 )
 
-data class CanvasNodeItem(
-    val id: Long,
-    val title: String,
-    val subtitle: String,
-    val type: CanvasNodeType,
-    val x: Float,
-    val y: Float,
-    val color: Long,
-    val linkedNoteId: Long?,
-    val targetUri: String? = null,
-    val targetMimeType: String? = null,
-    val targetName: String? = null,
-    val targetSizeBytes: Long? = null,
-    val createdAt: Long,
-    val updatedAt: Long,
-)
-
-enum class CanvasNodeType { Text, Note, File, Shape, Link, Media }
-
-data class CanvasEdgeItem(
-    val id: Long,
-    val fromNodeId: Long,
-    val toNodeId: Long,
-    val label: String,
-    val color: Long,
-    val createdAt: Long,
-    val updatedAt: Long,
-)
-
-enum class WorkspaceObjectType { Note, Task, Goal, CalendarEvent, File, Canvas, ChatMessage, DatabaseRow, Workspace, System }
+enum class WorkspaceObjectType { Note, Task, Goal, CalendarEvent, File, ChatMessage, DatabaseRow, Workspace, System }
 
 data class WorkspaceObject(
     val id: Long,
@@ -380,7 +354,6 @@ data class Workspace(
     val permInviteMembers: Boolean = false,
     val permDeleteNotes: Boolean = false,
     val permEditNotes: Boolean = true,
-    val permCreateCanvas: Boolean = true,
     val permManageTasks: Boolean = true,
 )
 
@@ -525,7 +498,6 @@ enum class Destination {
     Tags,
     Search,
     Tasks,
-    Canvas,
     Chat,
     ConflictReview,
     SyncMonitor,

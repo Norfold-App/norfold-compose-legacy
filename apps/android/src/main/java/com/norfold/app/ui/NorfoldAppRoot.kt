@@ -65,10 +65,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.norfold.app.branding.palette
 import com.norfold.app.data.GoogleDriveOAuth
+import com.norfold.app.data.BiometricVaultKeyStore
 import com.norfold.app.cloud.GoogleIdentityClient
 import com.norfold.app.cloud.NorfoldSupabase
 import com.google.android.gms.auth.api.identity.Identity
-import com.norfold.app.domain.CanvasNodeItem
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.SyncFolderRequest
 import com.norfold.app.domain.TaskItem
@@ -80,7 +80,6 @@ import com.norfold.app.ui.screens.BlockNoteEditorScreen
 import com.norfold.app.ui.screens.NotebookScreen
 import com.norfold.app.ui.screens.NotesHome
 import com.norfold.app.ui.screens.ObjectDetailScreen
-import com.norfold.app.ui.screens.CanvasBoardScreen
 import com.norfold.app.ui.screens.ChatScreen
 import com.norfold.app.ui.screens.ConflictReviewScreen
 import com.norfold.app.ui.screens.SearchScreen
@@ -104,7 +103,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
+fun NorfoldRoot(viewModel: DocsViewModel = viewModel()) {
     val state by viewModel.state.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
@@ -149,11 +148,6 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
         pendingTaskAttachment?.let { viewModel.attachFileToTask(it, uri) }
         pendingTaskAttachment = null
     }
-    var pendingCanvasTarget by remember { mutableStateOf<CanvasNodeItem?>(null) }
-    val canvasTargetLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        pendingCanvasTarget?.let { viewModel.attachTargetToCanvasNode(it, uri) }
-        pendingCanvasTarget = null
-    }
     val googleDriveAuthLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         runCatching { googleAuthorizationClient.getAuthorizationResultFromIntent(result.data) }
             .onSuccess { viewModel.connectGoogleDrive(it.accessToken) }
@@ -167,7 +161,14 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) viewModel.autoSyncIfPossible()
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    viewModel.onAppBackgrounded()
+                    viewModel.autoSyncIfPossible()
+                }
+                Lifecycle.Event.ON_START -> viewModel.onAppForegrounded()
+                else -> Unit
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -183,7 +184,8 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
         onDispose { }
     }
 
-    val biometricAuthenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.BIOMETRIC_WEAK
+    val biometricAuthenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG
+    val biometricVault = remember(context) { BiometricVaultKeyStore(context) }
     val biometricAvailable = remember(context) {
         BiometricManager.from(context).canAuthenticate(biometricAuthenticators) == BiometricManager.BIOMETRIC_SUCCESS
     }
@@ -193,12 +195,22 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
             viewModel.showMessage("Biometric unlock is unavailable")
             return
         }
+        val cryptoObject = biometricVault.unlockCryptoObject()
+        if (cryptoObject == null) {
+            viewModel.setPrivacyOption(biometricOnOpen = false)
+            viewModel.showMessage("Biometric Vault key is unavailable. Unlock with your password, then enable biometrics again.")
+            return
+        }
         val prompt = BiometricPrompt(
             activity,
             ContextCompat.getMainExecutor(activity),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    viewModel.unlockWithBiometric()
+                    if (biometricVault.completeUnlock(result.cryptoObject)) {
+                        viewModel.unlockWithBiometric()
+                    } else {
+                        viewModel.showMessage("Biometric Vault verification failed. Use your password and set it up again.")
+                    }
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -218,6 +230,7 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
                     .setNegativeButtonText("Use password")
                     .setAllowedAuthenticators(biometricAuthenticators)
                     .build(),
+                cryptoObject,
             )
         }.onFailure {
             viewModel.showMessage(it.localizedMessage ?: "Biometric unlock failed")
@@ -280,15 +293,6 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
                         pendingTaskAttachment = task
                         taskAttachmentLauncher.launch(arrayOf("*/*"))
                     },
-                    onPickCanvasTarget = { node ->
-                        pendingCanvasTarget = node
-                        canvasTargetLauncher.launch(
-                            when (node.type.name) {
-                                "Media" -> arrayOf("image/*", "video/*", "audio/*")
-                                else -> arrayOf("*/*")
-                            },
-                        )
-                    },
                     onPickBackupFolder = { backupFolderLauncher.launch(null) },
                     onPickBackupFile = { secret ->
                         pendingBackupImportSecret = secret
@@ -310,6 +314,14 @@ fun NorfoldRoot(viewModel: NotesViewModel = viewModel()) {
                             }
                             .addOnFailureListener(viewModel::reportGoogleDriveAuthorizationFailure)
                     },
+                    onDisconnectGoogleDrive = {
+                        googleAuthorizationClient.revokeAccess(GoogleDriveOAuth.revocationRequest())
+                            .addOnSuccessListener { viewModel.disconnectGoogleDrive() }
+                            .addOnFailureListener { error ->
+                                viewModel.disconnectGoogleDrive()
+                                viewModel.showMessage("Disconnected locally; Google access could not be revoked: ${error.localizedMessage ?: "unknown error"}")
+                            }
+                    },
                 )
             }
         }
@@ -324,8 +336,8 @@ private tailrec fun Context.findFragmentActivity(): FragmentActivity? = when (th
 
 @Composable
 private fun NotesApp(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onPickMarkdown: () -> Unit,
     onPickAttachment: () -> Unit,
@@ -334,10 +346,10 @@ private fun NotesApp(
     onPickChatAttachment: () -> Unit,
     onPickWorkspaceFile: () -> Unit,
     onPickTaskAttachment: (TaskItem) -> Unit,
-    onPickCanvasTarget: (CanvasNodeItem) -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
     var taskDetailOpen by remember { mutableStateOf(false) }
@@ -408,9 +420,9 @@ private fun NotesApp(
                     .background(MaterialTheme.colorScheme.background),
             ) {
                 when {
-                    compact -> CompactContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive) { taskDetailOpen = it }
-                    medium -> MediumContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive) { taskDetailOpen = it }
-                    else -> ExpandedContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive) { taskDetailOpen = it }
+                    compact -> CompactContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onDisconnectGoogleDrive) { taskDetailOpen = it }
+                    medium -> MediumContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onDisconnectGoogleDrive) { taskDetailOpen = it }
+                    else -> ExpandedContent(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onDisconnectGoogleDrive) { taskDetailOpen = it }
                 }
                 if (compact && !state.sidebarOpen && !imeVisible && !taskDetailOpen && state.destination.showCompactSidebarButton) {
                     CompactSidebarButton(viewModel)
@@ -428,10 +440,20 @@ private val Destination.showCompactSidebarButton: Boolean
         Destination.NoteEditor,
         Destination.ObjectDetail,
         Destination.CommandPalette,
+        Destination.WorkspaceHub,
+        Destination.Inbox,
+        Destination.NotesHome,
+        Destination.Files,
+        Destination.Database,
+        Destination.Activity,
+        Destination.Tasks,
+        Destination.Settings,
+        Destination.Vault,
+        Destination.ImportExport,
     )
 
 @Composable
-private fun CompactSidebarButton(viewModel: NotesViewModel) {
+private fun CompactSidebarButton(viewModel: DocsViewModel) {
     Surface(
         modifier = Modifier
             .padding(start = 14.dp, top = 12.dp)
@@ -450,8 +472,8 @@ private fun CompactSidebarButton(viewModel: NotesViewModel) {
 
 @Composable
 private fun CompactContent(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onPickMarkdown: () -> Unit,
     onPickAttachment: () -> Unit,
@@ -460,19 +482,19 @@ private fun CompactContent(
     onPickChatAttachment: () -> Unit,
     onPickWorkspaceFile: () -> Unit,
     onPickTaskAttachment: (TaskItem) -> Unit,
-    onPickCanvasTarget: (CanvasNodeItem) -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
     onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
-    DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onTaskDetailOpenChange)
+    DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onDisconnectGoogleDrive, onTaskDetailOpenChange)
 }
 
 @Composable
 private fun DestinationContent(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     modifier: Modifier,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onPickMarkdown: () -> Unit,
@@ -482,10 +504,10 @@ private fun DestinationContent(
     onPickChatAttachment: () -> Unit,
     onPickWorkspaceFile: () -> Unit,
     onPickTaskAttachment: (TaskItem) -> Unit,
-    onPickCanvasTarget: (CanvasNodeItem) -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
     onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
     Box(modifier) {
@@ -498,7 +520,9 @@ private fun DestinationContent(
                 Destination.NoteEditor -> BlockNoteEditorScreen(state, viewModel, Modifier.fillMaxSize(), viewModel::toggleSidebar)
                 Destination.WorkspaceHub -> WorkspaceHubScreen(state, viewModel)
                 Destination.Inbox -> WorkspaceHubScreen(state, viewModel, inboxMode = true)
-                Destination.Calendar -> CalendarWorkspaceScreen(state, viewModel)
+                // Legacy deep links enter the same integrated Tasks calendar instead of a
+                // disconnected calendar destination with no local way back to the task views.
+                Destination.Calendar -> TasksBoardScreen(state, viewModel, onPickTaskAttachment, onTaskDetailOpenChange)
                 Destination.Goals -> GoalsScreen(state, viewModel)
                 Destination.Files -> FilesLibraryScreen(state, viewModel, onPickWorkspaceFile)
                 Destination.Database -> DatabaseScreen(state, viewModel)
@@ -511,11 +535,10 @@ private fun DestinationContent(
                 Destination.Tags -> TagsScreen(state, viewModel)
                 Destination.Search -> SearchScreen(state, viewModel)
                 Destination.Tasks -> TasksBoardScreen(state, viewModel, onPickTaskAttachment, onTaskDetailOpenChange)
-                Destination.Canvas -> CanvasBoardScreen(state, viewModel, onPickCanvasTarget)
                 Destination.Chat -> ChatScreen(state, viewModel, onPickChatAttachment)
                 Destination.ConflictReview -> ConflictReviewScreen(state, viewModel)
                 Destination.SyncMonitor -> SyncMonitorScreen(state, viewModel)
-                Destination.Settings, Destination.Vault, Destination.ImportExport -> SettingsScreen(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive)
+                Destination.Settings, Destination.Vault, Destination.ImportExport -> SettingsScreen(state, viewModel, onPickSyncFolder, onPickMarkdown, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onDisconnectGoogleDrive)
                 Destination.NotesHome -> NotesHome(state, viewModel, Modifier.fillMaxSize())
             }
         }
@@ -524,8 +547,8 @@ private fun DestinationContent(
 
 @Composable
 private fun MediumContent(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onPickMarkdown: () -> Unit,
     onPickAttachment: () -> Unit,
@@ -534,10 +557,10 @@ private fun MediumContent(
     onPickChatAttachment: () -> Unit,
     onPickWorkspaceFile: () -> Unit,
     onPickTaskAttachment: (TaskItem) -> Unit,
-    onPickCanvasTarget: (CanvasNodeItem) -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
     onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
     if (state.destination == Destination.NotesHome) {
@@ -548,14 +571,14 @@ private fun MediumContent(
     } else if (state.destination == Destination.NoteEditor) {
         BlockNoteEditorScreen(state, viewModel, Modifier.fillMaxSize(), viewModel::toggleSidebar)
     } else {
-        DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onTaskDetailOpenChange)
+        DestinationContent(state, viewModel, Modifier.fillMaxSize(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onDisconnectGoogleDrive, onTaskDetailOpenChange)
     }
 }
 
 @Composable
 private fun ExpandedContent(
-    state: NotesUiState,
-    viewModel: NotesViewModel,
+    state: DocsUiState,
+    viewModel: DocsViewModel,
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onPickMarkdown: () -> Unit,
     onPickAttachment: () -> Unit,
@@ -564,10 +587,10 @@ private fun ExpandedContent(
     onPickChatAttachment: () -> Unit,
     onPickWorkspaceFile: () -> Unit,
     onPickTaskAttachment: (TaskItem) -> Unit,
-    onPickCanvasTarget: (CanvasNodeItem) -> Unit,
     onPickBackupFolder: () -> Unit,
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
     onTaskDetailOpenChange: (Boolean) -> Unit,
 ) {
     Row(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 6.dp)) {
@@ -578,7 +601,7 @@ private fun ExpandedContent(
         } else if (state.destination == Destination.NoteEditor) {
             BlockNoteEditorScreen(state, viewModel, Modifier.weight(1f).fillMaxHeight(), viewModel::toggleSidebar)
         } else {
-            DestinationContent(state, viewModel, Modifier.weight(1f).fillMaxHeight(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickCanvasTarget, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onTaskDetailOpenChange)
+            DestinationContent(state, viewModel, Modifier.weight(1f).fillMaxHeight(), onPickSyncFolder, onPickMarkdown, onPickAttachment, onPickEmbed, onPickCover, onPickChatAttachment, onPickWorkspaceFile, onPickTaskAttachment, onPickBackupFolder, onPickBackupFile, onConnectGoogleDrive, onDisconnectGoogleDrive, onTaskDetailOpenChange)
         }
     }
 }

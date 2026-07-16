@@ -1,6 +1,7 @@
 # Public Android configuration only. Copy to norfold.properties (gitignored).
 SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_REPLACE_ME
-GOOGLE_SERVER_CLIENT_ID=REPLACE_ME.apps.googleusercontent.com
-GOOGLE_CLOUD_PROJECT_ID=norfold-alpha
+GOOGLE_ANDROID_CLIENT_ID=REPLACE_WITH_ANDROID_CLIENT_ID.apps.googleusercontent.com
+GOOGLE_SERVER_CLIENT_ID=REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com
+GOOGLE_CLOUD_PROJECT_ID=norfold
 FIREBASE_PROJECT_ID=norfold-alpha

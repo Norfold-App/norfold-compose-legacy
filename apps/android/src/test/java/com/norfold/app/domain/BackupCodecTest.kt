@@ -71,24 +71,6 @@ class BackupCodecTest {
             calendarEvents = listOf(
                 CalendarEventItem(73, 1, "event-sync-73", "Design review", "Review adaptive layouts", 200, 220, false, 0xFF9A48FF, CalendarEventSource.Local, null, 142, 162),
             ),
-            canvasNodes = listOf(
-                CanvasNodeItem(
-                    id = 9,
-                    title = "PDF brief",
-                    subtitle = "Spec attachment",
-                    type = CanvasNodeType.File,
-                    x = 0.2f,
-                    y = 0.3f,
-                    color = 0xFF4AADFF,
-                    linkedNoteId = null,
-                    targetUri = "content://canvas/brief.pdf",
-                    targetMimeType = "application/pdf",
-                    targetName = "brief.pdf",
-                    targetSizeBytes = 4096,
-                    createdAt = 60,
-                    updatedAt = 70,
-                ),
-            ),
             workspaceObjects = listOf(
                 WorkspaceObject(
                     id = 11,
@@ -146,8 +128,6 @@ class BackupCodecTest {
         assertEquals(true, restored.taskChecklistItems.single().checked)
         assertEquals(4L, restored.tasks.single().taskColumnId)
         assertEquals(2, restored.tasks.single().sortOrder)
-        assertEquals("content://canvas/brief.pdf", restored.canvasNodes.single().targetUri)
-        assertEquals("brief.pdf", restored.canvasNodes.single().targetName)
         assertEquals("Project", restored.workspaceObjects.first().title)
         assertEquals(WorkspaceLinkType.Attachment, restored.workspaceObjectLinks.single().linkType)
         assertEquals("Updated note", restored.workspaceActivities.single().title)

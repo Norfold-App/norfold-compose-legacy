@@ -1,6 +1,7 @@
 package com.norfold.app.data
 
 import android.content.Context
+import com.norfold.app.BuildConfig
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -24,8 +25,6 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TaskPropertyValueEntity::class,
         TaskChecklistItemEntity::class,
         ChatMessageEntity::class,
-        CanvasNodeEntity::class,
-        CanvasEdgeEntity::class,
         WorkspaceObjectEntity::class,
         WorkspaceObjectLinkEntity::class,
         WorkspaceActivityEntity::class,
@@ -39,7 +38,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 31,
+    version = 32,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -49,8 +48,9 @@ abstract class NorfoldDatabase : RoomDatabase() {
         @Volatile private var instance: NorfoldDatabase? = null
 
         fun get(context: Context): NorfoldDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext, NorfoldDatabase::class.java, "norfold.db")
-                .addMigrations(
+            instance ?: run {
+                val builder = Room.databaseBuilder(context.applicationContext, NorfoldDatabase::class.java, "norfold.db")
+                    .addMigrations(
                     MIGRATION_1_12,
                     MIGRATION_2_12,
                     MIGRATION_3_12,
@@ -81,9 +81,13 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_28_29,
                     MIGRATION_29_30,
                     MIGRATION_30_31,
-                )
-                .build()
-                .also { instance = it }
+                    MIGRATION_31_32,
+                    )
+                if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
+                    builder.fallbackToDestructiveMigration(dropAllTables = true)
+                }
+                builder.build().also { instance = it }
+            }
         }
 
         private val MIGRATION_1_12 = schemaMigration(1, 12)
@@ -285,6 +289,55 @@ abstract class NorfoldDatabase : RoomDatabase() {
         internal val MIGRATION_30_31 = object : Migration(30, 31) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE settings ADD COLUMN noteRenderEngine TEXT NOT NULL DEFAULT 'Auto'")
+            }
+        }
+
+        internal val MIGRATION_31_32 = object : Migration(31, 32) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DELETE FROM workspace_object_links WHERE fromObjectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas') OR toObjectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_activities WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_object_history WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_comments WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_files WHERE objectId IN (SELECT id FROM workspace_objects WHERE objectType = 'Canvas')")
+                db.execSQL("DELETE FROM workspace_objects WHERE objectType = 'Canvas'")
+                db.execSQL("DROP TABLE IF EXISTS canvas_edges")
+                db.execSQL("DROP TABLE IF EXISTS canvas_nodes")
+                db.execSQL(
+                    """
+                    CREATE TABLE workspaces_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        icon TEXT NOT NULL,
+                        iconKind TEXT NOT NULL,
+                        iconUri TEXT,
+                        backgroundUri TEXT,
+                        palette TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        permRename INTEGER NOT NULL,
+                        permChangeIcon INTEGER NOT NULL,
+                        permInviteMembers INTEGER NOT NULL,
+                        permDeleteNotes INTEGER NOT NULL,
+                        permEditNotes INTEGER NOT NULL,
+                        permManageTasks INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO workspaces_new (
+                        id, name, icon, iconKind, iconUri, backgroundUri, palette, createdAt,
+                        permRename, permChangeIcon, permInviteMembers, permDeleteNotes,
+                        permEditNotes, permManageTasks
+                    )
+                    SELECT
+                        id, name, icon, iconKind, iconUri, backgroundUri, palette, createdAt,
+                        permRename, permChangeIcon, permInviteMembers, permDeleteNotes,
+                        permEditNotes, permManageTasks
+                    FROM workspaces
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE workspaces")
+                db.execSQL("ALTER TABLE workspaces_new RENAME TO workspaces")
             }
         }
 
@@ -492,41 +545,6 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     attachmentMimeType TEXT,
                     attachmentUri TEXT,
                     attachmentSizeBytes INTEGER,
-                    workspaceId INTEGER NOT NULL DEFAULT 1
-                )
-                """.trimIndent(),
-            )
-            execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS canvas_nodes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    title TEXT NOT NULL,
-                    subtitle TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    x REAL NOT NULL,
-                    y REAL NOT NULL,
-                    color INTEGER NOT NULL,
-                    linkedNoteId INTEGER,
-                    targetUri TEXT,
-                    targetMimeType TEXT,
-                    targetName TEXT,
-                    targetSizeBytes INTEGER,
-                    createdAt INTEGER NOT NULL,
-                    updatedAt INTEGER NOT NULL,
-                    workspaceId INTEGER NOT NULL DEFAULT 1
-                )
-                """.trimIndent(),
-            )
-            execSQL(
-                """
-                CREATE TABLE IF NOT EXISTS canvas_edges (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                    fromNodeId INTEGER NOT NULL,
-                    toNodeId INTEGER NOT NULL,
-                    label TEXT NOT NULL DEFAULT '',
-                    color INTEGER NOT NULL,
-                    createdAt INTEGER NOT NULL,
-                    updatedAt INTEGER NOT NULL,
                     workspaceId INTEGER NOT NULL DEFAULT 1
                 )
                 """.trimIndent(),
@@ -786,12 +804,6 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("chat_messages", "attachmentUri", "TEXT")
             addColumnIfMissing("chat_messages", "attachmentSizeBytes", "INTEGER")
             addColumnIfMissing("chat_messages", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
-            addColumnIfMissing("canvas_nodes", "linkedNoteId", "INTEGER")
-            addColumnIfMissing("canvas_nodes", "targetUri", "TEXT")
-            addColumnIfMissing("canvas_nodes", "targetMimeType", "TEXT")
-            addColumnIfMissing("canvas_nodes", "targetName", "TEXT")
-            addColumnIfMissing("canvas_nodes", "targetSizeBytes", "INTEGER")
-            addColumnIfMissing("canvas_nodes", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
             addColumnIfMissing("settings", "themeProfile", "TEXT NOT NULL DEFAULT 'Neon'")
             addColumnIfMissing("settings", "activeWorkspaceId", "INTEGER NOT NULL DEFAULT 1")
             addColumnIfMissing("settings", "syncProvider", "TEXT NOT NULL DEFAULT 'None'")
@@ -903,12 +915,6 @@ abstract class NorfoldDatabase : RoomDatabase() {
             execSQL("CREATE INDEX IF NOT EXISTS index_task_checklist_items_sortOrder ON task_checklist_items(sortOrder)")
             execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_createdAt ON chat_messages(createdAt)")
             execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_workspaceId ON chat_messages(workspaceId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_nodes_updatedAt ON canvas_nodes(updatedAt)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_nodes_type ON canvas_nodes(type)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_nodes_workspaceId ON canvas_nodes(workspaceId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_edges_fromNodeId ON canvas_edges(fromNodeId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_edges_toNodeId ON canvas_edges(toNodeId)")
-            execSQL("CREATE INDEX IF NOT EXISTS index_canvas_edges_workspaceId ON canvas_edges(workspaceId)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_workspaceId ON workspace_objects(workspaceId)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_objectType ON workspace_objects(objectType)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_sourceId ON workspace_objects(sourceId)")

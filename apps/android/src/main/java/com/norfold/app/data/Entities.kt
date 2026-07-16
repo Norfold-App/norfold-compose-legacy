@@ -12,9 +12,6 @@ import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Attachment
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
-import com.norfold.app.domain.CanvasEdgeItem
-import com.norfold.app.domain.CanvasNodeItem
-import com.norfold.app.domain.CanvasNodeType
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
@@ -72,7 +69,6 @@ data class WorkspaceEntity(
     val permInviteMembers: Boolean = false,
     val permDeleteNotes: Boolean = false,
     val permEditNotes: Boolean = true,
-    val permCreateCanvas: Boolean = true,
     val permManageTasks: Boolean = true,
 )
 
@@ -304,37 +300,6 @@ data class ChatMessageEntity(
     val attachmentMimeType: String? = null,
     val attachmentUri: String? = null,
     val attachmentSizeBytes: Long? = null,
-    val workspaceId: Long = 1,
-)
-
-@Entity(tableName = "canvas_nodes", indices = [Index("updatedAt"), Index("type"), Index("workspaceId")])
-data class CanvasNodeEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val title: String,
-    val subtitle: String,
-    val type: String,
-    val x: Float,
-    val y: Float,
-    val color: Long,
-    val linkedNoteId: Long? = null,
-    val targetUri: String? = null,
-    val targetMimeType: String? = null,
-    val targetName: String? = null,
-    val targetSizeBytes: Long? = null,
-    val createdAt: Long,
-    val updatedAt: Long,
-    val workspaceId: Long = 1,
-)
-
-@Entity(tableName = "canvas_edges", indices = [Index("fromNodeId"), Index("toNodeId"), Index("workspaceId")])
-data class CanvasEdgeEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val fromNodeId: Long,
-    val toNodeId: Long,
-    val label: String = "",
-    val color: Long,
-    val createdAt: Long,
-    val updatedAt: Long,
     val workspaceId: Long = 1,
 )
 
@@ -612,7 +577,6 @@ fun WorkspaceEntity.toDomain() = com.norfold.app.domain.Workspace(
     permInviteMembers = permInviteMembers,
     permDeleteNotes = permDeleteNotes,
     permEditNotes = permEditNotes,
-    permCreateCanvas = permCreateCanvas,
     permManageTasks = permManageTasks,
 )
 fun NotebookEntity.toDomain() = Notebook(id = id, name = name, parentId = parentId, color = color, sortOrder = sortOrder)
@@ -707,31 +671,6 @@ fun ChatMessageEntity.toDomain() = ChatMessageItem(
     attachmentMimeType = attachmentMimeType,
     attachmentUri = attachmentUri,
     attachmentSizeBytes = attachmentSizeBytes,
-)
-fun CanvasNodeEntity.toDomain() = CanvasNodeItem(
-    id = id,
-    title = title,
-    subtitle = subtitle,
-    type = CanvasNodeType.entries.firstOrNull { it.name == type } ?: CanvasNodeType.Text,
-    x = x,
-    y = y,
-    color = color,
-    linkedNoteId = linkedNoteId,
-    targetUri = targetUri,
-    targetMimeType = targetMimeType,
-    targetName = targetName,
-    targetSizeBytes = targetSizeBytes,
-    createdAt = createdAt,
-    updatedAt = updatedAt,
-)
-fun CanvasEdgeEntity.toDomain() = CanvasEdgeItem(
-    id = id,
-    fromNodeId = fromNodeId,
-    toNodeId = toNodeId,
-    label = label,
-    color = color,
-    createdAt = createdAt,
-    updatedAt = updatedAt,
 )
 fun WorkspaceObjectEntity.toDomain() = WorkspaceObject(
     id = id,
@@ -930,6 +869,7 @@ fun NoteEntity.toDomain(
     attachments = attachments,
     overlapMode = docOverlapModeOf(overlapMode),
     freeformLayout = DocLayoutJson.decode(freeformLayoutJson),
+    canvasSpec = DocLayoutJson.decodeCanvas(freeformLayoutJson),
 )
 
 data class NoteWithRelations(

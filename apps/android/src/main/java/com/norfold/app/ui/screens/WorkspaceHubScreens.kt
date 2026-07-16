@@ -74,8 +74,8 @@ import com.norfold.app.domain.WorkspaceActivity
 import com.norfold.app.domain.WorkspaceFileItem
 import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
-import com.norfold.app.ui.NotesUiState
-import com.norfold.app.ui.NotesViewModel
+import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.GlobalSearchBar
 import com.norfold.app.ui.components.pressScale
 import java.time.Instant
@@ -87,9 +87,9 @@ import kotlin.math.sin
 private enum class DatabaseViewMode(val label: String) { Table("Table"), List("List"), Board("Board"), Gallery("Gallery"), Timeline("Timeline") }
 
 @Composable
-fun WorkspaceHubScreen(state: NotesUiState, viewModel: NotesViewModel, inboxMode: Boolean = false) {
+fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: Boolean = false) {
     LazyColumn(
-        Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 58.dp, bottom = 12.dp),
+        Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -164,7 +164,7 @@ fun WorkspaceHubScreen(state: NotesUiState, viewModel: NotesViewModel, inboxMode
 }
 
 @Composable
-private fun FirstRunSetupCard(viewModel: NotesViewModel) {
+private fun FirstRunSetupCard(viewModel: DocsViewModel) {
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.13f),
@@ -187,7 +187,7 @@ private fun FirstRunSetupCard(viewModel: NotesViewModel) {
 }
 
 @Composable
-private fun WorkspaceHero(state: NotesUiState, viewModel: NotesViewModel, inboxMode: Boolean) {
+private fun WorkspaceHero(state: DocsUiState, viewModel: DocsViewModel, inboxMode: Boolean) {
     val active = state.workspaces.firstOrNull { it.id == state.settings.activeWorkspaceId }
     Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -206,12 +206,12 @@ private fun WorkspaceHero(state: NotesUiState, viewModel: NotesViewModel, inboxM
 }
 
 @Composable
-private fun HubSearchBar(viewModel: NotesViewModel) {
-    GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) })
+private fun HubSearchBar(viewModel: DocsViewModel) {
+    GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar)
 }
 
 @Composable
-private fun HubStats(state: NotesUiState, viewModel: NotesViewModel) {
+private fun HubStats(state: DocsUiState, viewModel: DocsViewModel) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         StatCard("Docs", state.notes.size.toString(), Icons.Outlined.Description, Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
         StatCard("Tasks", state.tasks.size.toString(), Icons.Outlined.TaskAlt, Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
@@ -219,7 +219,7 @@ private fun HubStats(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-private fun PlanningOverview(state: NotesUiState, viewModel: NotesViewModel) {
+private fun PlanningOverview(state: DocsUiState, viewModel: DocsViewModel) {
     val openTasks = state.tasks.count { it.status != TaskStatus.Done }
     val completedTasks = state.tasks.size - openTasks
     val taskProgress = if (state.tasks.isEmpty()) 0f else completedTasks.toFloat() / state.tasks.size
@@ -279,11 +279,11 @@ private fun StatCard(label: String, value: String, icon: ImageVector, modifier: 
 }
 
 @Composable
-private fun QuickCaptureRow(viewModel: NotesViewModel) {
+private fun QuickCaptureRow(viewModel: DocsViewModel) {
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         QuickChip("Doc", Icons.Outlined.Add, viewModel::createNote)
         QuickChip("Task", Icons.Outlined.Check, viewModel::createTaskAndOpen)
-        QuickChip("Calendar", Icons.Outlined.CalendarMonth) { viewModel.go(Destination.Calendar) }
+        QuickChip("Calendar", Icons.Outlined.CalendarMonth) { viewModel.openTaskCalendar() }
         QuickChip("Chat", Icons.Outlined.ChatBubbleOutline) { viewModel.go(Destination.Chat) }
     }
 }
@@ -339,7 +339,7 @@ private fun EmptyActionCard(title: String, detail: String, action: String, onAct
 }
 
 @Composable
-private fun SyncSummaryCard(state: NotesUiState, viewModel: NotesViewModel) {
+private fun SyncSummaryCard(state: DocsUiState, viewModel: DocsViewModel) {
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Box(Modifier.size(72.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
@@ -369,10 +369,10 @@ private fun ActivityList(items: List<WorkspaceActivity>) {
 }
 
 @Composable
-fun FilesLibraryScreen(state: NotesUiState, viewModel: NotesViewModel, onPickFile: () -> Unit) {
-    LazyColumn(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+fun FilesLibraryScreen(state: DocsUiState, viewModel: DocsViewModel, onPickFile: () -> Unit) {
+    LazyColumn(Modifier.fillMaxSize().padding(top = 18.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Files", fontWeight = FontWeight.Black, fontSize = 28.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
-        item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }) }
+        item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar) }
         item { Button(onClick = onPickFile, modifier = Modifier.fillMaxWidth()) { Text("Upload") } }
         if (state.workspaceFiles.isEmpty()) {
             item { EmptyActionCard("No files yet", "Upload PDFs, images, audio, markdown, ZIPs, and project assets.", "Upload file", onPickFile) }
@@ -388,7 +388,7 @@ private fun FileRow(file: WorkspaceFileItem, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun DatabaseScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun DatabaseScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var viewMode by remember { mutableStateOf(DatabaseViewMode.Table) }
     var typeFilter by remember { mutableStateOf<WorkspaceObjectType?>(null) }
     val objects = remember(state.workspaceObjects, typeFilter) {
@@ -397,12 +397,12 @@ fun DatabaseScreen(state: NotesUiState, viewModel: NotesViewModel) {
             .sortedByDescending { it.updatedAt }
             .take(160)
     }
-    LazyColumn(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(Modifier.fillMaxSize().padding(top = 18.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Text("Database", fontWeight = FontWeight.Black, fontSize = 28.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             Text("Objects, relations, files, tasks, docs, and workspace records in one place.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
-        item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }) }
+        item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar) }
         item {
             Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -498,7 +498,7 @@ private fun DatabaseChip(label: String, selected: Boolean, onClick: () -> Unit) 
 }
 
 @Composable
-private fun DatabaseStats(objects: List<WorkspaceObject>, state: NotesUiState) {
+private fun DatabaseStats(objects: List<WorkspaceObject>, state: DocsUiState) {
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         DatabaseStat("Shown", objects.size.toString(), Icons.Outlined.GridView)
         DatabaseStat("Links", state.workspaceObjectLinks.size.toString(), Icons.Outlined.Difference)
@@ -532,7 +532,7 @@ private fun DatabaseTableHeader() {
 }
 
 @Composable
-private fun DatabaseTableRow(obj: WorkspaceObject, state: NotesUiState, viewModel: NotesViewModel) {
+private fun DatabaseTableRow(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
     val relations = state.workspaceObjectLinks.count { it.fromObjectId == obj.id || it.toObjectId == obj.id }
     Surface(Modifier.fillMaxWidth().clickable { viewModel.openWorkspaceObject(obj) }, shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f)) {
         Row(Modifier.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -551,7 +551,7 @@ private fun DatabaseTableRow(obj: WorkspaceObject, state: NotesUiState, viewMode
 }
 
 @Composable
-private fun DatabaseObjectRow(obj: WorkspaceObject, state: NotesUiState, viewModel: NotesViewModel) {
+private fun DatabaseObjectRow(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
     Surface(Modifier.fillMaxWidth().clickable { viewModel.openWorkspaceObject(obj) }, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(Color(obj.color).copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
@@ -567,7 +567,7 @@ private fun DatabaseObjectRow(obj: WorkspaceObject, state: NotesUiState, viewMod
 }
 
 @Composable
-private fun DatabaseBoardColumn(title: String, objects: List<WorkspaceObject>, state: NotesUiState, viewModel: NotesViewModel) {
+private fun DatabaseBoardColumn(title: String, objects: List<WorkspaceObject>, state: DocsUiState, viewModel: DocsViewModel) {
     Surface(Modifier.width(246.dp), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.66f)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -585,7 +585,7 @@ private fun DatabaseBoardColumn(title: String, objects: List<WorkspaceObject>, s
 }
 
 @Composable
-private fun DatabaseObjectCard(obj: WorkspaceObject, state: NotesUiState, viewModel: NotesViewModel, modifier: Modifier = Modifier) {
+private fun DatabaseObjectCard(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier = Modifier) {
     Surface(modifier.clickable { viewModel.openWorkspaceObject(obj) }, shape = RoundedCornerShape(18.dp), color = Color(obj.color).copy(alpha = 0.16f)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -600,7 +600,7 @@ private fun DatabaseObjectCard(obj: WorkspaceObject, state: NotesUiState, viewMo
 }
 
 @Composable
-private fun DatabaseTimelineRow(obj: WorkspaceObject, state: NotesUiState, viewModel: NotesViewModel) {
+private fun DatabaseTimelineRow(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(12.dp).clip(CircleShape).background(Color(obj.color)))
@@ -625,7 +625,7 @@ private fun WorkspaceObjectType.label(): String = when (this) {
     else -> name
 }
 
-private fun databaseMeta(obj: WorkspaceObject, state: NotesUiState): String {
+private fun databaseMeta(obj: WorkspaceObject, state: DocsUiState): String {
     val links = state.workspaceObjectLinks.count { it.fromObjectId == obj.id || it.toObjectId == obj.id }
     val comments = state.workspaceComments.count { it.objectId == obj.id }
     val history = state.workspaceObjectHistory.count { it.objectId == obj.id }
@@ -644,7 +644,7 @@ private fun timelineBucket(time: Long): String {
 }
 
 @Composable
-fun GraphScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun GraphScreen(state: DocsUiState, viewModel: DocsViewModel) {
     Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Graph", fontWeight = FontWeight.Black, fontSize = 28.sp)
         val linkColor = MaterialTheme.colorScheme.primary
@@ -681,7 +681,7 @@ fun GraphScreen(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-fun ActivityScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun ActivityScreen(state: DocsUiState, viewModel: DocsViewModel) {
     val feed = state.workspaceActivities.map {
         ActivityTimelineEntry(
             time = it.createdAt,
@@ -699,9 +699,9 @@ fun ActivityScreen(state: NotesUiState, viewModel: NotesViewModel) {
             icon = Icons.Outlined.Difference,
         )
     }
-    LazyColumn(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize().padding(top = 18.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("My Activity", fontWeight = FontWeight.Black, fontSize = 28.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
-        item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }) }
+        item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar) }
         item {
             ElevatedButton(onClick = viewModel::rebuildWorkspaceIndex, modifier = Modifier.fillMaxWidth()) { Text("Rebuild index") }
         }
@@ -751,7 +751,7 @@ private fun ActivityTimelineRow(entry: ActivityTimelineEntry, modifier: Modifier
 }
 
 @Composable
-fun TemplatesScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun TemplatesScreen(state: DocsUiState, viewModel: DocsViewModel) {
     val templates = listOf("Personal", "Student", "Research", "Software Team", "Business", "Second Brain", "Journal", "Knowledge Base")
     LazyColumn(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Templates", fontWeight = FontWeight.Black, fontSize = 28.sp) }
@@ -764,7 +764,7 @@ fun TemplatesScreen(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-fun CommandPaletteScreen(state: NotesUiState, viewModel: NotesViewModel) {
+fun CommandPaletteScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var query by remember { mutableStateOf("") }
     val commands: List<Pair<String, () -> Unit>> = listOf(
         "Create doc" to { viewModel.createNote(); Unit },
@@ -793,7 +793,7 @@ fun CommandPaletteScreen(state: NotesUiState, viewModel: NotesViewModel) {
 }
 
 @Composable
-private fun ObjectInspectorDialog(obj: WorkspaceObject, state: NotesUiState, viewModel: NotesViewModel, onDismiss: () -> Unit) {
+private fun ObjectInspectorDialog(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel, onDismiss: () -> Unit) {
     var comment by remember(obj.id) { mutableStateOf("") }
     val links = state.workspaceObjectLinks.filter { it.fromObjectId == obj.id || it.toObjectId == obj.id }
     val comments = state.workspaceComments.filter { it.objectId == obj.id }
@@ -863,7 +863,6 @@ private fun iconForObject(type: WorkspaceObjectType): ImageVector = when (type) 
     WorkspaceObjectType.Goal -> Icons.Outlined.Check
     WorkspaceObjectType.CalendarEvent -> Icons.Outlined.Star
     WorkspaceObjectType.File -> Icons.Outlined.Folder
-    WorkspaceObjectType.Canvas -> Icons.Outlined.GridView
     WorkspaceObjectType.ChatMessage -> Icons.Outlined.ChatBubbleOutline
     WorkspaceObjectType.DatabaseRow -> Icons.Outlined.GridView
     WorkspaceObjectType.Workspace -> Icons.Outlined.Home
