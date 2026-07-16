@@ -11,6 +11,8 @@ import com.norfold.app.domain.DocLayerOrder
 import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocLayoutJson
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentOwner
+import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.EmbedMetadata
@@ -19,6 +21,7 @@ import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.Note
+import com.norfold.app.domain.OwnedDocument
 import com.norfold.app.domain.MarkdownBlockCodec
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.Notebook
@@ -578,6 +581,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
     /** Deletes a workspace and all of its content. Refuses to delete the last remaining workspace. */
     suspend fun deleteWorkspace(id: Long): Boolean {
         if (dao.allWorkspaces().size <= 1) return false
+        dao.deleteNoteDocumentsForWorkspace(id)
         dao.deleteNotesForWorkspace(id)
         dao.deleteNotebooksForWorkspace(id)
         dao.deleteTasksForWorkspace(id)
@@ -602,6 +606,59 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     suspend fun noteById(id: Long): Note? = dao.noteById(id)?.toDomain()
 
+    suspend fun documentByOwner(owner: DocumentOwner): OwnedDocument? =
+        dao.documentByOwner(owner.type.storageValue, owner.id)?.toDomain()
+
+    suspend fun saveDocument(
+        owner: DocumentOwner,
+        document: BlockDocument,
+        dirtyBlockIds: Set<String> = document.blocks.mapTo(linkedSetOf()) { it.id },
+        layoutMode: DocOverlapMode? = null,
+        freeformLayout: Map<String, FreeformPlacement>? = null,
+        canvasSpec: DocCanvasSpec? = null,
+    ): OwnedDocument = database.withTransaction {
+        persistDocument(owner, document, dirtyBlockIds, layoutMode, freeformLayout, canvasSpec)
+    }
+
+    private suspend fun persistDocument(
+        owner: DocumentOwner,
+        document: BlockDocument,
+        dirtyBlockIds: Set<String>,
+        layoutMode: DocOverlapMode?,
+        freeformLayout: Map<String, FreeformPlacement>?,
+        canvasSpec: DocCanvasSpec?,
+        updatedAt: Long = System.currentTimeMillis(),
+    ): OwnedDocument {
+        val existing = dao.documentByOwner(owner.type.storageValue, owner.id)?.toDomain()
+        val normalized = document.normalized()
+        val resolvedMode = layoutMode ?: existing?.layoutMode ?: DocOverlapMode.Reflow
+        val resolvedLayout = freeformLayout ?: existing?.freeformLayout.orEmpty()
+        val resolvedCanvas = canvasSpec ?: existing?.canvasSpec ?: DocCanvasSpec()
+        dao.upsertDocument(
+            DocumentEntity(
+                id = owner.documentId,
+                ownerType = owner.type.storageValue,
+                ownerId = owner.id,
+                layoutMode = resolvedMode.name.lowercase(),
+                layoutJson = DocLayoutJson.encode(resolvedLayout, resolvedCanvas),
+                createdAt = existing?.createdAt ?: updatedAt,
+                updatedAt = updatedAt,
+            ),
+        )
+        val existingRows = dao.blocksForDocument(owner.documentId).associateBy(DocumentBlockEntity::blockId)
+        val next = normalized.blocks.mapIndexed { position, block ->
+            DocumentBlockEntity(block.id, owner.documentId, position, BlockDocumentJson.encodeBlock(block), updatedAt)
+        }
+        val changed = next.filter { candidate ->
+            val old = existingRows[candidate.blockId]
+            candidate.blockId in dirtyBlockIds || old == null || old.position != candidate.position || old.payloadJson != candidate.payloadJson
+        }
+        if (changed.isNotEmpty()) dao.upsertDocumentBlocks(changed)
+        val removed = existingRows.keys - next.mapTo(hashSetOf(), DocumentBlockEntity::blockId)
+        if (removed.isNotEmpty()) dao.deleteDocumentBlocks(owner.documentId, removed.toList())
+        return OwnedDocument(owner, normalized, resolvedMode, resolvedLayout, resolvedCanvas, existing?.createdAt ?: updatedAt, updatedAt)
+    }
+
     suspend fun createNote(
         title: String = "Untitled doc",
         body: String = "",
@@ -612,25 +669,26 @@ class DocsRepository(private val database: NorfoldDatabase) {
     ): Long {
         val now = System.currentTimeMillis()
         val document = MarkdownBlockCodec.import(body)
-        val id = dao.insertNote(
-            NoteEntity(
-                title = title.ifBlank { "Untitled doc" },
-                searchText = document.plainText(),
-                notebookId = notebookId,
-                coverUri = null,
-                coverMimeType = null,
-                pinned = pinned,
-                starred = starred,
-                archived = false,
-                locked = false,
-                createdAt = now,
-                updatedAt = now,
-                workspaceId = activeWs(),
-            ),
-        )
-        dao.upsertNoteBlocks(document.blocks.mapIndexed { position, block ->
-            NoteBlockEntity(block.id, id, position, BlockDocumentJson.encodeBlock(block), now)
-        })
+        val id = database.withTransaction {
+            val noteId = dao.insertNote(
+                NoteEntity(
+                    title = title.ifBlank { "Untitled doc" },
+                    searchText = document.plainText(),
+                    notebookId = notebookId,
+                    coverUri = null,
+                    coverMimeType = null,
+                    pinned = pinned,
+                    starred = starred,
+                    archived = false,
+                    locked = false,
+                    createdAt = now,
+                    updatedAt = now,
+                    workspaceId = activeWs(),
+                ),
+            )
+            persistDocument(DocumentOwner.note(noteId), document, document.blocks.mapTo(linkedSetOf()) { it.id }, null, null, null, now)
+            noteId
+        }
         setTags(id, tagNames)
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled doc" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
         recordActivity(WorkspaceActivityType.Created, "You", "Created doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = id)
@@ -648,20 +706,12 @@ class DocsRepository(private val database: NorfoldDatabase) {
         document: BlockDocument,
         dirtyBlockIds: Set<String> = document.blocks.mapTo(linkedSetOf()) { it.id },
     ) {
-        val normalized = document.normalized()
         val now = System.currentTimeMillis()
-        val existing = dao.blocksForNote(note.id).associateBy(NoteBlockEntity::id)
-        val next = normalized.blocks.mapIndexed { position, block ->
-            NoteBlockEntity(block.id, note.id, position, BlockDocumentJson.encodeBlock(block), now)
+        val normalized = database.withTransaction {
+            val persisted = persistDocument(DocumentOwner.note(note.id), document, dirtyBlockIds, null, null, null, now)
+            dao.updateNoteContent(note.id, title.ifBlank { "Untitled doc" }, persisted.document.plainText(), now)
+            persisted.document
         }
-        val changed = next.filter { candidate ->
-            val old = existing[candidate.id]
-            candidate.id in dirtyBlockIds || old == null || old.position != candidate.position || old.payloadJson != candidate.payloadJson
-        }
-        if (changed.isNotEmpty()) dao.upsertNoteBlocks(changed)
-        val removed = existing.keys - next.mapTo(hashSetOf(), NoteBlockEntity::id)
-        if (removed.isNotEmpty()) dao.deleteNoteBlocks(removed.toList())
-        dao.updateNoteContent(note.id, title.ifBlank { "Untitled doc" }, normalized.plainText(), now)
         val markdown = MarkdownBlockCodec.export(normalized)
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled doc" }, normalized.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
         recordActivity(WorkspaceActivityType.Updated, "You", "Updated doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
@@ -1421,18 +1471,32 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun setStarred(note: Note) = dao.setStarred(note.id, !note.starred, System.currentTimeMillis())
     suspend fun setArchived(note: Note, value: Boolean = !note.archived) = dao.setArchived(note.id, value, System.currentTimeMillis())
     suspend fun setLocked(note: Note) = dao.setLocked(note.id, !note.locked, System.currentTimeMillis())
-    suspend fun setOverlapMode(note: Note, mode: DocOverlapMode) =
-        dao.setNoteOverlapMode(note.id, mode.name.lowercase(), System.currentTimeMillis())
+    suspend fun setOverlapMode(note: Note, mode: DocOverlapMode) = updateNoteDocumentLayout(note, mode, note.freeformLayout, note.canvasSpec)
     suspend fun setFreeformLayout(note: Note, layout: Map<String, FreeformPlacement>) =
-        dao.setNoteFreeformLayout(note.id, DocLayoutJson.encode(layout, note.canvasSpec), System.currentTimeMillis())
+        updateNoteDocumentLayout(note, note.overlapMode, layout, note.canvasSpec)
     suspend fun setCanvasSpec(note: Note, canvasSpec: DocCanvasSpec) =
-        dao.setNoteFreeformLayout(note.id, DocLayoutJson.encode(note.freeformLayout, canvasSpec), System.currentTimeMillis())
+        updateNoteDocumentLayout(note, note.overlapMode, note.freeformLayout, canvasSpec)
     suspend fun setCanvasLayout(
         note: Note,
         layout: Map<String, FreeformPlacement>,
         canvasSpec: DocCanvasSpec,
-    ) = dao.setNoteFreeformLayout(note.id, DocLayoutJson.encode(layout, canvasSpec), System.currentTimeMillis())
-    suspend fun deleteNote(note: Note) = dao.deleteNote(note.id)
+    ) = updateNoteDocumentLayout(note, note.overlapMode, layout, canvasSpec)
+
+    private suspend fun updateNoteDocumentLayout(
+        note: Note,
+        mode: DocOverlapMode,
+        layout: Map<String, FreeformPlacement>,
+        canvasSpec: DocCanvasSpec,
+    ) = database.withTransaction {
+        val now = System.currentTimeMillis()
+        persistDocument(DocumentOwner.note(note.id), note.document, emptySet(), mode, layout, canvasSpec, now)
+        dao.touchNote(note.id, now)
+    }
+
+    suspend fun deleteNote(note: Note) = database.withTransaction {
+        dao.deleteDocumentForOwner(DocumentOwnerType.Note.storageValue, note.id)
+        dao.deleteNote(note.id)
+    }
 
     suspend fun updateSettings(settings: AppSettings) = dao.upsertSettings(
         AppSettingsEntity(
@@ -1583,6 +1647,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         dao.clearTasks()
         dao.clearTaskColumns()
         dao.clearTaskBoards()
+        dao.clearDocuments()
         dao.clearNotes()
         dao.clearTags()
         dao.clearNotebooks()
@@ -1627,13 +1692,17 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     locked = note.locked,
                     createdAt = note.createdAt,
                     updatedAt = note.updatedAt,
-                    overlapMode = note.overlapMode.name.lowercase(),
-                    freeformLayoutJson = DocLayoutJson.encode(note.freeformLayout, note.canvasSpec),
                 ),
             )
-            dao.upsertNoteBlocks(note.document.blocks.mapIndexed { position, block ->
-                NoteBlockEntity(block.id, note.id, position, BlockDocumentJson.encodeBlock(block), note.updatedAt)
-            })
+            persistDocument(
+                owner = DocumentOwner.note(note.id),
+                document = note.document,
+                dirtyBlockIds = note.document.blocks.mapTo(linkedSetOf()) { it.id },
+                layoutMode = note.overlapMode,
+                freeformLayout = note.freeformLayout,
+                canvasSpec = note.canvasSpec,
+                updatedAt = note.updatedAt,
+            )
             setTags(note.id, note.tags.map { it.name })
         }
         snapshot.attachments.forEach { dao.insertAttachment(AttachmentEntity(it.id, it.noteId, it.displayName, it.mimeType, it.uri, it.sizeBytes)) }
