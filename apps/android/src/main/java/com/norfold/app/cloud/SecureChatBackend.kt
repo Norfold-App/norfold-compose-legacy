@@ -147,8 +147,83 @@ class SecureChatBackend(context: Context) {
         )
     }
 
+    suspend fun sendWorkspaceText(
+        workspaceId: String,
+        channelId: String?,
+        clientSyncId: String,
+        body: String,
+        createdAt: Long,
+        replyPreview: String? = null,
+    ): String = sendWorkspacePayload(
+        workspaceId = workspaceId,
+        channelId = channelId,
+        clientSyncId = clientSyncId,
+        payload = SecureChatPayloadV1(
+            type = "text",
+            body = body,
+            createdAt = createdAt,
+            replyPreview = replyPreview,
+        ),
+    )
+
+    suspend fun sendWorkspaceMutation(
+        workspaceId: String,
+        channelId: String?,
+        clientSyncId: String,
+        targetMessageId: String,
+        type: String,
+        body: String = "",
+        editedAt: Long? = null,
+        reactionsJson: String? = null,
+        pinned: Boolean? = null,
+    ): String = sendWorkspacePayload(
+        workspaceId = workspaceId,
+        channelId = channelId,
+        clientSyncId = clientSyncId,
+        payload = SecureChatPayloadV1(
+            type = type,
+            body = body,
+            createdAt = System.currentTimeMillis(),
+            targetMessageId = targetMessageId,
+            editedAt = editedAt,
+            reactionsJson = reactionsJson,
+            pinned = pinned,
+        ),
+    )
+
     private suspend fun sendPayload(
         conversationId: String,
+        clientSyncId: String,
+        payload: SecureChatPayloadV1,
+    ): String {
+        val epochId = ensureAccountEpoch(conversationId)
+        return sendPayloadForEpoch(conversationId, epochId, clientSyncId, payload)
+    }
+
+    private suspend fun sendWorkspacePayload(
+        workspaceId: String,
+        channelId: String?,
+        clientSyncId: String,
+        payload: SecureChatPayloadV1,
+    ): String {
+        registerCurrentDevice()
+        renewLease()
+        val security = ChatBackend.ensureWorkspaceSecurityEpoch(workspaceId, channelId)
+        require(security.securityMode == com.norfold.app.domain.ChatSecurityMode.EndToEndEncrypted) {
+            "Workspace E2EE transport cannot send Managed content."
+        }
+        require(security.acknowledged) {
+            "Acknowledge this workspace's security disclosure before sending."
+        }
+        val epochId = requireNotNull(security.securityEpochId) {
+            "Workspace E2EE epoch is unavailable."
+        }
+        return sendPayloadForEpoch(channelId ?: workspaceId, epochId, clientSyncId, payload)
+    }
+
+    private suspend fun sendPayloadForEpoch(
+        conversationId: String,
+        epochId: String,
         clientSyncId: String,
         payload: SecureChatPayloadV1,
     ): String {
@@ -157,8 +232,7 @@ class SecureChatBackend(context: Context) {
         val sender = identityStore.getOrCreate()
         registerCurrentDevice()
         renewLease()
-        val epochId = ensureAccountEpoch(conversationId)
-        val recipients = conversationCredentials(conversationId).map { it.publicMaterial() }
+        val recipients = securityEpochCredentials(epochId).map { it.publicMaterial() }
         val metadata = E2eeMessageMetadata(
             conversationId = conversationId,
             messageId = clientSyncId,
@@ -242,9 +316,9 @@ class SecureChatBackend(context: Context) {
             },
         ).data.trim('"')
 
-    private suspend fun conversationCredentials(conversationId: String): List<RemoteDeviceCredential> =
+    private suspend fun securityEpochCredentials(epochId: String): List<RemoteDeviceCredential> =
         client.postgrest.rpc(
-            function = "account_conversation_device_credentials",
-            parameters = buildJsonObject { put("p_conversation", conversationId) },
+            function = "security_epoch_device_credentials",
+            parameters = buildJsonObject { put("p_security_epoch", epochId) },
         ).decodeList()
 }

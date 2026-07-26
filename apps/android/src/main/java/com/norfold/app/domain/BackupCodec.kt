@@ -215,6 +215,11 @@ object BackupCodec {
                     it.editedAt ?: "",
                     b64(it.reactionsJson),
                     it.pinned,
+                    it.receiptStatus?.name.orEmpty(),
+                    it.starred,
+                    it.securityMode?.name.orEmpty(),
+                    b64(it.securityEpochId.orEmpty()),
+                    b64(it.securityEventId.orEmpty()),
                 ).joinToString("|"),
             )
         }
@@ -231,6 +236,15 @@ object BackupCodec {
                     it.createdAt,
                     it.workspaceId,
                     it.pinned,
+                    b64(it.accountConversationId.orEmpty()),
+                    b64(it.coverUri.orEmpty()),
+                    b64(it.description),
+                    b64(it.rules),
+                    it.rulesReminderDays,
+                    it.visibility.name,
+                    it.securityMode.name,
+                    b64(it.securityEpochId.orEmpty()),
+                    b64(it.acknowledgedSecurityEpochId.orEmpty()),
                 ).joinToString("|"),
             )
         }
@@ -498,6 +512,15 @@ object BackupCodec {
                     editedAt = cells.getOrElse(15) { "" }.takeIf { it.isNotBlank() }?.toLong(),
                     reactionsJson = unb64(cells.getOrElse(16) { "" }).ifBlank { "{}" },
                     pinned = cells.getOrElse(17) { "false" }.toBoolean(),
+                    receiptStatus = ChatReceiptStatus.entries.firstOrNull {
+                        it.name == cells.getOrElse(18) { "" }
+                    },
+                    starred = cells.getOrElse(19) { "false" }.toBoolean(),
+                    securityMode = ChatSecurityMode.entries.firstOrNull {
+                        it.name == cells.getOrElse(20) { "" }
+                    },
+                    securityEpochId = unb64(cells.getOrElse(21) { "" }).takeIf { it.isNotBlank() },
+                    securityEventId = unb64(cells.getOrElse(22) { "" }).takeIf { it.isNotBlank() },
                 )
                 "CHANNEL" -> {
                     val legacy = ChatChannelKind.entries.any { it.name == cells.getOrElse(2) { "" } }
@@ -516,6 +539,19 @@ object BackupCodec {
                         createdAt = cells.getOrElse(6 + offset) { "0" }.toLong(),
                         workspaceId = workspaceId,
                         pinned = cells.getOrElse(8 + offset) { "false" }.toBoolean(),
+                        accountConversationId = unb64(cells.getOrElse(9 + offset) { "" }).takeIf { it.isNotBlank() },
+                        coverUri = unb64(cells.getOrElse(10 + offset) { "" }).takeIf { it.isNotBlank() },
+                        description = unb64(cells.getOrElse(11 + offset) { "" }),
+                        rules = unb64(cells.getOrElse(12 + offset) { "" }),
+                        rulesReminderDays = cells.getOrElse(13 + offset) { "7" }.toIntOrNull()?.coerceIn(1, 365) ?: 7,
+                        visibility = ChatChannelVisibility.entries.firstOrNull {
+                            it.name == cells.getOrElse(14 + offset) { "" }
+                        } ?: ChatChannelVisibility.Private,
+                        securityMode = ChatSecurityMode.entries.firstOrNull {
+                            it.name == cells.getOrElse(15 + offset) { "" }
+                        } ?: ChatSecurityMode.EndToEndEncrypted,
+                        securityEpochId = unb64(cells.getOrElse(16 + offset) { "" }).takeIf { it.isNotBlank() },
+                        acknowledgedSecurityEpochId = unb64(cells.getOrElse(17 + offset) { "" }).takeIf { it.isNotBlank() },
                     )
                 }
                 "OBJECT" -> workspaceObjects += WorkspaceObject(

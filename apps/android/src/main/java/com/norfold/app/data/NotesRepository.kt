@@ -1,6 +1,7 @@
 package com.norfold.app.data
 
 import android.os.Build
+import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.cloud.RemoteWorkspaceObject
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Attachment
@@ -9,8 +10,10 @@ import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
+import com.norfold.app.domain.ChatChannelVisibility
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ChatReceiptStatus
+import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.WorkspaceMember
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.DocLayerOrder
@@ -108,6 +111,13 @@ private data class SharedDocumentPayload(
     val freeformLayout: Map<String, FreeformPlacement>,
     val canvasSpec: DocCanvasSpec,
 )
+
+private fun chatSecurityModeName(raw: String): String = when (raw.lowercase()) {
+    "e2ee", ChatSecurityMode.EndToEndEncrypted.name.lowercase() ->
+        ChatSecurityMode.EndToEndEncrypted.name
+    "managed", ChatSecurityMode.Managed.name.lowercase() -> ChatSecurityMode.Managed.name
+    else -> error("Unknown Chat security mode: $raw")
+}
 
 private fun RemoteWorkspaceObject.decodeSharedDocument(): SharedDocumentPayload? = runCatching {
     val body = content ?: return null
@@ -1099,6 +1109,17 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 .ifBlank { storedName }
                 .ifBlank { "Direct message" }
         } else storedName.ifBlank { if (kind == ChatChannelKind.Group) "Group" else "Channel" }
+        val visibility = content["visibility"]?.jsonPrimitive?.contentOrNull
+            ?.let { stored -> ChatChannelVisibility.entries.firstOrNull { it.name.equals(stored, true) } }
+            ?: ChatChannelVisibility.Private
+        val securityMode = when (content["securityMode"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
+            "e2ee", ChatSecurityMode.EndToEndEncrypted.name.lowercase() -> ChatSecurityMode.EndToEndEncrypted
+            "managed", ChatSecurityMode.Managed.name.lowercase() -> ChatSecurityMode.Managed
+            // Legacy workspace channel objects were transported as plaintext and are
+            // classified Managed by the additive control-plane migration.
+            else -> ChatSecurityMode.Managed
+        }
+        val securityEpochId = content["securityEpochId"]?.jsonPrimitive?.contentOrNull
         val entity = ChatChannelEntity(
             id = existing?.id ?: 0L,
             syncId = remote.clientSyncId,
@@ -1109,6 +1130,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
             createdAt = content["createdAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
             workspaceId = localWorkspaceId,
             pinned = existing?.pinned ?: false,
+            visibility = visibility.name,
+            securityMode = securityMode.name,
+            securityEpochId = securityEpochId,
+            acknowledgedSecurityEpochId = existing?.acknowledgedSecurityEpochId,
         )
         val localId = dao.insertChatChannel(entity)
         bindRemoteChatChannel(localWorkspaceId, localId, remote)
@@ -1173,6 +1198,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
                             reactionsJson = content["reactionsJson"]?.jsonPrimitive?.contentOrNull ?: local.reactionsJson,
                             pinned = content["pinned"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: local.pinned,
                             channelId = localChannelId,
+                            securityMode = content["securityMode"]?.jsonPrimitive?.contentOrNull
+                                ?.let(::chatSecurityModeName) ?: local.securityMode,
+                            securityEpochId = content["securityEpochId"]?.jsonPrimitive?.contentOrNull
+                                ?: local.securityEpochId,
                         ),
                     )
                 }
@@ -1213,6 +1242,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     reactionsJson = content["reactionsJson"]?.jsonPrimitive?.contentOrNull ?: "{}",
                     pinned = content["pinned"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false,
                     channelId = localChannelId,
+                    securityMode = content["securityMode"]?.jsonPrimitive?.contentOrNull
+                        ?.let(::chatSecurityModeName),
+                    securityEpochId = content["securityEpochId"]?.jsonPrimitive?.contentOrNull,
                     workspaceId = localWorkspaceId,
                 ),
             )
@@ -2308,6 +2340,31 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun accountChannelId(accountConversationId: String): Long? =
         dao.chatChannelByAccountConversation(accountConversationId)?.id
 
+    suspend fun updateChatChannelSecurity(
+        channelId: Long,
+        mode: ChatSecurityMode,
+        securityEpochId: String?,
+        acknowledged: Boolean,
+    ) {
+        dao.setChatChannelSecurity(
+            id = channelId,
+            securityMode = mode.name,
+            securityEpochId = securityEpochId,
+            acknowledgedSecurityEpochId = securityEpochId.takeIf { acknowledged },
+        )
+    }
+
+    suspend fun chatMessageById(messageId: Long): ChatMessageItem? =
+        dao.chatMessageById(messageId)?.toDomain()
+
+    suspend fun setChatMessageSecurity(
+        messageId: Long,
+        mode: ChatSecurityMode,
+        securityEpochId: String,
+    ) {
+        dao.setChatMessageSecurity(messageId, mode.name, securityEpochId)
+    }
+
     suspend fun updateChatChannelRichMetadata(
         channelId: Long,
         name: String,
@@ -2383,6 +2440,86 @@ class DocsRepository(private val database: NorfoldDatabase) {
         true
     }
 
+    /** Imports an opaque-relay workspace message without creating a plaintext cloud object. */
+    suspend fun importSecureWorkspaceMessage(
+        localWorkspaceId: Long,
+        localChannelId: Long?,
+        clientSyncId: String,
+        relayId: String,
+        senderUsername: String,
+        senderDisplayName: String,
+        body: String,
+        color: Long,
+        createdAt: Long,
+        isOwn: Boolean,
+        securityEpochId: String,
+    ): Boolean = database.withTransaction {
+        val existing = dao.remoteBindingBySyncId(
+            localWorkspaceId,
+            WorkspaceObjectType.ChatMessage.name,
+            clientSyncId,
+        )
+        if (existing != null) return@withTransaction false
+        val localId = dao.insertChatMessage(
+            ChatMessageEntity(
+                authorUsername = senderUsername,
+                authorDisplayName = senderDisplayName.ifBlank { senderUsername },
+                body = body,
+                color = color,
+                createdAt = createdAt,
+                workspaceId = localWorkspaceId,
+                channelId = localChannelId,
+                receiptStatus = if (isOwn) ChatReceiptStatus.Sent.name else null,
+                securityMode = ChatSecurityMode.EndToEndEncrypted.name,
+                securityEpochId = securityEpochId,
+            ),
+        )
+        dao.insertRemoteBinding(
+            RemoteObjectBindingEntity(
+                workspaceId = localWorkspaceId,
+                objectType = WorkspaceObjectType.ChatMessage.name,
+                localId = localId,
+                syncId = clientSyncId,
+                remoteId = relayId,
+                remoteVersion = 1,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+        true
+    }
+
+    /**
+     * Materializes authoritative workspace-security audit events as centered system dividers in
+     * General. The stable event id makes repeated pulls and restored backups idempotent.
+     */
+    suspend fun importWorkspaceChatSecurityEvents(
+        localWorkspaceId: Long,
+        events: List<ChatBackend.WorkspaceSecurityEvent>,
+    ): Int = database.withTransaction {
+        var inserted = 0
+        events.forEach { event ->
+            if (dao.chatMessageBySecurityEventId(localWorkspaceId, event.id) != null) return@forEach
+            val createdAt = runCatching { java.time.Instant.parse(event.createdAt).toEpochMilli() }
+                .getOrElse { System.currentTimeMillis() }
+            dao.insertChatMessage(
+                ChatMessageEntity(
+                    authorUsername = "system",
+                    authorDisplayName = "Security",
+                    body = event.dividerText,
+                    color = 0xFF7E57FF,
+                    createdAt = createdAt,
+                    system = true,
+                    workspaceId = localWorkspaceId,
+                    channelId = null,
+                    securityMode = event.securityMode.name,
+                    securityEventId = event.id,
+                ),
+            )
+            inserted += 1
+        }
+        inserted
+    }
+
     /** Marks an optimistic account send as bound to its server row (dedupe on echo). */
     suspend fun bindAccountDirectMessage(localMessageId: Long, clientSyncId: String) {
         val ws = activeWs()
@@ -2399,6 +2536,35 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 localId = localMessageId,
                 syncId = clientSyncId,
                 remoteId = clientSyncId,
+                remoteVersion = 1,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    suspend fun bindSecureChatMessage(
+        localWorkspaceId: Long,
+        localMessageId: Long,
+        clientSyncId: String,
+        relayId: String = clientSyncId,
+    ) {
+        val existing = dao.remoteBinding(
+            localWorkspaceId,
+            WorkspaceObjectType.ChatMessage.name,
+            localMessageId,
+        )
+        dao.insertRemoteBinding(
+            existing?.copy(
+                syncId = clientSyncId,
+                remoteId = relayId,
+                remoteVersion = 1,
+                updatedAt = System.currentTimeMillis(),
+            ) ?: RemoteObjectBindingEntity(
+                workspaceId = localWorkspaceId,
+                objectType = WorkspaceObjectType.ChatMessage.name,
+                localId = localMessageId,
+                syncId = clientSyncId,
+                remoteId = relayId,
                 remoteVersion = 1,
                 updatedAt = System.currentTimeMillis(),
             ),
@@ -2426,12 +2592,21 @@ class DocsRepository(private val database: NorfoldDatabase) {
         dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, messageId)
             ?.takeIf { it.remoteId != null }
 
+    suspend fun chatMessageRemoteBindingBySyncId(
+        localWorkspaceId: Long,
+        syncId: String,
+    ): RemoteObjectBindingEntity? =
+        dao.remoteBindingBySyncId(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, syncId)
+
     suspend fun chatChannelRemoteBinding(localWorkspaceId: Long, channelId: Long): RemoteObjectBindingEntity? =
         dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.ChatChannel.name, channelId)
             ?.takeIf { it.remoteId != null }
 
     suspend fun localChatChannelIdBySyncId(localWorkspaceId: Long, syncId: String): Long? =
         dao.chatChannelBySyncId(localWorkspaceId, syncId)?.id
+
+    suspend fun workspaceChannelBySyncId(syncId: String): ChatChannel? =
+        dao.chatChannelBySyncIdAnyWorkspace(syncId)?.toDomain()?.takeIf { it.scope == com.norfold.app.domain.ChatScope.Workspace }
 
     suspend fun chatChannelById(channelId: Long): ChatChannel? = dao.chatChannelById(channelId)?.toDomain()
 
@@ -2531,6 +2706,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
             nextAttemptAt = System.currentTimeMillis() + delayMs,
             lastError = failure.message.orEmpty().take(240),
         )
+    }
+
+    suspend fun wakeSecureWorkspaceChatOperations(remoteWorkspaceId: String) {
+        dao.wakeSecureChatOutbox(remoteWorkspaceId)
     }
 
     suspend fun recordSecureRelayCheckpoint(
@@ -3128,7 +3307,28 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 dao.insertCalendarEvent(CalendarEventEntity(it.id, it.workspaceId, it.syncId, it.title, it.description, it.startAt, it.endAt, it.allDay, it.color, it.source.name, it.externalId, it.createdAt, it.updatedAt))
             }
             snapshot.chatChannels.forEach {
-                dao.insertChatChannel(ChatChannelEntity(it.id, it.syncId, it.kind.name, it.name, it.counterpartUsername, it.icon, it.createdAt, it.workspaceId, it.pinned))
+                dao.insertChatChannel(
+                    ChatChannelEntity(
+                        id = it.id,
+                        syncId = it.syncId,
+                        kind = it.kind.name,
+                        name = it.name,
+                        counterpartUsername = it.counterpartUsername,
+                        icon = it.icon,
+                        createdAt = it.createdAt,
+                        workspaceId = it.workspaceId,
+                        pinned = it.pinned,
+                        accountConversationId = it.accountConversationId,
+                        coverUri = it.coverUri,
+                        description = it.description,
+                        rules = it.rules,
+                        rulesReminderDays = it.rulesReminderDays,
+                        visibility = it.visibility.name,
+                        securityMode = it.securityMode.name,
+                        securityEpochId = it.securityEpochId,
+                        acknowledgedSecurityEpochId = it.acknowledgedSecurityEpochId,
+                    ),
+                )
             }
             snapshot.chatMessages.forEach {
                 dao.insertChatMessage(
@@ -3151,6 +3351,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
                         editedAt = it.editedAt,
                         reactionsJson = it.reactionsJson,
                         pinned = it.pinned,
+                        starred = it.starred,
+                        securityMode = it.securityMode?.name,
+                        securityEpochId = it.securityEpochId,
+                        securityEventId = it.securityEventId,
                     ),
                 )
             }

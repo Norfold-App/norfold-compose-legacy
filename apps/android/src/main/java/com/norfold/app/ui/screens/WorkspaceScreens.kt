@@ -102,6 +102,8 @@ import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Business
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.GifBox
 import androidx.compose.material.icons.outlined.Tag
@@ -182,6 +184,7 @@ import com.norfold.app.data.ChatConversationPrefs
 import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatReceiptStatus
+import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ConflictSideSummary
 import com.norfold.app.domain.Destination
@@ -228,6 +231,7 @@ import androidx.compose.ui.text.withStyle
 import com.norfold.app.domain.WorkspaceMember
 import com.norfold.app.domain.Note
 import com.norfold.app.cloud.NorfoldPresence
+import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.ui.ChatComposerAction
 import com.norfold.app.ui.components.NorfoldFullscreenDialog
 import com.norfold.app.ui.components.NorfoldBottomSheet
@@ -241,6 +245,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     var message by remember { mutableStateOf(TextFieldValue("")) }
     var toolsExpanded by remember { mutableStateOf(false) }
     var detailsOpen by remember { mutableStateOf(false) }
+    var securityDetailsOpen by remember { mutableStateOf(false) }
     var rulesReviewChannelId by remember { mutableStateOf<Long?>(null) }
     // Profile viewer target: (username, displayName). Opened from the details roster or a DM header.
     var profileTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -262,6 +267,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     val currentUsername = state.settings.syncUserName.ifBlank { "you" }
     val teamWorkspaceId by viewModel.teamWorkspaceRemoteId.collectAsState()
     val collaborationStatus by viewModel.teamCollaborationStatus.collectAsState()
+    val workspaceSecurity by viewModel.workspaceChatSecurity.collectAsState()
     val recordingState by viewModel.voiceRecordingState.collectAsState()
     val chatUploads by viewModel.chatUploads.collectAsState()
     val chatAudio by viewModel.chatAudio.collectAsState()
@@ -274,10 +280,20 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     val blockedAccountIds by viewModel.blockedAccountIds.collectAsState()
     val activeChannel = state.chatChannels.firstOrNull { it.id == state.activeChatChannelId }
     val presence = if (activeChannel?.accountConversationId != null) accountPresence else workspacePresence
+    val sharedConversation = activeChannel?.accountConversationId == null
+    val visibleWorkspaceSecurity = workspaceSecurity.takeIf { sharedConversation }
+    val canManageWorkspaceSecurity = state.workspaceMembers.firstOrNull {
+        it.username.equals(currentUsername, ignoreCase = true)
+    }?.role?.lowercase()?.let { it in setOf("owner", "admin") } == true
     LaunchedEffect(activeChannel?.id, activeChannel?.rules, activeChannel?.rulesReminderDays) {
         rulesReviewChannelId = activeChannel
             ?.takeIf(viewModel::shouldReviewChatGroupRules)
             ?.id
+    }
+    LaunchedEffect(activeChannel?.id, teamWorkspaceId) {
+        if (sharedConversation && teamWorkspaceId != null) {
+            viewModel.refreshWorkspaceChatSecurity(activeChannel?.id)
+        }
     }
     LaunchedEffect(message.text, activeChannel?.id) {
         val typing = message.text.isNotBlank()
@@ -315,6 +331,24 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             onQueryChange = viewModel::searchChatGifs,
             onPick = { gif -> viewModel.sendChatGif(gif); gifPickerOpen = false },
             onDismiss = { gifPickerOpen = false },
+        )
+    }
+    visibleWorkspaceSecurity?.takeIf { !it.acknowledged }?.let { security ->
+        WorkspaceSecurityDisclosure(
+            security = security,
+            onAcknowledge = viewModel::acknowledgeWorkspaceChatSecurity,
+            onNotNow = viewModel::handleBack,
+        )
+    }
+    if (securityDetailsOpen && visibleWorkspaceSecurity != null) {
+        WorkspaceSecurityDetails(
+            security = visibleWorkspaceSecurity,
+            canManage = canManageWorkspaceSecurity,
+            onChangeMode = {
+                viewModel.changeWorkspaceChatSecurityMode(it)
+                securityDetailsOpen = false
+            },
+            onDismiss = { securityDetailsOpen = false },
         )
     }
     Column(
@@ -355,12 +389,53 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             onTitleClick = { detailsOpen = true },
             onSearch = { chatSearchOpen = !chatSearchOpen; if (!chatSearchOpen) chatQuery = "" },
         )
+        visibleWorkspaceSecurity?.let { security ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .clickable { securityDetailsOpen = true },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    Icon(
+                        if (security.securityMode == ChatSecurityMode.EndToEndEncrypted) {
+                            Icons.Outlined.Lock
+                        } else {
+                            Icons.Outlined.Business
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (security.securityMode == ChatSecurityMode.EndToEndEncrypted) {
+                                "End-to-end encrypted"
+                            } else {
+                                "Managed workspace"
+                            },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                        )
+                        Text(
+                            "Security epoch ${security.epochNumber}${if (security.acknowledged) " · reviewed" else " · review required"}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+        }
         val blockedSharedHandles = remember(blockedAccountIds, state.workspaceMembers) {
             state.workspaceMembers
                 .filter { it.userId in blockedAccountIds }
                 .mapTo(hashSetOf()) { it.username.lowercase() }
         }
-        val sharedConversation = activeChannel?.accountConversationId == null
         val hasBlockedSharedMessages = sharedConversation && state.chatMessages.any { item ->
             item.channelId == activeChannel?.id && item.authorUsername.lowercase() in blockedSharedHandles
         }
@@ -893,6 +968,152 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                     }
                 }
                 }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceSecurityDisclosure(
+    security: ChatBackend.WorkspaceSecuritySnapshot,
+    onAcknowledge: () -> Unit,
+    onNotNow: () -> Unit,
+) {
+    val encrypted = security.securityMode == ChatSecurityMode.EndToEndEncrypted
+    NorfoldContentDialog(onDismissRequest = onNotNow) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp,
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(52.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (encrypted) Icons.Outlined.Lock else Icons.Outlined.Business,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                }
+                Text(
+                    if (encrypted) "This workspace is end-to-end encrypted" else "This is a Managed workspace",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 22.sp,
+                )
+                Text(
+                    if (encrypted) {
+                        "Message content is encrypted between authorized member devices. Norfold cannot normally read it, and older private history may depend on a trusted device or your private Chat archive."
+                    } else {
+                        "Access remains members-only and protected by authentication, TLS, authorization, and database policies. Content is not end-to-end encrypted, so authorized workspace or backend features may process it."
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp,
+                )
+                Text(
+                    "Security epoch ${security.epochNumber}. Messages keep the security semantics they had when sent.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onNotNow) { Text("Not now") }
+                    Button(onClick = onAcknowledge) { Text("I understand") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceSecurityDetails(
+    security: ChatBackend.WorkspaceSecuritySnapshot,
+    canManage: Boolean,
+    onChangeMode: (ChatSecurityMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var confirming by remember(security.securityVersion) { mutableStateOf<ChatSecurityMode?>(null) }
+    val encrypted = security.securityMode == ChatSecurityMode.EndToEndEncrypted
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp,
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(13.dp),
+            ) {
+                Text("Workspace security", fontWeight = FontWeight.Black, fontSize = 22.sp)
+                Text(
+                    if (encrypted) "End-to-end encrypted" else "Managed",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    if (encrypted) {
+                        "Authorized member devices encrypt and decrypt message content. The backend relays ciphertext."
+                    } else {
+                        "Members-only access remains protected, while authorized backend and workspace features may process message content."
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Epoch ${security.epochNumber} · ${if (security.acknowledged) "reviewed on this account" else "review required"}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+                if (canManage) {
+                    val target = if (encrypted) ChatSecurityMode.Managed else ChatSecurityMode.EndToEndEncrypted
+                    if (confirming == null) {
+                        FilledTonalButton(
+                            onClick = { confirming = target },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (encrypted) "Switch to Managed…" else "Switch to end-to-end encryption…")
+                        }
+                    } else {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(18.dp),
+                        ) {
+                            Column(
+                                Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Text("Create a new security epoch?", fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (confirming == ChatSecurityMode.Managed) {
+                                        "Future messages will be Managed and not end-to-end encrypted. Existing encrypted history will not be decrypted or re-uploaded."
+                                    } else {
+                                        "The switch succeeds only after every active member has an authorized secure device. Existing Managed history will remain Managed."
+                                    },
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    fontSize = 13.sp,
+                                )
+                                Row(Modifier.align(Alignment.End)) {
+                                    TextButton(onClick = { confirming = null }) { Text("Cancel") }
+                                    Button(onClick = { onChangeMode(requireNotNull(confirming)) }) {
+                                        Text("Change security")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Close")
                 }
             }
         }

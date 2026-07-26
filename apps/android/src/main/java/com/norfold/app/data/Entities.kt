@@ -324,7 +324,15 @@ data class TaskChecklistItemEntity(
     val updatedAt: Long,
 )
 
-@Entity(tableName = "chat_messages", indices = [Index("createdAt"), Index("workspaceId"), Index("channelId")])
+@Entity(
+    tableName = "chat_messages",
+    indices = [
+        Index("createdAt"),
+        Index("workspaceId"),
+        Index("channelId"),
+        Index(value = ["workspaceId", "securityEventId"], unique = true),
+    ],
+)
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val authorUsername: String,
@@ -348,6 +356,11 @@ data class ChatMessageEntity(
     val pinned: Boolean = false,
     // Private per-user bookmark. Never synced to remote — kept out of every remote payload.
     val starred: Boolean = false,
+    // Null is legacy/unclassified history; security semantics are immutable per message.
+    val securityMode: String? = null,
+    val securityEpochId: String? = null,
+    // Stable server event id keeps durable security dividers idempotent across refresh/restore.
+    val securityEventId: String? = null,
 )
 
 @Entity(
@@ -830,6 +843,11 @@ fun ChatMessageEntity.toDomain() = ChatMessageItem(
     reactionsJson = reactionsJson,
     pinned = pinned,
     starred = starred,
+    securityMode = securityMode?.let { stored ->
+        ChatSecurityMode.entries.firstOrNull { it.name.equals(stored, ignoreCase = true) }
+    },
+    securityEpochId = securityEpochId,
+    securityEventId = securityEventId,
 )
 
 fun ChatChannelEntity.toDomain() = ChatChannel(
