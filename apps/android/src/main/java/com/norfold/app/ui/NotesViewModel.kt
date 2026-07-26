@@ -1663,6 +1663,121 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 ?.equals("owner", ignoreCase = true)
         } == true
 
+    fun isChatGroupAdmin(channel: ChatChannel): Boolean =
+        channel.accountConversationId?.let { conversationId ->
+            _personalConversations.value.firstOrNull { it.conversationId == conversationId }
+                ?.myRole
+                ?.lowercase() in setOf("owner", "admin")
+        } == true
+
+    fun refreshChatGroupMembers(channel: ChatChannel) = viewModelScope.launch {
+        val conversationId = channel.accountConversationId
+            ?.takeIf { channel.kind == ChatChannelKind.Group } ?: return@launch
+        runCatching { NorfoldSocial.groupMembers(conversationId) }
+            .onSuccess { members ->
+                _groupMembers.value = _groupMembers.value + (conversationId to members)
+            }
+            .onFailure { Log.w("NorfoldChatGovernance", "Group roster refresh failed", it) }
+    }
+
+    fun setChatGroupMemberRole(channel: ChatChannel, memberId: String, role: String) =
+        mutateChatGroupMembership(channel, "Couldn't change that member's role.") { conversationId ->
+            NorfoldSocial.setGroupMemberRole(conversationId, memberId, role)
+        }
+
+    fun addChatGroupMember(channel: ChatChannel, memberId: String) =
+        mutateChatGroupMembership(channel, "Couldn't add that member.") { conversationId ->
+            NorfoldSocial.addGroupMember(conversationId, memberId)
+        }
+
+    fun transferChatGroupOwnership(channel: ChatChannel, memberId: String) =
+        mutateChatGroupMembership(channel, "Couldn't transfer group ownership.") { conversationId ->
+            NorfoldSocial.transferGroupOwnership(conversationId, memberId)
+        }
+
+    fun removeChatGroupMember(channel: ChatChannel, memberId: String) =
+        mutateChatGroupMembership(channel, "Couldn't remove that member.") { conversationId ->
+            NorfoldSocial.removeGroupMember(conversationId, memberId)
+        }
+
+    private fun mutateChatGroupMembership(
+        channel: ChatChannel,
+        failureMessage: String,
+        mutation: suspend (String) -> Unit,
+    ) = viewModelScope.launch {
+        val conversationId = channel.accountConversationId
+            ?.takeIf { channel.kind == ChatChannelKind.Group }
+            ?: return@launch
+        runCatching { mutation(conversationId) }
+            .onSuccess {
+                refreshSocialGraph()
+                refreshChatGroupMembers(channel)
+                refreshChatGovernanceHistory(channel)
+                emitSuccess("Group membership updated")
+            }
+            .onFailure { emitError(authFailureMessage(it, failureMessage)) }
+    }
+
+    fun refreshWorkspaceChannelMembers(channel: ChatChannel) = viewModelScope.launch {
+        if (channel.scope != ChatScope.Workspace) return@launch
+        val workspaceId = _teamWorkspaceRemoteId.value ?: return@launch
+        runCatching { ChatBackend.workspaceChannelMembers(workspaceId, channel.syncId) }
+            .onSuccess { members ->
+                _workspaceChannelMembers.value = _workspaceChannelMembers.value + (channel.syncId to members)
+            }
+            .onFailure { Log.w("NorfoldChatGovernance", "Workspace channel roster refresh failed", it) }
+    }
+
+    fun setWorkspaceChannelMemberRole(channel: ChatChannel, memberId: String, role: String) =
+        mutateWorkspaceChannelMembership(channel, "Couldn't change that channel role.") { workspaceId ->
+            ChatBackend.setWorkspaceChannelMemberRole(workspaceId, channel.syncId, memberId, role)
+        }
+
+    fun addWorkspaceChannelMember(channel: ChatChannel, memberId: String) =
+        mutateWorkspaceChannelMembership(channel, "Couldn't add that channel member.") { workspaceId ->
+            ChatBackend.addWorkspaceChannelMember(workspaceId, channel.syncId, memberId)
+        }
+
+    fun transferWorkspaceChannelOwnership(channel: ChatChannel, memberId: String) =
+        mutateWorkspaceChannelMembership(channel, "Couldn't transfer channel ownership.") { workspaceId ->
+            ChatBackend.transferWorkspaceChannelOwnership(workspaceId, channel.syncId, memberId)
+        }
+
+    fun removeWorkspaceChannelMember(channel: ChatChannel, memberId: String) =
+        mutateWorkspaceChannelMembership(channel, "Couldn't remove that channel member.") { workspaceId ->
+            ChatBackend.removeWorkspaceChannelMember(workspaceId, channel.syncId, memberId)
+        }
+
+    private fun mutateWorkspaceChannelMembership(
+        channel: ChatChannel,
+        failureMessage: String,
+        mutation: suspend (String) -> Unit,
+    ) = viewModelScope.launch {
+        val workspaceId = _teamWorkspaceRemoteId.value ?: return@launch
+        runCatching { mutation(workspaceId) }
+            .onSuccess {
+                refreshWorkspaceChannelMembers(channel)
+                refreshWorkspaceChatSecurity(channel.id)
+                refreshChatGovernanceHistory(channel)
+                emitSuccess("Channel membership updated")
+            }
+            .onFailure { emitError(authFailureMessage(it, failureMessage)) }
+    }
+
+    fun refreshChatGovernanceHistory(channel: ChatChannel) = viewModelScope.launch {
+        val key = channel.accountConversationId ?: channel.syncId
+        val workspaceId = if (channel.scope == ChatScope.Workspace) _teamWorkspaceRemoteId.value else null
+        runCatching {
+            ChatBackend.governanceHistory(
+                accountConversationId = channel.accountConversationId,
+                workspaceId = workspaceId,
+                channelId = channel.syncId.takeIf { channel.scope == ChatScope.Workspace },
+            )
+        }.onSuccess { history ->
+            _chatGovernanceHistory.value = _chatGovernanceHistory.value + (key to history)
+        }.onFailure { Log.w("NorfoldChatGovernance", "Governance history refresh failed", it) }
+    }
+
     fun shouldReviewChatGroupRules(channel: ChatChannel): Boolean {
         if (channel.kind != ChatChannelKind.Group || channel.rules.isBlank()) return false
         val lastSeen = ChatConversationPrefs.rulesLastSeenAt(app, chatConversationPreferenceKey(channel))
@@ -1716,6 +1831,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         }.onSuccess {
             emitInfo("Group details updated.")
             refreshSocialGraph()
+            refreshChatGovernanceHistory(channel)
         }.onFailure { emitError(authFailureMessage(it, "Couldn't update the group. Try again.")) }
     }
 
@@ -1873,6 +1989,17 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val _personalConversations = MutableStateFlow<List<NorfoldSocial.RemoteDirectConversation>>(emptyList())
     val personalConversations: StateFlow<List<NorfoldSocial.RemoteDirectConversation>> = _personalConversations.asStateFlow()
 
+    private val _groupMembers = MutableStateFlow<Map<String, List<NorfoldSocial.RemoteGroupMember>>>(emptyMap())
+    val groupMembers: StateFlow<Map<String, List<NorfoldSocial.RemoteGroupMember>>> = _groupMembers.asStateFlow()
+
+    private val _workspaceChannelMembers = MutableStateFlow<Map<String, List<ChatBackend.RemoteWorkspaceChannelMember>>>(emptyMap())
+    val workspaceChannelMembers: StateFlow<Map<String, List<ChatBackend.RemoteWorkspaceChannelMember>>> =
+        _workspaceChannelMembers.asStateFlow()
+
+    private val _chatGovernanceHistory = MutableStateFlow<Map<String, List<ChatBackend.GovernanceEvent>>>(emptyMap())
+    val chatGovernanceHistory: StateFlow<Map<String, List<ChatBackend.GovernanceEvent>>> =
+        _chatGovernanceHistory.asStateFlow()
+
     /** The last invite token created this session, until dismissed or consumed into a share. */
     private val _pendingFriendInvite = MutableStateFlow<String?>(null)
     val pendingFriendInvite: StateFlow<String?> = _pendingFriendInvite.asStateFlow()
@@ -1926,6 +2053,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         )
         runCatching { NorfoldSocial.directMessages(convo.conversationId) }
             .onSuccess { messages -> messages.forEach { importAccountMessage(localChannelId, it) } }
+        if (isGroup) {
+            runCatching { NorfoldSocial.groupMembers(convo.conversationId) }
+                .onSuccess { members ->
+                    _groupMembers.value = _groupMembers.value + (convo.conversationId to members)
+                }
+        }
         return localChannelId
     }
 

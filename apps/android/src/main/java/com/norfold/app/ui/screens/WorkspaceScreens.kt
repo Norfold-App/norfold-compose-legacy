@@ -193,6 +193,7 @@ import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatReceiptStatus
 import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.ChatScope
+import com.norfold.app.domain.ChatChannelVisibility
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ConflictSideSummary
 import com.norfold.app.domain.Destination
@@ -1744,6 +1745,35 @@ private fun ConversationDetailsSheet(
 ) {
     val title = channel?.name ?: "General"
     val isDm = channel?.kind == ChatChannelKind.Dm
+    val groupMembersByConversation by viewModel.groupMembers.collectAsState()
+    val workspaceMembersByChannel by viewModel.workspaceChannelMembers.collectAsState()
+    val socialContacts by viewModel.socialContacts.collectAsState()
+    val governanceHistoryByConversation by viewModel.chatGovernanceHistory.collectAsState()
+    val governedMembers = channel?.accountConversationId
+        ?.let { groupMembersByConversation[it] }
+        .orEmpty()
+    val governedWorkspaceMembers = channel?.takeIf { it.scope == ChatScope.Workspace }
+        ?.let { workspaceMembersByChannel[it.syncId] }
+        .orEmpty()
+    val canAdminGroup = channel?.let(viewModel::isChatGroupAdmin) == true
+    val ownsGroup = channel?.let(viewModel::isChatGroupOwner) == true
+    val governanceHistory = channel?.let {
+        governanceHistoryByConversation[it.accountConversationId ?: it.syncId]
+    }.orEmpty()
+    val canManageWorkspace = state.workspaceMembers.firstOrNull {
+        it.username.equals(state.settings.syncUserName, ignoreCase = true)
+    }?.role?.lowercase() in setOf("owner", "admin")
+    LaunchedEffect(channel?.accountConversationId) {
+        channel?.takeIf { it.kind == ChatChannelKind.Group }
+            ?.let(viewModel::refreshChatGroupMembers)
+    }
+    LaunchedEffect(channel?.syncId, channel?.visibility) {
+        channel?.takeIf { it.scope == ChatScope.Workspace && it.visibility == ChatChannelVisibility.Private }
+            ?.let(viewModel::refreshWorkspaceChannelMembers)
+    }
+    LaunchedEffect(channel?.syncId, channel?.accountConversationId) {
+        channel?.let(viewModel::refreshChatGovernanceHistory)
+    }
     val kindLabel = when (channel?.kind) {
         null -> "Workspace channel · everyone is here"
         ChatChannelKind.Topic -> "Channel · synced"
@@ -1759,9 +1789,15 @@ private fun ConversationDetailsSheet(
     val linkCount = convoMessages.count { it.body.contains("http://", true) || it.body.contains("https://", true) }
     // Roster: General/topic/group derive posters from the message stream (no membership model yet);
     // a DM is the two participants.
-    val roster: List<Pair<String, String>> = remember(convoMessages, channel?.id, state.workspaceMembers) {
+    val roster: List<Pair<String, String>> = remember(
+        convoMessages, channel?.id, state.workspaceMembers, governedMembers, governedWorkspaceMembers,
+    ) {
         when {
             isDm -> listOf(channel!!.counterpartUsername to channel.counterpartUsername)
+            channel?.kind == ChatChannelKind.Group && governedMembers.isNotEmpty() ->
+                governedMembers.map { it.handle.orEmpty() to it.displayName.ifBlank { it.handle.orEmpty() } }
+            governedWorkspaceMembers.isNotEmpty() ->
+                governedWorkspaceMembers.map { it.handle.orEmpty() to it.displayName.ifBlank { it.handle.orEmpty() } }
             else -> {
                 val fromMembers = state.workspaceMembers.map { it.username to it.displayName.ifBlank { it.username } }
                 val fromPosts = convoMessages.filter { !it.system }.map { it.authorUsername to it.authorDisplayName.ifBlank { it.authorUsername } }
@@ -1992,9 +2028,124 @@ private fun ConversationDetailsSheet(
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                roster.forEach { (username, display) ->
-                    val status = presence.firstOrNull { it.username.equals(username, true) }?.availability
-                    MemberRosterRow(display, username, status) { onOpenProfile(username, display) }
+                if (channel?.kind == ChatChannelKind.Group && governedMembers.isNotEmpty()) {
+                    governedMembers.forEach { member ->
+                        val username = member.handle.orEmpty()
+                        val display = member.displayName.ifBlank { username.ifBlank { "Member" } }
+                        val status = presence.firstOrNull { it.username.equals(username, true) }?.availability
+                        GroupGovernanceRow(
+                            username = username,
+                            display = display,
+                            role = member.role,
+                            status = status,
+                            canChangeRole = ownsGroup && member.role != "owner",
+                            canTransferOwnership = ownsGroup && member.role != "owner",
+                            canRemove = member.role != "owner" && (ownsGroup || (canAdminGroup && member.role == "member")),
+                            onOpenProfile = { onOpenProfile(username, display) },
+                            onToggleAdmin = {
+                                viewModel.setChatGroupMemberRole(
+                                    requireNotNull(channel),
+                                    member.userId,
+                                    if (member.role == "admin") "member" else "admin",
+                                )
+                            },
+                            onTransferOwnership = {
+                                viewModel.transferChatGroupOwnership(requireNotNull(channel), member.userId)
+                            },
+                            onRemove = {
+                                viewModel.removeChatGroupMember(requireNotNull(channel), member.userId)
+                            },
+                        )
+                    }
+                } else if (channel != null && governedWorkspaceMembers.isNotEmpty()) {
+                    governedWorkspaceMembers.forEach { member ->
+                        val username = member.handle.orEmpty()
+                        val display = member.displayName.ifBlank { username.ifBlank { "Member" } }
+                        val status = presence.firstOrNull { it.username.equals(username, true) }?.availability
+                        GroupGovernanceRow(
+                            username = username,
+                            display = display,
+                            role = member.role,
+                            status = status,
+                            canChangeRole = canManageWorkspace && member.role != "owner",
+                            canTransferOwnership = canManageWorkspace && member.role != "owner",
+                            canRemove = canManageWorkspace && member.role != "owner",
+                            onOpenProfile = { onOpenProfile(username, display) },
+                            onToggleAdmin = {
+                                viewModel.setWorkspaceChannelMemberRole(
+                                    channel,
+                                    member.userId,
+                                    if (member.role == "admin") "member" else "admin",
+                                )
+                            },
+                            onTransferOwnership = {
+                                viewModel.transferWorkspaceChannelOwnership(channel, member.userId)
+                            },
+                            onRemove = { viewModel.removeWorkspaceChannelMember(channel, member.userId) },
+                        )
+                    }
+                } else {
+                    roster.forEach { (username, display) ->
+                        val status = presence.firstOrNull { it.username.equals(username, true) }?.availability
+                        MemberRosterRow(display, username, status) { onOpenProfile(username, display) }
+                    }
+                }
+                val existingMemberIds = when {
+                    governedMembers.isNotEmpty() -> governedMembers.mapTo(hashSetOf()) { it.userId }
+                    governedWorkspaceMembers.isNotEmpty() -> governedWorkspaceMembers.mapTo(hashSetOf()) { it.userId }
+                    else -> emptySet()
+                }
+                val addableGroupContacts = if (channel?.kind == ChatChannelKind.Group && canAdminGroup) {
+                    socialContacts.filter { it.contactId !in existingMemberIds }
+                } else emptyList()
+                val addableWorkspaceMembers = if (
+                    channel != null && channel.scope == ChatScope.Workspace &&
+                    channel.visibility == ChatChannelVisibility.Private && canManageWorkspace
+                ) {
+                    state.workspaceMembers.filter { it.userId !in existingMemberIds }
+                } else emptyList()
+                if (addableGroupContacts.isNotEmpty() || addableWorkspaceMembers.isNotEmpty()) {
+                    Text(
+                        "Add member",
+                        Modifier.padding(start = 20.dp, top = 10.dp, bottom = 4.dp),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        addableGroupContacts.forEach { contact ->
+                            AssistChip(
+                                onClick = { viewModel.addChatGroupMember(requireNotNull(channel), contact.contactId) },
+                                label = { Text(contact.displayName.ifBlank { contact.handle ?: "Contact" }) },
+                            )
+                        }
+                        addableWorkspaceMembers.forEach { member ->
+                            AssistChip(
+                                onClick = { viewModel.addWorkspaceChannelMember(requireNotNull(channel), member.userId) },
+                                label = { Text(member.displayName.ifBlank { member.username }) },
+                            )
+                        }
+                    }
+                }
+                if (governanceHistory.isNotEmpty()) {
+                    Text(
+                        "Recent access changes",
+                        Modifier.padding(start = 20.dp, top = 14.dp, bottom = 4.dp),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    governanceHistory.take(6).forEach { event ->
+                        Text(
+                            governanceEventLabel(event),
+                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
             if (channel?.kind == ChatChannelKind.Group && channel.accountConversationId != null) {
@@ -2018,7 +2169,7 @@ private fun ConversationDetailsSheet(
                         modifier = Modifier.padding(horizontal = 8.dp),
                     ) { Text("Review group rules") }
                 }
-                if (viewModel.isChatGroupOwner(channel)) {
+                if (viewModel.isChatGroupAdmin(channel)) {
                     TextButton(
                         onClick = { editingGroup = true },
                         modifier = Modifier.padding(horizontal = 8.dp),
@@ -2270,6 +2421,64 @@ private fun MemberRosterRow(display: String, username: String, status: String?, 
             Text("@$username", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun GroupGovernanceRow(
+    username: String,
+    display: String,
+    role: String,
+    status: String?,
+    canChangeRole: Boolean,
+    canTransferOwnership: Boolean,
+    canRemove: Boolean,
+    onOpenProfile: () -> Unit,
+    onToggleAdmin: () -> Unit,
+    onTransferOwnership: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        MemberRosterRow(display, username, status, onOpenProfile)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 72.dp, end = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                role.replaceFirstChar { it.uppercase() },
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (canChangeRole) {
+                TextButton(onClick = onToggleAdmin) {
+                    Text(if (role == "admin") "Make member" else "Make admin")
+                }
+            }
+            if (canTransferOwnership) {
+                TextButton(onClick = onTransferOwnership) { Text("Make owner") }
+            }
+            if (canRemove) {
+                TextButton(onClick = onRemove) {
+                    Text("Remove", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+private fun governanceEventLabel(event: ChatBackend.GovernanceEvent): String {
+    val actor = event.actorName.ifBlank { "Someone" }
+    val target = event.targetName.ifBlank { "a member" }
+    return when (event.eventType) {
+        "member_added" -> "$actor added $target"
+        "member_removed" -> "$actor removed $target"
+        "role_changed" -> "$actor changed $target's role"
+        "ownership_transferred" -> "$target became the owner"
+        "metadata_changed" -> "$actor updated the group details"
+        "channel_archived" -> "$actor archived the channel"
+        else -> "$actor changed conversation access"
     }
 }
 

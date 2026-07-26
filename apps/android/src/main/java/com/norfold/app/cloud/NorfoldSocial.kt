@@ -85,6 +85,16 @@ object NorfoldSocial {
     )
 
     @Serializable
+    data class RemoteGroupMember(
+        @SerialName("user_id") val userId: String,
+        val handle: String? = null,
+        @SerialName("display_name") val displayName: String = "",
+        @SerialName("avatar_path") val avatarPath: String? = null,
+        val role: String = "member",
+        @SerialName("joined_at") val joinedAt: String? = null,
+    )
+
+    @Serializable
     data class RemoteDirectMessage(
         val id: String,
         @SerialName("conversation_id") val conversationId: String,
@@ -267,6 +277,49 @@ object NorfoldSocial {
         client.postgrest.rpc(
             function = "leave_group",
             parameters = buildJsonObject { put("p_conversation", conversationId) },
+        )
+    }
+
+    suspend fun groupMembers(conversationId: String): List<RemoteGroupMember> {
+        requireAccount()
+        return client.postgrest.rpc(
+            function = "group_members",
+            parameters = buildJsonObject { put("p_conversation", conversationId) },
+        ).decodeList()
+    }
+
+    suspend fun setGroupMemberRole(conversationId: String, memberId: String, role: String) {
+        require(role in setOf("admin", "member"))
+        requireAccount()
+        client.postgrest.rpc(
+            function = "set_group_member_role",
+            parameters = buildJsonObject {
+                put("p_conversation", conversationId)
+                put("p_member", memberId)
+                put("p_role", role)
+            },
+        )
+    }
+
+    suspend fun transferGroupOwnership(conversationId: String, memberId: String) {
+        requireAccount()
+        client.postgrest.rpc(
+            function = "transfer_group_ownership",
+            parameters = buildJsonObject {
+                put("p_conversation", conversationId)
+                put("p_new_owner", memberId)
+            },
+        )
+    }
+
+    suspend fun removeGroupMember(conversationId: String, memberId: String) {
+        requireAccount()
+        client.postgrest.rpc(
+            function = "remove_group_member",
+            parameters = buildJsonObject {
+                put("p_conversation", conversationId)
+                put("p_member", memberId)
+            },
         )
     }
 
