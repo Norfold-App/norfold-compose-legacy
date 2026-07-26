@@ -118,6 +118,30 @@ object ChatBackend {
         @SerialName("created_at") val createdAt: String,
     )
 
+    @Serializable
+    data class AbuseReportReceipt(
+        @SerialName("report_id") val reportId: String,
+        @SerialName("message_sync_id") val messageSyncId: String,
+        @SerialName("reported_user_id") val reportedUserId: String,
+        val category: String,
+        val status: String,
+        @SerialName("blocked_at_submission") val blockedAtSubmission: Boolean,
+        @SerialName("created_at") val createdAt: String,
+        @SerialName("updated_at") val updatedAt: String,
+    )
+
+    enum class AbuseReportCategory(val wireValue: String, val label: String) {
+        Spam("spam", "Spam"),
+        Harassment("harassment", "Harassment or bullying"),
+        Hate("hate", "Hate speech"),
+        SexualContent("sexual_content", "Sexual content"),
+        Violence("violence", "Violence or threats"),
+        Impersonation("impersonation", "Impersonation"),
+        Scam("scam", "Scam or fraud"),
+        SelfHarm("self_harm", "Self-harm concern"),
+        Other("other", "Something else"),
+    }
+
     suspend fun registerWorkspaceChannel(
         workspaceId: String,
         channelId: String,
@@ -442,6 +466,36 @@ object ChatBackend {
             put("p_limit", limit.coerceIn(1, 200))
         },
     ).decodeList()
+
+    /**
+     * Submit only a server-verifiable message reference plus the reporter's explicit note.
+     * The server derives the author/scope and never receives decrypted E2EE message content.
+     */
+    suspend fun submitAbuseReport(
+        messageSyncId: String,
+        securityEpochId: String,
+        category: AbuseReportCategory,
+        reporterNote: String,
+        alsoBlock: Boolean,
+    ): String {
+        require(reporterNote.length <= 1_000) { "Report notes are limited to 1,000 characters." }
+        return client.postgrest.rpc(
+            function = "submit_chat_abuse_report",
+            parameters = buildJsonObject {
+                put("p_message_sync_id", messageSyncId)
+                put("p_security_epoch", securityEpochId)
+                put("p_category", category.wireValue)
+                put("p_reporter_note", reporterNote.trim())
+                put("p_also_block", alsoBlock)
+            },
+        ).data.trim('"')
+    }
+
+    suspend fun myAbuseReportReceipts(limit: Int = 50): List<AbuseReportReceipt> =
+        client.postgrest.rpc(
+            function = "my_chat_abuse_report_receipts",
+            parameters = buildJsonObject { put("p_limit", limit.coerceIn(1, 200)) },
+        ).decodeList()
 
     suspend fun setWorkspaceChannelMemberRole(
         workspaceId: String,

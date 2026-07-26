@@ -4216,6 +4216,61 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         emitInfo(if (starred) "Saved to Starred." else "Removed from Starred.")
     }
 
+    fun canReportChatMessage(message: ChatMessageItem): Boolean {
+        if (message.system || message.securityEpochId.isNullOrBlank()) return false
+        val currentUsername = state.value.settings.syncUserName.ifBlank { "you" }
+        return !message.authorUsername.equals(currentUsername, ignoreCase = true)
+    }
+
+    fun reportChatMessage(
+        message: ChatMessageItem,
+        category: ChatBackend.AbuseReportCategory,
+        reporterNote: String,
+        alsoBlock: Boolean,
+    ) = viewModelScope.launch {
+        if (!canReportChatMessage(message)) {
+            emitError("This message can't be reported from this device.")
+            return@launch
+        }
+        if (!NorfoldSupabase.isSignedIn()) {
+            emitError("Sign in to submit a report.")
+            return@launch
+        }
+        val binding = repository.chatMessageRemoteBinding(message.workspaceId, message.id)
+        val epochId = message.securityEpochId
+        if (binding == null || epochId.isNullOrBlank()) {
+            emitError("This message hasn't finished syncing, so it can't be reported yet.")
+            return@launch
+        }
+        runCatching {
+            ChatBackend.submitAbuseReport(
+                messageSyncId = binding.syncId,
+                securityEpochId = epochId,
+                category = category,
+                reporterNote = reporterNote,
+                alsoBlock = alsoBlock,
+            )
+        }.onSuccess {
+            if (alsoBlock) {
+                accountIdForUsername(message.authorUsername)?.let { accountId ->
+                    _blockedAccountIds.value = _blockedAccountIds.value + accountId
+                }
+                refreshSocialGraph()
+            }
+            emitSuccess(if (alsoBlock) "Report sent and account blocked." else "Report sent.")
+        }.onFailure { error ->
+            emitError(
+                when {
+                    error.message?.contains("report_rate_limit", ignoreCase = true) == true ->
+                        "You've reached today's report limit. If anyone is in immediate danger, contact local emergency services."
+                    error.message?.contains("reportable_message_not_found", ignoreCase = true) == true ->
+                        "That message is no longer available to report."
+                    else -> "Couldn't send the report. Nothing was shared; try again later."
+                },
+            )
+        }
+    }
+
     private suspend fun syncChatMutation(message: ChatMessageItem, mutationType: String) {
         if (!NorfoldSupabase.isSignedIn()) return
         val settings = state.value.settings
