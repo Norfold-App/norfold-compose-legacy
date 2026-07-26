@@ -1,5 +1,6 @@
 package com.norfold.app.ui.components
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -23,13 +24,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.norfold.app.branding.NorfoldPopEasing
 
 /**
  * Shared motion language for the app so navigation and interaction feel intentional, not cheap.
@@ -39,10 +44,43 @@ object Motion {
     const val Quick = 160      // taps, small feedback
     const val Standard = 240   // list items, screen changes
     const val Gentle = 320     // reveals, larger content
+    const val PopDuration = 420 // the brand pop, below
 
     val Easing: Easing = FastOutSlowInEasing
 
+    /**
+     * The Norfold "pop": the green dot's overshoot from the logo intro, reused as the
+     * app's success gesture so confirmations feel like the brand, not a stock scale-in.
+     */
+    val Pop: Easing = NorfoldPopEasing
+
     fun <T> spec(durationMillis: Int = Standard) = tween<T>(durationMillis, easing = Easing)
+}
+
+/** One-shot brand pop on first composition — for success surfaces that appear once. */
+@Composable
+fun Modifier.popIn(): Modifier {
+    val scale = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { scale.animateTo(1f, tween(Motion.PopDuration, easing = Motion.Pop)) }
+    return this.scale(scale.value)
+}
+
+/**
+ * Replays the brand pop whenever [key] changes (e.g. a task flipping to Done). Renders
+ * at rest on first composition so lists don't pop while scrolling into view.
+ */
+@Composable
+fun Modifier.popOnChange(key: Any?): Modifier {
+    val scale = remember { Animatable(1f) }
+    var last by remember { mutableStateOf(key) }
+    LaunchedEffect(key) {
+        if (key != last) {
+            last = key
+            scale.snapTo(0.4f) // shrink, don't vanish: mid-list blinking would read as a glitch
+            scale.animateTo(1f, tween(Motion.PopDuration, easing = Motion.Pop))
+        }
+    }
+    return this.scale(scale.value)
 }
 
 /**

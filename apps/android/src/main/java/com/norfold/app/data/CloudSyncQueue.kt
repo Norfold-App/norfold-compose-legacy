@@ -6,6 +6,12 @@ import java.util.UUID
 
 enum class CloudObjectOperation { Upsert, Delete }
 
+/**
+ * Parked: nothing enqueues into this queue anymore and no worker drains it. The server side has
+ * no goal/calendar-event endpoints, so writing to sync_outbox only accumulated dead rows
+ * (DocsRepository.ensureSeedData purges leftovers). Keep the class and its tables until real
+ * goal/event cloud sync exists, then wire enqueue/claimBatch back into the mutation paths.
+ */
 class CloudSyncQueue(private val database: NorfoldDatabase) {
     private val dao = database.dao()
 

@@ -30,12 +30,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Undo
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Check
@@ -48,6 +53,7 @@ import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.ImportExport
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Groups
@@ -62,7 +68,10 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Workspaces
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import com.norfold.app.ui.components.WorkspaceIconBadge
 import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FilterChip
@@ -82,6 +91,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,8 +103,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -106,11 +120,18 @@ import com.norfold.app.BuildConfig
 import com.norfold.app.branding.BuiltInCovers
 import com.norfold.app.branding.NorfoldLogo
 import com.norfold.app.branding.palette
+import com.norfold.app.domain.WorkspaceIconKind
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.AppIconFamily
+import com.norfold.app.domain.ControlLabelMode
+import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.EditorLineWidth
-import com.norfold.app.domain.ContextualMenuColor
-import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.domain.DeviceSettingsProfile
+import com.norfold.app.domain.SettingsProfileCategory
 import com.norfold.app.domain.NoteGestureAction
+import com.norfold.app.domain.TaskGestureAction
+import com.norfold.app.domain.NoteRenderEngine
+import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.domain.SyncFolderAction
 import com.norfold.app.domain.SyncFolderRequest
 import com.norfold.app.domain.SyncProvider
@@ -120,6 +141,9 @@ import com.norfold.app.cloud.ExternalServiceConfig
 import com.norfold.app.data.BiometricVaultKeyStore
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.EmailAuthPhase
+import com.norfold.app.ui.EmailAuthOperation
+import com.norfold.app.ui.ScaleSetting
 import com.norfold.app.ui.components.AccentDot
 import com.norfold.app.ui.components.EditFieldDialog
 import com.norfold.app.ui.components.GlobalSearchBar
@@ -131,19 +155,32 @@ import com.norfold.app.ui.components.RowValue
 import com.norfold.app.ui.components.SettingsGroup
 import com.norfold.app.ui.components.SettingsRow
 import com.norfold.app.ui.components.SettingsSectionLabel
+import com.norfold.app.ui.components.SemanticEditorIcon
+import com.norfold.app.ui.components.SemanticFamilyIcon
+import com.norfold.app.ui.components.NorfoldIconFamilies
+import com.norfold.app.ui.components.CustomIconPackStore
+import com.norfold.app.ui.components.displayName
+import com.norfold.app.ui.fonts.FontCatalogPickerSheet
+import com.norfold.app.ui.fonts.FontCatalogSnapshot
+import com.norfold.app.ui.fonts.FontCatalogStore
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 private enum class SettingsSection(val title: String, val subtitle: String, val icon: ImageVector) {
     Profile("Profile", "Username, public name and device", Icons.Outlined.Person),
     Workspace("Workspace", "Name, visuals and member defaults", Icons.Outlined.Workspaces),
     Appearance("Appearance", "Theme, palette, density and type", Icons.Outlined.Palette),
+    Accessibility("Accessibility", "Labels, readable controls and assistive guidance", Icons.Outlined.AccessibilityNew),
     Editor("Editor & Markdown", "Line width, syntax and writing behavior", Icons.Outlined.Code),
     Security("Security & Vault", "Vault, biometrics and screenshots", Icons.Outlined.Security),
-    Sync("Account & Restore", "Account, sync, backup and recovery", Icons.Outlined.CloudSync),
+    Sync("Account & Sync", "Norfold Cloud account and sync status", Icons.Outlined.CloudSync),
     Backup("Backup & Import", "Encrypted exports, restore and Markdown import", Icons.Outlined.Backup),
     App("App Info", "Version, identity and build details", Icons.Outlined.Settings),
-    SyncEngine("Sync Settings", "Exit sync, provider status and manual controls", Icons.Outlined.CloudSync),
+    SyncEngine("Sync Settings", "Provider status, Sync now and background behavior", Icons.Outlined.CloudSync),
     Conflicts("Conflict Resolution", "Merge strategy and conflict records", Icons.Outlined.Difference),
     WorkspaceMembers("Members", "Local workspace membership", Icons.Outlined.Groups),
     WorkspaceAdvanced("Advanced", "Export or delete this workspace", Icons.Outlined.Tune),
@@ -155,12 +192,11 @@ private val RootSettingsSections = setOf(
     SettingsSection.Profile,
     SettingsSection.Workspace,
     SettingsSection.Appearance,
+    SettingsSection.Accessibility,
     SettingsSection.Editor,
     SettingsSection.Security,
     SettingsSection.Sync,
     SettingsSection.Backup,
-    SettingsSection.SyncEngine,
-    SettingsSection.Conflicts,
     SettingsSection.App,
     SettingsSection.Diagnostics,
 )
@@ -175,14 +211,38 @@ fun SettingsScreen(
     onPickBackupFile: (String) -> Unit,
     onConnectGoogleDrive: () -> Unit,
     onDisconnectGoogleDrive: () -> Unit,
+    onCloudGoogleSignIn: () -> Unit,
 ) {
     var section by remember { mutableStateOf<SettingsSection?>(null) }
     var showWorkspaceDialog by remember { mutableStateOf(false) }
+    var showLeavePreviewDialog by remember { mutableStateOf(false) }
     var workspaceDialogTab by remember { mutableStateOf(WorkspaceVisualTab.Identity) }
+    val scalePreview by viewModel.scalePreview.collectAsState()
+    val renderedState = scalePreview?.let { state.copy(settings = it.applyTo(state.settings)) } ?: state
     if (showWorkspaceDialog) WorkspaceVisualDialog(state, viewModel, workspaceDialogTab) { showWorkspaceDialog = false }
+    if (showLeavePreviewDialog) {
+        NorfoldDialog(
+            onDismissRequest = { showLeavePreviewDialog = false },
+            title = { Text("Unsaved appearance preview") },
+            text = { Text("Revert the temporary scale changes before leaving, or continue previewing them.") },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.revertScalePreview()
+                    showLeavePreviewDialog = false
+                    section = null
+                }) { Text("Revert and leave") }
+            },
+            dismissButton = { TextButton(onClick = { showLeavePreviewDialog = false }) { Text("Continue preview") } },
+        )
+    }
 
-    BackHandler(enabled = section != null || showWorkspaceDialog) {
-        if (showWorkspaceDialog) showWorkspaceDialog = false else section = null
+    BackHandler(enabled = section != null || showWorkspaceDialog || showLeavePreviewDialog) {
+        when {
+            showLeavePreviewDialog -> showLeavePreviewDialog = false
+            showWorkspaceDialog -> showWorkspaceDialog = false
+            scalePreview != null && section in setOf(SettingsSection.Appearance, SettingsSection.Editor) -> showLeavePreviewDialog = true
+            else -> section = null
+        }
     }
 
     val pendingSection by viewModel.pendingSettingsSection.collectAsState()
@@ -214,7 +274,10 @@ fun SettingsScreen(
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    IconButton(onClick = { section = null }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null) }
+                    IconButton(onClick = {
+                        if (scalePreview != null && section in setOf(SettingsSection.Appearance, SettingsSection.Editor)) showLeavePreviewDialog = true
+                        else section = null
+                    }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null) }
                     Text(section!!.title, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
                 }
             }
@@ -236,15 +299,16 @@ fun SettingsScreen(
                         onPermissions = { section = SettingsSection.Permissions },
                         onAdvanced = { section = SettingsSection.WorkspaceAdvanced },
                     )
-                    SettingsSection.Appearance -> AppearanceSettings(state, viewModel)
-                    SettingsSection.Editor -> EditorSettings(state, viewModel)
+                    SettingsSection.Appearance -> AppearanceSettings(renderedState, viewModel)
+                    SettingsSection.Accessibility -> AccessibilitySettings(renderedState, viewModel)
+                    SettingsSection.Editor -> EditorSettings(renderedState, viewModel)
                     SettingsSection.Security -> SecuritySettings(state, viewModel)
-                    SettingsSection.Sync -> SyncSettings(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive) { section = it }
+                    SettingsSection.Sync -> SyncSettings(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive, onCloudGoogleSignIn) { section = it }
                     SettingsSection.Backup -> BackupImportSettings(state, viewModel, onPickMarkdown, onPickBackupFolder, onPickBackupFile)
                     SettingsSection.SyncEngine -> SyncEngineSettings(state, viewModel) { section = SettingsSection.Sync }
                     SettingsSection.Conflicts -> ConflictSettings(state, viewModel)
                     SettingsSection.Permissions -> PermissionsSettings(state, viewModel)
-                    SettingsSection.WorkspaceMembers -> WorkspaceMembersSettings(state)
+                    SettingsSection.WorkspaceMembers -> WorkspaceMembersSettings(state, viewModel)
                     SettingsSection.WorkspaceAdvanced -> WorkspaceAdvancedSettings(state, viewModel) { section = SettingsSection.Sync }
                     SettingsSection.Diagnostics -> DiagnosticsSettings(state, viewModel)
                     SettingsSection.App -> AppInfoSettings()
@@ -260,7 +324,7 @@ fun SettingsScreen(
 private fun SettingsIndex(onOpen: (SettingsSection) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().widthIn(max = 1040.dp)) {
         val account = listOf(SettingsSection.Profile, SettingsSection.Workspace, SettingsSection.Appearance, SettingsSection.Editor)
-        val privacy = listOf(SettingsSection.Security)
+        val privacy = listOf(SettingsSection.Accessibility, SettingsSection.Security)
         val twoColumns = maxWidth >= 760.dp
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (twoColumns) {
@@ -272,7 +336,7 @@ private fun SettingsIndex(onOpen: (SettingsSection) -> Unit) {
                 SettingsSectionGroup("Account & Workspace", account, onOpen)
                 SettingsSectionGroup("Privacy & Security", privacy, onOpen)
             }
-            SettingsSectionGroup("Backup & Data", listOf(SettingsSection.Sync, SettingsSection.SyncEngine, SettingsSection.Backup, SettingsSection.Conflicts), onOpen)
+            SettingsSectionGroup("Backup & Data", listOf(SettingsSection.Sync, SettingsSection.Backup), onOpen)
             SettingsSectionGroup("About", listOf(SettingsSection.App, SettingsSection.Diagnostics), onOpen)
         }
     }
@@ -308,7 +372,7 @@ private fun ProfileSettings(state: DocsUiState, viewModel: DocsViewModel) {
     }
 
     when (editing) {
-        "username" -> EditFieldDialog("Username", username, "Used for mentions and links", { editing = null }) { viewModel.updateProfile(it, publicName, deviceName) }
+        "username" -> UsernameEditDialog(username, viewModel, onDismiss = { editing = null }) { viewModel.updateProfile(it, publicName, deviceName) }
         "public" -> EditFieldDialog("Public name", publicName, "Shown to other members", { editing = null }) { viewModel.updateProfile(username, it, deviceName) }
         "device" -> EditFieldDialog("Device name", deviceName, "Shown in sessions and sync", { editing = null }) { viewModel.updateProfile(username, publicName, it) }
     }
@@ -375,6 +439,8 @@ private fun WorkspaceSettings(
         WorkspaceBannerCard(
             name = state.settings.workspaceName,
             icon = state.settings.workspaceIcon.ifBlank { "N" },
+            iconKind = state.settings.workspaceIconKind,
+            iconUri = state.settings.workspaceIconUri,
             backgroundUri = state.settings.workspaceBackgroundUri,
             onEdit = onVisuals,
         )
@@ -394,14 +460,131 @@ private fun WorkspaceSettings(
 }
 
 @Composable
-private fun WorkspaceMembersSettings(state: DocsUiState) {
-    SettingsGroup(header = "Members") {
-        SettingsRow(
-            title = state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Local owner" } },
-            subtitle = "Owner · This device",
-            icon = Icons.Outlined.Person,
-            trailing = { RowValue("Owner", accent = true) },
+private fun WorkspaceMembersSettings(state: DocsUiState, viewModel: DocsViewModel) {
+    val remoteWorkspaceId by viewModel.teamWorkspaceRemoteId.collectAsState()
+    val collaborationStatus by viewModel.teamCollaborationStatus.collectAsState()
+    val accountEmail by viewModel.cloudAccountEmail.collectAsState()
+    val inviteShare by viewModel.teamInviteShare.collectAsState()
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    var showInvite by remember { mutableStateOf(false) }
+    var showJoin by remember { mutableStateOf(false) }
+    var inviteEmail by remember { mutableStateOf("") }
+    var inviteAsViewer by remember { mutableStateOf(false) }
+    var inviteToken by remember { mutableStateOf("") }
+
+    if (showInvite) {
+        NorfoldDialog(
+            onDismissRequest = { showInvite = false },
+            title = { Text("Invite a member") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = inviteEmail,
+                        onValueChange = { inviteEmail = it },
+                        label = { Text("Email") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = inviteAsViewer, onCheckedChange = { inviteAsViewer = it })
+                        Text("Viewer only")
+                    }
+                    Text("The invitation is bound to this email and expires after seven days.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.createTeamInvitation(inviteEmail, inviteAsViewer)
+                    showInvite = false
+                }) { Text("Create invite") }
+            },
+            dismissButton = { TextButton(onClick = { showInvite = false }) { Text("Cancel") } },
         )
+    }
+    if (showJoin) {
+        NorfoldDialog(
+            onDismissRequest = { showJoin = false },
+            title = { Text("Join a team workspace") },
+            text = {
+                OutlinedTextField(
+                    value = inviteToken,
+                    onValueChange = { inviteToken = it },
+                    label = { Text("Invitation code") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.acceptTeamInvitation(inviteToken); showJoin = false }) { Text("Join") }
+            },
+            dismissButton = { TextButton(onClick = { showJoin = false }) { Text("Cancel") } },
+        )
+    }
+    if (inviteShare != null) {
+        val invite = inviteShare!!
+        val shareText = "Norfold team invitation for ${invite.email}\n\nInvitation code:\n${invite.token}\n\nSign in with ${invite.email}, then open Settings → Workspace → Members → Join a team workspace."
+        NorfoldDialog(
+            onDismissRequest = viewModel::clearTeamInviteShare,
+            title = { Text("Invitation ready") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("For ${invite.email}", fontWeight = FontWeight.Bold)
+                    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Text(invite.token, Modifier.fillMaxWidth().padding(12.dp), fontSize = 12.sp)
+                    }
+                    Text("Only that account can accept this code. It expires in seven days.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_EMAIL, arrayOf(invite.email))
+                        putExtra(Intent.EXTRA_SUBJECT, "Join my Norfold workspace")
+                        putExtra(Intent.EXTRA_TEXT, shareText)
+                    }
+                    context.startActivity(Intent.createChooser(send, "Send Norfold invitation"))
+                }) { Text("Send") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    clipboard.setText(AnnotatedString(invite.token))
+                    viewModel.showMessage("Invitation code copied")
+                }) { Text("Copy code") }
+            },
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        SettingsGroup(header = "Members") {
+            SettingsRow(
+                title = state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Local owner" } },
+                subtitle = accountEmail?.let { "Owner · $it" } ?: "Owner · This device",
+                icon = Icons.Outlined.Person,
+                trailing = { RowValue("Owner", accent = true) },
+            )
+        }
+        SettingsGroup(header = "Team collaboration") {
+            SettingsRow(
+                title = if (remoteWorkspaceId == null) "Local workspace" else "Connected team workspace",
+                subtitle = collaborationStatus,
+                icon = if (remoteWorkspaceId == null) Icons.Outlined.CloudOff else Icons.Outlined.Groups,
+                trailing = { RowValue(if (remoteWorkspaceId == null) "Local" else "Team", accent = remoteWorkspaceId != null) },
+                onClick = if (remoteWorkspaceId != null) ({ viewModel.refreshTeamChat() }) else null,
+            )
+            RowDivider()
+            if (remoteWorkspaceId == null) {
+                Button(onClick = viewModel::enableTeamCollaboration, enabled = accountEmail != null, modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                    Text(if (accountEmail == null) "Sign in first" else "Enable team collaboration")
+                }
+            } else {
+                SettingsRow("Invite member", subtitle = "Create a seven-day email-bound invitation", icon = Icons.Outlined.Add, trailing = { RowChevron() }, onClick = { showInvite = true })
+            }
+            RowDivider()
+            SettingsRow("Join a team workspace", subtitle = "Use an invitation code sent to this account", icon = Icons.Outlined.Groups, trailing = { RowChevron() }, onClick = { showJoin = true })
+        }
     }
 }
 
@@ -456,7 +639,7 @@ private fun ProfileBannerCard(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Brush.linearGradient(listOf(Color(0xFF1B1E28), Color(0xFF10131B), MaterialTheme.colorScheme.primary.copy(alpha = 0.60f)))),
+                        .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.primary.copy(alpha = 0.60f)))),
                 )
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.58f)))))
@@ -485,7 +668,7 @@ private fun ProfileBannerCard(
 }
 
 @Composable
-private fun WorkspaceBannerCard(name: String, icon: String, backgroundUri: String?, onEdit: () -> Unit) {
+private fun WorkspaceBannerCard(name: String, icon: String, iconKind: WorkspaceIconKind, iconUri: String?, backgroundUri: String?, onEdit: () -> Unit) {
     Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
         Box(Modifier.fillMaxWidth().aspectRatio(2.12f).clickable(onClick = onEdit)) {
             if (!backgroundUri.isNullOrBlank()) {
@@ -494,7 +677,7 @@ private fun WorkspaceBannerCard(name: String, icon: String, backgroundUri: Strin
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Brush.linearGradient(listOf(Color(0xFF14161F), Color(0xFF1B1E28), MaterialTheme.colorScheme.primary.copy(alpha = 0.70f)))),
+                        .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.primary.copy(alpha = 0.70f)))),
                 )
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.62f)))))
@@ -503,9 +686,14 @@ private fun WorkspaceBannerCard(name: String, icon: String, backgroundUri: Strin
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(Modifier.size(54.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-                    Text(icon.take(2), fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimary, fontSize = 22.sp)
-                }
+                WorkspaceIconBadge(
+                    icon = icon,
+                    iconKind = iconKind,
+                    iconUri = iconUri,
+                    size = 54.dp,
+                    corner = 16.dp,
+                    fontSize = 22.sp,
+                )
                 Column(Modifier.weight(1f)) {
                     Text(name, color = Color.White, fontWeight = FontWeight.Black, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("1 member · Owner", color = Color.White.copy(alpha = 0.76f), fontSize = 12.sp)
@@ -519,8 +707,77 @@ private fun WorkspaceBannerCard(name: String, icon: String, backgroundUri: Strin
 @Composable
 private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val s = state.settings
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val fontCatalog = remember(context) { FontCatalogStore(context) }
     var showFontPicker by remember { mutableStateOf(false) }
-    if (showFontPicker) OptionPickerDialog("App font", listOf("Inter", "System", "Serif", "Mono"), s.appFont, { showFontPicker = false }) { picked -> viewModel.patchSettings { it.copy(appFont = picked) } }
+    var showLabelsPicker by remember { mutableStateOf(false) }
+    var showAppIconPicker by remember { mutableStateOf(false) }
+    var iconImportStatus by remember { mutableStateOf<String?>(null) }
+    var pendingAppIcon by remember { mutableStateOf<SemanticActionId?>(null) }
+    val iconImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            iconImportStatus = "Importing icon pack…"
+            iconImportStatus = runCatching {
+                val result = withContext(Dispatchers.IO) { CustomIconPackStore(context).importZip(uri) }
+                viewModel.patchSettings { it.copy(appIconFamily = AppIconFamily.Custom) }
+                "Imported ${result.mapped} controls; ${result.missing.size} use safe fallbacks"
+            }.getOrElse { "Couldn't import icon pack: ${it.message ?: "invalid archive"}" }
+        }
+    }
+    val singleAppIconImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val action = pendingAppIcon
+        pendingAppIcon = null
+        if (uri != null && action != null) scope.launch {
+            iconImportStatus = runCatching {
+                withContext(Dispatchers.IO) { CustomIconPackStore(context, "app").importSingle(action, uri) }
+                viewModel.patchSettings { it.copy(appIconFamily = AppIconFamily.Custom) }
+                "Assigned ${action.defaultLabel}; unmatched controls still use their preset fallback"
+            }.getOrElse { "Couldn't assign ${action.defaultLabel}: ${it.message ?: "invalid SVG"}" }
+        }
+    }
+    if (showFontPicker) FontCatalogPickerSheet(
+        store = fontCatalog,
+        selectedFamily = s.appFont,
+        title = "App font",
+        onDismiss = { showFontPicker = false },
+        onSelect = { picked ->
+            viewModel.patchSettings { it.copy(appFont = picked) }
+            showFontPicker = false
+        },
+    )
+    if (showLabelsPicker) OptionPickerDialog(
+        "Control labels",
+        listOf("Adaptive labels", "Icons only", "Icons + text"),
+        s.appLabelMode.displayName(),
+        { showLabelsPicker = false },
+    ) { picked ->
+        viewModel.patchSettings {
+            it.copy(
+                appLabelMode = when (picked) {
+                    "Icons only" -> ControlLabelMode.IconsOnly
+                    "Icons + text" -> ControlLabelMode.IconsAndText
+                    else -> ControlLabelMode.Adaptive
+                },
+            )
+        }
+    }
+    if (showAppIconPicker) IconFamilyPickerDialog(
+        title = "App icon family",
+        selected = s.appIconFamily,
+        importStatus = iconImportStatus,
+        onImport = { iconImporter.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
+        customNamespace = "app",
+        onAssignMissing = { action ->
+            pendingAppIcon = action
+            singleAppIconImporter.launch(arrayOf("image/svg+xml", "text/xml", "application/xml"))
+        },
+        onDismiss = { showAppIconPicker = false },
+        onSelect = { picked ->
+            viewModel.patchSettings { it.copy(appIconFamily = picked) }
+            showAppIconPicker = false
+        },
+    )
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         // Theme tiles
@@ -532,11 +789,11 @@ private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
                 ThemeTile("Dark", Icons.Outlined.DarkMode, state.settings.themeMode == ThemeMode.Dark, Modifier.weight(1f)) { viewModel.setTheme(ThemeMode.Dark) }
             }
         }
-        // Accent color dots (wired to palette). Graphite (the neutral default) is shown first.
+        // Accent color dots (wired to palette). The canonical logo palette is the default.
         Column {
             SettingsSectionLabel("Accent color")
             var showAllPalettes by remember { mutableStateOf(false) }
-            val accentProfiles = listOf(ThemeProfile.Graphite) + ThemeProfile.entries.filter { it != ThemeProfile.Graphite }
+            val accentProfiles = listOf(ThemeProfile.Norfold) + ThemeProfile.entries.filter { it != ThemeProfile.Norfold }
             SettingsGroup {
                 Column {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -560,29 +817,126 @@ private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
                 }
             }
         }
-        // Density / font / font-size / animations / reduce-motion
+        // Density / font / independent app scales / labels / animations.
         SettingsGroup {
             SettingsRow("UI density", trailing = { RowValue(if (s.uiDensityCompact) "Compact" else "Comfortable", accent = true) }, onClick = { viewModel.patchSettings { it.copy(uiDensityCompact = !it.uiDensityCompact) } })
             RowDivider(inset = false)
-            SettingsRow("Font", trailing = { RowValue(s.appFont, accent = true) }, onClick = { showFontPicker = true })
+            SettingsRow(
+                "App font",
+                subtitle = "Choose from device fonts or the complete open-source Google Fonts catalog",
+                trailing = { RowValue(s.appFont, accent = true) },
+                onClick = { showFontPicker = true },
+            )
             RowDivider(inset = false)
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-                Text("App size", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("A", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Slider(
-                        value = s.uiScale,
-                        onValueChange = viewModel::setUiScale,
-                        modifier = Modifier.weight(1f),
-                        valueRange = 0.9f..1.12f,
-                    )
-                    Text("A", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+            ScalePreferenceEditor(
+                label = "App text scale",
+                description = "Changes app text only; document selection and typing size live in the editor toolbar",
+                value = s.fontScale,
+                setting = ScaleSetting.Font,
+                onValue = { viewModel.previewScales(fontScale = it) },
+                onValidity = viewModel::setScaleInputValidity,
+            )
+            RowDivider(inset = false)
+            ScalePreferenceEditor(
+                label = "App UI/UX scale",
+                description = "Changes control and layout dimensions independently from app text",
+                value = s.uiScale,
+                setting = ScaleSetting.Ui,
+                onValue = { viewModel.previewScales(uiScale = it) },
+                onValidity = viewModel::setScaleInputValidity,
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "Labels",
+                subtitle = "Adaptive labels keep familiar actions compact and explain ambiguous actions",
+                trailing = { RowChevron(s.appLabelMode.displayName()) },
+                onClick = { showLabelsPicker = true },
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "App icon family",
+                subtitle = "Choose among verified free presets or import your own SVG ZIP",
+                trailing = { RowChevron(s.appIconFamily.displayName()) },
+                onClick = { showAppIconPicker = true },
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "Reset appearance scale",
+                subtitle = "Preview font and interface scale at 100%",
+                onClick = { viewModel.previewScales(fontScale = 1f, uiScale = 1f) },
+            )
             RowDivider(inset = false)
             SettingsRow("Reduce motion", subtitle = "Minimize navigation and content animations", trailing = { RowSwitch(s.reduceMotion) { viewModel.setPrivacyOption(reduceMotion = it) } })
         }
     }
+}
+
+@Composable
+private fun AccessibilitySettings(state: DocsUiState, viewModel: DocsViewModel) {
+    val settings = state.settings
+    var showLabelsPicker by remember { mutableStateOf(false) }
+    if (showLabelsPicker) {
+        OptionPickerDialog(
+            title = "Visible control labels",
+            options = listOf("Adaptive labels", "Icons only", "Icons + text"),
+            selected = settings.appLabelMode.displayName(),
+            onDismiss = { showLabelsPicker = false },
+        ) { picked ->
+            viewModel.patchSettings {
+                it.copy(
+                    appLabelMode = when (picked) {
+                        "Icons only" -> ControlLabelMode.IconsOnly
+                        "Icons + text" -> ControlLabelMode.IconsAndText
+                        else -> ControlLabelMode.Adaptive
+                    },
+                )
+            }
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        SettingsGroup(header = "Visible labels") {
+            SettingsRow(
+                "App control labels",
+                subtitle = "The same setting shown in Appearance",
+                icon = Icons.Outlined.AccessibilityNew,
+                trailing = { RowChevron(settings.appLabelMode.displayName()) },
+                onClick = { showLabelsPicker = true },
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "Editor toolbar labels",
+                subtitle = "Global default; an individual document can override it from Document settings",
+                icon = Icons.Outlined.Code,
+                trailing = { RowChevron(settings.appLabelMode.displayName()) },
+                onClick = { showLabelsPicker = true },
+            )
+        }
+        SettingsGroup(header = "How adaptive labels work") {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Adaptive labels respond to available space and your scaling choices.", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Familiar actions may stay icon-only. Ambiguous or active actions receive visible text, and every icon keeps an accessibility name for screen readers.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    "Choose Icons + text when you want labels shown wherever space allows. Tool rows scroll horizontally instead of clipping controls.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+    }
+}
+
+private fun ControlLabelMode.displayName(): String = when (this) {
+    ControlLabelMode.Adaptive -> "Adaptive labels"
+    ControlLabelMode.IconsOnly -> "Icons only"
+    ControlLabelMode.IconsAndText -> "Icons + text"
 }
 
 @Composable
@@ -609,15 +963,127 @@ private fun ThemeTile(label: String, icon: ImageVector, selected: Boolean, modif
 @Composable
 private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val s = state.settings
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val fontCatalog = remember(context) { FontCatalogStore(context) }
     val lineWidths = EditorLineWidth.entries
     var showLinePicker by remember { mutableStateOf(false) }
-    var showMenuStylePicker by remember { mutableStateOf(false) }
-    var showMenuColorPicker by remember { mutableStateOf(false) }
+    var showEditorIconPicker by remember { mutableStateOf(false) }
+    var editorIconImportStatus by remember { mutableStateOf<String?>(null) }
+    var pendingEditorIcon by remember { mutableStateOf<SemanticActionId?>(null) }
+    val editorIconImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            editorIconImportStatus = "Importing icon pack…"
+            editorIconImportStatus = runCatching {
+                val result = withContext(Dispatchers.IO) { CustomIconPackStore(context, "editor").importZip(uri) }
+                viewModel.patchSettings { it.copy(editorIconFamily = EditorIconFamily.Custom) }
+                "Imported ${result.mapped} controls; ${result.missing.size} use safe fallbacks"
+            }.getOrElse { "Couldn't import icon pack: ${it.message ?: "invalid archive"}" }
+        }
+    }
+    val singleEditorIconImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val action = pendingEditorIcon
+        pendingEditorIcon = null
+        if (uri != null && action != null) scope.launch {
+            editorIconImportStatus = runCatching {
+                withContext(Dispatchers.IO) { CustomIconPackStore(context, "editor").importSingle(action, uri) }
+                viewModel.patchSettings { it.copy(editorIconFamily = EditorIconFamily.Custom) }
+                "Assigned ${action.defaultLabel}; unmatched editor controls use their preset fallback"
+            }.getOrElse { "Couldn't assign ${action.defaultLabel}: ${it.message ?: "invalid SVG"}" }
+        }
+    }
+    var showHiddenFonts by remember { mutableStateOf(false) }
+    var hiddenFontsSnapshot by remember { mutableStateOf<FontCatalogSnapshot?>(null) }
+    var hiddenReload by remember { mutableStateOf(0) }
+    var selectedHiddenFonts by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(showHiddenFonts, hiddenReload) {
+        if (showHiddenFonts) hiddenFontsSnapshot = fontCatalog.snapshot()
+    }
     if (showLinePicker) OptionPickerDialog("Line width", lineWidths.map { it.name }, s.editorLineWidth.name, { showLinePicker = false }) { p -> viewModel.setEditorLineWidth(EditorLineWidth.valueOf(p)) }
-    if (showMenuStylePicker) OptionPickerDialog("Contextual menu", ContextualMenuStyle.entries.map { it.name }, s.contextualMenuStyle.name, { showMenuStylePicker = false }) { p -> viewModel.patchSettings { it.copy(contextualMenuStyle = ContextualMenuStyle.valueOf(p)) } }
-    if (showMenuColorPicker) OptionPickerDialog("Menu color", listOf("Follow theme", "App accent"), if (s.contextualMenuColor == ContextualMenuColor.AppAccent) "App accent" else "Follow theme", { showMenuColorPicker = false }) { p -> viewModel.patchSettings { it.copy(contextualMenuColor = if (p == "App accent") ContextualMenuColor.AppAccent else ContextualMenuColor.FollowTheme) } }
+    if (showEditorIconPicker) EditorIconFamilyPickerDialog(
+        selected = s.editorIconFamily,
+        appFamily = s.appIconFamily,
+        importStatus = editorIconImportStatus,
+        onImport = { editorIconImporter.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
+        onAssignMissing = { action ->
+            pendingEditorIcon = action
+            singleEditorIconImporter.launch(arrayOf("image/svg+xml", "text/xml", "application/xml"))
+        },
+        onDismiss = { showEditorIconPicker = false },
+        onSelect = { picked ->
+            viewModel.patchSettings { it.copy(editorIconFamily = picked) }
+            showEditorIconPicker = false
+        },
+    )
+    if (showHiddenFonts) NorfoldDialog(
+        onDismissRequest = { showHiddenFonts = false },
+        title = { Text("Hidden editor fonts") },
+        text = {
+            val hidden = hiddenFontsSnapshot?.hidden.orEmpty().sortedBy(String::lowercase)
+            if (hidden.isEmpty()) Text("No fonts are hidden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+                items(hidden.size) { index ->
+                    val family = hidden[index]
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = family in selectedHiddenFonts,
+                            onCheckedChange = { checked ->
+                                selectedHiddenFonts = if (checked) selectedHiddenFonts + family else selectedHiddenFonts - family
+                            },
+                        )
+                        Text(family, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        TextButton(onClick = {
+                            fontCatalog.restore(listOf(family))
+                            selectedHiddenFonts -= family
+                            hiddenReload++
+                        }) { Text("Restore") }
+                    }
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = { showHiddenFonts = false }) { Text("Close") } },
+        confirmButton = {
+            Button(
+                onClick = {
+                    fontCatalog.restore(selectedHiddenFonts)
+                    selectedHiddenFonts = emptySet()
+                    hiddenReload++
+                },
+                enabled = selectedHiddenFonts.isNotEmpty(),
+            ) { Text("Restore selected") }
+        },
+    )
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        SettingsGroup(header = "Toolbar") {
+            SettingsRow(
+                "Icon family",
+                subtitle = "Independent from app chrome when explicitly selected",
+                trailing = { RowChevron(s.editorIconFamily.displayName()) },
+                onClick = { showEditorIconPicker = true },
+            )
+            RowDivider(inset = false)
+            ScalePreferenceEditor(
+                label = "Toolbar thickness",
+                description = "Scales editor controls, icons and toolbar labels together",
+                value = s.editorToolbarScale,
+                setting = ScaleSetting.Toolbar,
+                onValue = { viewModel.previewScales(toolbarScale = it) },
+                onValidity = viewModel::setScaleInputValidity,
+            )
+            RowDivider(inset = false)
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                Text("Live toolbar preview", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text("Targets remain at least 48dp even when visuals are smaller.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                ToolbarPreviewStrip(s.appLabelMode, s.editorToolbarScale)
+            }
+            RowDivider(inset = false)
+            SettingsRow(
+                "Reset toolbar appearance",
+                subtitle = "Preview toolbar thickness at 100%",
+                onClick = { viewModel.previewScales(toolbarScale = 1f) },
+            )
+        }
         SettingsGroup(header = "Editor") {
             SettingsRow(
                 "Document surface",
@@ -626,6 +1092,19 @@ private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
             )
             RowDivider(inset = false)
             SettingsRow("Line width", trailing = { RowChevron(s.editorLineWidth.name) }, onClick = { showLinePicker = true })
+            RowDivider(inset = false)
+            SettingsRow(
+                "Selected text and next typing size",
+                subtitle = "Use A↕ in the editor: a selection changes immediately; a caret changes what you type next until reset",
+                trailing = { RowValue("6–144 sp", accent = true) },
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "Hidden fonts",
+                subtitle = "Restore individual or multiple fonts hidden from search, A–Z, recent and most-used lists",
+                trailing = { RowChevron(hiddenFontsSnapshot?.hidden?.size?.toString().orEmpty()) },
+                onClick = { showHiddenFonts = true },
+            )
             RowDivider(inset = false)
             SliderRow("Tab size", (s.tabSize - 2) / 6f) { v -> viewModel.patchSettings { it.copy(tabSize = (2 + (v * 6)).toInt().coerceIn(2, 8)) } }
             RowDivider(inset = false)
@@ -647,10 +1126,295 @@ private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
             RowDivider(inset = false)
             GestureRow("Swipe left", state.settings.noteSwipeEndAction) { viewModel.setNoteGestureActions(swipeEnd = it) }
         }
-        SettingsGroup(header = "Contextual menus") {
-            SettingsRow("Menu treatment", subtitle = "Pill is the compact default", trailing = { RowChevron(s.contextualMenuStyle.name) }, onClick = { showMenuStylePicker = true })
+        SettingsGroup(header = "Task interactions") {
+            TaskGestureRow("Swipe right", state.settings.taskSwipeStartAction) { viewModel.setTaskGestureActions(swipeStart = it) }
             RowDivider(inset = false)
-            SettingsRow("Color behavior", subtitle = "System light/dark or the app accent", trailing = { RowChevron(if (s.contextualMenuColor == ContextualMenuColor.AppAccent) "App accent" else "Follow theme") }, onClick = { showMenuColorPicker = true })
+            TaskGestureRow("Swipe left", state.settings.taskSwipeEndAction) { viewModel.setTaskGestureActions(swipeEnd = it) }
+        }
+        SettingsGroup(header = "Note rendering") {
+            RenderEngineRow(state.settings.noteRenderEngine) { viewModel.setNoteRenderEngine(it) }
+        }
+    }
+}
+
+@Composable
+private fun IconFamilyPickerDialog(
+    title: String,
+    selected: AppIconFamily,
+    importStatus: String?,
+    onImport: () -> Unit,
+    customNamespace: String = "app",
+    onAssignMissing: (SemanticActionId) -> Unit = {},
+    onDismiss: () -> Unit,
+    onSelect: (AppIconFamily) -> Unit,
+) {
+    val context = LocalContext.current
+    val customStore = remember(context, customNamespace, importStatus) { CustomIconPackStore(context, customNamespace) }
+    val relevantActions = remember(customNamespace) {
+        if (customNamespace == "editor") {
+            listOf(
+                SemanticActionId.Back, SemanticActionId.Menu, SemanticActionId.Search,
+                SemanticActionId.Done, SemanticActionId.Save, SemanticActionId.Undo,
+                SemanticActionId.Redo, SemanticActionId.Bold, SemanticActionId.Italic,
+                SemanticActionId.Underline, SemanticActionId.Insert, SemanticActionId.Toolsets,
+                SemanticActionId.Paragraph, SemanticActionId.Checklist, SemanticActionId.Table,
+                SemanticActionId.Image, SemanticActionId.Attachment, SemanticActionId.Shapes,
+                SemanticActionId.Arrange, SemanticActionId.Review, SemanticActionId.More,
+            )
+        } else {
+            listOf(
+                SemanticActionId.AppHome, SemanticActionId.AppToday, SemanticActionId.AppUpcoming,
+                SemanticActionId.AppFavorites, SemanticActionId.AppNotes, SemanticActionId.AppDocuments,
+                SemanticActionId.AppTasks, SemanticActionId.AppFiles, SemanticActionId.AppChat,
+                SemanticActionId.AppInbox, SemanticActionId.AppDatabase, SemanticActionId.AppGraph,
+                SemanticActionId.AppActivity, SemanticActionId.AppTemplates, SemanticActionId.AppSettings,
+                SemanticActionId.AppFolder, SemanticActionId.AppTags,
+            )
+        }
+    }
+    val mappedCount = remember(importStatus, relevantActions) { relevantActions.count { customStore.iconFile(it) != null } }
+    val missingActions = remember(importStatus, relevantActions) { relevantActions.filter { customStore.iconFile(it) == null } }
+    val previewActions = if (customNamespace == "editor") {
+        listOf(SemanticActionId.Bold, SemanticActionId.Italic, SemanticActionId.Insert)
+    } else {
+        listOf(SemanticActionId.AppHome, SemanticActionId.AppNotes, SemanticActionId.AppDocuments)
+    }
+    NorfoldDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(
+                    "Every bundled preset is free to use under the license shown. The preview is rendered by the same icon system used throughout this part of Norfold.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+                importStatus?.let {
+                    Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).padding(top = 8.dp)) {
+                    items(NorfoldIconFamilies.size) { index ->
+                        val info = NorfoldIconFamilies[index]
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(enabled = info.family != AppIconFamily.Custom || mappedCount > 0) { onSelect(info.family) }
+                                .padding(horizontal = 10.dp, vertical = 10.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    previewActions.forEach { action ->
+                                        SemanticFamilyIcon(info.family, action, null, Modifier.size(20.dp), customNamespace = customNamespace)
+                                    }
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(info.displayName, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        if (info.family == AppIconFamily.Custom) "$mappedCount of ${relevantActions.size} mapped controls · ${info.license}" else "${info.license} · ${info.source}",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp,
+                                        maxLines = 2,
+                                    )
+                                }
+                                if (selected == info.family) Icon(Icons.Outlined.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
+                            }
+                            if (info.family == AppIconFamily.Custom) {
+                                TextButton(onClick = onImport, modifier = Modifier.align(Alignment.End)) {
+                                    Text(if (mappedCount == 0) "Import SVG ZIP" else "Replace imported pack")
+                                }
+                                if (missingActions.isNotEmpty()) {
+                                    Text(
+                                        "${missingActions.size} icons are missing. Norfold uses the active default icon for each missing item until you assign an SVG.",
+                                        color = MaterialTheme.colorScheme.error,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    )
+                                    missingActions.forEach { action ->
+                                        TextButton(
+                                            onClick = { onAssignMissing(action) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Text("Assign ${action.defaultLabel}", modifier = Modifier.weight(1f))
+                                            Icon(Icons.Outlined.FileUpload, null, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (index != NorfoldIconFamilies.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun EditorIconFamilyPickerDialog(
+    selected: EditorIconFamily,
+    appFamily: AppIconFamily,
+    importStatus: String?,
+    onImport: () -> Unit,
+    onAssignMissing: (SemanticActionId) -> Unit,
+    onDismiss: () -> Unit,
+    onSelect: (EditorIconFamily) -> Unit,
+) {
+    var showSpecific by remember { mutableStateOf(false) }
+    if (showSpecific) {
+        IconFamilyPickerDialog(
+            title = "Editor icon preset",
+            selected = AppIconFamily.entries.firstOrNull { it.name == selected.name } ?: appFamily,
+            importStatus = importStatus,
+            onImport = onImport,
+            customNamespace = "editor",
+            onAssignMissing = onAssignMissing,
+            onDismiss = { showSpecific = false },
+            onSelect = { family ->
+                onSelect(EditorIconFamily.entries.first { it.name == family.name })
+                showSpecific = false
+            },
+        )
+        return
+    }
+    NorfoldDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Editor icon family") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(
+                    onClick = { onSelect(EditorIconFamily.UseApp) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (selected == EditorIconFamily.UseApp) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        SemanticFamilyIcon(appFamily, SemanticActionId.Bold, null, Modifier.size(24.dp))
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("Use app icon family", fontWeight = FontWeight.SemiBold)
+                            Text(appFamily.displayName(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                        if (selected == EditorIconFamily.UseApp) Icon(Icons.Outlined.Check, "Selected")
+                    }
+                }
+                Surface(onClick = { showSpecific = true }, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Palette, null)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("Choose editor-only preset", fontWeight = FontWeight.SemiBold)
+                            Text(if (selected == EditorIconFamily.UseApp) "Independent from app icons" else selected.displayName(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                        Icon(Icons.Outlined.ChevronRight, null)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun ScalePreferenceEditor(
+    label: String,
+    description: String = "50%–200% · temporary until Save",
+    value: Float,
+    setting: ScaleSetting,
+    onValue: (Float) -> Unit,
+    onValidity: (ScaleSetting, Boolean) -> Unit,
+) {
+    var raw by remember(label) { mutableStateOf((value * 100f).roundToInt().toString()) }
+    LaunchedEffect(value) {
+        raw = (value * 100f).roundToInt().toString()
+    }
+    val parsed = raw.toFloatOrNull()
+    val valid = parsed != null && parsed in 50f..200f
+
+    Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(label, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text("$description · 50%–200% · temporary until Save", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            }
+            TextButton(onClick = {
+                raw = "100"
+                onValidity(setting, true)
+                onValue(1f)
+            }) { Text("Reset") }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Slider(
+                value = value.coerceIn(0.5f, 2f),
+                onValueChange = { next ->
+                    raw = (next * 100f).roundToInt().toString()
+                    onValidity(setting, true)
+                    onValue(next)
+                },
+                modifier = Modifier.weight(1f),
+                valueRange = 0.5f..2f,
+                steps = 149,
+            )
+            OutlinedTextField(
+                value = raw,
+                onValueChange = { next ->
+                    raw = next.take(7)
+                    val numeric = raw.toFloatOrNull()
+                    val inRange = numeric != null && numeric in 50f..200f
+                    onValidity(setting, inRange)
+                    if (inRange) onValue(numeric!! / 100f)
+                },
+                modifier = Modifier
+                    .widthIn(min = 88.dp, max = 104.dp),
+                singleLine = true,
+                isError = raw.isNotEmpty() && !valid,
+                suffix = { Text("%") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+        }
+        if (!valid) {
+            Text("Enter a value from 50 to 200. The last valid preview remains active.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun ToolbarPreviewStrip(labelMode: ControlLabelMode, toolbarScale: Float) {
+    data class PreviewCommand(val action: SemanticActionId, val label: String, val ambiguous: Boolean)
+    val commands = remember {
+        listOf(
+            PreviewCommand(SemanticActionId.Back, "Back", false),
+            PreviewCommand(SemanticActionId.Undo, "Undo", false),
+            PreviewCommand(SemanticActionId.Bold, "Bold", false),
+            PreviewCommand(SemanticActionId.Insert, "Insert", true),
+            PreviewCommand(SemanticActionId.Toolsets, "Toolsets", true),
+        )
+    }
+    val visualScale = toolbarScale.coerceIn(0.5f, 2f)
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        commands.forEach { command ->
+            val showLabel = when (labelMode) {
+                ControlLabelMode.IconsOnly -> false
+                ControlLabelMode.IconsAndText -> true
+                ControlLabelMode.Adaptive -> command.ambiguous
+            }
+            Surface(
+                shape = RoundedCornerShape((12f * visualScale.coerceAtMost(1.5f)).dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                        .padding(horizontal = if (showLabel) 12.dp else 8.dp, vertical = (6f * visualScale).dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SemanticEditorIcon(command.action, command.label, Modifier.size((24f * visualScale).coerceIn(14f, 40f).dp))
+                    if (showLabel) Text(command.label, fontSize = (13f * visualScale).coerceIn(10f, 20f).sp, maxLines = 1)
+                }
+            }
         }
     }
 }
@@ -664,6 +1428,30 @@ private fun SliderRow(label: String, value: Float, onChange: (Float) -> Unit) {
 }
 
 @Composable
+private fun TaskGestureRow(label: String, selected: TaskGestureAction, onSelect: (TaskGestureAction) -> Unit) {
+    val actions = TaskGestureAction.entries
+    SettingsRow(label, trailing = { RowChevron(selected.name) }, onClick = {
+        onSelect(actions[(actions.indexOf(selected) + 1) % actions.size])
+    })
+}
+
+@Composable
+private fun RenderEngineRow(selected: NoteRenderEngine, onSelect: (NoteRenderEngine) -> Unit) {
+    val engines = NoteRenderEngine.entries
+    val subtitle = when (selected) {
+        NoteRenderEngine.Auto -> "Picks WebView or native based on device capability"
+        NoteRenderEngine.Native -> "Lightweight native renderer — best performance"
+        NoteRenderEngine.WebView -> "Full WebView renderer — richest formatting"
+    }
+    SettingsRow(
+        "Render engine",
+        subtitle = subtitle,
+        trailing = { RowChevron(selected.name) },
+        onClick = { onSelect(engines[(engines.indexOf(selected) + 1) % engines.size]) },
+    )
+}
+
+@Composable
 private fun GestureRow(label: String, selected: NoteGestureAction, onSelect: (NoteGestureAction) -> Unit) {
     val actions = NoteGestureAction.entries
     SettingsRow(label, trailing = { RowChevron(selected.name) }, onClick = {
@@ -671,18 +1459,6 @@ private fun GestureRow(label: String, selected: NoteGestureAction, onSelect: (No
     })
 }
 
-@Composable
-private fun GestureActionRow(selected: NoteGestureAction, onSelect: (NoteGestureAction) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-        NoteGestureAction.entries.forEach { action ->
-            FilterChip(
-                selected = selected == action,
-                onClick = { onSelect(action) },
-                label = { Text(action.name) },
-            )
-        }
-    }
-}
 
 @Composable
 private fun SecuritySettings(state: DocsUiState, viewModel: DocsViewModel) {
@@ -839,16 +1615,105 @@ private fun SyncSettings(
     onPickSyncFolder: (SyncFolderRequest) -> Unit,
     onConnectGoogleDrive: () -> Unit,
     onDisconnectGoogleDrive: () -> Unit,
+    onCloudGoogleSignIn: () -> Unit,
     onNavigate: (SettingsSection) -> Unit,
 ) {
     val capabilities = ExternalServiceConfig.capabilities
+    val accountEmail by viewModel.cloudAccountEmail.collectAsState()
+    val emailAuthPhase by viewModel.emailAuthPhase.collectAsState()
+    val emailAuthOperation by viewModel.emailAuthOperation.collectAsState()
+    var showEmailAuth by remember { mutableStateOf(false) }
+    var signUp by remember { mutableStateOf(false) }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    val authBusy = emailAuthOperation != EmailAuthOperation.Idle
+
+    LaunchedEffect(emailAuthPhase) {
+        if (emailAuthPhase == EmailAuthPhase.Completed) {
+            showEmailAuth = false
+            password = ""
+            code = ""
+            viewModel.consumeEmailAuthCompleted()
+        }
+    }
+    if (showEmailAuth || emailAuthPhase !is EmailAuthPhase.None) {
+        NorfoldDialog(
+            onDismissRequest = { showEmailAuth = false; viewModel.cancelEmailAuth() },
+            title = {
+                Text(
+                    when (emailAuthPhase) {
+                        is EmailAuthPhase.AwaitSignupCode -> "Verify your email"
+                        is EmailAuthPhase.AwaitRecoveryCode -> "Enter recovery code"
+                        is EmailAuthPhase.AwaitNewPassword -> "Choose a new password"
+                        else -> if (signUp) "Create Norfold account" else "Sign in with email"
+                    },
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    when (val phase = emailAuthPhase) {
+                        is EmailAuthPhase.AwaitSignupCode,
+                        is EmailAuthPhase.AwaitRecoveryCode -> {
+                            val target = when (phase) {
+                                is EmailAuthPhase.AwaitSignupCode -> phase.email
+                                is EmailAuthPhase.AwaitRecoveryCode -> phase.email
+                                else -> ""
+                            }
+                            Text("Enter the 6-digit code sent to $target", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("Verification code") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
+                        }
+                        is EmailAuthPhase.AwaitNewPassword ->
+                            OutlinedTextField(password, { password = it }, label = { Text("New password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
+                        else -> {
+                            OutlinedTextField(email, { email = it }, label = { Text("Email") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), singleLine = true, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(password, { password = it }, label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(signUp, { signUp = it })
+                                Text("Create a new account")
+                            }
+                            Text("Passwords are sent only to Norfold Cloud over TLS and are never stored in workspace files.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !authBusy,
+                    onClick = {
+                        when (emailAuthPhase) {
+                            is EmailAuthPhase.AwaitSignupCode,
+                            is EmailAuthPhase.AwaitRecoveryCode -> viewModel.verifyEmailCode(code)
+                            is EmailAuthPhase.AwaitNewPassword -> viewModel.completePasswordReset(password)
+                            else -> viewModel.authenticateWithEmail(email, password, signUp)
+                        }
+                    },
+                ) { Text(if (authBusy) "Working…" else if (emailAuthPhase is EmailAuthPhase.None) if (signUp) "Create account" else "Sign in" else "Continue") }
+            },
+            dismissButton = { TextButton(onClick = { showEmailAuth = false; viewModel.cancelEmailAuth() }) { Text("Cancel") } },
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Account") {
             SettingsRow(
-                state.settings.syncUserName.ifBlank { "Local owner" },
-                subtitle = if (capabilities.googleIdentity) "Google identity is ready" else "Local-first workspace · cloud account backend not configured",
+                accountEmail ?: state.settings.syncUserName.ifBlank { "Local owner" },
+                subtitle = if (accountEmail != null) "Signed in to Norfold Cloud" else if (capabilities.googleIdentity) "Cloud identity is ready" else "Local-first workspace · cloud account backend not configured",
                 icon = Icons.Outlined.Person,
+                trailing = { RowValue(if (accountEmail == null) "Local" else "Connected", accent = accountEmail != null) },
             )
+            RowDivider()
+            if (accountEmail == null) {
+                Button(onClick = onCloudGoogleSignIn, enabled = capabilities.googleIdentity && !authBusy, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    Text("Sign in with Google")
+                }
+                ElevatedButton(onClick = { showEmailAuth = true }, enabled = capabilities.supabase && !authBusy, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    Text("Sign in or create account with email")
+                }
+            } else {
+                ElevatedButton(onClick = viewModel::signOutCloudAccount, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    Text("Sign out of Norfold Cloud")
+                }
+            }
             RowDivider()
             SettingsRow(
                 "Google configuration",
@@ -857,7 +1722,6 @@ private fun SyncSettings(
                 trailing = { RowValue(if (capabilities.googleDrive) "Ready" else "Needs setup", accent = capabilities.googleDrive) },
             )
         }
-        ManualSyncCard(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive)
         SettingsGroup(header = "Sync") {
             SettingsRow(
                 "Last synced",
@@ -866,19 +1730,29 @@ private fun SyncSettings(
             )
             RowDivider()
             SettingsRow(
-                "Open Sync Settings",
+                "Sync Settings",
                 subtitle = "Provider status, Sync now, cooldown and background behavior",
                 icon = Icons.Outlined.CloudSync,
                 trailing = { RowChevron() },
                 onClick = { onNavigate(SettingsSection.SyncEngine) },
             )
-        }
-        SettingsGroup(header = "Manage") {
-            SettingsRow("Sync behavior", subtitle = "Interval, network and battery rules", icon = Icons.Outlined.CloudSync, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.SyncEngine) })
             RowDivider()
             SettingsRow("Backup & Import", subtitle = "Encrypted exports, restore and Markdown", icon = Icons.Outlined.Backup, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.Backup) })
             RowDivider()
             SettingsRow("Conflict Resolution", subtitle = "Defaults, reports and keep-both behavior", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { onNavigate(SettingsSection.Conflicts) })
+        }
+        var showLegacyChain by remember { mutableStateOf(false) }
+        SettingsGroup(header = "Advanced") {
+            SettingsRow(
+                "Legacy sync chain",
+                subtitle = "Manual encrypted sync via Drive app-data or a folder you choose. Separate from your Norfold Cloud account.",
+                icon = Icons.Outlined.Tune,
+                trailing = { RowValue(if (showLegacyChain) "Hide" else "Show", accent = showLegacyChain) },
+                onClick = { showLegacyChain = !showLegacyChain },
+            )
+        }
+        if (showLegacyChain) {
+            ManualSyncCard(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive)
         }
     }
 }
@@ -926,6 +1800,26 @@ private fun ManualSyncCard(
             ElevatedButton(onClick = onDisconnectGoogleDrive, enabled = state.googleDriveConnected && !state.syncing, modifier = Modifier.fillMaxWidth()) {
                 Text("Disconnect and revoke Drive access")
             }
+            var showWipeConfirm by remember { mutableStateOf(false) }
+            ElevatedButton(
+                onClick = { showWipeConfirm = true },
+                enabled = state.googleDriveConnected && !state.syncing,
+                modifier = Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.ButtonDefaults.elevatedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text("Wipe all Drive backup data") }
+            if (showWipeConfirm) {
+                NorfoldDialog(
+                    onDismissRequest = { showWipeConfirm = false },
+                    title = { Text("Delete all backups?", fontWeight = FontWeight.Bold) },
+                    text = { Text("This permanently deletes all Norfold backup files from your Google Drive app data. Your local notes are not affected. This cannot be undone.") },
+                    confirmButton = {
+                        TextButton(onClick = { showWipeConfirm = false; viewModel.wipeGoogleDriveBackup() }) {
+                            Text("Delete forever", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = { TextButton(onClick = { showWipeConfirm = false }) { Text("Cancel") } },
+                )
+            }
         }
         Text(
             "Identity and Drive authorization are separate. Drive data stays in appDataFolder; manual providers below use a user-selected folder.",
@@ -937,15 +1831,15 @@ private fun ManualSyncCard(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = state.googleDriveConnected && syncSecret.isNotBlank() && !state.syncing,
                 onClick = { viewModel.createGoogleDriveApiChain(syncSecret, syncUsername, syncPublicName, syncDeviceName) },
-            ) { Text("Create Google sync chain") }
+            ) { SyncButtonContent("Create Google sync chain", state.syncing) }
             ElevatedButton(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = state.googleDriveConnected && syncSecret.isNotBlank() && !state.syncing,
                 onClick = { viewModel.restoreGoogleDriveApiChain(syncSecret, syncUsername, syncPublicName, syncDeviceName) },
-            ) { Text("Restore Google sync chain") }
+            ) { SyncButtonContent("Restore Google sync chain", state.syncing) }
         }
     }
-    OutlinedTextField(syncSecret, { syncSecret = it }, label = { Text("Sync key") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
+    OutlinedTextField(syncSecret, { syncSecret = it }, label = { Text("Backup password (optional)") }, supportingText = { Text(if (syncSecret.isBlank()) "Leave blank — Norfold manages encryption automatically on this device." else "Never uploaded. Required to restore on a new device.") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
     OutlinedTextField(syncUsername, { syncUsername = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
     OutlinedTextField(syncPublicName, { syncPublicName = it }, label = { Text("Public name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
     OutlinedTextField(syncDeviceName, { syncDeviceName = it }, label = { Text("Device name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
@@ -957,8 +1851,8 @@ private fun ManualSyncCard(
         FilterChip(syncProvider == SyncProvider.LocalFolder, { syncProvider = SyncProvider.LocalFolder }, label = { Text("Local folder") })
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        Button(modifier = Modifier.fillMaxWidth(), enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { onPickSyncFolder(SyncFolderRequest(syncProvider, SyncFolderAction.CreateChain, syncSecret, syncUsername, syncPublicName, syncDeviceName)) }) { Text("Create manual chain") }
-        ElevatedButton(modifier = Modifier.fillMaxWidth(), enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { onPickSyncFolder(SyncFolderRequest(syncProvider, SyncFolderAction.RestoreChain, syncSecret, syncUsername, syncPublicName, syncDeviceName)) }) { Text("Restore manual chain") }
+        Button(modifier = Modifier.fillMaxWidth(), enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { onPickSyncFolder(SyncFolderRequest(syncProvider, SyncFolderAction.CreateChain, syncSecret, syncUsername, syncPublicName, syncDeviceName)) }) { SyncButtonContent("Create manual chain", state.syncing) }
+        ElevatedButton(modifier = Modifier.fillMaxWidth(), enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { onPickSyncFolder(SyncFolderRequest(syncProvider, SyncFolderAction.RestoreChain, syncSecret, syncUsername, syncPublicName, syncDeviceName)) }) { SyncButtonContent("Restore manual chain", state.syncing) }
     }
     ElevatedButton(modifier = Modifier.fillMaxWidth(), onClick = { viewModel.go(Destination.ConflictReview) }) { Icon(Icons.Outlined.Difference, null); Text("Open conflicts") }
 }
@@ -967,8 +1861,9 @@ private fun ManualSyncCard(
 @Composable
 private fun SyncEngineSettings(state: DocsUiState, viewModel: DocsViewModel, onSetUpSync: () -> Unit) {
     val s = state.settings
+    val deviceProfiles by viewModel.deviceSettingsProfiles.collectAsState()
     var cooldownSeconds by remember { mutableStateOf(viewModel.syncCooldownRemainingSeconds()) }
-    LaunchedEffect(state.syncing, state.message, s.lastSyncAt) {
+    LaunchedEffect(state.syncing, s.lastSyncAt) {
         do {
             cooldownSeconds = viewModel.syncCooldownRemainingSeconds()
             if (cooldownSeconds > 0L) delay(250L)
@@ -976,14 +1871,15 @@ private fun SyncEngineSettings(state: DocsUiState, viewModel: DocsViewModel, onS
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        SyncChainCard(state, deviceProfiles)
         SettingsGroup(header = "Sync status") {
             SettingsRow(
                 "Provider",
                 subtitle = when (s.syncProvider) {
-                    SyncProvider.GoogleDrive -> "Encrypted Google Drive app-data chain"
-                    SyncProvider.OneDrive -> "Encrypted OneDrive folder chain"
-                    SyncProvider.LocalFolder -> "Encrypted local folder chain"
-                    SyncProvider.None -> "Create or restore a chain in Account & Restore"
+                    SyncProvider.GoogleDrive -> "Encrypted backup in your Google Drive"
+                    SyncProvider.OneDrive -> "Encrypted backup in your OneDrive folder"
+                    SyncProvider.LocalFolder -> "Encrypted backup in a folder on this device"
+                    SyncProvider.None -> "Optional — Norfold works fully offline without it"
                 },
                 icon = Icons.Outlined.CloudSync,
                 trailing = { RowValue(if (s.syncProvider == SyncProvider.None) "Not configured" else s.syncProvider.name) },
@@ -1000,14 +1896,12 @@ private fun SyncEngineSettings(state: DocsUiState, viewModel: DocsViewModel, onS
                 enabled = !state.syncing && cooldownSeconds == 0L && s.syncProvider != SyncProvider.None,
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
             ) {
-                Icon(Icons.Outlined.CloudSync, null)
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    when {
-                        state.syncing -> "Syncing…"
+                SyncButtonContent(
+                    label = when {
                         cooldownSeconds > 0L -> "Sync again in ${cooldownSeconds}s"
                         else -> "Sync now"
                     },
+                    syncing = state.syncing,
                 )
             }
             if (s.syncProvider == SyncProvider.None) {
@@ -1018,13 +1912,141 @@ private fun SyncEngineSettings(state: DocsUiState, viewModel: DocsViewModel, onS
             }
         }
         SettingsGroup(header = "Sync behavior") {
-            SettingsRow("Sync when leaving the app", subtitle = "Runs only after a chain is unlocked in this session", trailing = { RowSwitch(s.autoSync) { v -> viewModel.patchSettings { it.copy(autoSync = v) } } })
+            SettingsRow("Sync when leaving the app", subtitle = "Runs only after sync is unlocked in this session", trailing = { RowSwitch(s.autoSync) { v -> viewModel.patchSettings { it.copy(autoSync = v) } } })
             RowDivider(inset = false)
             SettingsRow("Background scheduling", subtitle = "Not enabled in this pre-beta build", trailing = { RowValue("Off") })
         }
         SettingsGroup(header = "Advanced") {
-            SettingsRow("Rebuild local index", subtitle = "Re-index all content", icon = Icons.Outlined.Settings, trailing = { RowChevron() }, onClick = { viewModel.go(Destination.SyncMonitor) })
+            SettingsRow("Rebuild local index", subtitle = "Re-index all content", icon = Icons.Outlined.Settings, onClick = { viewModel.rebuildWorkspaceIndex() })
         }
+    }
+}
+
+@Composable
+private fun SyncChainCard(state: DocsUiState, deviceProfiles: List<DeviceSettingsProfile>) = SettingsCard {
+    val settings = state.settings
+    val provider = when (settings.syncProvider) {
+        SyncProvider.GoogleDrive -> "Google Drive app data"
+        SyncProvider.OneDrive -> "OneDrive folder"
+        SyncProvider.LocalFolder -> "Authorized local folder"
+        SyncProvider.None -> "No remote destination"
+    }
+    val statusText = when {
+        state.syncing -> "Transferring encrypted snapshot"
+        !state.online && settings.syncProvider != SyncProvider.None -> "Offline · local changes stay on this device"
+        settings.syncProvider == SyncProvider.None -> "Local only"
+        else -> settings.lastSyncStatus
+    }
+    val statusColor = when {
+        state.syncing -> MaterialTheme.colorScheme.primary
+        !state.online || statusText.contains("fail", true) || statusText.contains("error", true) -> MaterialTheme.colorScheme.error
+        settings.syncConflictCount > 0 -> MaterialTheme.colorScheme.tertiary
+        settings.lastSyncAt != null -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val knownDevices = deviceProfiles
+        .distinctBy { it.deviceId }
+        .sortedByDescending { it.updatedAt }
+    val restoreSummary = when {
+        knownDevices.isEmpty() -> "This device will register with its first snapshot"
+        knownDevices.size == 1 -> "1 registered device profile · ${knownDevices.first().deviceName}"
+        else -> "${knownDevices.size} registered device profiles · choose what to restore per device"
+    }
+
+    Text("Your sync chain", fontWeight = FontWeight.Black, fontSize = 18.sp)
+    Text(
+        "Norfold writes locally first, encrypts one workspace snapshot, then moves that snapshot through the configured provider.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp,
+    )
+    Spacer(Modifier.size(12.dp))
+    SyncChainNode(
+        icon = Icons.Outlined.PhoneAndroid,
+        title = settings.settingsDeviceName.ifBlank { settings.syncDeviceName.ifBlank { "This device" } },
+        subtitle = "Local Room database · edits remain available offline",
+        badge = "Source",
+    )
+    SyncChainConnector()
+    SyncChainNode(
+        icon = Icons.Outlined.Security,
+        title = "Encrypted Norfold snapshot",
+        subtitle = "Workspaces, docs, tasks, chat, object history, file metadata and device settings",
+        badge = settings.syncChainId?.take(8)?.let { "Chain $it" } ?: "Not created",
+    )
+    SyncChainConnector()
+    SyncChainNode(
+        icon = if (settings.syncProvider == SyncProvider.None) Icons.Outlined.CloudOff else Icons.Outlined.CloudSync,
+        title = provider,
+        subtitle = statusText,
+        badge = settings.lastSyncAt?.let { relativeSettingsTime(it) + " ago" } ?: "Never synced",
+        accent = statusColor,
+    )
+    SyncChainConnector()
+    SyncChainNode(
+        icon = Icons.Outlined.Backup,
+        title = "Restore by device profile",
+        subtitle = restoreSummary,
+        badge = if (knownDevices.size > 1) "Selective" else "Ready",
+    )
+    if (settings.syncConflictCount > 0) {
+        Spacer(Modifier.size(10.dp))
+        Text(
+            "${settings.syncConflictCount} conflict${if (settings.syncConflictCount == 1) "" else "s"} need review before the chain is fully settled.",
+            color = MaterialTheme.colorScheme.tertiary,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+        )
+    }
+}
+
+@Composable
+private fun SyncChainNode(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    badge: String,
+    accent: Color = MaterialTheme.colorScheme.primary,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(shape = CircleShape, color = accent.copy(alpha = 0.13f), modifier = Modifier.size(42.dp)) {
+            Box(contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, modifier = Modifier.size(21.dp)) }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        }
+        Surface(shape = RoundedCornerShape(50), color = accent.copy(alpha = 0.11f)) {
+            Text(
+                badge,
+                color = accent,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 10.sp,
+                maxLines = 1,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SyncChainConnector() {
+    Box(Modifier.padding(start = 20.dp).size(width = 2.dp, height = 18.dp).background(MaterialTheme.colorScheme.outlineVariant))
+}
+
+@Composable
+private fun SyncButtonContent(label: String, syncing: Boolean) {
+    if (syncing) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.size(8.dp))
+        Text("Syncing…")
+    } else {
+        Icon(Icons.Outlined.CloudSync, null)
+        Spacer(Modifier.size(8.dp))
+        Text(label)
     }
 }
 
@@ -1090,6 +2112,7 @@ private fun BackupImportSettings(
     onPickBackupFile: (String) -> Unit,
 ) {
     val s = state.settings
+    val deviceProfiles by viewModel.deviceSettingsProfiles.collectAsState()
     var showAdvanced by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
         SettingsGroup(header = "Backup & Import") {
@@ -1102,7 +2125,117 @@ private fun BackupImportSettings(
             RowDivider()
             SettingsRow("Import from ZIP", subtitle = "Norfold or other apps export", icon = Icons.Outlined.FileUpload, trailing = { RowChevron() }, onClick = { showAdvanced = true })
         }
+        DeviceSettingsProfilesCard(
+            profiles = deviceProfiles,
+            settings = s,
+            onApply = viewModel::applyDeviceSettingsProfile,
+            onReset = viewModel::resetDeviceSettings,
+        )
         if (showAdvanced) BackupAdvancedCard(state, viewModel, onPickMarkdown, onPickBackupFolder, onPickBackupFile)
+    }
+}
+
+@Composable
+private fun DeviceSettingsProfilesCard(
+    profiles: List<DeviceSettingsProfile>,
+    settings: com.norfold.app.domain.AppSettings,
+    onApply: (String, Set<SettingsProfileCategory>) -> Unit,
+    onReset: (Set<SettingsProfileCategory>) -> Unit,
+) = SettingsCard {
+    var selectedDeviceId by remember { mutableStateOf<String?>(null) }
+    var categories by remember {
+        mutableStateOf(
+            setOf(
+                SettingsProfileCategory.Appearance,
+                SettingsProfileCategory.Editor,
+                SettingsProfileCategory.Accessibility,
+            ),
+        )
+    }
+    LaunchedEffect(profiles, settings.settingsDeviceId) {
+        if (profiles.none { it.deviceId == selectedDeviceId }) {
+            selectedDeviceId = profiles.firstOrNull { it.deviceId != settings.settingsDeviceId }?.deviceId
+                ?: profiles.firstOrNull()?.deviceId
+        }
+    }
+    val selected = profiles.firstOrNull { it.deviceId == selectedDeviceId }
+    val changes = selected?.changesFrom(settings).orEmpty()
+
+    Text("Device settings profiles", fontWeight = FontWeight.Black, fontSize = 18.sp)
+    Text(
+        "Backups keep each device's interface preferences separate. Choose exactly what this device should inherit before applying anything.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp,
+    )
+    if (profiles.isEmpty()) {
+        Text("A profile will appear after this device finishes registering.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        profiles.take(6).forEach { profile ->
+            val selectedProfile = profile.deviceId == selectedDeviceId
+            Surface(
+                modifier = Modifier.fillMaxWidth().clickable { selectedDeviceId = profile.deviceId },
+                shape = MaterialTheme.shapes.medium,
+                color = if (selectedProfile) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(Icons.Outlined.PhoneAndroid, null, tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.weight(1f)) {
+                        Text(profile.deviceName, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${profile.deviceType} · ${profile.screenClass}${if (profile.deviceId == settings.settingsDeviceId) " · This device" else ""}",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (selectedProfile) Icon(Icons.Outlined.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
+    }
+
+    if (selected != null) {
+        Text("Include", fontWeight = FontWeight.Bold)
+        SettingsProfileCategory.entries.forEach { category ->
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    categories = if (category in categories) categories - category else categories + category
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = category in categories,
+                    onCheckedChange = { checked -> categories = if (checked) categories + category else categories - category },
+                )
+                Text(category.name)
+            }
+        }
+        Text("Changes on this device", fontWeight = FontWeight.Bold)
+        val visibleChanges = changes.filter { it.category in categories }
+        if (visibleChanges.isEmpty()) {
+            Text("No selected values would change.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            visibleChanges.take(12).forEach { change ->
+                Text(
+                    "${change.name}: ${change.currentValue} → ${change.incomingValue}",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                enabled = categories.isNotEmpty() && visibleChanges.isNotEmpty(),
+                onClick = { onApply(selected.deviceId, categories) },
+            ) { Text("Apply selected") }
+            ElevatedButton(
+                enabled = categories.isNotEmpty(),
+                onClick = { onReset(categories) },
+            ) { Text("Reset selected") }
+        }
     }
 }
 
@@ -1135,8 +2268,26 @@ private fun BackupAdvancedCard(
     }
     OutlinedTextField(backupSecret, { backupSecret = it }, label = { Text("Backup password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { viewModel.exportBackup(backupSecret) { backupPayload = it } }) { Icon(Icons.Outlined.FileDownload, null); Text("Export") }
-        ElevatedButton(onClick = { viewModel.importBackup(backupSecret, backupPayload) }) { Icon(Icons.Outlined.FileUpload, null); Text("Import") }
+        Button(
+            enabled = !state.syncing,
+            onClick = { viewModel.exportBackup(backupSecret) { backupPayload = it } },
+        ) {
+            if (state.syncing) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+            } else {
+                Icon(Icons.Outlined.FileDownload, null); Text("Export")
+            }
+        }
+        ElevatedButton(
+            enabled = !state.syncing,
+            onClick = { viewModel.importBackup(backupSecret, backupPayload) },
+        ) {
+            if (state.syncing) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(Icons.Outlined.FileUpload, null); Text("Import")
+            }
+        }
     }
     ElevatedButton(
         enabled = backupSecret.isNotBlank(),

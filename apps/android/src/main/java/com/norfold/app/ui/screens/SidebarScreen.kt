@@ -19,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +31,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -46,6 +49,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -53,6 +57,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Search
@@ -60,15 +65,19 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.TrackChanges
+import androidx.compose.material.icons.outlined.People
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import com.norfold.app.ui.components.NorfoldDropdownMenu
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -95,17 +104,42 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.norfold.app.domain.ChatChannel
+import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.DocOutline
 import com.norfold.app.domain.DocSectionAction
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.domain.DocumentOwner
+import com.norfold.app.domain.WorkspaceObjectType
+import com.norfold.app.domain.WorkspaceObjectHistory
+import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.domain.Note
 import com.norfold.app.ui.DocsUiState
+import com.norfold.app.ui.components.WorkspaceIconBadge
+import com.norfold.app.ui.components.NorfoldBottomSheet
+import com.norfold.app.ui.components.SemanticAppIcon
 import com.norfold.app.ui.DocsViewModel
 
 @Composable
 fun SectionSidebarOverlay(state: DocsUiState, viewModel: DocsViewModel) {
+    if (state.destination == Destination.DocumentEditor) {
+        NorfoldBottomSheet(onDismissRequest = viewModel::closeSidebar) {
+            SidebarContent(
+                state,
+                viewModel,
+                Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.86f)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+        return
+    }
     val panelEnter = if (state.settings.reduceMotion) {
         fadeIn(tween(150))
     } else {
@@ -143,7 +177,16 @@ fun SectionSidebarOverlay(state: DocsUiState, viewModel: DocsViewModel) {
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 16.dp,
                 ) {
-                    SidebarContent(state, viewModel, Modifier.padding(horizontal = 16.dp, vertical = 20.dp))
+                    // The overlay now sits above the Scaffold (over the navbar), so it must
+                    // apply its own system-bar insets.
+                    SidebarContent(
+                        state,
+                        viewModel,
+                        Modifier
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 20.dp),
+                    )
                 }
             }
         }
@@ -180,17 +223,24 @@ private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(activeColor),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text((active?.icon ?: "N").take(1), fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
-            }
+            WorkspaceIconBadge(
+                icon = active?.icon ?: "N",
+                iconKind = active?.iconKind ?: state.settings.workspaceIconKind,
+                iconUri = active?.iconUri ?: state.settings.workspaceIconUri,
+                size = 40.dp,
+                corner = 12.dp,
+                background = activeColor,
+                contentColor = Color.White,
+                fontSize = 18.sp,
+                maxGlyphs = 1,
+            )
             Column(Modifier.weight(1f)) {
                 Text(active?.name ?: state.settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${state.notes.size} docs · ${state.workspaces.size} workspaces", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val noteCount = state.notes.count { it.overlapMode == DocOverlapMode.Reflow }
+                val documentCount = state.notes.count { it.overlapMode == DocOverlapMode.Bounded }
+                Text("$noteCount notes · $documentCount documents", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = { viewModel.go(Destination.Inbox) }, modifier = Modifier.size(30.dp)) {
+            IconButton(onClick = { viewModel.go(Destination.Inbox) }, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.Outlined.NotificationsNone, "Inbox", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
             }
             Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
@@ -206,12 +256,20 @@ private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Box(Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(ws.palette.palette().accent), contentAlignment = Alignment.Center) {
-                            Text(ws.icon.take(1), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
+                        WorkspaceIconBadge(
+                            icon = ws.icon,
+                            iconKind = ws.iconKind,
+                            iconUri = ws.iconUri,
+                            size = 26.dp,
+                            corner = 8.dp,
+                            background = ws.palette.palette().accent,
+                            contentColor = Color.White,
+                            fontSize = 12.sp,
+                            maxGlyphs = 1,
+                        )
                         Text(ws.name, Modifier.weight(1f), fontSize = 14.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (selected) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                        else if (state.workspaces.size > 1) IconButton(onClick = { viewModel.deleteWorkspace(ws.id) }, modifier = Modifier.size(24.dp)) {
+                        else if (state.workspaces.size > 1) IconButton(onClick = { viewModel.deleteWorkspace(ws.id) }, modifier = Modifier.size(40.dp)) {
                             Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
                         }
                     }
@@ -325,7 +383,7 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
     // the workspace nav is reachable again via the editor's back button.
     val activeDocument by viewModel.activeDocument.collectAsState()
     val editorDocument = activeDocument
-    if (state.destination == Destination.NoteEditor && editorDocument != null) {
+    if (state.destination in setOf(Destination.NoteEditor, Destination.DocumentEditor) && editorDocument != null) {
         val title = when (editorDocument.owner.type) {
             DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == editorDocument.owner.id }?.title
             DocumentOwnerType.Task -> state.tasks.firstOrNull { it.id == editorDocument.owner.id }?.title
@@ -333,14 +391,82 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
         }.orEmpty().ifBlank { "Untitled" }
         val locked = editorDocument.owner.type == DocumentOwnerType.Note &&
             state.notes.firstOrNull { it.id == editorDocument.owner.id }?.locked == true
-        DocSidebarContent(editorDocument.owner.documentId, title, editorDocument.document, locked, state, viewModel, sidebarQuery, { sidebarQuery = it }, modifier)
+        DocSidebarContent(editorDocument.owner, title, editorDocument.document, locked, state, viewModel, sidebarQuery, { sidebarQuery = it }, modifier)
         return
     }
-    var notesExpanded by remember { mutableStateOf(state.destination in setOf(Destination.NotesHome, Destination.NoteEditor)) }
+    // Chat gets its own sidebar — people, groups, and topics — the same way the
+    // editor swaps in its table of contents.
+    if (state.destination == Destination.Chat) {
+        ChatSidebarContent(state, viewModel, sidebarQuery, { sidebarQuery = it }, modifier)
+        return
+    }
+    var notesExpanded by remember { mutableStateOf(state.destination in setOf(Destination.NotesHome, Destination.NoteEditor, Destination.Notebooks, Destination.Tags)) }
     var notesShowAll by remember { mutableStateOf(false) }
+    var documentsExpanded by remember { mutableStateOf(state.destination in setOf(Destination.DocumentsHome, Destination.DocumentEditor)) }
+    var documentsShowAll by remember { mutableStateOf(false) }
     var tasksExpanded by remember { mutableStateOf(state.destination in setOf(Destination.Tasks, Destination.Calendar)) }
-    var notebooksExpanded by remember { mutableStateOf(state.destination == Destination.Notebooks) }
+    var creatingFolderScope by remember { mutableStateOf<String?>(null) }
+    var folderName by remember { mutableStateOf("") }
+    var folderIcon by remember { mutableStateOf(SemanticActionId.AppFolder) }
     val publicName = state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Local owner" } }
+    creatingFolderScope?.let { scope ->
+        val documentFolder = scope == "documents"
+        val iconChoices = listOf(
+            SemanticActionId.AppFolder,
+            if (documentFolder) SemanticActionId.AppDocuments else SemanticActionId.AppNotes,
+            SemanticActionId.AppFavorites,
+            SemanticActionId.AppTags,
+            SemanticActionId.AppFiles,
+            SemanticActionId.AppTemplates,
+        )
+        NorfoldDialog(
+            onDismissRequest = { creatingFolderScope = null },
+            title = { Text(if (documentFolder) "New document folder" else "New notes folder") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = folderName,
+                        onValueChange = { folderName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("Folder name") },
+                    )
+                    Text("Folder icon", fontWeight = FontWeight.SemiBold)
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        iconChoices.forEach { choice ->
+                            Surface(
+                                onClick = { folderIcon = choice },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (folderIcon == choice) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                            ) {
+                                SemanticAppIcon(
+                                    choice,
+                                    choice.defaultLabel,
+                                    Modifier.padding(12.dp).size(22.dp),
+                                    if (folderIcon == choice) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            dismissButton = { TextButton(onClick = { creatingFolderScope = null }) { Text("Cancel") } },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.addNotebook(folderName, scope, folderIcon.stableId)
+                        folderName = ""
+                        folderIcon = SemanticActionId.AppFolder
+                        creatingFolderScope = null
+                    },
+                    enabled = folderName.isNotBlank(),
+                ) { Text("Create") }
+            },
+        )
+    }
     Column(
         modifier.fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -359,7 +485,21 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                 Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Doc", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Note", maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Surface(
+                onClick = viewModel::createDocument,
+                modifier = Modifier.weight(1f).height(40.dp),
+                shape = RoundedCornerShape(9.dp),
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(3.dp))
+                    Text("Doc", maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
             Surface(
@@ -372,8 +512,8 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
             ) {
                 Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Task", maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.width(3.dp))
+                    Text("Task", maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -385,34 +525,44 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Spacer(Modifier.height(4.dp))
-            SideNavItem("Dashboard", Icons.Outlined.Home, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
-            SideNavItem("Today", Icons.Outlined.CalendarMonth, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView == "Day") {
+            SideNavItem("Dashboard", SemanticActionId.AppHome, state.destination == Destination.WorkspaceHub) { viewModel.go(Destination.WorkspaceHub) }
+            SideNavItem("Today", SemanticActionId.AppToday, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView == "Day") {
                 viewModel.openTaskCalendar("Day")
             }
-            SideNavItem("Upcoming", Icons.Outlined.CalendarMonth, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView == "Agenda") {
+            SideNavItem("Upcoming", SemanticActionId.AppUpcoming, state.destination == Destination.Tasks && state.settings.taskViewMode == "Calendar" && state.settings.calendarDefaultView == "Agenda") {
                 viewModel.openTaskCalendar("Agenda")
             }
-            SideNavItem("Favorites", Icons.Outlined.Star, state.destination == Destination.NotesHome && state.tab == com.norfold.app.domain.HomeTab.Pinned) {
+            SideNavItem("Favorites", SemanticActionId.AppFavorites, state.destination == Destination.NotesHome && state.tab == com.norfold.app.domain.HomeTab.Pinned) {
                 viewModel.selectTab(com.norfold.app.domain.HomeTab.Pinned)
-                viewModel.go(Destination.NotesHome)
+                viewModel.openNotesLibrary()
             }
 
             SidebarDropdownHeader(
-                label = "Docs",
-                icon = Icons.Outlined.Description,
+                label = "Notes",
+                icon = SemanticActionId.AppNotes,
                 expanded = notesExpanded,
-                selected = state.destination in setOf(Destination.NotesHome, Destination.NoteEditor),
+                selected = state.destination in setOf(Destination.NotesHome, Destination.NoteEditor, Destination.Notebooks, Destination.Tags),
                 onToggle = { notesExpanded = !notesExpanded },
-                onClick = { viewModel.go(Destination.NotesHome) },
+                onClick = viewModel::openNotesLibrary,
             )
             AnimatedVisibility(notesExpanded) {
                 Column(Modifier.padding(start = 22.dp)) {
-                    SideNavItem("All docs", Icons.Outlined.Description, state.destination == Destination.NotesHome) { viewModel.go(Destination.NotesHome) }
-                    SideNavItem("Tags", Icons.Outlined.Tag, state.destination == Destination.Tags) { viewModel.go(Destination.Tags) }
-                    val recents = state.notes.sortedByDescending { it.updatedAt }
+                    SideNavItem("All notes", SemanticActionId.AppNotes, state.destination == Destination.NotesHome && state.selectedNotebookId == null && state.selectedTagId == null) { viewModel.filterByNotebook(null) }
+                    SideNavItem("Manage folders", SemanticActionId.AppFolder, state.destination == Destination.Notebooks) { viewModel.go(Destination.Notebooks) }
+                    SideNavItem("New notes folder", SemanticActionId.Insert, false) {
+                        creatingFolderScope = "notes"
+                    }
+                    state.notebooks.filter { it.scope == "notes" }.forEach { notebook ->
+                        val icon = SemanticActionId.entries.firstOrNull { it.stableId == notebook.iconId } ?: SemanticActionId.AppFolder
+                        SideNavItem(notebook.name, icon, state.selectedNotebookId == notebook.id) {
+                            viewModel.filterByNotebook(notebook.id)
+                        }
+                    }
+                    SideNavItem("Tags", SemanticActionId.AppTags, state.destination == Destination.Tags) { viewModel.go(Destination.Tags) }
+                    val recents = state.notes.filter { it.overlapMode == DocOverlapMode.Reflow }.sortedByDescending { it.updatedAt }
                     val shown = if (notesShowAll) recents else recents.take(3)
                     shown.forEach { note ->
-                        SideNavItem(note.title.ifBlank { "Untitled" }, Icons.Outlined.Description, state.destination == Destination.NoteEditor && state.selectedNote?.id == note.id) {
+                        SideNavItem(note.title.ifBlank { "Untitled note" }, SemanticActionId.AppNotes, state.destination == Destination.NoteEditor && state.selectedNote?.id == note.id) {
                             viewModel.select(note)
                         }
                     }
@@ -423,8 +573,41 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
             }
 
             SidebarDropdownHeader(
+                label = "Documents",
+                icon = SemanticActionId.AppDocuments,
+                expanded = documentsExpanded,
+                selected = state.destination in setOf(Destination.DocumentsHome, Destination.DocumentEditor),
+                onToggle = { documentsExpanded = !documentsExpanded },
+                onClick = viewModel::openDocumentsLibrary,
+            )
+            AnimatedVisibility(documentsExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    SideNavItem("All documents", SemanticActionId.AppDocuments, state.destination == Destination.DocumentsHome) { viewModel.openDocumentsLibrary() }
+                    SideNavItem("New document folder", SemanticActionId.Insert, false) {
+                        creatingFolderScope = "documents"
+                    }
+                    state.notebooks.filter { it.scope == "documents" }.forEach { notebook ->
+                        val icon = SemanticActionId.entries.firstOrNull { it.stableId == notebook.iconId } ?: SemanticActionId.AppFolder
+                        SideNavItem(notebook.name, icon, state.selectedNotebookId == notebook.id) {
+                            viewModel.filterByNotebook(notebook.id)
+                        }
+                    }
+                    val recents = state.notes.filter { it.overlapMode == DocOverlapMode.Bounded }.sortedByDescending { it.updatedAt }
+                    val shown = if (documentsShowAll) recents else recents.take(3)
+                    shown.forEach { note ->
+                        SideNavItem(note.title.ifBlank { "Untitled document" }, SemanticActionId.AppDocuments, state.destination == Destination.DocumentEditor && state.selectedNote?.id == note.id) {
+                            viewModel.select(note)
+                        }
+                    }
+                    if (recents.size > 3) {
+                        SideNavItem(if (documentsShowAll) "Show less" else "…", Icons.Outlined.UnfoldMore, false) { documentsShowAll = !documentsShowAll }
+                    }
+                }
+            }
+
+            SidebarDropdownHeader(
                 label = "Tasks",
-                icon = Icons.Outlined.Check,
+                icon = SemanticActionId.AppTasks,
                 expanded = tasksExpanded,
                 selected = state.destination == Destination.Tasks,
                 onToggle = { tasksExpanded = !tasksExpanded },
@@ -445,28 +628,9 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                 }
             }
 
-            SideNavItem("Files", Icons.Outlined.Folder, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
-            SideNavItem("Chat", Icons.Outlined.ChatBubbleOutline, state.destination == Destination.Chat) { viewModel.go(Destination.Chat) }
-            SideNavItem("Inbox", Icons.Outlined.Folder, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
-
-            SidebarDropdownHeader(
-                label = "Notebooks",
-                icon = Icons.Outlined.Folder,
-                expanded = notebooksExpanded,
-                selected = state.destination == Destination.Notebooks || state.selectedNotebookId != null,
-                onToggle = { notebooksExpanded = !notebooksExpanded },
-                onClick = { viewModel.go(Destination.Notebooks) },
-            )
-            AnimatedVisibility(notebooksExpanded) {
-                Column(Modifier.padding(start = 22.dp)) {
-                    SideNavItem("Manage notebooks", Icons.Outlined.Folder, state.destination == Destination.Notebooks) { viewModel.go(Destination.Notebooks) }
-                    state.notebooks.forEach { notebook ->
-                        SideNavItem(notebook.name, Icons.Outlined.Description, state.selectedNotebookId == notebook.id) {
-                            viewModel.filterByNotebook(notebook.id)
-                        }
-                    }
-                }
-            }
+            SideNavItem("Files", SemanticActionId.AppFiles, state.destination == Destination.Files) { viewModel.go(Destination.Files) }
+            SideNavItem("Chat", SemanticActionId.AppChat, state.destination == Destination.Chat) { viewModel.openChatInbox() }
+            SideNavItem("Inbox", SemanticActionId.AppInbox, state.destination == Destination.Inbox) { viewModel.go(Destination.Inbox) }
 
             Spacer(Modifier.height(4.dp))
             Text(
@@ -477,14 +641,14 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp,
             )
-            SideNavItem("Database", Icons.Outlined.GridView, state.destination == Destination.Database) { viewModel.go(Destination.Database) }
-            SideNavItem("Graph", Icons.Outlined.Difference, state.destination == Destination.Graph) { viewModel.go(Destination.Graph) }
-            SideNavItem("Activity", Icons.Outlined.Star, state.destination == Destination.Activity) { viewModel.go(Destination.Activity) }
-            SideNavItem("Templates", Icons.Outlined.Tag, state.destination == Destination.Templates) { viewModel.go(Destination.Templates) }
+            SideNavItem("Database", SemanticActionId.AppDatabase, state.destination == Destination.Database) { viewModel.go(Destination.Database) }
+            SideNavItem("Graph", SemanticActionId.AppGraph, state.destination == Destination.Graph) { viewModel.go(Destination.Graph) }
+            SideNavItem("Activity", SemanticActionId.AppActivity, state.destination == Destination.Activity) { viewModel.go(Destination.Activity) }
+            SideNavItem("Templates", SemanticActionId.AppTemplates, state.destination == Destination.Templates) { viewModel.go(Destination.Templates) }
 
             Spacer(Modifier.height(6.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-            SideNavItem("Settings", Icons.Outlined.Settings, state.destination == Destination.Settings) { viewModel.go(Destination.Settings) }
+            SideNavItem("Settings", SemanticActionId.AppSettings, state.destination == Destination.Settings) { viewModel.go(Destination.Settings) }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
         Row(
@@ -508,9 +672,243 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
  * Sidebar body while a Doc is open: workspace switcher + the doc's table of contents,
  * replacing the workspace nav entirely. The editor's back button restores the nav.
  */
+private enum class DocSidebarTab { Outline, People, History }
+
+@Composable
+private fun ChatSidebarContent(
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    modifier: Modifier,
+) {
+    var topicsExpanded by remember { mutableStateOf(true) }
+    var peopleExpanded by remember { mutableStateOf(true) }
+    var groupsExpanded by remember { mutableStateOf(true) }
+    var showCreateTopic by remember { mutableStateOf(false) }
+    var showCreateGroup by remember { mutableStateOf(false) }
+    var pendingChannelDelete by remember { mutableStateOf<ChatChannel?>(null) }
+    val currentUsername = state.settings.syncUserName.ifBlank { "you" }
+    val currentDisplay = state.settings.syncPublicName.ifBlank { currentUsername }
+    val activeChannelId = state.activeChatChannelId
+    val topics = state.chatChannels.filter { it.kind == ChatChannelKind.Topic }
+    val groups = state.chatChannels.filter { it.kind == ChatChannelKind.Group }
+    // People come from the synced roster (everyone in the workspace, whether or not they've
+    // spoken), unioned with message authors so anyone who appears in the log but is missing from
+    // a stale roster still shows. Self is pinned on top; the rest sort by display name.
+    val people = remember(state.workspaceMembers, state.chatMessages, currentUsername, currentDisplay) {
+        val byUsername = LinkedHashMap<String, String>()
+        state.workspaceMembers
+            .sortedBy { it.displayName.ifBlank { it.username }.lowercase() }
+            .forEach { member ->
+                byUsername[member.username] = member.displayName.ifBlank { member.username }
+            }
+        state.chatMessages
+            .asReversed()
+            .filter { !it.system }
+            .forEach { msg ->
+                byUsername.getOrPut(msg.authorUsername) {
+                    msg.authorDisplayName.ifBlank { msg.authorUsername }
+                }
+            }
+        // No self row: People lists teammates you can message, and you can't DM yourself.
+        byUsername.remove(currentUsername)
+        byUsername.toList()
+    }
+
+    if (showCreateTopic) {
+        ChatChannelCreateDialog(
+            title = "New channel",
+            label = "Channel name",
+            onDismiss = { showCreateTopic = false },
+            onCreate = { viewModel.createChatTopic(it); showCreateTopic = false },
+        )
+    }
+    if (showCreateGroup) {
+        val contacts by viewModel.socialContacts.collectAsState()
+        NewGroupDialog(
+            contacts = contacts,
+            onDismiss = { showCreateGroup = false },
+            onCreate = { name, memberIds ->
+                viewModel.createChatGroup(name, memberIds)
+                showCreateGroup = false
+            },
+        )
+    }
+    pendingChannelDelete?.let { channel ->
+        val kindLabel = if (channel.kind == ChatChannelKind.Group) "group" else "channel"
+        NorfoldDialog(
+            onDismissRequest = { pendingChannelDelete = null },
+            title = { Text("Delete ${channel.name}?") },
+            text = { Text("Deleting this $kindLabel also deletes all of its messages. This can't be undone.") },
+            dismissButton = { TextButton(onClick = { pendingChannelDelete = null }) { Text("Cancel") } },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.deleteChatChannel(channel.id)
+                    pendingChannelDelete = null
+                }) { Text("Delete") }
+            },
+        )
+    }
+
+    Column(
+        modifier.fillMaxHeight(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        UnifiedSidebarHeader(state, viewModel, searchQuery, onSearchQueryChange)
+        Text(
+            "Chat",
+            Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 2.dp),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (searchQuery.isNotBlank()) {
+            SidebarSearchResults(state, viewModel, searchQuery, Modifier.weight(1f))
+        } else Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Spacer(Modifier.height(4.dp))
+            SidebarDropdownHeader(
+                label = "Channels",
+                icon = SemanticActionId.AppTopics,
+                expanded = topicsExpanded,
+                selected = false,
+                onToggle = { topicsExpanded = !topicsExpanded },
+                onClick = { topicsExpanded = !topicsExpanded },
+            )
+            AnimatedVisibility(topicsExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    // General is the shared, team-synced feed; it's always present and can't be removed.
+                    SideNavItem("General", SemanticActionId.AppTopics, activeChannelId == null) {
+                        viewModel.selectChatChannel(null)
+                    }
+                    topics.forEach { topic ->
+                        ChatChannelRow(
+                            label = topic.name,
+                            icon = SemanticActionId.AppTopics,
+                            selected = activeChannelId == topic.id,
+                            onClick = { viewModel.selectChatChannel(topic.id) },
+                            onDelete = { pendingChannelDelete = topic },
+                        )
+                    }
+                    SideNavItem("New channel", SemanticActionId.Insert, false) { showCreateTopic = true }
+                }
+            }
+            SidebarDropdownHeader(
+                label = "People",
+                icon = SemanticActionId.AppPeople,
+                expanded = peopleExpanded,
+                selected = false,
+                onToggle = { peopleExpanded = !peopleExpanded },
+                onClick = { peopleExpanded = !peopleExpanded },
+            )
+            AnimatedVisibility(peopleExpanded) {
+                Column(Modifier.padding(start = 22.dp)) {
+                    people.forEach { (username, display) ->
+                        val dmChannel = state.chatChannels.firstOrNull {
+                            it.kind == ChatChannelKind.Dm && it.counterpartUsername == username
+                        }
+                        SideNavItem(
+                            display,
+                            SemanticActionId.AppPeople,
+                            dmChannel != null && activeChannelId == dmChannel.id,
+                        ) {
+                            viewModel.openDirectMessage(username, display)
+                        }
+                    }
+                    SideNavItem("Invite people", SemanticActionId.Insert, false) {
+                        viewModel.closeSidebar()
+                        viewModel.goToWorkspaceMembers()
+                    }
+                }
+            }
+            // Groups only earn a section once one exists; "New group" lives at the tail of the
+            // list so an empty section never renders.
+            if (groups.isNotEmpty()) {
+                SidebarDropdownHeader(
+                    label = "Groups",
+                    icon = SemanticActionId.AppGroups,
+                    expanded = groupsExpanded,
+                    selected = false,
+                    onToggle = { groupsExpanded = !groupsExpanded },
+                    onClick = { groupsExpanded = !groupsExpanded },
+                )
+                AnimatedVisibility(groupsExpanded) {
+                    Column(Modifier.padding(start = 22.dp)) {
+                        groups.forEach { group ->
+                            ChatChannelRow(
+                                label = group.name,
+                                icon = SemanticActionId.AppGroups,
+                                selected = activeChannelId == group.id,
+                                onClick = { viewModel.selectChatChannel(group.id) },
+                                onDelete = { pendingChannelDelete = group },
+                            )
+                        }
+                        SideNavItem("New group", SemanticActionId.Insert, false) { showCreateGroup = true }
+                    }
+                }
+            } else {
+                SideNavItem("New group", SemanticActionId.AppGroups, false) { showCreateGroup = true }
+            }
+        }
+    }
+}
+
+/** A channel row with a trailing delete affordance. Used for user-created topics and groups. */
+@Composable
+private fun ChatChannelRow(
+    label: String,
+    icon: SemanticActionId,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) {
+            SideNavItem(label, icon, selected, onClick)
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
+            Icon(
+                Icons.Outlined.Close,
+                contentDescription = "Delete $label",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatChannelCreateDialog(
+    title: String,
+    label: String,
+    onDismiss: () -> Unit,
+    onCreate: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    NorfoldDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text(label) },
+            )
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            Button(onClick = { onCreate(name) }, enabled = name.isNotBlank()) { Text("Create") }
+        },
+    )
+}
+
 @Composable
 private fun DocSidebarContent(
-    documentKey: String,
+    owner: DocumentOwner,
     title: String,
     document: BlockDocument,
     locked: Boolean,
@@ -520,6 +918,23 @@ private fun DocSidebarContent(
     onSearchQueryChange: (String) -> Unit,
     modifier: Modifier,
 ) {
+    val documentKey = owner.documentId
+    val documentOnly = state.destination == Destination.DocumentEditor
+    var selectedTab by remember(documentKey) { mutableStateOf(DocSidebarTab.Outline) }
+    val presence by viewModel.documentPresence.collectAsState()
+    val presenceStatus by viewModel.documentPresenceStatus.collectAsState()
+    val activeBlockId by viewModel.activeDocumentBlockId.collectAsState()
+    val objectId = remember(state.workspaceObjects, owner) {
+        if (owner.type == DocumentOwnerType.Note) {
+            state.workspaceObjects.firstOrNull { it.objectType == WorkspaceObjectType.Note && it.sourceId == owner.id }?.id
+        } else null
+    }
+    val histories = remember(state.workspaceObjectHistory, objectId, activeBlockId) {
+        state.workspaceObjectHistory
+            .filter { objectId != null && it.objectId == objectId }
+            .let { entries -> if (activeBlockId == null) entries else entries.filter { it.blockId == activeBlockId } }
+            .sortedByDescending(WorkspaceObjectHistory::createdAt)
+    }
     Column(
         modifier.fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -533,6 +948,34 @@ private fun DocSidebarContent(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+        if (documentOnly) {
+            DocumentPresenceStrip(presence, presenceStatus, activeBlockId) { viewModel.enterDocumentPresence(owner) }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                DocSidebarTab.entries.forEach { tab ->
+                    val selected = selectedTab == tab
+                    Surface(
+                        modifier = Modifier.weight(1f).clickable { selectedTab = tab },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                        contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    ) {
+                        Row(Modifier.padding(horizontal = 6.dp, vertical = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                when (tab) {
+                                    DocSidebarTab.Outline -> Icons.AutoMirrored.Outlined.FormatListBulleted
+                                    DocSidebarTab.People -> Icons.Outlined.People
+                                    DocSidebarTab.History -> Icons.Outlined.History
+                                },
+                                null,
+                                Modifier.size(15.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(tab.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
         if (searchQuery.isNotBlank()) {
             SidebarSearchResults(state, viewModel, searchQuery, Modifier.weight(1f))
         } else Column(
@@ -540,8 +983,160 @@ private fun DocSidebarContent(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Spacer(Modifier.height(2.dp))
-            DocTableOfContents(documentKey, document, locked, viewModel)
+            when (if (documentOnly) selectedTab else DocSidebarTab.Outline) {
+                DocSidebarTab.Outline -> DocTableOfContents(documentKey, document, locked, viewModel)
+                DocSidebarTab.People -> DocumentPeoplePanel(presence, histories, activeBlockId, presenceStatus)
+                DocSidebarTab.History -> DocumentHistoryPanel(histories, activeBlockId, viewModel)
+            }
         }
+    }
+}
+
+@Composable
+private fun DocumentPresenceStrip(
+    presence: List<com.norfold.app.cloud.DocumentPresenceState>,
+    status: String,
+    activeBlockId: String?,
+    onRetry: () -> Unit,
+) {
+    val relevant = if (activeBlockId == null) presence else presence.filter { it.blockId == activeBlockId || it.blockId == null }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            relevant.take(4).forEach { person -> CollaboratorAvatar(person.displayName, person.color, person.editing) }
+            if (relevant.size > 4) {
+                Surface(Modifier.size(30.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Box(contentAlignment = Alignment.Center) { Text("…", fontWeight = FontWeight.Bold) }
+                }
+            }
+        }
+        Text(
+            if (activeBlockId == null) status else "${relevant.size} on selected block",
+            Modifier.weight(1f).clickable(enabled = status.contains("retry", ignoreCase = true), onClick = onRetry),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun CollaboratorAvatar(name: String, color: Long, active: Boolean) {
+    Surface(
+        Modifier.size(30.dp),
+        shape = CircleShape,
+        color = Color(color),
+        border = androidx.compose.foundation.BorderStroke(if (active) 2.dp else 1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(name.trim().firstOrNull()?.uppercase() ?: "?", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun DocumentPeoplePanel(
+    presence: List<com.norfold.app.cloud.DocumentPresenceState>,
+    histories: List<WorkspaceObjectHistory>,
+    activeBlockId: String?,
+    status: String,
+) {
+    val active = if (activeBlockId == null) presence else presence.filter { it.blockId == activeBlockId }
+    val past = histories.map(WorkspaceObjectHistory::actor).filter(String::isNotBlank).distinct()
+    Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(if (activeBlockId == null) "Active now" else "Active on selected block", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        if (active.isEmpty()) {
+            Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else active.forEach { person ->
+            PersonRow(person.displayName, if (person.editing) "Editing now" else "Viewing", person.color)
+        }
+        HorizontalDivider()
+        Text(if (activeBlockId == null) "Past editors" else "Worked on this block", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        if (past.isEmpty()) {
+            Text("No recorded editors yet", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else past.forEach { actor -> PersonRow(actor, "Recorded in history", collaboratorColor(actor)) }
+    }
+}
+
+@Composable
+private fun PersonRow(name: String, detail: String, color: Long) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        CollaboratorAvatar(name, color, active = false)
+        Column(Modifier.weight(1f)) {
+            Text(name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(detail, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun DocumentHistoryPanel(histories: List<WorkspaceObjectHistory>, activeBlockId: String?, viewModel: DocsViewModel) {
+    Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(if (activeBlockId == null) "Document history" else "Selected block history", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        if (histories.isEmpty()) {
+            Text("No changes recorded yet", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else histories.forEach { entry -> DocumentHistoryRow(entry) { viewModel.requestBlockRestore(entry) } }
+    }
+}
+
+@Composable
+private fun DocumentHistoryRow(entry: WorkspaceObjectHistory, onRestore: () -> Unit) {
+    var expanded by remember(entry.id) { mutableStateOf(false) }
+    Surface(
+        Modifier.fillMaxWidth().clickable { expanded = !expanded },
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CollaboratorAvatar(entry.actor, collaboratorColor(entry.actor), active = false)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(entry.summary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("${entry.actor} · ${historyRelativeTime(entry.createdAt)}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, if (expanded) "Collapse change" else "Expand change", Modifier.size(18.dp))
+            }
+            if (expanded) {
+                if (entry.beforeValue.isNotBlank()) Text("Before · ${historyValuePreview(entry.beforeValue)}", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
+                if (entry.afterValue.isNotBlank()) Text("After · ${historyValuePreview(entry.afterValue)}", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                if (entry.blockId != null) {
+                    Surface(
+                        modifier = Modifier.clickable(onClick = onRestore),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ) {
+                        Text("Restore this version", Modifier.padding(horizontal = 10.dp, vertical = 7.dp), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun collaboratorColor(name: String): Long {
+    val colors = longArrayOf(0xFF8B5CF6, 0xFF2563EB, 0xFF0D9488, 0xFFDB2777, 0xFFEA580C, 0xFF7C3AED)
+    return colors[(name.hashCode() and Int.MAX_VALUE) % colors.size]
+}
+
+private fun historyValuePreview(value: String): String =
+    runCatching { BlockDocumentJson.decodeBlock(value).plainText().ifBlank { "Structured block" } }
+        .getOrElse { value }
+        .replace('\n', ' ')
+        .take(180)
+
+private fun historyRelativeTime(createdAt: Long): String {
+    val delta = (System.currentTimeMillis() - createdAt).coerceAtLeast(0L)
+    return when {
+        delta < 60_000L -> "just now"
+        delta < 3_600_000L -> "${delta / 60_000L}m ago"
+        delta < 86_400_000L -> "${delta / 3_600_000L}h ago"
+        else -> "${delta / 86_400_000L}d ago"
     }
 }
 
@@ -770,7 +1365,7 @@ private fun DocTableOfContents(documentKey: String, document: BlockDocument, loc
                             )
                         }
                     }
-                    DropdownMenu(expanded = menuFor == id, onDismissRequest = { menuFor = null }) {
+                    NorfoldDropdownMenu(expanded = menuFor == id, onDismissRequest = { menuFor = null }) {
                         DropdownMenuItem(text = { Text("Move up") }, onClick = {
                             menuFor = null
                             viewModel.requestSectionAction(id, DocSectionAction.MoveUp)
@@ -806,6 +1401,30 @@ private fun SidebarDropdownHeader(
     selected: Boolean,
     onToggle: () -> Unit,
     onClick: () -> Unit,
+) = SidebarDropdownHeader(label, expanded, selected, onToggle, onClick) { tint ->
+    Icon(icon, null, Modifier.size(22.dp), tint = tint)
+}
+
+@Composable
+private fun SidebarDropdownHeader(
+    label: String,
+    icon: SemanticActionId,
+    expanded: Boolean,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onClick: () -> Unit,
+) = SidebarDropdownHeader(label, expanded, selected, onToggle, onClick) { tint ->
+    SemanticAppIcon(icon, null, Modifier.size(22.dp), tint)
+}
+
+@Composable
+private fun SidebarDropdownHeader(
+    label: String,
+    expanded: Boolean,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onClick: () -> Unit,
+    iconContent: @Composable (Color) -> Unit,
 ) {
     Row(
         Modifier
@@ -816,7 +1435,7 @@ private fun SidebarDropdownHeader(
             .padding(start = 14.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, Modifier.size(22.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        iconContent(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(12.dp))
         Text(
             label,
@@ -825,7 +1444,7 @@ private fun SidebarDropdownHeader(
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
-        IconButton(onClick = onToggle, modifier = Modifier.size(34.dp)) {
+        IconButton(onClick = onToggle, modifier = Modifier.size(40.dp)) {
             Icon(
                 if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.UnfoldMore,
                 if (expanded) "Collapse $label" else "Expand $label",
@@ -837,7 +1456,20 @@ private fun SidebarDropdownHeader(
 }
 
 @Composable
-private fun SideNavItem(label: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+private fun SideNavItem(label: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) =
+    SideNavItem(label, selected, onClick) { tint -> Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp)) }
+
+@Composable
+private fun SideNavItem(label: String, icon: SemanticActionId, selected: Boolean, onClick: () -> Unit) =
+    SideNavItem(label, selected, onClick) { tint -> SemanticAppIcon(icon, null, Modifier.size(22.dp), tint) }
+
+@Composable
+private fun SideNavItem(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    iconContent: @Composable (Color) -> Unit,
+) {
     val bgAlpha by animateFloatAsState(
         targetValue = if (selected) 1f else 0f,
         animationSpec = tween(200, easing = FastOutSlowInEasing),
@@ -880,7 +1512,7 @@ private fun SideNavItem(label: String, icon: ImageVector, selected: Boolean, onC
                 .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(icon, null, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+            iconContent(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(12.dp))
             Text(
                 label,

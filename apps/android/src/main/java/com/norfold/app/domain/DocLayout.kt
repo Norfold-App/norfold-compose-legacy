@@ -6,6 +6,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import java.util.UUID
 import kotlin.math.ceil
 
 /**
@@ -33,6 +34,9 @@ fun docOverlapModeOf(raw: String?): DocOverlapMode =
 @Serializable
 enum class DocPagePreset { A4, Letter, Legal, Custom }
 
+@Serializable
+enum class DocumentLabelMode { UseGlobal, Adaptive, IconsOnly, IconsAndText }
+
 /**
  * A fixed-size, exportable artboard. Dimensions use document points (72 points per inch), which
  * map directly to PDF/CSS print units and remain independent of device density.
@@ -43,16 +47,73 @@ data class DocCanvasSpec(
     val width: Float = 595f,
     val height: Float = 842f,
     val pageCount: Int = 1,
+    /** Stable identities used by history, page reordering, and future collaboration operations. */
+    val pageIds: List<String> = emptyList(),
     val pageGap: Float = 24f,
+    val toolbarLabelMode: DocumentLabelMode = DocumentLabelMode.UseGlobal,
 ) {
-    fun normalized(): DocCanvasSpec = copy(
-        width = width.coerceIn(240f, 2400f),
-        height = height.coerceIn(240f, 3400f),
-        pageCount = pageCount.coerceIn(1, 100),
-        pageGap = pageGap.coerceIn(0f, 96f),
-    )
+    fun normalized(): DocCanvasSpec {
+        val count = pageCount.coerceIn(1, 100)
+        val stableIds = pageIds
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinct()
+            .take(count)
+            .toMutableList()
+        while (stableIds.size < count) {
+            val ordinal = stableIds.size + 1
+            var candidate = "legacy-page-$ordinal"
+            var suffix = 2
+            while (candidate in stableIds) candidate = "legacy-page-$ordinal-${suffix++}"
+            stableIds += candidate
+        }
+        return copy(
+            width = width.coerceIn(240f, 2400f),
+            height = height.coerceIn(240f, 3400f),
+            pageCount = count,
+            pageIds = stableIds,
+            pageGap = pageGap.coerceIn(0f, 96f),
+        )
+    }
+
+    fun addPage(): DocCanvasSpec {
+        val current = normalized()
+        if (current.pageCount >= 100) return current
+        return current.copy(
+            pageCount = current.pageCount + 1,
+            pageIds = current.pageIds + "page-${UUID.randomUUID()}",
+        ).normalized()
+    }
+
+    fun removePage(index: Int): DocCanvasSpec {
+        val current = normalized()
+        if (current.pageCount <= 1) return current
+        val resolved = index.coerceIn(0, current.pageCount - 1)
+        return current.copy(
+            pageCount = current.pageCount - 1,
+            pageIds = current.pageIds.filterIndexed { pageIndex, _ -> pageIndex != resolved },
+        ).normalized()
+    }
+
+    fun movePage(from: Int, to: Int): DocCanvasSpec {
+        val current = normalized()
+        val source = from.coerceIn(0, current.pageCount - 1)
+        val target = to.coerceIn(0, current.pageCount - 1)
+        if (source == target) return current
+        val ids = current.pageIds.toMutableList()
+        val moved = ids.removeAt(source)
+        ids.add(target, moved)
+        return current.copy(pageIds = ids)
+    }
 
     val totalHeight: Float get() = height * pageCount + pageGap * (pageCount - 1)
+
+    fun pageOrigin(pageIndex: Int): Float = pageIndex.coerceIn(0, pageCount - 1) * (height + pageGap)
+
+    fun rawPageIndexOf(placement: FreeformPlacement): Int =
+        (placement.y / (height + pageGap)).toInt().coerceAtLeast(0)
+
+    fun pageIndexOf(placement: FreeformPlacement): Int = rawPageIndexOf(placement).coerceIn(0, pageCount - 1)
 
     fun pagesRequiredFor(layout: Map<String, FreeformPlacement>): Int {
         val bottom = layout.values.maxOfOrNull { it.y + it.height } ?: 0f

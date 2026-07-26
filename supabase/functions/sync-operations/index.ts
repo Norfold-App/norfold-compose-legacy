@@ -1,4 +1,4 @@
-import { corsHeaders, json } from "../_shared/http.ts";
+import { corsHeaders, json, requiredEnv } from "../_shared/http.ts";
 import { authenticatedClient, requireUser } from "../_shared/supabase.ts";
 
 type SyncOperation = {
@@ -44,9 +44,26 @@ Deno.serve(async (request) => {
       if (error) throw error;
       results.push(data);
     }
+    // Object triggers have now committed durable delivery rows. Dispatch is best-effort here:
+    // a temporary FCM failure stays queued and the scheduled/manual dispatcher can retry it.
+    const dispatchResponse = await fetch(`${requiredEnv("SUPABASE_URL")}/functions/v1/notification-dispatch`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${requiredEnv("SUPABASE_SERVICE_ROLE_KEY")}` },
+    });
+    if (!dispatchResponse.ok) console.error("notification dispatch deferred:", dispatchResponse.status);
     return json({ results });
   } catch (error) {
+    if (error instanceof SyntaxError) return json({ error: "Invalid JSON payload" }, 400);
     const message = error instanceof Error ? error.message : "Sync failed";
-    return json({ error: message }, message.startsWith("VERSION_CONFLICT") ? 409 : 401);
+    // Conflict and channel-privacy markers are part of the client contract and stay verbatim;
+    // anything else is an internal failure whose detail belongs in the function log, not the
+    // response. The old blanket 401 also mislabeled every failure as an auth problem.
+    if (message.startsWith("VERSION_CONFLICT")) return json({ error: message }, 409);
+    if (message.includes("CHANNEL_ACCESS_DENIED")) return json({ error: "CHANNEL_ACCESS_DENIED" }, 403);
+    if (message === "Authentication required" || message === "Invalid authentication token") {
+      return json({ error: message }, 401);
+    }
+    console.error("sync-operations failed:", message);
+    return json({ error: "Sync failed" }, 500);
   }
 });

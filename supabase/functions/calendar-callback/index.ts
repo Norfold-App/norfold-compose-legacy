@@ -37,6 +37,9 @@ async function exchangeCode(provider: Provider, code: string, redirectUri: strin
   return result as TokenResponse;
 }
 
+// The payload is decoded without signature verification: the token arrives over TLS straight
+// from the provider's token endpoint, and the value is only an opaque dedup key for
+// integration_accounts (user_id,provider,provider_subject) — never an authentication input.
 function jwtSubject(idToken?: string): string {
   if (!idToken) return "calendar-account";
   const payload = idToken.split(".")[1];
@@ -74,7 +77,9 @@ Deno.serve(async (request) => {
     if (databaseError) throw databaseError;
     return Response.redirect(`norfold://integrations/calendar?provider=${encodeURIComponent(state.provider)}&status=connected`, 302);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Calendar connection failed";
-    return Response.redirect(`norfold://integrations/calendar?status=error&message=${encodeURIComponent(message)}`, 302);
+    // Error detail stays in the function log; echoing it into the redirect leaked token
+    // exchange and database internals into a URL any app on the device could observe.
+    console.error("calendar-callback failed:", error instanceof Error ? error.message : error);
+    return Response.redirect("norfold://integrations/calendar?status=error", 302);
   }
 });

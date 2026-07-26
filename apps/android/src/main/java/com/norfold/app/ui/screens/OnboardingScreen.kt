@@ -56,13 +56,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,13 +81,34 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.norfold.app.cloud.NorfoldSupabase
+import com.norfold.app.domain.AppIconFamily
+import com.norfold.app.domain.BackupCategory
+import com.norfold.app.domain.ControlLabelMode
+import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.ThemeMode
+import com.norfold.app.data.GoogleDriveBackupManifest
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.EmailAuthPhase
+import com.norfold.app.ui.EmailAuthOperation
+import com.norfold.app.ui.OnboardingSetupPreferences
+import com.norfold.app.ui.AccountCoordinatorState
+import com.norfold.app.ui.CloudAuthProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.norfold.app.BuildConfig
-import com.norfold.app.branding.NorfoldLogo
+import com.norfold.app.branding.NorfoldGlyphDrawIn
+import com.norfold.app.branding.NorfoldInk
+import com.norfold.app.branding.NorfoldInkOnDark
+import com.norfold.app.branding.NorfoldWordmarkText
+import com.norfold.app.branding.norfoldRiseIn
+import com.norfold.app.ui.components.popIn
+import com.norfold.app.ui.components.GoogleGMark
+import com.norfold.app.ui.components.NorfoldDialog
+import androidx.compose.ui.graphics.luminance
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 private const val OnboardingPreferences = "norfold_onboarding_draft"
 
@@ -95,8 +116,10 @@ private const val OnboardingPreferences = "norfold_onboarding_draft"
 fun NorfoldOnboardingScreen(
     state: DocsUiState,
     viewModel: DocsViewModel,
+    externalAuthBusy: Boolean = false,
     onRestoreBackup: (String) -> Unit = {},
     onGoogleSignIn: () -> Unit = {},
+    onConnectGoogleDrive: () -> Unit = {},
     onEmailSignIn: (String, String, Boolean) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
@@ -108,19 +131,71 @@ fun NorfoldOnboardingScreen(
     var workspaceName by rememberSaveable { mutableStateOf(preferences.getString("workspace", "My Workspace") ?: "My Workspace") }
     var workspaceTemplate by rememberSaveable { mutableStateOf(preferences.getString("template", "Start empty") ?: "Start empty") }
     var collaborationMode by rememberSaveable { mutableStateOf(preferences.getString("collaboration", "Just me for now") ?: "Just me for now") }
+    var inviteCode by rememberSaveable { mutableStateOf("") }
     var avatarUri by rememberSaveable { mutableStateOf(preferences.getString("avatar_uri", "") ?: "") }
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var backupPassword by rememberSaveable { mutableStateOf("") }
+    var backupFrequency by rememberSaveable { mutableStateOf(preferences.getString("backup_frequency", "Daily") ?: "Daily") }
+    var restoreWorkspaceContent by rememberSaveable { mutableStateOf(true) }
+    var restoreConversations by rememberSaveable { mutableStateOf(true) }
+    var restoreDeviceSettings by rememberSaveable { mutableStateOf(true) }
+    var restoredFromCloud by rememberSaveable { mutableStateOf(false) }
+    var confirmStartFresh by rememberSaveable { mutableStateOf(false) }
     var signUp by rememberSaveable { mutableStateOf(false) }
     var emailUpdates by rememberSaveable { mutableStateOf(false) }
     var reminders by rememberSaveable { mutableStateOf(true) }
-    var productTips by rememberSaveable { mutableStateOf(false) }
-    val authPhase by viewModel.emailAuthPhase.collectAsState()
+    var productTips by rememberSaveable { mutableStateOf(true) }
+    var useRecommendedDefaults by rememberSaveable { mutableStateOf(preferences.getBoolean("recommended_defaults", true)) }
+    var isFinishing by remember { mutableStateOf(false) }
+    var setupTheme by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_theme", null), ThemeMode.System)) }
+    var setupLabels by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_labels", null), ControlLabelMode.Adaptive)) }
+    var setupAppIcons by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_app_icons", null), AppIconFamily.MaterialSymbolsRounded)) }
+    var setupEditorIcons by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_editor_icons", null), EditorIconFamily.UseApp)) }
+    var setupFontScale by rememberSaveable { mutableStateOf(preferences.getFloat("setup_font_scale", 1f).coerceIn(0.5f, 2f)) }
+    var setupUiScale by rememberSaveable { mutableStateOf(preferences.getFloat("setup_ui_scale", 1f).coerceIn(0.5f, 2f)) }
+    var setupToolbarScale by rememberSaveable { mutableStateOf(preferences.getFloat("setup_toolbar_scale", 1f).coerceIn(0.5f, 2f)) }
+    var setupReduceMotion by rememberSaveable { mutableStateOf(preferences.getBoolean("setup_reduce_motion", false)) }
+    val authPhase by viewModel.emailAuthPhase.collectAsStateWithLifecycle()
+    val authOperation by viewModel.emailAuthOperation.collectAsStateWithLifecycle()
+    val googleProfileSuggestion by viewModel.googleProfileSuggestion.collectAsStateWithLifecycle()
+    val accountCoordinatorState by viewModel.accountCoordinatorState.collectAsStateWithLifecycle()
+    val cloudAuthProvider by viewModel.cloudAuthProvider.collectAsStateWithLifecycle()
+    val driveBackups by viewModel.driveBackups.collectAsStateWithLifecycle()
+    val authBusy = authOperation != EmailAuthOperation.Idle || externalAuthBusy
+    var resendCooldownSeconds by remember { mutableStateOf(viewModel.emailResendCooldownRemainingSeconds()) }
+    LaunchedEffect(authPhase, authBusy) {
+        do {
+            resendCooldownSeconds = viewModel.emailResendCooldownRemainingSeconds()
+            if (resendCooldownSeconds > 0L) delay(250L)
+        } while (resendCooldownSeconds > 0L)
+    }
     LaunchedEffect(authPhase) {
         if (authPhase == EmailAuthPhase.Completed) {
             viewModel.consumeEmailAuthCompleted()
-            if (step <= 3) step = 5
+            if (step <= 1) step = 3
+        }
+    }
+    LaunchedEffect(googleProfileSuggestion) {
+        val profile = googleProfileSuggestion ?: return@LaunchedEffect
+        val suggestedFullName = profile.fullName.trim()
+        val suggestedNickname = profile.nickname.trim()
+        val suggestedAvatar = profile.avatarUri.orEmpty().trim()
+        if (fullName.isBlank() && suggestedFullName.isNotBlank()) fullName = suggestedFullName
+        if (displayName.isBlank() && suggestedNickname.isNotBlank()) displayName = suggestedNickname
+        if (avatarUri.isBlank() && suggestedAvatar.isNotBlank()) avatarUri = suggestedAvatar
+        if (step <= 1) step = 3
+        viewModel.consumeGoogleProfileSuggestion()
+    }
+    LaunchedEffect(step, cloudAuthProvider, state.googleDriveConnected) {
+        if (step == 8 && cloudAuthProvider == CloudAuthProvider.Google && !state.googleDriveConnected) {
+            onConnectGoogleDrive()
+        }
+    }
+    LaunchedEffect(accountCoordinatorState) {
+        if (accountCoordinatorState == AccountCoordinatorState.Ready && step == 8) {
+            restoredFromCloud = true
+            step = 9
         }
     }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -130,7 +205,12 @@ fun NorfoldOnboardingScreen(
         }
     }
 
-    LaunchedEffect(step, fullName, displayName, workspaceName, workspaceTemplate, collaborationMode) {
+    LaunchedEffect(
+        step, fullName, displayName, workspaceName, workspaceTemplate, collaborationMode, avatarUri,
+        useRecommendedDefaults, setupTheme, setupLabels, setupAppIcons, setupEditorIcons,
+        setupFontScale, setupUiScale, setupToolbarScale, setupReduceMotion,
+        backupFrequency,
+    ) {
         preferences.edit()
             .putInt("step", step)
             .putString("full_name", fullName)
@@ -139,6 +219,16 @@ fun NorfoldOnboardingScreen(
             .putString("template", workspaceTemplate)
             .putString("collaboration", collaborationMode)
             .putString("avatar_uri", avatarUri)
+            .putBoolean("recommended_defaults", useRecommendedDefaults)
+            .putString("setup_theme", setupTheme.name)
+            .putString("setup_labels", setupLabels.name)
+            .putString("setup_app_icons", setupAppIcons.name)
+            .putString("setup_editor_icons", setupEditorIcons.name)
+            .putFloat("setup_font_scale", setupFontScale)
+            .putFloat("setup_ui_scale", setupUiScale)
+            .putFloat("setup_toolbar_scale", setupToolbarScale)
+            .putBoolean("setup_reduce_motion", setupReduceMotion)
+            .putString("backup_frequency", backupFrequency)
             .apply()
     }
 
@@ -153,15 +243,18 @@ fun NorfoldOnboardingScreen(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    if (step > 0) IconButton(onClick = { step-- }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                    // Restore (step 2) is entered from Welcome, not Sign in — back returns there.
+                    if (step > 0) IconButton(onClick = { step = if (step == 2) 0 else step - 1 }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
                     else Spacer(Modifier.size(48.dp))
                     Spacer(Modifier.weight(1f))
-                    if (step in 1..3) TextButton(onClick = { step = 5 }) { Text("Skip") }
+                    if (step == 1) TextButton(onClick = { step = 3 }) { Text("Skip") }
                 }
                 AnimatedContent(
                     targetState = step,
                     transitionSpec = {
-                        if (targetState > initialState) {
+                        if (state.settings.reduceMotion) {
+                            fadeIn(tween(90)) togetherWith fadeOut(tween(90))
+                        } else if (targetState > initialState) {
                             (slideInHorizontally(tween(280)) { it / 4 } + fadeIn(tween(220))) togetherWith
                                 (slideOutHorizontally(tween(220)) { -it / 5 } + fadeOut(tween(180)))
                         } else {
@@ -181,64 +274,148 @@ fun NorfoldOnboardingScreen(
                 when (visibleStep) {
                     0 -> WelcomeStep(
                         onNext = { step = 1 },
-                        onRestore = { step = 4 },
+                        onRestore = { step = 2 },
                         onGoogle = onGoogleSignIn,
-                        onOffline = { step = 5 },
+                        onOffline = { step = 3 },
                         onTerms = { uriHandler.openUri(BuildConfig.TERMS_URL) },
                         onPrivacy = { uriHandler.openUri(BuildConfig.PRIVACY_URL) },
                     )
-                    1 -> ProductStep(
-                        title = "Everything in one place",
-                        subtitle = "Docs, tasks, calendar, files, and chat - all connected to keep you in flow.",
-                        preview = { WorkspacePreview() },
-                        footerTitle = "Your data, your control",
-                        footer = "Everything is private and secure. You're always in control.",
-                    )
-                    2 -> ProductStep(
-                        title = "Work your way",
-                        subtitle = "Customize views, organize your workspace, and build habits that stick.",
-                        preview = { WorkflowPreview() },
-                        footerTitle = "Made for deep work",
-                        footer = "Distraction-free, offline-ready, and built to help you focus.",
-                    )
-                    3 -> when (val phase = authPhase) {
-                        is EmailAuthPhase.AwaitSignupCode -> EmailCodeStep(phase.email, recovery = false, viewModel::verifyEmailCode, viewModel::resendEmailCode, viewModel::cancelEmailAuth)
-                        is EmailAuthPhase.AwaitRecoveryCode -> EmailCodeStep(phase.email, recovery = true, viewModel::verifyEmailCode, viewModel::resendEmailCode, viewModel::cancelEmailAuth)
-                        is EmailAuthPhase.AwaitNewPassword -> NewPasswordStep(viewModel::completePasswordReset)
-                        else -> SignInStep(email, { email = it }, password, { password = it }, signUp, { signUp = it }, onGoogleSignIn, onEmailSignIn, { viewModel.beginPasswordReset(email.trim()) }) { step = 5 }
+                    1 -> when (val phase = authPhase) {
+                        is EmailAuthPhase.AwaitSignupCode -> EmailCodeStep(phase.email, recovery = false, authBusy, resendCooldownSeconds, viewModel::verifyEmailCode, viewModel::resendEmailCode, viewModel::cancelEmailAuth)
+                        is EmailAuthPhase.AwaitRecoveryCode -> EmailCodeStep(phase.email, recovery = true, authBusy, resendCooldownSeconds, viewModel::verifyEmailCode, viewModel::resendEmailCode, viewModel::cancelEmailAuth)
+                        is EmailAuthPhase.AwaitNewPassword -> NewPasswordStep(authBusy, viewModel::completePasswordReset)
+                        else -> SignInStep(email, { email = it }, password, { password = it }, signUp, { signUp = it }, authBusy, onGoogleSignIn, onEmailSignIn, { viewModel.beginPasswordReset(email.trim()) }) { step = 3 }
                     }
-                    4 -> RestoreStep(backupPassword, { backupPassword = it }) { onRestoreBackup(backupPassword) }
-                    5 -> ProfileStep(fullName, { fullName = it }, displayName, { displayName = it }, avatarUri) {
+                    2 -> RestoreStep(backupPassword, { backupPassword = it }) { onRestoreBackup(backupPassword) }
+                    3 -> ProfileStep(fullName, { fullName = it }, displayName, { displayName = it }, avatarUri) {
                         avatarPicker.launch(arrayOf("image/*"))
                     }
-                    6 -> WorkspaceStep(workspaceName, { workspaceName = it }, workspaceTemplate) { workspaceTemplate = it }
-                    7 -> CollaborationStep(collaborationMode) { collaborationMode = it }
-                    8 -> NotificationStep(emailUpdates, { emailUpdates = it }, reminders, { reminders = it }, productTips, { productTips = it })
-                    else -> CompletionStep(workspaceName)
+                    4 -> WorkspaceStep(workspaceName, { workspaceName = it }, workspaceTemplate) { workspaceTemplate = it }
+                    5 -> CollaborationStep(
+                        collaborationMode,
+                        inviteCode,
+                        { inviteCode = it },
+                        signedIn = remember(visibleStep) { NorfoldSupabase.isSignedIn() },
+                        onSignIn = { step = 1 },
+                    ) { collaborationMode = it }
+                    6 -> PreferencesStep(
+                        useRecommendedDefaults = useRecommendedDefaults,
+                        onRecommended = { useRecommendedDefaults = it },
+                        theme = setupTheme,
+                        onTheme = { setupTheme = it },
+                        labels = setupLabels,
+                        onLabels = { setupLabels = it },
+                        appIcons = setupAppIcons,
+                        onAppIcons = { setupAppIcons = it },
+                        editorIcons = setupEditorIcons,
+                        onEditorIcons = { setupEditorIcons = it },
+                        fontScale = setupFontScale,
+                        onFontScale = { setupFontScale = it },
+                        uiScale = setupUiScale,
+                        onUiScale = { setupUiScale = it },
+                        toolbarScale = setupToolbarScale,
+                        onToolbarScale = { setupToolbarScale = it },
+                        reduceMotion = setupReduceMotion,
+                        onReduceMotion = { setupReduceMotion = it },
+                    )
+                    7 -> NotificationStep(emailUpdates, { emailUpdates = it }, reminders, { reminders = it }, productTips, { productTips = it })
+                    8 -> BackupSetupStep(
+                        signedIn = NorfoldSupabase.isSignedIn(),
+                        googleProvider = cloudAuthProvider == CloudAuthProvider.Google,
+                        driveConnected = state.googleDriveConnected,
+                        coordinatorState = accountCoordinatorState,
+                        backups = driveBackups,
+                        frequency = backupFrequency,
+                        onFrequency = { backupFrequency = it },
+                        secret = backupPassword,
+                        onSecret = { backupPassword = it },
+                        workspaceContent = restoreWorkspaceContent,
+                        onWorkspaceContent = { restoreWorkspaceContent = it },
+                        conversations = restoreConversations,
+                        onConversations = { restoreConversations = it },
+                        deviceSettings = restoreDeviceSettings,
+                        onDeviceSettings = { restoreDeviceSettings = it },
+                        onConnectDrive = onConnectGoogleDrive,
+                        onRefresh = viewModel::discoverGoogleDriveBackups,
+                        onRestore = { manifest ->
+                            viewModel.restoreGoogleDriveBackup(
+                                manifest,
+                                backupPassword,
+                                buildSet {
+                                    if (restoreWorkspaceContent) add(BackupCategory.WorkspaceContent)
+                                    if (restoreConversations) add(BackupCategory.ConversationsAndFiles)
+                                    if (restoreDeviceSettings) add(BackupCategory.DeviceSettings)
+                                },
+                            )
+                        },
+                    )
+                    else -> CompletionStep(if (restoredFromCloud) "Restored workspace" else workspaceName)
                 }
                 }
                 }
             }
-            if (step in 1..2 || step in 5..8) {
-                OnboardingPrimaryButton(if (step == 8) "Continue" else "Next") { step++ }
+            if (step in 3..8) {
+                OnboardingPrimaryButton(if (step >= 7) "Continue" else "Next") {
+                    if (step == 8 && driveBackups.isNotEmpty()) {
+                        confirmStartFresh = true
+                    } else {
+                        if (step == 8) viewModel.startFreshAfterBackupDiscovery()
+                        step++
+                    }
+                }
             } else if (step == 9) {
-                OnboardingPrimaryButton("Go to workspace") {
-                    preferences.edit().clear().apply()
+                OnboardingPrimaryButton("Go to workspace", loading = isFinishing) {
+                    isFinishing = true
                     viewModel.finishOnboarding(
                         workspaceName = workspaceName,
                         purpose = collaborationMode,
-                        themeMode = ThemeMode.System,
+                        setup = OnboardingSetupPreferences(
+                            useRecommendedDefaults = useRecommendedDefaults,
+                            themeMode = setupTheme,
+                            appLabelMode = setupLabels,
+                            appIconFamily = setupAppIcons,
+                            editorIconFamily = setupEditorIcons,
+                            fontScale = setupFontScale,
+                            uiScale = setupUiScale,
+                            editorToolbarScale = setupToolbarScale,
+                            reduceMotion = setupReduceMotion,
+                        ),
                         fullName = fullName,
                         displayName = displayName,
                         template = workspaceTemplate,
                         emailUpdates = emailUpdates,
                         reminders = reminders,
+                        productTips = productTips,
+                        backupFrequency = backupFrequency,
+                        preserveRestoredWorkspace = restoredFromCloud,
                         avatarUri = avatarUri,
+                        inviteToken = inviteCode.trim().takeIf { collaborationMode == "Join a team" && it.isNotBlank() },
+                        openMembers = collaborationMode == "Invite people",
+                        // Wizard state is dropped only after onboarding is durably persisted, so a
+                        // failure mid-finish restarts with everything the user already entered.
+                        onFinished = { preferences.edit().clear().apply() },
                     )
                 }
             }
-            if (step != 4) StepDots(step)
+            if (step != 2) StepDots(step)
         }
+    }
+    if (confirmStartFresh) {
+        NorfoldDialog(
+            onDismissRequest = { confirmStartFresh = false },
+            title = { Text("Start without restoring?") },
+            text = {
+                Text("A backup was found. Starting fresh keeps that backup in Google Drive, but none of its selected data will be added to this device.")
+            },
+            dismissButton = { TextButton(onClick = { confirmStartFresh = false }) { Text("Review backup") } },
+            confirmButton = {
+                Button(onClick = {
+                    confirmStartFresh = false
+                    viewModel.startFreshAfterBackupDiscovery()
+                    step = 9
+                }) { Text("Start fresh") }
+            },
+        )
     }
 }
 
@@ -259,10 +436,19 @@ private fun WelcomeStep(
             Text("DOCS  |  CALENDAR  |  CHAT  |  TASKS", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
         }
     }
-    OnboardingPrimaryButton("Get started", onNext)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedButton(onClick = onRestore, Modifier.weight(1f).height(50.dp)) { Icon(Icons.Outlined.Restore, null); Text(" Restore backup") }
-        OutlinedButton(onClick = onGoogle, Modifier.weight(1f).height(50.dp)) { Text("G", color = Color(0xFF4285F4), fontWeight = FontWeight.Black); Text("  Sign in with Google") }
+    OnboardingPrimaryButton("Get started", onClick = onNext)
+    // Stacked full-width so the label never wraps against its icon on narrow screens.
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedButton(onClick = onRestore, Modifier.fillMaxWidth().height(52.dp)) {
+            Icon(Icons.Outlined.Restore, null, Modifier.size(20.dp))
+            Spacer(Modifier.size(10.dp))
+            Text("Restore backup", maxLines = 1)
+        }
+        OutlinedButton(onClick = onGoogle, Modifier.fillMaxWidth().height(52.dp)) {
+            GoogleGMark(size = 18.dp)
+            Spacer(Modifier.size(10.dp))
+            Text("Sign in with Google", maxLines = 1)
+        }
     }
     Text("What you can do", Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold, fontSize = 18.sp)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -287,73 +473,28 @@ private fun WelcomeStep(
 }
 
 @Composable
-private fun ProductStep(title: String, subtitle: String, preview: @Composable () -> Unit, footerTitle: String, footer: String) {
-    Text(title, fontSize = 30.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center)
-    Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, fontSize = 16.sp, lineHeight = 22.sp)
-    preview()
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .3f)) {
-        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Icon(Icons.Outlined.CheckCircle, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
-            Column { Text(footerTitle, fontWeight = FontWeight.Bold); Text(footer, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
-        }
-    }
-}
-
-@Composable
-private fun WorkspacePreview() {
-    Surface(Modifier.fillMaxWidth().height(360.dp), shape = RoundedCornerShape(22.dp), border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = .18f))) {
-        Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Column(Modifier.widthIn(min = 92.dp).fillMaxSize().weight(.32f), verticalArrangement = Arrangement.spacedBy(15.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    NorfoldLogo(22.dp)
-                    Text("Norfold", fontWeight = FontWeight.Bold)
-                }
-                listOf("Home", "Docs", "Tasks", "Calendar", "Chat", "Files", "More").forEach { Text(it, color = if (it == "Home") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-            }
-            Column(Modifier.weight(.68f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) { Text("Search everything", Modifier.padding(10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("Docs\n12", "Tasks\n8", "Events\n5", "Messages\n3").forEach { PreviewTile(it, Modifier.weight(1f)) } }
-                PreviewPanel("Today's tasks", listOf("Draft project roadmap", "Polish Android workspace"))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PreviewPanel("Upcoming events", listOf("Team sync", "Design review"), Modifier.weight(1f)); PreviewPanel("Recent docs", listOf("Welcome to Norfold", "Meeting notes"), Modifier.weight(1f)) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorkflowPreview() {
-    Surface(Modifier.fillMaxWidth().height(360.dp), shape = RoundedCornerShape(22.dp), border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = .18f))) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { listOf("Table", "Board", "Calendar", "List").forEach { Text(it, color = if (it == "Table") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold, fontSize = 12.sp) } }
-            PreviewPanel("To do", listOf("Design onboarding flow", "Write launch plan", "Review feedback"))
-            Text("Calendar", fontWeight = FontWeight.Bold)
-            Text("July 2026", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { listOf("S 6", "M 7", "T 8", "W 9", "T 10", "F 11", "S 12").forEach { Text(it, fontSize = 11.sp) } }
-            Spacer(Modifier.weight(1f))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { listOf("Table", "Board", "List", "Calendar").forEach { PreviewTile(it, Modifier.size(68.dp, 44.dp)) } }
-        }
-    }
-}
-
-@Composable
-private fun SignInStep(email: String, onEmail: (String) -> Unit, password: String, onPassword: (String) -> Unit, signUp: Boolean, onMode: (Boolean) -> Unit, onGoogle: () -> Unit, onEmailAction: (String, String, Boolean) -> Unit, onForgotPassword: () -> Unit, onOffline: () -> Unit) {
+private fun SignInStep(email: String, onEmail: (String) -> Unit, password: String, onPassword: (String) -> Unit, signUp: Boolean, onMode: (Boolean) -> Unit, busy: Boolean, onGoogle: () -> Unit, onEmailAction: (String, String, Boolean) -> Unit, onForgotPassword: () -> Unit, onOffline: () -> Unit) {
     Text("Let's get you in", fontSize = 30.sp, fontWeight = FontWeight.Black)
     Text("Sign in to access your workspace or create a new account.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).padding(3.dp)) {
-        listOf(false to "Sign in", true to "Sign up").forEach { (mode, label) -> Surface(Modifier.weight(1f).clickable { onMode(mode) }, color = if (signUp == mode) MaterialTheme.colorScheme.surface else Color.Transparent, shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(10.dp), textAlign = TextAlign.Center, color = if (signUp == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) } }
+        listOf(false to "Sign in", true to "Sign up").forEach { (mode, label) -> Surface(Modifier.weight(1f).clickable(enabled = !busy) { onMode(mode) }, color = if (signUp == mode) MaterialTheme.colorScheme.surface else Color.Transparent, shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(10.dp), textAlign = TextAlign.Center, color = if (signUp == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) } }
     }
-    OutlinedButton(onClick = onGoogle, Modifier.fillMaxWidth().height(50.dp)) { Text("G", color = Color(0xFF4285F4), fontWeight = FontWeight.Black); Text("  Continue with Google") }
+    OutlinedButton(onClick = onGoogle, modifier = Modifier.fillMaxWidth().height(52.dp), enabled = !busy) {
+        GoogleGMark(size = 18.dp)
+        Spacer(Modifier.size(10.dp))
+        Text("Continue with Google")
+    }
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Text("Apple sign-in will be available in a later release", Modifier.padding(15.dp), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     HorizontalDivider()
-    OutlinedTextField(email, onEmail, Modifier.fillMaxWidth(), label = { Text("Email address") }, leadingIcon = { Icon(Icons.Outlined.Email, null) }, singleLine = true)
-    OutlinedTextField(password, onPassword, Modifier.fillMaxWidth(), label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-    OnboardingPrimaryButton(if (signUp) "Create account" else "Sign in") { onEmailAction(email.trim(), password, signUp) }
-    if (!signUp) TextButton(onClick = onForgotPassword) { Text("Forgot password?") }
-    TextButton(onClick = onOffline) { Text("Continue offline") }
+    OutlinedTextField(email, onEmail, Modifier.fillMaxWidth(), label = { Text("Email address") }, leadingIcon = { Icon(Icons.Outlined.Email, null) }, singleLine = true, enabled = !busy)
+    OutlinedTextField(password, onPassword, Modifier.fillMaxWidth(), label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !busy)
+    OnboardingPrimaryButton(if (signUp) "Create account" else "Sign in", loading = busy) { onEmailAction(email.trim(), password, signUp) }
+    if (!signUp) TextButton(onClick = onForgotPassword, enabled = !busy) { Text("Forgot password?") }
+    TextButton(onClick = onOffline, enabled = !busy) { Text("Continue offline") }
 }
 
 @Composable
-private fun EmailCodeStep(email: String, recovery: Boolean, onVerify: (String) -> Unit, onResend: () -> Unit, onBack: () -> Unit) {
+private fun EmailCodeStep(email: String, recovery: Boolean, busy: Boolean, resendCooldownSeconds: Long, onVerify: (String) -> Unit, onResend: () -> Unit, onBack: () -> Unit) {
     var code by rememberSaveable { mutableStateOf("") }
     StepIcon(Icons.Outlined.Email)
     Text(if (recovery) "Reset your password" else "Check your email", fontSize = 30.sp, fontWeight = FontWeight.Black)
@@ -369,21 +510,24 @@ private fun EmailCodeStep(email: String, recovery: Boolean, onVerify: (String) -
         label = { Text("6-digit code") },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
+        enabled = !busy,
     )
-    OnboardingPrimaryButton(if (recovery) "Verify code" else "Verify and continue") { onVerify(code) }
-    TextButton(onClick = onResend) { Text("Resend code") }
-    TextButton(onClick = onBack) { Text(if (recovery) "Back to sign in" else "Use a different email") }
+    OnboardingPrimaryButton(if (recovery) "Verify code" else "Verify and continue", loading = busy) { onVerify(code) }
+    TextButton(onClick = onResend, enabled = !busy && resendCooldownSeconds == 0L) {
+        Text(if (resendCooldownSeconds > 0L) "Resend in ${resendCooldownSeconds}s" else "Resend code")
+    }
+    TextButton(onClick = onBack, enabled = !busy) { Text(if (recovery) "Back to sign in" else "Use a different email") }
 }
 
 @Composable
-private fun NewPasswordStep(onSubmit: (String) -> Unit) {
+private fun NewPasswordStep(busy: Boolean, onSubmit: (String) -> Unit) {
     var newPassword by rememberSaveable { mutableStateOf("") }
     var confirm by rememberSaveable { mutableStateOf("") }
     val mismatch = confirm.isNotEmpty() && confirm != newPassword
     StepIcon(Icons.Outlined.Lock)
     Text("Choose a new password", fontSize = 30.sp, fontWeight = FontWeight.Black)
     Text("Code accepted. Set a new password for your account.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-    OutlinedTextField(newPassword, { newPassword = it }, Modifier.fillMaxWidth(), label = { Text("New password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+    OutlinedTextField(newPassword, { newPassword = it }, Modifier.fillMaxWidth(), label = { Text("New password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !busy)
     OutlinedTextField(
         confirm,
         { confirm = it },
@@ -393,19 +537,19 @@ private fun NewPasswordStep(onSubmit: (String) -> Unit) {
         singleLine = true,
         isError = mismatch,
         supportingText = { if (mismatch) Text("Passwords don't match") },
+        enabled = !busy,
     )
-    OnboardingPrimaryButton("Update password") { if (!mismatch && newPassword.isNotEmpty()) onSubmit(newPassword) }
+    OnboardingPrimaryButton("Update password", loading = busy, enabled = !mismatch && newPassword.isNotEmpty()) { onSubmit(newPassword) }
 }
 
 @Composable
 private fun RestoreStep(secret: String, onSecret: (String) -> Unit, onRestore: () -> Unit) {
-    Text("Restoring your data", fontSize = 30.sp, fontWeight = FontWeight.Black)
-    Text("Choose an encrypted Norfold backup. This may take a few moments.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-    Box(Modifier.size(150.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(progress = { .72f }, Modifier.fillMaxSize(), strokeWidth = 6.dp); Icon(Icons.Outlined.CloudDownload, null, Modifier.size(54.dp), tint = MaterialTheme.colorScheme.primary) }
-    Text("72%", fontWeight = FontWeight.Bold)
+    StepIcon(Icons.Outlined.CloudDownload)
+    Text("Restore your data", fontSize = 30.sp, fontWeight = FontWeight.Black)
+    Text("Enter the backup password, then choose an encrypted Norfold backup. When the restore finishes you'll land in your workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     OutlinedTextField(secret, onSecret, Modifier.fillMaxWidth(), label = { Text("Backup password") }, visualTransformation = PasswordVisualTransformation())
-    listOf("Docs", "Tasks", "Calendar", "Files & media", "Settings").forEachIndexed { index, label -> Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Icon(if (index < 3) Icons.Outlined.CheckCircle else Icons.Outlined.Restore, null, tint = MaterialTheme.colorScheme.primary) } } }
-    OnboardingPrimaryButton("Choose backup", onRestore)
+    listOf("Docs", "Tasks", "Calendar", "Files & media", "Settings").forEach { label -> Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Icon(Icons.Outlined.Restore, null, tint = MaterialTheme.colorScheme.primary) } } }
+    OnboardingPrimaryButton("Choose backup", enabled = secret.isNotBlank(), onClick = onRestore)
 }
 
 @Composable
@@ -459,13 +603,36 @@ private fun WorkspaceStep(name: String, onName: (String) -> Unit, template: Stri
 }
 
 @Composable
-private fun CollaborationStep(selected: String, onSelect: (String) -> Unit) {
+private fun CollaborationStep(selected: String, inviteCode: String, onInviteCode: (String) -> Unit, signedIn: Boolean, onSignIn: () -> Unit, onSelect: (String) -> Unit) {
     StepIcon(Icons.Outlined.Groups)
     Text("Collaborate your way", fontSize = 28.sp, fontWeight = FontWeight.Black)
     Text("Invite people or skip this step.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     ChoiceCard("Just me for now", "I'll invite people later", selected == "Just me for now") { onSelect("Just me for now") }
-    ChoiceCard("Invite people", "Add teammates or friends", selected == "Invite people") { onSelect("Invite people") }
+    ChoiceCard("Invite people", "Opens workspace members after setup so you can send invitations", selected == "Invite people") { onSelect("Invite people") }
     ChoiceCard("Join a team", "Use an invite code to join", selected == "Join a team") { onSelect("Join a team") }
+    if (selected == "Join a team") {
+        if (!signedIn) {
+            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.errorContainer) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Sign in first", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+                    Text(
+                        "Joining a team needs the account the invite was sent to. Sign in, then come back to this step.",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    TextButton(onClick = onSignIn) { Text("Sign in") }
+                }
+            }
+        }
+        OutlinedTextField(
+            inviteCode,
+            onInviteCode,
+            Modifier.fillMaxWidth(),
+            label = { Text("Invite code") },
+            supportingText = { Text("Paste the code your teammate shared. Requires the invited account to be signed in.") },
+            singleLine = true,
+            enabled = signedIn,
+        )
+    }
 }
 
 @Composable
@@ -479,35 +646,248 @@ private fun NotificationStep(email: Boolean, onEmail: (Boolean) -> Unit, reminde
 }
 
 @Composable
+private fun BackupSetupStep(
+    signedIn: Boolean,
+    googleProvider: Boolean,
+    driveConnected: Boolean,
+    coordinatorState: AccountCoordinatorState,
+    backups: List<GoogleDriveBackupManifest>,
+    frequency: String,
+    onFrequency: (String) -> Unit,
+    secret: String,
+    onSecret: (String) -> Unit,
+    workspaceContent: Boolean,
+    onWorkspaceContent: (Boolean) -> Unit,
+    conversations: Boolean,
+    onConversations: (Boolean) -> Unit,
+    deviceSettings: Boolean,
+    onDeviceSettings: (Boolean) -> Unit,
+    onConnectDrive: () -> Unit,
+    onRefresh: () -> Unit,
+    onRestore: (GoogleDriveBackupManifest) -> Unit,
+) {
+    StepIcon(Icons.Outlined.CloudDownload)
+    Text("Backup and restore", fontSize = 28.sp, fontWeight = FontWeight.Black)
+    Text(
+        when {
+            !signedIn -> "Local-only work stays on this device. Connect an account later to enable automatic encrypted backup."
+            driveConnected -> "Automatic encrypted backup is on. New backups replace this device's earlier snapshot without deleting backups from your other devices."
+            googleProvider -> "Google sign-in is complete. Approve the separate Drive app-data permission to finish automatic backup."
+            else -> "Your Norfold account is ready. Connect a Google account for encrypted backup; the Google account is only the storage provider."
+        },
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+    )
+    if (signedIn && !driveConnected) {
+        OutlinedButton(onClick = onConnectDrive, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            GoogleGMark(size = 18.dp)
+            Spacer(Modifier.size(10.dp))
+            Text(if (googleProvider) "Allow encrypted Drive backup" else "Connect Google for backup")
+        }
+    }
+    if (driveConnected) {
+        Text("Backup schedule", Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Daily", "Weekly", "Monthly").forEach { option ->
+                Surface(
+                    modifier = Modifier.weight(1f).clickable { onFrequency(option) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (frequency == option) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, if (frequency == option) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                ) { Text(option, Modifier.padding(vertical = 11.dp), textAlign = TextAlign.Center, fontWeight = if (frequency == option) FontWeight.Bold else FontWeight.Normal) }
+            }
+        }
+        OutlinedTextField(
+            value = secret,
+            onValueChange = onSecret,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Backup password (optional)") },
+            supportingText = { Text(if (secret.isBlank()) "Leave blank to let Norfold manage encryption automatically on this device." else "This password is never uploaded. You will need it to restore on a new device.") },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+        )
+        if (coordinatorState == AccountCoordinatorState.DiscoveringBackupsAndMemberships) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("Checking Drive and workspace memberships…")
+            }
+        }
+        (coordinatorState as? AccountCoordinatorState.RecoverableError)?.let {
+            Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(it.message, color = MaterialTheme.colorScheme.onErrorContainer)
+                    TextButton(onClick = onRefresh) { Text("Try again") }
+                }
+            }
+        }
+        if (backups.isNotEmpty()) {
+            Text("Backups found", Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            ToggleCard("Workspace content", "Docs, Notes, Tasks, calendar, links, comments, and history", workspaceContent, onWorkspaceContent)
+            ToggleCard("Conversations and files", "Chat messages, channels, attachments, and Files", conversations, onConversations)
+            ToggleCard("Device settings", "Appearance, editor, and accessibility preferences", deviceSettings, onDeviceSettings)
+            backups.forEach { manifest ->
+                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Text(manifest.deviceName, fontWeight = FontWeight.Bold)
+                        Text(
+                            "${manifest.appVersion.ifBlank { "Earlier build" }} · ${manifest.encryptedSizeBytes / 1024L} KB · ${manifest.counts.workspaceContent} workspace items · ${manifest.counts.conversationsAndFiles} chat/file items",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                        )
+                        Button(
+                            onClick = { onRestore(manifest) },
+                            enabled = workspaceContent || conversations || deviceSettings,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Restore selected data") }
+                    }
+                }
+            }
+            Text("Continue starts fresh without deleting or overwriting these backups.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        } else if (coordinatorState !is AccountCoordinatorState.DiscoveringBackupsAndMemberships) {
+            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .3f)) {
+                Text("No earlier Norfold backup was found for this Google account.", Modifier.padding(14.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreferencesStep(
+    useRecommendedDefaults: Boolean,
+    onRecommended: (Boolean) -> Unit,
+    theme: ThemeMode,
+    onTheme: (ThemeMode) -> Unit,
+    labels: ControlLabelMode,
+    onLabels: (ControlLabelMode) -> Unit,
+    appIcons: AppIconFamily,
+    onAppIcons: (AppIconFamily) -> Unit,
+    editorIcons: EditorIconFamily,
+    onEditorIcons: (EditorIconFamily) -> Unit,
+    fontScale: Float,
+    onFontScale: (Float) -> Unit,
+    uiScale: Float,
+    onUiScale: (Float) -> Unit,
+    toolbarScale: Float,
+    onToolbarScale: (Float) -> Unit,
+    reduceMotion: Boolean,
+    onReduceMotion: (Boolean) -> Unit,
+) {
+    StepIcon(Icons.Outlined.CheckCircle)
+    Text("Set up Norfold your way", fontSize = 28.sp, fontWeight = FontWeight.Black)
+    Text("Use the recommended setup, or customize the important interface and editor choices now. Nothing is saved until setup finishes.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    ChoiceCard("Recommended defaults", "Norfold theme, adaptive labels, readable sizing and editor icons that follow the app", useRecommendedDefaults) { onRecommended(true) }
+    ChoiceCard("Customize now", "Choose app appearance and editor controls separately", !useRecommendedDefaults) { onRecommended(false) }
+    if (!useRecommendedDefaults) {
+        OnboardingPreferenceGroup("Appearance") {
+            PreferenceChoices("Theme", ThemeMode.entries, theme, onTheme) { it.name }
+            PreferenceChoices("Labels", ControlLabelMode.entries, labels, onLabels) {
+                when (it) {
+                    ControlLabelMode.Adaptive -> "Adaptive"
+                    ControlLabelMode.IconsOnly -> "Icons"
+                    ControlLabelMode.IconsAndText -> "Icons + text"
+                }
+            }
+            PreferenceChoices(
+                "App UI icons",
+                listOf(AppIconFamily.MaterialSymbolsRounded, AppIconFamily.MaterialSymbolsOutlined, AppIconFamily.Lucide),
+                appIcons,
+                onAppIcons,
+            ) { it.name.removePrefix("MaterialSymbols").replace("Rounded", "Material rounded").replace("Outlined", "Material outline") }
+            OnboardingScalePreference("Text size", fontScale, onFontScale)
+            OnboardingScalePreference("App UI size", uiScale, onUiScale)
+        }
+        OnboardingPreferenceGroup("Editor") {
+            PreferenceChoices(
+                "Editor icons",
+                listOf(EditorIconFamily.UseApp, EditorIconFamily.MaterialSymbolsRounded, EditorIconFamily.Lucide),
+                editorIcons,
+                onEditorIcons,
+            ) { if (it == EditorIconFamily.UseApp) "Follow app" else it.name.removePrefix("MaterialSymbols").replace("Rounded", "Material rounded") }
+            OnboardingScalePreference("Toolbar size", toolbarScale, onToolbarScale)
+        }
+        ToggleCard("Reduce motion", "Use simpler transitions and less animation", reduceMotion, onReduceMotion)
+    }
+    Text("Every choice remains available later in Appearance, Editor & Markdown, and Accessibility settings.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.fillMaxWidth())
+}
+
+@Composable
+private fun OnboardingPreferenceGroup(title: String, content: @Composable () -> Unit) {
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun <T> PreferenceChoices(label: String, values: List<T>, selected: T, onSelect: (T) -> Unit, name: (T) -> String) {
+    Text(label, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    values.forEach { value ->
+        Surface(
+            Modifier.fillMaxWidth().clickable { onSelect(value) },
+            shape = RoundedCornerShape(10.dp),
+            color = if (value == selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f) else MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, if (value == selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(name(value), Modifier.weight(1f), fontWeight = if (value == selected) FontWeight.Bold else FontWeight.Normal)
+                if (value == selected) Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnboardingScalePreference(label: String, value: Float, onValue: (Float) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(label, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text("${(value * 100).roundToInt()}%", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+        TextButton(onClick = { onValue(1f) }, enabled = value != 1f) { Text("Reset") }
+    }
+    Slider(value = value, onValueChange = { onValue((it * 20).roundToInt() / 20f) }, valueRange = 0.5f..2f)
+}
+
+@Composable
 private fun CompletionStep(workspace: String) {
-    Surface(Modifier.size(92.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Outlined.Check, null, Modifier.padding(24.dp), tint = Color.White) }
+    // The brand pop on the moment that earns it.
+    Surface(Modifier.size(92.dp).popIn(), shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Outlined.Check, null, Modifier.padding(24.dp), tint = Color.White) }
     Text("You're all set!", fontSize = 30.sp, fontWeight = FontWeight.Black)
     Text("Welcome to Norfold. Let's get things done.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { listOf("Workspace created: $workspace", "Profile set", "You're ready to go").forEach { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.CheckCircle, null, tint = Color(0xFF27AE60)); Text(it, Modifier.padding(start = 10.dp)) } } }
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { listOf("Workspace created: $workspace", "Profile set", "You're ready to go").forEach { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.CheckCircle, null, tint = com.norfold.app.ui.SemanticColors.signalGreen); Text(it, Modifier.padding(start = 10.dp)) } } }
     }
 }
 
 @Composable private fun NorfoldWordmark() {
+    // First thing a new user sees: the brand introduces itself — glyph draws in,
+    // dot pops, wordmark rises. Brand ink, not theme tint, so it matches the logo.
+    val ink = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) NorfoldInkOnDark else NorfoldInk
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            NorfoldLogo(42.dp)
-            Text("Norfold", fontSize = 28.sp, fontWeight = FontWeight.Black)
+            NorfoldGlyphDrawIn(size = 42.dp, ink = ink)
+            NorfoldWordmarkText(fontSize = 28.sp, color = ink, modifier = Modifier.norfoldRiseIn())
         }
-        Text("Your private workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Your private workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.norfoldRiseIn())
     }
 }
 @Composable private fun StepIcon(icon: ImageVector) { Surface(Modifier.size(72.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) { Icon(icon, null, Modifier.padding(20.dp), tint = MaterialTheme.colorScheme.primary) } }
 @Composable private fun FeatureCard(icon: ImageVector, title: String, detail: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Column { Text(title, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp) } } } }
-@Composable private fun PreviewTile(text: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .6f)) { Text(text, Modifier.padding(9.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp) } }
-@Composable private fun PreviewPanel(title: String, rows: List<String>, modifier: Modifier = Modifier) { Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f)) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) { Text(title, fontWeight = FontWeight.Bold, fontSize = 11.sp); rows.forEach { Text("○  $it", fontSize = 10.sp) } } } }
 @Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) { Surface(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(18.dp).background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)); Column(Modifier.padding(start = 14.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } } } }
 @Composable private fun ToggleCard(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit) { Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }; Switch(checked, onChecked) } } }
 
 @Composable
-private fun OnboardingPrimaryButton(label: String, onClick: () -> Unit) {
-    Button(onClick, Modifier.fillMaxWidth().widthIn(max = 472.dp).padding(horizontal = 24.dp, vertical = 8.dp).height(54.dp), shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-        Text(label, fontWeight = FontWeight.Bold); Spacer(Modifier.weight(1f)); Icon(Icons.AutoMirrored.Outlined.ArrowForward, null)
+private fun OnboardingPrimaryButton(label: String, loading: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(onClick, Modifier.fillMaxWidth().widthIn(max = 472.dp).padding(horizontal = 24.dp, vertical = 8.dp).height(52.dp), enabled = enabled && !loading, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
+        if (loading) {
+            CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+            Spacer(Modifier.size(10.dp))
+            Text("Please wait…", fontWeight = FontWeight.Bold)
+        } else {
+            Text(label, fontWeight = FontWeight.Bold); Spacer(Modifier.weight(1f)); Icon(Icons.AutoMirrored.Outlined.ArrowForward, null)
+        }
     }
 }
 
@@ -517,3 +897,6 @@ private fun StepDots(step: Int) {
         repeat(10) { index -> Box(Modifier.size(if (index == step) 9.dp else 7.dp).background(if (index == step) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, CircleShape)) }
     }
 }
+
+private inline fun <reified T : Enum<T>> enumValueOrDefault(raw: String?, fallback: T): T =
+    enumValues<T>().firstOrNull { it.name == raw } ?: fallback

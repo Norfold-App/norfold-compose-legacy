@@ -24,6 +24,9 @@ data class BrandPalette(
 private fun hex(v: Long) = Color(v or 0xFF000000L)
 
 val BrandPalettes: Map<ThemeProfile, BrandPalette> = mapOf(
+    // Canonical logo colors: #1E2024 ink, #56AA5F dot, and an accessible darker
+    // green for Material controls on light surfaces.
+    ThemeProfile.Norfold to BrandPalette(ThemeProfile.Norfold, "Norfold", hex(0x56AA5F), hex(0x3D7C45), hex(0x1E2024), hex(0xA7D8AB), accent = hex(0x3D7C45)),
     ThemeProfile.Neon to BrandPalette(ThemeProfile.Neon, "Neon", hex(0xFF80E5), hex(0x9D50BB), hex(0x6E48AA), hex(0x4FACFE), accent = hex(0x9D50BB)),
     ThemeProfile.Sunset to BrandPalette(ThemeProfile.Sunset, "Sunset", hex(0xFF6B6B), hex(0xFECA57), hex(0xFF9FF3), hex(0x54A0FF), accent = hex(0xF75C7A)),
     ThemeProfile.Ocean to BrandPalette(ThemeProfile.Ocean, "Ocean", hex(0x00D2FF), hex(0x3A7BD5), hex(0x00C6FF), hex(0x0072FF), accent = hex(0x2E7BE4)),
@@ -35,4 +38,4 @@ val BrandPalettes: Map<ThemeProfile, BrandPalette> = mapOf(
     ThemeProfile.Graphite to BrandPalette(ThemeProfile.Graphite, "Graphite", hex(0x4A4E63), hex(0x33374A), hex(0x6B6F82), hex(0x9195A6), accent = hex(0x33374A)),
 )
 
-fun ThemeProfile.palette(): BrandPalette = BrandPalettes[this] ?: BrandPalettes.getValue(ThemeProfile.Graphite)
+fun ThemeProfile.palette(): BrandPalette = BrandPalettes[this] ?: BrandPalettes.getValue(ThemeProfile.Norfold)

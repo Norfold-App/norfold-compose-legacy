@@ -226,10 +226,14 @@ class BlockDocumentRoomTest {
     }
 
     @Test
-    fun emptyDatabaseSeedsCompleteGuideExactlyOnce() = runBlocking {
+    fun emptyDatabaseStaysEmptyUntilGuideIsChosenAndGuideAppliesExactlyOnce() = runBlocking {
         val repository = DocsRepository(database)
 
         repository.ensureSeedData()
+        assertTrue(dao.allNotesSnapshot().isEmpty())
+        assertTrue(dao.allTasks().isEmpty())
+
+        repository.applyWorkspaceTemplate("Norfold Guide")
         val notesAfterFirstSeed = dao.allNotesSnapshot().map { it.toDomain() }
         val tasksAfterFirstSeed = dao.allTasks()
         val playground = notesAfterFirstSeed.single { it.title == "Rich blocks playground" }
@@ -244,7 +248,7 @@ class BlockDocumentRoomTest {
         assertTrue(dao.allTaskPropertyValues().isNotEmpty())
         assertTrue(dao.allTags().any { it.scope.startsWith("board:") })
 
-        repository.ensureSeedData()
+        repository.applyWorkspaceTemplate("Norfold Guide")
 
         assertEquals(notesAfterFirstSeed.size, dao.allNotesSnapshot().size)
         assertEquals(tasksAfterFirstSeed.size, dao.allTasks().size)
@@ -256,7 +260,7 @@ class BlockDocumentRoomTest {
         dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
         dao.insertTask(TaskEntity(title = "Keep this task", workspaceId = 1, createdAt = 1, updatedAt = 1))
 
-        DocsRepository(database).ensureSeedData()
+        DocsRepository(database).applyWorkspaceTemplate("Norfold Guide")
 
         assertTrue(dao.allNotesSnapshot().any { it.note.title == "Rich blocks playground" })
         assertEquals(listOf("Keep this task"), dao.allTasks().map { it.title })

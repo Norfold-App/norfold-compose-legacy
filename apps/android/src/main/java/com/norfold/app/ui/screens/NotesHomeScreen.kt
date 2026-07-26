@@ -30,11 +30,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material3.Card
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Star
@@ -42,6 +44,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -70,21 +73,30 @@ import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.WorkspaceIconKind
 import com.norfold.app.domain.HomeTab
 import com.norfold.app.domain.Note
+import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.NoteGestureAction
 import com.norfold.app.domain.Tag
 import com.norfold.app.domain.Destination
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
-import com.norfold.app.ui.components.EmptyNotes
 import com.norfold.app.ui.components.GlobalSearchBar
+import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.pressScale
 
+enum class LibraryKind { Notes, Documents }
+
 @Composable
-fun NotesHome(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier, showHeader: Boolean = true) {
+fun NotesHome(
+    state: DocsUiState,
+    viewModel: DocsViewModel,
+    modifier: Modifier,
+    showHeader: Boolean = true,
+    libraryKind: LibraryKind = LibraryKind.Notes,
+) {
     var showWorkspaceDialog by remember { mutableStateOf(false) }
     if (showWorkspaceDialog) WorkspaceVisualDialog(state, viewModel) { showWorkspaceDialog = false }
     LazyColumn(
-        modifier = modifier.padding(horizontal = 16.dp),
+        modifier = modifier.padding(horizontal = 18.dp),
         contentPadding = PaddingValues(
             top = if (showHeader) 16.dp else 0.dp,
             bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 90.dp,
@@ -95,22 +107,34 @@ fun NotesHome(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier, 
             item { WorkspaceHomeHeader(state) { showWorkspaceDialog = true } }
             item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar) }
         }
-        item { HomeTabs(state, viewModel) }
-        val tabNotes = when (state.tab) {
-            HomeTab.AllNotes -> state.notes
-            HomeTab.Pinned -> state.notes.filter { it.pinned }
-            HomeTab.Tags -> state.notes.filter { it.tags.isNotEmpty() }
+        item { HomeTabs(state, viewModel, libraryKind) }
+        val libraryNotes = state.notes.filter { note ->
+            when (libraryKind) {
+                LibraryKind.Notes -> note.overlapMode == DocOverlapMode.Reflow
+                LibraryKind.Documents -> note.overlapMode == DocOverlapMode.Bounded
+            }
         }
-        val notebookNotes = state.selectedNotebookId?.let { notebookId ->
-            tabNotes.filter { it.notebookId == notebookId }
-        } ?: tabNotes
-        val visibleNotes = state.selectedTagId?.let { tagId ->
-            notebookNotes.filter { note -> note.tags.any { it.id == tagId } }
-        } ?: notebookNotes
+        val tabNotes = when (state.tab) {
+            HomeTab.AllNotes -> libraryNotes
+            HomeTab.Pinned -> libraryNotes.filter { it.pinned }
+            HomeTab.Tags -> if (libraryKind == LibraryKind.Notes) libraryNotes.filter { it.tags.isNotEmpty() } else libraryNotes
+        }
+        val notebookNotes = state.selectedNotebookId
+            ?.let { notebookId -> tabNotes.filter { it.notebookId == notebookId } }
+            ?: tabNotes
+        val visibleNotes = if (libraryKind == LibraryKind.Notes) {
+            state.selectedTagId?.let { tagId -> notebookNotes.filter { note -> note.tags.any { it.id == tagId } } } ?: notebookNotes
+        } else notebookNotes
         val activeNotebook = state.notebooks.firstOrNull { it.id == state.selectedNotebookId }
-        val activeTag = state.tags.firstOrNull { it.id == state.selectedTagId }
+        val activeTag = state.tags.firstOrNull { libraryKind == LibraryKind.Notes && it.id == state.selectedTagId }
         if (activeNotebook != null) {
-            item { ActiveNotebookFilter(activeNotebook.name, visibleNotes.size) { viewModel.filterByNotebook(null) } }
+            item {
+                ActiveNotebookFilter(
+                    activeNotebook.name,
+                    visibleNotes.size,
+                    if (libraryKind == LibraryKind.Notes) "notes" else "documents",
+                ) { viewModel.filterByNotebook(null) }
+            }
         }
         if (activeTag != null) {
             item { ActiveTagFilter(activeTag.name, visibleNotes.size) { viewModel.filterByTag(null) } }
@@ -124,8 +148,66 @@ fun NotesHome(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier, 
             item { SectionHeader("Today") }
             items(visibleNotes.filterNot { it.pinned }, key = { it.id }) { NoteCard(it, state.selectedNote?.id == it.id, state.settings, state.tags.filter { tag -> tag.scope == "notes" }, viewModel, Modifier.animateItem()) }
         }
-        if (state.notes.isEmpty()) item { EmptyNotes(viewModel::createNote) }
+        when {
+            libraryNotes.isEmpty() -> item {
+                LibraryEmptyState(
+                    kind = libraryKind,
+                    onCreate = {
+                        if (libraryKind == LibraryKind.Notes) viewModel.createNote() else viewModel.createDocument()
+                    },
+                )
+            }
+            visibleNotes.isEmpty() -> item {
+                FilteredNotesEmpty(
+                    label = when {
+                        activeNotebook != null -> "No ${if (libraryKind == LibraryKind.Notes) "notes" else "documents"} in ${activeNotebook.name}"
+                        activeTag != null -> "No notes tagged #${activeTag.name}"
+                        state.tab == HomeTab.Pinned -> "No pinned ${if (libraryKind == LibraryKind.Notes) "notes" else "documents"}"
+                        else -> "No ${if (libraryKind == LibraryKind.Notes) "notes" else "documents"} in this view"
+                    },
+                    onClear = {
+                        viewModel.filterByNotebook(null)
+                        viewModel.filterByTag(null)
+                        viewModel.selectTab(HomeTab.AllNotes)
+                    },
+                    onCreate = {
+                        if (libraryKind == LibraryKind.Notes) viewModel.createNote() else viewModel.createDocument()
+                    },
+                    itemName = if (libraryKind == LibraryKind.Notes) "note" else "document",
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun LibraryEmptyState(kind: LibraryKind, onCreate: () -> Unit) {
+    val isNotes = kind == LibraryKind.Notes
+    NorfoldEmptyState(
+        icon = Icons.Outlined.Description,
+        title = if (isNotes) "Your notes start here" else "Your documents start here",
+        detail = if (isNotes) {
+            "Capture ideas in responsive Flow notes. They wrap naturally on phones, tablets, and larger screens."
+        } else {
+            "Create fixed-page documents for page-accurate layouts, export, and presentation."
+        },
+        action = { Button(onClick = onCreate) { Text(if (isNotes) "Create note" else "Create document") } },
+    )
+}
+
+@Composable
+private fun FilteredNotesEmpty(label: String, onClear: () -> Unit, onCreate: () -> Unit, itemName: String) {
+    NorfoldEmptyState(
+        icon = Icons.Outlined.FilterList,
+        title = label,
+        detail = "Clear this view or create a $itemName here.",
+        action = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onClear) { Text("Clear filters") }
+                Button(onClick = onCreate) { Text("Create ${itemName.replaceFirstChar(Char::uppercase)}") }
+            }
+        },
+    )
 }
 
 @Composable
@@ -155,7 +237,9 @@ private fun WorkspaceHomeHeader(state: DocsUiState, onEdit: () -> Unit) {
             // Centered workspace name + counts (icon and edit affordance flank it).
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                Text("${state.notes.size} docs · ${state.tasks.size} tasks · ${state.chatMessages.size} messages", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center)
+                val noteCount = state.notes.count { it.overlapMode == DocOverlapMode.Reflow }
+                val documentCount = state.notes.count { it.overlapMode == DocOverlapMode.Bounded }
+                Text("$noteCount notes · $documentCount documents · ${state.tasks.size} tasks", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center)
             }
             Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
         }
@@ -163,21 +247,23 @@ private fun WorkspaceHomeHeader(state: DocsUiState, onEdit: () -> Unit) {
 }
 
 @Composable
-private fun HomeTabs(state: DocsUiState, viewModel: DocsViewModel) {
+private fun HomeTabs(state: DocsUiState, viewModel: DocsViewModel, kind: LibraryKind) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FilterChip(state.tab == HomeTab.AllNotes, { viewModel.selectTab(HomeTab.AllNotes) }, label = { Text("All Docs") })
+        FilterChip(state.tab == HomeTab.AllNotes, { viewModel.selectTab(HomeTab.AllNotes) }, label = { Text(if (kind == LibraryKind.Notes) "All notes" else "All documents") })
         FilterChip(state.tab == HomeTab.Pinned, { viewModel.selectTab(HomeTab.Pinned) }, label = { Text("Pinned") })
-        FilterChip(state.tab == HomeTab.Tags, { viewModel.selectTab(HomeTab.Tags) }, label = { Text("Tags") })
+        if (kind == LibraryKind.Notes) {
+            FilterChip(state.tab == HomeTab.Tags, { viewModel.selectTab(HomeTab.Tags) }, label = { Text("Tags") })
+        }
         Icon(Icons.Outlined.KeyboardArrowDown, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
-private fun ActiveNotebookFilter(name: String, count: Int, onClear: () -> Unit) {
+private fun ActiveNotebookFilter(name: String, count: Int, itemLabel: String, onClear: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -188,10 +274,10 @@ private fun ActiveNotebookFilter(name: String, count: Int, onClear: () -> Unit) 
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Notebook", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("Folder", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Text(name, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("$count docs", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Text("$count $itemLabel", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         Icon(
             Icons.Outlined.Close,
             contentDescription = "Clear notebook filter",
@@ -216,7 +302,7 @@ private fun ActiveTagFilter(name: String, count: Int, onClear: () -> Unit) {
             Text("Tag filter", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Text("#$name", fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("$count docs", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Text("$count notes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         Icon(Icons.Outlined.Close, "Clear tag filter", Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onClear).padding(5.dp), tint = MaterialTheme.colorScheme.primary)
     }
 }
@@ -306,6 +392,19 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, availableTags
                 )
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = accent.copy(alpha = 0.14f),
+                            contentColor = accent,
+                        ) {
+                            Text(
+                                if (note.overlapMode == DocOverlapMode.Reflow) "Note" else "Document",
+                                Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        Spacer(Modifier.width(7.dp))
                         Text(note.title, Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (note.starred) Icon(Icons.Outlined.Star, null, tint = accent, modifier = Modifier.size(18.dp))
                         if (note.locked) Icon(Icons.Outlined.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
@@ -335,10 +434,10 @@ private fun NoteQuickActionsDialog(note: Note, availableTags: List<Tag>, viewMod
     var editingTags by remember(note.id) { mutableStateOf(false) }
     var selectedTags by remember(note.id, note.tags) { mutableStateOf(note.tags.mapTo(mutableSetOf()) { it.name }) }
     NorfoldContentDialog(onDismissRequest = onDismiss) {
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(note.title, fontWeight = FontWeight.Black, fontSize = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("Doc actions", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Text(if (note.overlapMode == DocOverlapMode.Reflow) "Note actions" else "Document actions", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 if (editingTags) {
                     Text("Choose tags", fontWeight = FontWeight.Bold)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -422,7 +521,7 @@ private fun NoteQuickActionsDialog(note: Note, availableTags: List<Tag>, viewMod
 @Composable
 private fun MiniTag(label: String, accent: Color) {
     Box(
-        Modifier.padding(end = 6.dp).clip(RoundedCornerShape(999.dp))
+        Modifier.padding(end = 6.dp).clip(CircleShape)
             .background(accent.copy(alpha = 0.14f))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {

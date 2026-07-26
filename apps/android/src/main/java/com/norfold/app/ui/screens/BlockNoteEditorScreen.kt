@@ -4,6 +4,7 @@ package com.norfold.app.ui.screens
 
 import android.app.Activity
 import android.content.Context
+import android.speech.tts.TextToSpeech
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -17,8 +18,18 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,13 +40,18 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -43,6 +59,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -52,6 +69,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.norfold.app.ui.components.NorfoldBottomSheet
+import com.norfold.app.ui.components.NorfoldAnchoredPopup
+import com.norfold.app.ui.components.NorfoldPopupPlacement
+import com.norfold.app.ui.components.NorfoldPopupRow
+import com.norfold.app.ui.components.NorfoldPopupSectionLabel
+import com.norfold.app.ui.components.NorfoldPopupDivider
+import com.norfold.app.ui.components.NorfoldDropdownMenu
+import com.norfold.app.ui.components.EditorCardController
+import com.norfold.app.ui.components.EditorCardHost
+import com.norfold.app.ui.components.EditorCardPlacement
+import com.norfold.app.ui.components.EditorCardChoice
+import com.norfold.app.ui.components.EditorCardChoiceGrid
+import com.norfold.app.ui.components.EditorCardSegment
+import com.norfold.app.ui.components.EditorCardSegmentRow
+import com.norfold.app.ui.components.EditorCardStepperRow
+import com.norfold.app.ui.components.editorCardAnchor
+import com.norfold.app.ui.components.rememberEditorCardController
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -63,7 +97,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
@@ -77,23 +113,30 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FormatAlignCenter
+import androidx.compose.material.icons.outlined.FormatAlignJustify
+import androidx.compose.material.icons.outlined.FormatAlignLeft
+import androidx.compose.material.icons.outlined.FormatAlignRight
+import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.FormatListNumbered
 import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.HorizontalRule
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PictureAsPdf
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.material.icons.outlined.Title
+import androidx.compose.material.icons.outlined.Visibility
 import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -134,15 +177,22 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -151,10 +201,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -171,13 +224,17 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -210,10 +267,13 @@ import com.norfold.app.domain.EmbedMetadata
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EmojiInline
 import com.norfold.app.domain.FileBlock
+import com.norfold.app.domain.DocHeading
 import com.norfold.app.domain.DocOutline
 import com.norfold.app.domain.DocCanvasSpec
+import com.norfold.app.domain.DocumentLabelMode
 import com.norfold.app.domain.DocLayerOrder
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocPagePreset
 import com.norfold.app.domain.DocPagination
 import com.norfold.app.domain.DocSectionAction
 import com.norfold.app.domain.DocSections
@@ -225,7 +285,9 @@ import com.norfold.app.ui.dnd.dropSlotOutline
 import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.ImageLayout
 import com.norfold.app.domain.InlineNode
+import com.norfold.app.domain.InlineMark
 import com.norfold.app.domain.InlineText
+import com.norfold.app.domain.InlineTypingStyle
 import com.norfold.app.domain.ItalicInline
 import com.norfold.app.domain.LinkInline
 import com.norfold.app.domain.ListItem
@@ -242,6 +304,14 @@ import com.norfold.app.domain.NumberedListBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
 import com.norfold.app.domain.StrikethroughInline
+import com.norfold.app.domain.UnderlineInline
+import com.norfold.app.domain.HighlightInline
+import com.norfold.app.domain.FontFamilyInline
+import com.norfold.app.domain.FontSizeInline
+import com.norfold.app.domain.BlockAlign
+import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.domain.ShapeKind
+import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.domain.SmartPasteCodec
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TableAlignment
@@ -251,35 +321,49 @@ import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.TodoItem
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
-import com.norfold.app.ui.LocalContextualMenuColor
-import com.norfold.app.ui.LocalContextualMenuStyle
-import com.norfold.app.domain.ContextualMenuColor
-import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.ui.feedback.NorfoldHaptic
+import com.norfold.app.ui.feedback.performNorfoldHaptic
+import com.norfold.app.ui.LocalControlLabelMode
+import com.norfold.app.ui.LocalEditorToolbarScale
+import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.ChartBuilderSheet
 import com.norfold.app.ui.components.DiagramBuilderSheet
 import com.norfold.app.ui.components.MathBuilderSheet
 import com.norfold.app.ui.components.MathInsertionKind
+import com.norfold.app.ui.components.SemanticEditorIcon
+import com.norfold.app.ui.fonts.FontCatalogPickerSheet
+import com.norfold.app.ui.fonts.FontCatalogStore
+import com.norfold.app.ui.fonts.NorfoldFontFamilies
+import com.norfold.app.ui.shapes.ShapeCatalogSheet
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.roundToInt
 
+internal enum class EditorSurface { FlowNote, Document }
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun BlockNoteEditorScreen(
+internal fun StructuredBlockEditorHost(
     state: DocsUiState,
     viewModel: DocsViewModel,
     modifier: Modifier,
     onOpenSidebar: () -> Unit,
+    surface: EditorSurface,
 ) {
     val ownedDocument by viewModel.activeDocument.collectAsState()
     val activeDocument = ownedDocument ?: return
     val owner = activeDocument.owner
     val editorKey = owner.documentId
     val initialTitle = when (owner.type) {
-        DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == owner.id }?.title ?: "Untitled doc"
+        DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == owner.id }?.title
+            ?: if (surface == EditorSurface.Document) "Untitled document" else "Untitled note"
         DocumentOwnerType.Task -> state.tasks.firstOrNull { it.id == owner.id }?.title ?: "Untitled task"
         DocumentOwnerType.CalendarEvent -> state.calendarEvents.firstOrNull { it.id == owner.id }?.title ?: "Untitled event"
     }
@@ -287,11 +371,14 @@ fun BlockNoteEditorScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val emojiShortcodes = remember(context) { loadEmojiShortcodes(context) }
     var title by remember(editorKey) { mutableStateOf(initialTitle) }
+    var lastObservedTitle by remember(editorKey) { mutableStateOf(initialTitle) }
     val session = remember(editorKey) { BlockEditorSession(activeDocument.document) }
     var renderedDocument by remember(editorKey) { mutableStateOf(session.document) }
     var revision by remember(editorKey) { mutableIntStateOf(0) }
     var savedRevision by remember(editorKey) { mutableIntStateOf(0) }
     var editMode by remember(editorKey) { mutableStateOf(false) }
+    var documentViewMode by remember(editorKey) { mutableStateOf(DocumentViewMode.PageView) }
+    val readingDocument = surface == EditorSurface.Document && !editMode && documentViewMode == DocumentViewMode.ReadingView
     var focusTarget by remember(editorKey) { mutableStateOf<BlockCursor?>(null) }
     var rangeAnchorId by remember(editorKey) { mutableStateOf<String?>(null) }
     var rangeExtentId by remember(editorKey) { mutableStateOf<String?>(null) }
@@ -299,6 +386,52 @@ fun BlockNoteEditorScreen(
     var mathBuilderRequest by remember(editorKey) { mutableStateOf<MathBuilderRequest?>(null) }
     var diagramBuilderRequest by remember(editorKey) { mutableStateOf<DiagramBuilderRequest?>(null) }
     var activeSelection by remember(editorKey) { mutableStateOf<EditorSelection?>(null) }
+    var typingStyleOverride by remember(editorKey) { mutableStateOf<InlineTypingStyle?>(null) }
+    var fontPickerOpen by remember(editorKey) { mutableStateOf(false) }
+    val fontCatalog = remember(context) { FontCatalogStore(context) }
+    var activeCanvasPage by remember(editorKey) { mutableIntStateOf(0) }
+    LaunchedEffect(initialTitle) {
+        if (title == lastObservedTitle) title = initialTitle
+        lastObservedTitle = initialTitle
+    }
+    LaunchedEffect(activeDocument.updatedAt) {
+        if (session.mergeRemote(activeDocument.document)) renderedDocument = session.document
+    }
+    LaunchedEffect(editorKey, surface) {
+        if (surface == EditorSurface.Document) viewModel.enterDocumentPresence(owner)
+        else viewModel.leaveDocumentPresence()
+    }
+    LaunchedEffect(surface, editMode, focusTarget?.blockId, activeSelection?.start?.blockId) {
+        if (surface == EditorSurface.Document) {
+            viewModel.updateDocumentPresence(activeSelection?.start?.blockId ?: focusTarget?.blockId, editMode)
+        }
+    }
+    DisposableEffect(editorKey, surface) {
+        onDispose {
+            if (surface == EditorSurface.Document) viewModel.leaveDocumentPresence()
+        }
+    }
+    LaunchedEffect(editMode) {
+        if (!editMode) typingStyleOverride = null else {
+            documentViewMode = DocumentViewMode.PageView
+            fontCatalog.beginEditing()
+        }
+    }
+    LaunchedEffect(editorKey, activeDocument.layoutMode, surface) {
+        val expectedNoteMode = if (surface == EditorSurface.Document) DocOverlapMode.Bounded else DocOverlapMode.Reflow
+        if (owner.type == DocumentOwnerType.Note && activeDocument.layoutMode != expectedNoteMode) {
+            viewModel.updateActiveDocumentLayout(
+                owner = owner,
+                document = session.document,
+                mode = expectedNoteMode,
+                layout = activeDocument.freeformLayout,
+                canvasSpec = activeDocument.canvasSpec,
+            )
+        }
+    }
+    LaunchedEffect(activeDocument.canvasSpec.pageCount) {
+        activeCanvasPage = activeCanvasPage.coerceIn(0, activeDocument.canvasSpec.pageCount - 1)
+    }
     var linkEditorRequest by remember(editorKey) { mutableStateOf<LinkEditorRequest?>(null) }
     val listState = rememberLazyListState()
     val overlapViewport = remember(editorKey) { FreeformViewport() }
@@ -306,6 +439,10 @@ fun BlockNoteEditorScreen(
     // WYSIWYG preview toggled from the doc-settings menu. Session-local by design — the reflow
     // list below stays the default and the only editing surface.
     var paginatedView by remember(editorKey) { mutableStateOf(false) }
+    // Reader panel (top-center card in view mode; ☰ opens it in edit mode too).
+    var readerPanelOpen by remember(editorKey) { mutableStateOf(false) }
+    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
+    DisposableEffect(Unit) { onDispose { tts?.shutdown() } }
     // The print-source WebView must outlive the composable frame that created it: the print
     // framework pulls pages from it asynchronously after the menu closes.
     var printSource by remember { mutableStateOf<WebView?>(null) }
@@ -327,8 +464,14 @@ fun BlockNoteEditorScreen(
         val request = scrollRequest ?: return@LaunchedEffect
         val entry = DocOutline.extract(renderedDocument).firstOrNull { it.blockId == request.blockId }
         val topId = entry?.topLevelId ?: request.blockId
-        if (activeDocument.layoutMode != DocOverlapMode.Reflow) {
-            val y = (activeDocument.freeformLayout[topId]?.y ?: 0f) - 12f
+        if (activeDocument.layoutMode != DocOverlapMode.Reflow && !readingDocument) {
+            val placement = activeDocument.freeformLayout[topId]
+            val pageOrigin = if (activeDocument.layoutMode == DocOverlapMode.Bounded && placement != null) {
+                val page = activeDocument.canvasSpec.pageIndexOf(placement)
+                activeCanvasPage = page
+                activeDocument.canvasSpec.pageOrigin(page)
+            } else 0f
+            val y = ((placement?.y ?: 0f) - pageOrigin) - 12f
             val yPx = with(screenDensity) { y.coerceAtLeast(0f).dp.toPx() }
             overlapViewport.offset = Offset(overlapViewport.offset.x, -yPx * overlapViewport.scale)
         } else {
@@ -370,6 +513,101 @@ fun BlockNoteEditorScreen(
         focusTarget = cursor
     }
 
+    fun persistCanvas(layout: Map<String, FreeformPlacement>, spec: DocCanvasSpec) {
+        viewModel.updateActiveDocumentLayout(owner, session.document, DocOverlapMode.Bounded, layout, spec.normalized())
+    }
+
+    fun addCanvasPage() {
+        val next = activeDocument.canvasSpec.addPage()
+        activeCanvasPage = next.pageCount - 1
+        persistCanvas(activeDocument.freeformLayout, next)
+    }
+
+    fun duplicateCanvasPage() {
+        val spec = activeDocument.canvasSpec.normalized()
+        val sourcePage = activeCanvasPage.coerceIn(0, spec.pageCount - 1)
+        val sourceBlocks = renderedDocument.blocks.filter { block ->
+            activeDocument.freeformLayout[block.id]?.let(spec::rawPageIndexOf) == sourcePage
+        }
+        val nextSpec = spec.addPage()
+        val targetPage = nextSpec.pageCount - 1
+        if (sourceBlocks.isEmpty()) {
+            activeCanvasPage = targetPage
+            persistCanvas(activeDocument.freeformLayout, nextSpec)
+            return
+        }
+        val clones = sourceBlocks.map(::duplicateBlock)
+        session.appendBlocks(clones)
+        changed(BlockCursor(clones.first().id, 0))
+        val sourceOrigin = spec.pageOrigin(sourcePage)
+        val targetOrigin = nextSpec.pageOrigin(targetPage)
+        val copied = clones.zip(sourceBlocks).associate { (clone, original) ->
+            val placement = activeDocument.freeformLayout[original.id] ?: FreeformPlacement(x = 24f, y = sourceOrigin + 24f)
+            clone.id to placement.copy(y = targetOrigin + (placement.y - sourceOrigin).coerceAtLeast(0f))
+        }
+        activeCanvasPage = targetPage
+        persistCanvas(activeDocument.freeformLayout + copied, nextSpec)
+    }
+
+    fun deleteCanvasPage() {
+        val spec = activeDocument.canvasSpec.normalized()
+        if (spec.pageCount <= 1) return
+        val page = activeCanvasPage.coerceIn(0, spec.pageCount - 1)
+        val stride = spec.height + spec.pageGap
+        val pageBlockIds = activeDocument.freeformLayout.filterValues { spec.rawPageIndexOf(it) == page }.keys
+        if (pageBlockIds.isNotEmpty()) {
+            session.deleteBlocks(pageBlockIds)
+            changed()
+        }
+        val shifted = activeDocument.freeformLayout
+            .filterKeys { it !in pageBlockIds }
+            .mapValues { (_, placement) ->
+                if (spec.rawPageIndexOf(placement) > page) placement.copy(y = placement.y - stride) else placement
+            }
+            .toMutableMap()
+        val nextSpec = spec.removePage(page)
+        if (session.document.blocks.none { it.id in shifted }) {
+            session.document.blocks.firstOrNull()?.let { block ->
+                shifted[block.id] = FreeformPlacement(x = 24f, y = nextSpec.pageOrigin(page.coerceAtMost(nextSpec.pageCount - 1)) + 24f)
+            }
+        }
+        activeCanvasPage = page.coerceAtMost(nextSpec.pageCount - 1)
+        persistCanvas(shifted, nextSpec)
+    }
+
+    fun moveCanvasPage(delta: Int) {
+        val spec = activeDocument.canvasSpec.normalized()
+        val from = activeCanvasPage.coerceIn(0, spec.pageCount - 1)
+        val to = (from + delta).coerceIn(0, spec.pageCount - 1)
+        if (from == to) return
+        val fromOrigin = spec.pageOrigin(from)
+        val toOrigin = spec.pageOrigin(to)
+        val moved = activeDocument.freeformLayout.mapValues { (_, placement) ->
+            when (spec.rawPageIndexOf(placement)) {
+                from -> placement.copy(y = toOrigin + (placement.y - fromOrigin))
+                to -> placement.copy(y = fromOrigin + (placement.y - toOrigin))
+                else -> placement
+            }
+        }
+        activeCanvasPage = to
+        persistCanvas(moved, spec.movePage(from, to))
+    }
+
+    fun speakDocument() {
+        val text = renderedDocument.blocks.joinToString("\n") { it.plainText() }.take(3800)
+        if (text.isBlank()) return
+        val existing = tts
+        if (existing != null) {
+            existing.speak(text, TextToSpeech.QUEUE_FLUSH, null, "norfold-doc")
+        } else {
+            var created: TextToSpeech? = null
+            created = TextToSpeech(context) { status ->
+                if (status == TextToSpeech.SUCCESS) created?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "norfold-doc")
+            }
+            tts = created
+        }
+    }
+
     // Sidebar ToC section actions: applied to the live session (not the repository) so the
     // mutation joins the normal undo/redo + debounced autosave path and can't be clobbered
     // by the session's next flush.
@@ -395,6 +633,29 @@ fun BlockNoteEditorScreen(
         }
         if (applied) changed()
         viewModel.consumeSectionAction()
+    }
+
+    val blockRestoreRequest by viewModel.blockRestoreRequest.collectAsState()
+    LaunchedEffect(blockRestoreRequest) {
+        val request = blockRestoreRequest ?: return@LaunchedEffect
+        val payload = request.payloadJson
+        val applied = if (payload == null) {
+            if (session.document.findById(request.blockId) != null) {
+                session.delete(request.blockId)
+                true
+            } else false
+        } else {
+            val restored = BlockDocumentJson.decodeBlock(payload).withBlockId(request.blockId)
+            if (session.document.findById(request.blockId) != null) {
+                session.replaceBlock(restored)
+                true
+            } else {
+                session.appendBlocks(listOf(restored))
+                true
+            }
+        }
+        if (applied) changed(BlockCursor(request.blockId, 0))
+        viewModel.consumeBlockRestore()
     }
 
     // --- Cross-container drag hit-testing (window coordinates) ---
@@ -466,28 +727,17 @@ fun BlockNoteEditorScreen(
     }
 
     fun replaceActiveSelection(factory: (String) -> InlineNode) {
-        var selection = activeSelection ?: return
-        if (selection.text.isBlank()) {
-            val block = session.document.blocks.firstOrNull { it.id == selection.start.blockId } ?: return
-            val plain = block.inlineContent(selection.start.itemId)?.joinToString("") { it.plainText() } ?: return
-            val caret = selection.start.offset.coerceIn(0, plain.length)
-            var start = caret
-            var end = caret
-            while (start > 0 && !plain[start - 1].isWhitespace()) start--
-            while (end < plain.length && !plain[end].isWhitespace()) end++
-            if (start == end) return
-            selection = EditorSelection(
-                BlockCursor(block.id, start, selection.start.itemId),
-                BlockCursor(block.id, end, selection.start.itemId),
-                plain.substring(start, end),
-            )
-        }
+        val selection = activeSelection ?: return
+        if (selection.start == selection.end) return
         val selectedText = selection.text
         val replacement = factory(selectedText)
         val cursor = session.replaceSelectionWithInline(selection.start, selection.end, replacement)
         changed(cursor)
         activeSelection = EditorSelection(
-            start = cursor.copy(offset = (cursor.offset - replacement.plainText().length).coerceAtLeast(0)),
+            start = cursor.copy(
+                offset = (cursor.offset - replacement.plainText().length).coerceAtLeast(0),
+                itemId = selection.start.itemId,
+            ),
             end = cursor,
             text = replacement.plainText(),
         )
@@ -501,6 +751,56 @@ fun BlockNoteEditorScreen(
         val offset = selection.end.offset.coerceAtMost(transformed.plainText().length)
         changed(BlockCursor(transformed.id, offset))
         activeSelection = EditorSelection(BlockCursor(transformed.id, offset), BlockCursor(transformed.id, offset), "")
+    }
+
+    fun applyInlineMark(mark: InlineMark): Boolean {
+        if (!editMode) return false
+        val selection = activeSelection ?: return false
+        if (selection.start == selection.end) {
+            typingStyleOverride = (typingStyleOverride ?: session.inlineStyle(selection.start)).toggled(mark)
+        } else {
+            session.toggleInlineMark(selection.start, selection.end, mark)
+            changed()
+        }
+        return true
+    }
+
+    fun applyInlineFontFamily(family: String) {
+        val selection = activeSelection ?: return
+        if (selection.start == selection.end) {
+            val current = typingStyleOverride ?: session.inlineStyle(selection.start)
+            typingStyleOverride = current.copy(fontFamily = family)
+        } else {
+            session.setInlineFontFamily(selection.start, selection.end, family)
+            changed()
+        }
+        fontCatalog.recordUse(family, explicitSelection = true)
+    }
+
+    fun applyInlineFontSize(sizeSp: Float?) {
+        val selection = activeSelection ?: return
+        val normalized = sizeSp?.coerceIn(6f, 144f)
+        if (selection.start == selection.end) {
+            val current = typingStyleOverride ?: session.inlineStyle(selection.start)
+            typingStyleOverride = current.copy(fontSizeSp = normalized)
+        } else {
+            session.setInlineFontSize(selection.start, selection.end, normalized)
+            changed()
+        }
+    }
+
+    fun handleEditorShortcut(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
+        if (event.type != KeyEventType.KeyDown || (!event.isCtrlPressed && !event.isMetaPressed)) return false
+        return when {
+            event.key == Key.B -> applyInlineMark(InlineMark.Bold)
+            event.key == Key.I -> applyInlineMark(InlineMark.Italic)
+            event.key == Key.U -> applyInlineMark(InlineMark.Underline)
+            event.isShiftPressed && event.key == Key.X -> applyInlineMark(InlineMark.Strikethrough)
+            event.key == Key.Z && event.isShiftPressed -> session.redo().also { if (it) changed() }
+            event.key == Key.Z -> session.undo().also { if (it) changed() }
+            event.key == Key.Y -> session.redo().also { if (it) changed() }
+            else -> false
+        }
     }
 
     BackHandler(enabled = editMode) {
@@ -543,113 +843,201 @@ fun BlockNoteEditorScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             flushPendingDocument()
+            // Runs after the flush job above is registered, so a draft parked for discard is
+            // only deleted once the final save has landed (or kept if it gained content).
+            viewModel.finalizeDraftDiscard(owner)
         }
     }
 
     val baseEditorDensity = LocalDensity.current
+    val imeVisible = WindowInsets.isImeVisible
+    val globalControlLabelMode = LocalControlLabelMode.current
+    val documentControlLabelMode = activeDocument.canvasSpec.toolbarLabelMode.resolve(globalControlLabelMode)
+    val resolvedInlineStyle = activeSelection?.let { selection ->
+        if (selection.start == selection.end) typingStyleOverride ?: session.inlineStyle(selection.start)
+        else session.inlineStyle(selection.start, selection.end)
+    } ?: InlineTypingStyle()
     val editorFontScale = 0.85f + state.settings.editorFontSize.coerceIn(0f, 1f) * 0.45f
     val editorFamily = when (state.settings.editorFontFamily) {
         EditorFontFamily.Sans -> FontFamily.SansSerif
         EditorFontFamily.Serif -> FontFamily.Serif
     }
+    val editorCards = rememberEditorCardController()
+    val uiScope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    LaunchedEffect(editMode) { editorCards.closeAll() }
+    // Shared by the top-bar Export card and the reader panel's Export tool.
+    val onExportPdfAction = {
+        // Deterministic print source: Kotlin-side HTML (no async JS render) fed to the
+        // system print service, which owns pagination and the save-as-PDF UI. Uses the
+        // live session document so unsaved edits are included.
+        val jobName = title.ifBlank { "Norfold document" }
+        val web = WebView(context)
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String?) {
+                val printManager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
+                printManager.print(
+                    jobName,
+                    view.createPrintDocumentAdapter(jobName),
+                    PrintAttributes.Builder().setMediaSize(
+                        if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
+                            PrintAttributes.MediaSize(
+                                "NORFOLD_DOCUMENT",
+                                "Norfold document",
+                                (activeDocument.canvasSpec.width / 72f * 1000f).roundToInt(),
+                                (activeDocument.canvasSpec.height / 72f * 1000f).roundToInt(),
+                            )
+                        } else {
+                            PrintAttributes.MediaSize.ISO_A4
+                        },
+                    ).build(),
+                )
+            }
+        }
+        web.loadDataWithBaseURL(
+            null,
+            if (activeDocument.layoutMode == DocOverlapMode.Bounded && !imeVisible) {
+                MarkdownExporter.canvasPrintHtml(jobName, session.document, activeDocument.freeformLayout, activeDocument.canvasSpec)
+            } else {
+                MarkdownExporter.printHtml(jobName, MarkdownBlockCodec.export(session.document))
+            },
+            "text/html",
+            "utf-8",
+            null,
+        )
+        printSource = web
+    }
+    val onExportDocxAction = {
+        pendingDocx = DocxExporter.export(title, session.document)
+        val safeName = title.ifBlank { "Norfold document" }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        docxLauncher.launch("$safeName.docx")
+    }
     CompositionLocalProvider(
         LocalEmojiShortcodes provides emojiShortcodes,
-        LocalDensity provides Density(baseEditorDensity.density, baseEditorDensity.fontScale * editorFontScale),
-        LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = editorFamily),
+        LocalControlLabelMode provides documentControlLabelMode,
     ) {
-    Box(modifier.fillMaxSize().onGloballyPositioned { editorRootOrigin = it.positionInWindow() }) {
+    Box(
+        modifier
+            .fillMaxSize()
+            .onPreviewKeyEvent(::handleEditorShortcut)
+            .onGloballyPositioned { editorRootOrigin = it.positionInWindow() },
+    ) {
     Column(Modifier.fillMaxSize()) {
+        // Demo view-mode transition: the top bar rolls away toward the start edge; the mini rail
+        // and reader panel (below) take over while reading.
+        AnimatedVisibility(
+            visible = editMode,
+            modifier = Modifier.fillMaxWidth(),
+            enter = fadeIn(tween(300)) + slideInHorizontally(tween(300)) { -it / 2 },
+            exit = fadeOut(tween(300)) + slideOutHorizontally(tween(300)) { -it / 2 } + scaleOut(tween(300), targetScale = 0.6f),
+        ) {
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         BlockEditorHeader(
-            title = title,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 960.dp),
+            cards = editorCards,
             editMode = editMode,
             canUndo = session.canUndo(),
             canRedo = session.canRedo(),
-            onTitleChange = { title = it; revision++ },
+            focusedBlock = (activeSelection?.start?.blockId ?: focusTarget?.blockId)?.let { renderedDocument.findById(it) },
             onBack = {
                 if (editMode) {
                     editMode = false
                     activeSelection = null
+                    typingStyleOverride = null
                 } else viewModel.handleBack()
             },
-            onMenu = onOpenSidebar,
+            onMenu = { readerPanelOpen = true },
             onToggleEdit = {
                 editMode = !editMode
-                if (!editMode) activeSelection = null
+                if (!editMode) {
+                    activeSelection = null
+                    typingStyleOverride = null
+                }
             },
             onUndo = { if (session.undo()) changed() },
             onRedo = { if (session.redo()) changed() },
-            overlapMode = activeDocument.layoutMode,
-            onSetOverlapMode = { mode ->
-                if (mode == DocOverlapMode.Bounded) {
-                    val required = activeDocument.canvasSpec.pagesRequiredFor(activeDocument.freeformLayout)
-                    if (required > activeDocument.canvasSpec.pageCount) {
-                        viewModel.updateActiveDocumentLayout(
-                            owner,
-                            session.document,
-                            mode,
-                            activeDocument.freeformLayout,
-                            activeDocument.canvasSpec.copy(pageCount = required),
-                        )
-                    } else {
-                        viewModel.updateActiveDocumentLayout(owner, session.document, mode, activeDocument.freeformLayout, activeDocument.canvasSpec)
-                    }
-                } else {
-                    viewModel.updateActiveDocumentLayout(owner, session.document, mode, activeDocument.freeformLayout, activeDocument.canvasSpec)
+            onTurnInto = ::transformActiveBlock,
+            onCaseTransform = { transform -> replaceActiveSelection { InlineText(transform(it)) } },
+            onClearFormatting = {
+                activeSelection?.takeIf { it.start != it.end }?.let { selection ->
+                    val cursor = session.clearInlineFormatting(selection.start, selection.end)
+                    changed(cursor)
+                    activeSelection = selection.copy(end = cursor)
                 }
             },
+            onSetAlignment = { align ->
+                val id = activeSelection?.start?.blockId ?: focusTarget?.blockId
+                when (val block = id?.let { renderedDocument.findById(it) }) {
+                    is ParagraphBlock -> { session.replaceBlock(block.copy(align = align)); changed() }
+                    is HeadingBlock -> { session.replaceBlock(block.copy(align = align)); changed() }
+                    else -> {}
+                }
+            },
+            onInsert = { type ->
+                val anchor = activeSelection?.start?.blockId ?: session.document.blocks.lastOrNull()?.id
+                when (type) {
+                    InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
+                    InsertBlockType.Math -> mathBuilderRequest = MathBuilderRequest(anchorId = anchor)
+                    InsertBlockType.Mermaid -> diagramBuilderRequest = DiagramBuilderRequest(anchorId = anchor)
+                    else -> changed(session.insertAfter(anchor, newDocumentBlock(type)))
+                }
+            },
+            onInsertTable = { rows, cols ->
+                val anchor = activeSelection?.start?.blockId ?: session.document.blocks.lastOrNull()?.id
+                changed(
+                    session.insertAfter(
+                        anchor,
+                        TableBlock(
+                            headers = List(cols) { TableCell() },
+                            rows = List((rows - 1).coerceAtLeast(1)) { List(cols) { TableCell() } },
+                        ),
+                    ),
+                )
+            },
+            onLink = {
+                activeSelection?.let { selection ->
+                    linkEditorRequest = renderedDocument.linkEditorRequest(selection)
+                        ?: LinkEditorRequest(selection.start, selection.end, selection.text.ifBlank { "Link text" }, "https://")
+                }
+            },
+            onInsertEmoji = { unicode ->
+                activeSelection?.let { sel ->
+                    changed(session.replaceSelectionWithInline(sel.end, sel.end, InlineText(unicode)))
+                }
+            },
+            onReplaceBlock = { session.replaceBlock(it); changed() },
+            onDeleteBlock = { changed(session.delete(it)) },
+            onDuplicateBlock = { changed(session.insertAfter(it.id, duplicateBlock(it))) },
+            surface = surface,
             canvasSpec = activeDocument.canvasSpec,
             minimumCanvasPages = activeDocument.canvasSpec.pagesRequiredFor(activeDocument.freeformLayout),
             onSetCanvasSpec = {
                 viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, activeDocument.freeformLayout, it)
             },
-            paginatedView = paginatedView,
-            onTogglePaginatedView = { paginatedView = !paginatedView },
-            onExportPdf = {
-                // Deterministic print source: Kotlin-side HTML (no async JS render) fed to the
-                // system print service, which owns pagination and the save-as-PDF UI. Uses the
-                // live session document so unsaved edits are included.
-                val jobName = title.ifBlank { "Norfold document" }
-                val web = WebView(context)
-                web.webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView, url: String?) {
-                        val printManager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
-                        printManager.print(
-                            jobName,
-                            view.createPrintDocumentAdapter(jobName),
-                            PrintAttributes.Builder().setMediaSize(
-                                if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
-                                    PrintAttributes.MediaSize(
-                                        "NORFOLD_DOCUMENT",
-                                        "Norfold document",
-                                        (activeDocument.canvasSpec.width / 72f * 1000f).roundToInt(),
-                                        (activeDocument.canvasSpec.height / 72f * 1000f).roundToInt(),
-                                    )
-                                } else {
-                                    PrintAttributes.MediaSize.ISO_A4
-                                },
-                            ).build(),
-                        )
-                    }
+            editorFontSize = state.settings.editorFontSize,
+            onEditorFontSize = { size -> viewModel.patchSettings { it.copy(editorFontSize = size.coerceIn(0f, 1f)) } },
+            documentPlainText = { renderedDocument.blocks.joinToString("\n") { it.plainText() } },
+            onFind = { query ->
+                val q = query.trim().lowercase()
+                if (q.isNotEmpty()) {
+                    val index = renderedDocument.blocks.indexOfFirst { it.plainText().lowercase().contains(q) }
+                    if (index >= 0) uiScope.launch { listState.animateScrollToItem(index) }
                 }
-                web.loadDataWithBaseURL(
-                    null,
-                    if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
-                        MarkdownExporter.canvasPrintHtml(jobName, session.document, activeDocument.freeformLayout, activeDocument.canvasSpec)
-                    } else {
-                        MarkdownExporter.printHtml(jobName, MarkdownBlockCodec.export(session.document))
-                    },
-                    "text/html",
-                    "utf-8",
-                    null,
-                )
-                printSource = web
             },
-            onExportDocx = {
-                pendingDocx = DocxExporter.export(title, session.document)
-                val safeName = title.ifBlank { "Norfold document" }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                docxLauncher.launch("$safeName.docx")
+            onExportPdf = onExportPdfAction,
+            onExportDocx = onExportDocxAction,
+            onCopyMarkdown = { clipboard.setText(AnnotatedString(MarkdownBlockCodec.export(session.document))) },
+            onMoveToTrash = {
+                when (owner.type) {
+                    DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == owner.id }?.let(viewModel::delete)
+                    DocumentOwnerType.Task -> state.tasks.firstOrNull { it.id == owner.id }?.let(viewModel::deleteTask)
+                    DocumentOwnerType.CalendarEvent -> state.calendarEvents.firstOrNull { it.id == owner.id }?.let(viewModel::deleteCalendarEvent)
+                }
+                viewModel.handleBack()
             },
         )
+        }
+        }
         if (rangeAnchorId != null) {
             DocumentRangeToolbar(
                 onReplace = { replacement ->
@@ -687,19 +1075,38 @@ fun BlockNoteEditorScreen(
                 block = block,
                 index = index,
                 mode = if (contentEditing) BlockSurfaceMode.Edit else BlockSurfaceMode.View,
+                documentDensity = Density(baseEditorDensity.density, baseEditorDensity.fontScale * editorFontScale),
+                documentFontFamily = editorFamily,
                 focus = focusTarget?.takeIf { it.blockId == block.id },
                 onFocusConsumed = { focusTarget = null },
                 onReplace = { session.replaceBlock(it); changed() },
                 onEditText = { old, new ->
-                    val outcome = session.editTextOrSmartPaste(block.id, old, new)
-                    changed(outcome.cursor.takeIf { outcome.structuredPaste })
+                    val authored = (new.length - old.length).coerceAtLeast(0)
+                    val insertionOffset = old.commonPrefixWith(new).length
+                    val usedFont = (typingStyleOverride ?: session.inlineStyle(BlockCursor(block.id, insertionOffset))).fontFamily
+                    if (typingStyleOverride != null) {
+                        session.editText(block.id, old, new, typingStyleOverride)
+                        changed()
+                    } else {
+                        val outcome = session.editTextOrSmartPaste(block.id, old, new)
+                        changed(outcome.cursor.takeIf { outcome.structuredPaste })
+                    }
+                    if (authored > 0 && usedFont != null) fontCatalog.recordUse(usedFont, authoredCharacters = authored)
                 },
                 onReplaceInline = { start, end, inline ->
                     session.replaceSelectionWithInline(BlockCursor(block.id, start), BlockCursor(block.id, end), inline)
                     changed()
                 },
-                onEditListItem = { itemId, old, new -> session.editListItem(block.id, itemId, old, new); changed() },
-                onEditTodoItem = { itemId, old, new -> session.editTodoItem(block.id, itemId, old, new); changed() },
+                onEditListItem = { itemId, old, new ->
+                    val style = typingStyleOverride ?: session.inlineStyle(BlockCursor(block.id, old.commonPrefixWith(new).length, itemId))
+                    session.editListItem(block.id, itemId, old, new, typingStyleOverride); changed()
+                    if (new.length > old.length && style.fontFamily != null) fontCatalog.recordUse(style.fontFamily, new.length - old.length)
+                },
+                onEditTodoItem = { itemId, old, new ->
+                    val style = typingStyleOverride ?: session.inlineStyle(BlockCursor(block.id, old.commonPrefixWith(new).length, itemId))
+                    session.editTodoItem(block.id, itemId, old, new, typingStyleOverride); changed()
+                    if (new.length > old.length && style.fontFamily != null) fontCatalog.recordUse(style.fontFamily, new.length - old.length)
+                },
                 onSplitListItem = { itemId, offset -> changed(session.splitListItem(block.id, itemId, offset)) },
                 onExitListItem = { itemId -> changed(session.exitEmptyListItem(block.id, itemId)) },
                 onMergeListItem = { itemId -> changed(session.mergeListItemWithPrevious(block.id, itemId)) },
@@ -756,7 +1163,17 @@ fun BlockNoteEditorScreen(
                         initialSource = diagram.code,
                     )
                 },
-                onSelectionChange = { activeSelection = it },
+                onSelectionChange = {
+                    val previous = activeSelection
+                    if (it.start != it.end || previous?.start?.blockId != it.start.blockId || previous?.start?.itemId != it.start.itemId) {
+                        typingStyleOverride = null
+                        session.breakTypingGroup()
+                    }
+                    activeSelection = it
+                },
+                chromeVisible = focusTarget?.blockId == block.id ||
+                    activeSelection?.start?.blockId == block.id ||
+                    (!nested && rangeBounds?.contains(index) == true) || draggingId == block.id,
                 nested = nested,
                 onWrap = { axis -> session.wrapInContainer(block.id, axis); changed() },
                 onUnwrap = { session.unwrap(block.id); changed() },
@@ -795,27 +1212,19 @@ fun BlockNoteEditorScreen(
                 },
             )
         }
-        if (activeDocument.layoutMode != DocOverlapMode.Reflow) {
+        if (activeDocument.layoutMode != DocOverlapMode.Reflow && !readingDocument) {
             // Free-overlap mode: a completely freeform canvas (absolute x/y, explicit size, z-layers)
             // replaces the stacked list; the Reflow LazyColumn path below is untouched.
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val pageRailWide = maxWidth >= 840.dp
             FreeformDocCanvas(
                 blocks = renderedDocument.blocks,
                 layout = activeDocument.freeformLayout,
                 canvasSpec = activeDocument.canvasSpec.takeIf { activeDocument.layoutMode == DocOverlapMode.Bounded },
+                activePage = activeCanvasPage,
                 editMode = editMode,
                 onSeedLayout = { seeded ->
-                    if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
-                        val required = activeDocument.canvasSpec.pagesRequiredFor(seeded)
-                        viewModel.updateActiveDocumentLayout(
-                            owner,
-                            session.document,
-                            activeDocument.layoutMode,
-                            seeded,
-                            activeDocument.canvasSpec.copy(pageCount = maxOf(required, activeDocument.canvasSpec.pageCount)),
-                        )
-                    } else {
-                        viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, seeded, activeDocument.canvasSpec)
-                    }
+                    viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, seeded, activeDocument.canvasSpec)
                 },
                 onCommitPlacement = { id, placement ->
                     viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, activeDocument.freeformLayout + (id to placement), activeDocument.canvasSpec)
@@ -832,12 +1241,52 @@ fun BlockNoteEditorScreen(
                 onSendToBack = { id ->
                     viewModel.updateActiveDocumentLayout(owner, session.document, activeDocument.layoutMode, DocLayerOrder.sendToBack(activeDocument.freeformLayout, id), activeDocument.canvasSpec)
                 },
-                onBackgroundTap = { if (editMode) { editMode = false; activeSelection = null } },
+                onBackgroundTap = { if (editMode) { editMode = false; activeSelection = null; typingStyleOverride = null } },
                 onBackgroundDoubleTap = { if (!editMode) editMode = true },
+                onEnterBlock = { blockId ->
+                    val offset = renderedDocument.findById(blockId)?.plainText()?.length ?: 0
+                    focusTarget = BlockCursor(blockId, offset)
+                },
                 viewport = overlapViewport,
-                modifier = Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally).imePadding(),
+                fitPageToWidth = activeDocument.layoutMode == DocOverlapMode.Bounded,
+                modifier = Modifier
+                    .widthIn(max = 960.dp)
+                    .fillMaxSize()
+                    .align(Alignment.Center)
+                    .padding(
+                        start = if (pageRailWide && activeDocument.layoutMode == DocOverlapMode.Bounded) 116.dp else 0.dp,
+                        top = if (!editMode && activeDocument.layoutMode == DocOverlapMode.Bounded) 72.dp else 0.dp,
+                        bottom = if (!pageRailWide && activeDocument.layoutMode == DocOverlapMode.Bounded) 112.dp else 0.dp,
+                    )
+                    .imePadding(),
             ) { block, contentEditing ->
                 BlockNode(block, index = -1, nested = true, rowModifier = Modifier, contentEditing = contentEditing)
+            }
+            if (activeDocument.layoutMode == DocOverlapMode.Bounded) {
+                DocumentPageNavigator(
+                    pageCount = activeDocument.canvasSpec.pageCount,
+                    activePage = activeCanvasPage,
+                    blocks = renderedDocument.blocks,
+                    layout = activeDocument.freeformLayout,
+                    canvasSpec = activeDocument.canvasSpec,
+                    vertical = pageRailWide,
+                    overflowPages = (activeDocument.canvasSpec.pagesRequiredFor(activeDocument.freeformLayout) - activeDocument.canvasSpec.pageCount).coerceAtLeast(0),
+                    onSelect = {
+                        activeCanvasPage = it
+                        overlapViewport.offset = Offset.Zero
+                    },
+                    onAdd = ::addCanvasPage,
+                    onDuplicate = ::duplicateCanvasPage,
+                    onDelete = ::deleteCanvasPage,
+                    onMoveBack = { moveCanvasPage(-1) },
+                    onMoveForward = { moveCanvasPage(1) },
+                    modifier = Modifier
+                        .align(if (pageRailWide) Alignment.CenterStart else Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .then(if (imeVisible) Modifier.imePadding() else Modifier)
+                        .zIndex(8f),
+                )
+            }
             }
         } else if (paginatedView && !editMode) {
             // Page-mode paginated render path: read-only A4 pages; double-tap drops into edit
@@ -845,7 +1294,8 @@ fun BlockNoteEditorScreen(
             PaginatedDocPages(
                 blocks = renderedDocument.blocks,
                 onBackgroundDoubleTap = { editMode = true },
-                modifier = Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally),
+                // Clear the floating view-mode rail, same as the reflow list's top padding.
+                modifier = Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally).padding(top = 56.dp),
             ) { block -> BlockNode(block, index = -1, nested = true, rowModifier = Modifier) }
         } else {
         // Live reorder preview: while dragging over a top-level Top/Bottom edge, render the list with
@@ -864,11 +1314,18 @@ fun BlockNoteEditorScreen(
         LazyColumn(
             Modifier.widthIn(max = 960.dp).fillMaxSize().align(Alignment.CenterHorizontally).imePadding().pointerInput(editMode) {
                 detectTapGestures(
-                    onTap = { if (editMode) { editMode = false; activeSelection = null } },
+                    onTap = { if (editMode) { editMode = false; activeSelection = null; typingStyleOverride = null } },
                     onDoubleTap = { if (!editMode) editMode = true },
                 )
             },
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 184.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                // View mode floats the horizontal rail over the top-left; clear it so the
+                // first lines of reading text are never hidden behind it (any surface).
+                top = if (editMode) 12.dp else 68.dp,
+                bottom = 184.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             state = listState,
         ) {
@@ -920,58 +1377,202 @@ fun BlockNoteEditorScreen(
             Box(Modifier.heightIn(max = 240.dp).padding(10.dp)) { BlockCloneContent(cloneBlock) }
         }
     }
-    if (editMode && activeSelection != null) {
-        FloatingFormattingToolbar(
-            modifier = Modifier
+    // Demo contract: the formatting bar rides the keyboard whenever the doc is editable (not
+    // selection-gated), with the ＋ circle tangent above it; keyboard down swaps ＋ to a corner FAB.
+    val focusedEditorBlock = (activeSelection?.start?.blockId ?: focusTarget?.blockId)?.let { renderedDocument.findById(it) }
+    fun openNewBlockCard() = editorCards.toggle("card-newblock", placement = EditorCardPlacement.Above) {
+        NorfoldPopupSectionLabel("New block")
+        EditorCardChoiceGrid(
+            choices = listOf(
+                EditorCardChoice("text", "Text", glyph = "¶"),
+                EditorCardChoice("heading", "Heading", glyph = "H"),
+                EditorCardChoice("todo", "To-do", icon = Icons.Outlined.CheckBox),
+                EditorCardChoice("chart", "Chart", glyph = "▥"),
+                EditorCardChoice("image", "Image", icon = Icons.Outlined.Image),
+                EditorCardChoice("quote", "Quote", icon = Icons.Outlined.FormatQuote),
+                EditorCardChoice("table", "Table", icon = Icons.Outlined.TableChart),
+                EditorCardChoice("divider", "Divider", icon = Icons.Outlined.HorizontalRule),
+                EditorCardChoice("code", "Code", icon = Icons.Outlined.Code),
+            ),
+            onPick = { id ->
+                editorCards.closeAll()
+                val anchor = activeSelection?.start?.blockId ?: session.document.blocks.lastOrNull()?.id
+                when (id) {
+                    "chart" -> chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
+                    else -> {
+                        val type = when (id) {
+                            "text" -> InsertBlockType.Text
+                            "heading" -> InsertBlockType.Heading
+                            "todo" -> InsertBlockType.TodoList
+                            "image" -> InsertBlockType.Image
+                            "quote" -> InsertBlockType.Quote
+                            "table" -> InsertBlockType.Table
+                            "divider" -> InsertBlockType.Divider
+                            else -> InsertBlockType.Code
+                        }
+                        changed(session.insertAfter(anchor, newDocumentBlock(type)))
+                    }
+                }
+            },
+        )
+    }
+    if (editMode && imeVisible) {
+        Column(
+            Modifier
                 .align(Alignment.BottomCenter)
                 .imePadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 10.dp)
                 .zIndex(12f),
-            onInlineFormat = { action ->
-                when (action) {
-                    InlineFormatAction.Bold -> replaceActiveSelection { BoldInline(listOf(InlineText(it))) }
-                    InlineFormatAction.Italic -> replaceActiveSelection { ItalicInline(listOf(InlineText(it))) }
-                    InlineFormatAction.Strike -> replaceActiveSelection { StrikethroughInline(listOf(InlineText(it))) }
-                    InlineFormatAction.Code -> replaceActiveSelection(::CodeInline)
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (surface == EditorSurface.FlowNote) {
+                Surface(
+                    onClick = { openNewBlockCard() },
+                    modifier = Modifier.size(46.dp).editorCardAnchor(editorCards, "card-newblock"),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    shadowElevation = 8.dp,
+                ) {
+                    Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Add, "New block") }
                 }
-            },
-            onLink = {
-                activeSelection?.let { selection ->
-                    linkEditorRequest = renderedDocument.linkEditorRequest(selection)
-                        ?: LinkEditorRequest(selection.start, selection.end, selection.text.ifBlank { "Link text" }, "https://")
-                }
-            },
-            onTurnInto = ::transformActiveBlock,
-            onInsert = { type ->
-                val anchor = activeSelection?.start?.blockId
-                when (type) {
-                    InsertBlockType.Chart -> chartBuilderRequest = ChartBuilderRequest(anchorId = anchor)
-                    InsertBlockType.Math -> mathBuilderRequest = MathBuilderRequest(
-                        anchorId = anchor,
-                        initialKind = MathInsertionKind.Inline,
-                        inlineSelection = activeSelection,
-                    )
-                    InsertBlockType.Mermaid -> diagramBuilderRequest = DiagramBuilderRequest(anchorId = anchor)
-                    else -> changed(session.insertAfter(anchor, newDocumentBlock(type)))
-                }
-            },
-            onMove = { delta ->
-                val blockId = activeSelection?.start?.blockId
-                if (blockId != null) {
-                    val from = session.document.blocks.indexOfFirst { it.id == blockId }
-                    if (from >= 0) {
-                        session.move(blockId, (from + delta).coerceIn(0, session.document.blocks.lastIndex))
-                        changed(BlockCursor(blockId, activeSelection?.end?.offset ?: 0))
+                Spacer(Modifier.height(6.dp))
+            }
+            FloatingFormattingToolbar(
+                modifier = Modifier,
+                cards = editorCards,
+                focusedBlock = focusedEditorBlock,
+                inlineStyle = resolvedInlineStyle,
+                onInlineFormat = { action ->
+                    applyInlineMark(action.mark)
+                },
+                onHighlight = { token ->
+                    val selection = activeSelection ?: return@FloatingFormattingToolbar
+                    if (selection.start == selection.end) {
+                        val current = typingStyleOverride ?: session.inlineStyle(selection.start)
+                        typingStyleOverride = current.copy(
+                            marks = current.marks - InlineMark.Code,
+                            highlight = token.takeUnless { it == current.highlight },
+                        )
+                    } else {
+                        session.setInlineHighlight(selection.start, selection.end, token)
+                        changed()
                     }
-                }
-            },
-            fontFamily = state.settings.editorFontFamily,
-            fontSize = state.settings.editorFontSize,
-            onFontFamily = viewModel::setEditorFontFamily,
-            onFontSize = { size -> viewModel.patchSettings { it.copy(editorFontSize = size.coerceIn(0f, 1f)) } },
+                },
+                onLink = {
+                    activeSelection?.let { selection ->
+                        linkEditorRequest = renderedDocument.linkEditorRequest(selection)
+                            ?: LinkEditorRequest(selection.start, selection.end, selection.text.ifBlank { "Link text" }, "https://")
+                    }
+                },
+                onTurnInto = ::transformActiveBlock,
+                onSetAlignment = { align ->
+                    when (val block = focusedEditorBlock) {
+                        is ParagraphBlock -> { session.replaceBlock(block.copy(align = align)); changed() }
+                        is HeadingBlock -> { session.replaceBlock(block.copy(align = align)); changed() }
+                        else -> {}
+                    }
+                },
+                onDone = {
+                    activeSelection = null
+                    typingStyleOverride = null
+                    editMode = false
+                },
+                fontFamily = resolvedInlineStyle.fontFamily,
+                fontSizeSp = resolvedInlineStyle.fontSizeSp,
+                onOpenFontPicker = { fontPickerOpen = true },
+                onFontSize = ::applyInlineFontSize,
+            )
+        }
+    }
+    if (editMode && !imeVisible && surface == EditorSurface.FlowNote) {
+        Surface(
+            onClick = { openNewBlockCard() },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .navigationBarsPadding()
+                .padding(20.dp)
+                .size(54.dp)
+                .editorCardAnchor(editorCards, "card-newblock")
+                .zIndex(12f),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            shadowElevation = 10.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Add, "New block") }
+        }
+    }
+    // View-mode mini rail (top-left vertical pill: panel · edit · find).
+    AnimatedVisibility(
+        visible = !editMode,
+        modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 10.dp, vertical = 10.dp).zIndex(14f),
+        enter = fadeIn(tween(260)) + slideInVertically(tween(260)) { -it / 3 },
+        exit = fadeOut(tween(200)),
+    ) {
+        ViewModeRail(
+            onOpenPanel = { readerPanelOpen = true },
+            onEdit = { editMode = true },
         )
     }
+    // Reader panel: drops from top center over a scrim, on phone and tablet alike.
+    AnimatedVisibility(
+        visible = readerPanelOpen,
+        modifier = Modifier.zIndex(15f),
+        enter = fadeIn(tween(220)),
+        exit = fadeOut(tween(180)),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = .25f))
+                    .pointerInput(Unit) { detectTapGestures { readerPanelOpen = false } },
+            )
+            AnimatedVisibility(
+                visible = true,
+                modifier = Modifier.align(Alignment.TopCenter),
+                enter = slideInVertically(tween(240)) { -it / 6 },
+            ) {
+                ReaderPanel(
+                    modifier = Modifier.padding(top = 14.dp),
+                    title = title,
+                    editMode = editMode,
+                    onTitleChange = { title = it; revision++ },
+                    words = renderedDocument.blocks.joinToString("\n") { it.plainText() }.split(Regex("\\s+")).count { it.isNotBlank() },
+                    saved = revision == savedRevision,
+                    progress = if (renderedDocument.blocks.size <= 1) 0f else listState.firstVisibleItemIndex.toFloat() / (renderedDocument.blocks.size - 1),
+                    outline = DocOutline.extract(renderedDocument),
+                    onJumpTo = { heading -> viewModel.scrollToBlock(heading.blockId); readerPanelOpen = false },
+                    onEdit = { editMode = true },
+                    documentViewMode = documentViewMode.takeIf { surface == EditorSurface.Document },
+                    onDocumentViewMode = { documentViewMode = it },
+                    fontSize = state.settings.editorFontSize,
+                    onFontSize = { size -> viewModel.patchSettings { it.copy(editorFontSize = size.coerceIn(0f, 1f)) } },
+                    onSpeak = { speakDocument() },
+                    onCopy = { clipboard.setText(AnnotatedString(renderedDocument.blocks.joinToString("\n") { it.plainText() })) },
+                    onExportPdf = onExportPdfAction,
+                    onExportDocx = onExportDocxAction,
+                    onOpenSidebar = { readerPanelOpen = false; onOpenSidebar() },
+                    onDismiss = { readerPanelOpen = false },
+                )
+            }
+        }
+    }
+    EditorCardHost(editorCards)
+    }
+    if (fontPickerOpen) {
+        FontCatalogPickerSheet(
+            store = fontCatalog,
+            selectedFamily = resolvedInlineStyle.fontFamily,
+            title = "Document font",
+            onDismiss = { fontPickerOpen = false },
+            onSelect = {
+                applyInlineFontFamily(it)
+                fontPickerOpen = false
+            },
+        )
     }
     chartBuilderRequest?.let { request ->
         ChartBuilderSheet(
@@ -1101,7 +1702,13 @@ private data class LinkEditorRequest(
     val url: String,
 )
 
-private enum class InlineFormatAction { Bold, Italic, Strike, Code }
+private enum class InlineFormatAction(val mark: InlineMark) {
+    Bold(InlineMark.Bold),
+    Italic(InlineMark.Italic),
+    Underline(InlineMark.Underline),
+    Strike(InlineMark.Strikethrough),
+    Code(InlineMark.Code),
+}
 
 private enum class TextBlockTarget(val label: String) {
     Paragraph("Paragraph"),
@@ -1122,116 +1729,164 @@ private enum class TextBlockTarget(val label: String) {
 @Composable
 private fun FloatingFormattingToolbar(
     modifier: Modifier,
+    cards: EditorCardController,
+    focusedBlock: DocumentBlock?,
+    inlineStyle: InlineTypingStyle,
     onInlineFormat: (InlineFormatAction) -> Unit,
+    onHighlight: (String) -> Unit,
     onLink: () -> Unit,
     onTurnInto: (TextBlockTarget) -> Unit,
-    onInsert: (InsertBlockType) -> Unit,
-    onMove: (Int) -> Unit,
-    fontFamily: EditorFontFamily,
-    fontSize: Float,
-    onFontFamily: (EditorFontFamily) -> Unit,
-    onFontSize: (Float) -> Unit,
+    onSetAlignment: (BlockAlign) -> Unit,
+    onDone: () -> Unit,
+    fontFamily: String?,
+    fontSizeSp: Float?,
+    onOpenFontPicker: () -> Unit,
+    onFontSize: (Float?) -> Unit,
 ) {
-    var turnIntoOpen by remember { mutableStateOf(false) }
-    var overflowOpen by remember { mutableStateOf(false) }
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    var dragY by remember { mutableStateOf(0f) }
+    val toolbarScale = LocalEditorToolbarScale.current.coerceIn(0.5f, 2f)
+    // Card content lambdas outlive the tap that opened them; read live values via state.
+    val focused by rememberUpdatedState(focusedBlock)
+    val activeInlineStyle by rememberUpdatedState(inlineStyle)
+    val family by rememberUpdatedState(fontFamily)
+    val activeSize by rememberUpdatedState(fontSizeSp)
+
+    fun openStyleCard() = cards.toggle("bar-style", placement = EditorCardPlacement.Above) {
+        val block = focused
+        NorfoldPopupSectionLabel("Text style")
+        NorfoldPopupRow("Body text", selected = block is ParagraphBlock, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Paragraph) })
+        NorfoldPopupRow("Heading 1", selected = (block as? HeadingBlock)?.level == 1, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Heading1) })
+        NorfoldPopupRow("Heading 2", selected = (block as? HeadingBlock)?.level == 2, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Heading2) })
+        NorfoldPopupRow("Heading 3", selected = (block as? HeadingBlock)?.level == 3, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Heading3) })
+        NorfoldPopupRow("Quote", selected = block is QuoteBlock, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Quote) })
+        NorfoldPopupRow("Code block", selected = block is CodeBlock, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Code) })
+    }
+
+    fun openHighlightCard() = cards.toggle("bar-highlight", placement = EditorCardPlacement.Above) {
+        NorfoldPopupSectionLabel("Highlight")
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("yellow", "green", "blue", "pink", "orange").forEach { token ->
+                Surface(
+                    onClick = { cards.closeAll(); onHighlight(token) },
+                    modifier = Modifier.size(30.dp),
+                    shape = CircleShape,
+                    color = highlightColor(token).copy(alpha = 1f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        if (activeInlineStyle.highlight == token) 3.dp else 1.dp,
+                        if (activeInlineStyle.highlight == token) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                    ),
+                ) {}
+            }
+        }
+    }
+
+    fun openFontCard() = cards.toggle("bar-font", placement = EditorCardPlacement.Above) {
+        NorfoldPopupSectionLabel("Font")
+        NorfoldPopupRow(family ?: "Document default", selected = family != null, onClick = {})
+        NorfoldPopupRow("Browse open fonts…", onClick = { cards.closeAll(); onOpenFontPicker() })
+    }
+
+    fun openSizeCard() = cards.toggle("bar-size", placement = EditorCardPlacement.Above) {
+        NorfoldPopupSectionLabel("Text size")
+        val size = activeSize ?: 16f
+        var rawSize by remember(activeSize) { mutableStateOf(size.roundToInt().toString()) }
+        EditorCardStepperRow(
+            label = "Size",
+            valueText = "${size.roundToInt()} sp",
+            onDecrease = { onFontSize(size - 1f) },
+            onIncrease = { onFontSize(size + 1f) },
+        )
+        OutlinedTextField(
+            value = rawSize,
+            onValueChange = { next ->
+                rawSize = next.filter { it.isDigit() || it == '.' }.take(6)
+                rawSize.toFloatOrNull()?.takeIf { it in 6f..144f }?.let(onFontSize)
+            },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+            label = { Text("Exact size") },
+            suffix = { Text("sp") },
+            singleLine = true,
+            isError = rawSize.toFloatOrNull()?.let { it !in 6f..144f } ?: true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        )
+        NorfoldPopupRow("Use document default", selected = activeSize == null, onClick = { onFontSize(null) })
+    }
+
+    fun openAlignCard() = cards.toggle("bar-align", placement = EditorCardPlacement.Above) {
+        val align = when (val block = focused) {
+            is ParagraphBlock -> block.align
+            is HeadingBlock -> block.align
+            else -> null
+        }
+        NorfoldPopupSectionLabel("Alignment")
+        EditorCardSegmentRow(
+            segments = listOf(
+                EditorCardSegment("Start", icon = Icons.Outlined.FormatAlignLeft),
+                EditorCardSegment("Center", icon = Icons.Outlined.FormatAlignCenter),
+                EditorCardSegment("End", icon = Icons.Outlined.FormatAlignRight),
+                EditorCardSegment("Justify", icon = Icons.Outlined.FormatAlignJustify),
+            ),
+            selectedId = align?.name,
+            onSelect = { onSetAlignment(BlockAlign.valueOf(it)) },
+        )
+    }
+
     Surface(
         modifier = modifier.fillMaxWidth().widthIn(max = 720.dp).focusProperties { canFocus = false },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape((18f * toolbarScale.coerceAtMost(1.5f)).dp),
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         tonalElevation = 8.dp,
         shadowElevation = 10.dp,
     ) {
-        Column(Modifier.fillMaxWidth().animateContentSize()) {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            item("expand") { ToolbarTextButton(if (expanded) "⌄" else "⌃", if (expanded) "Collapse formatting bar" else "Expand formatting bar") { expanded = !expanded } }
-            item("drag") {
-                Icon(
-                    Icons.Outlined.DragIndicator,
-                    "Drag focused block up or down",
-                    Modifier
-                        .size(44.dp)
-                        .padding(10.dp)
-                        .pointerInput(Unit) {
-                            detectDragGestures(
-                                onDragStart = { dragY = 0f },
-                                onDragCancel = { dragY = 0f },
-                                onDragEnd = {
-                                    if (kotlin.math.abs(dragY) > 18f) onMove(if (dragY < 0f) -1 else 1)
-                                    dragY = 0f
-                                },
-                                onDrag = { change, amount -> change.consume(); dragY += amount.y },
-                            )
-                        },
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            item("turn-into") {
-                Box {
-                    ToolbarTextButton("T", "Turn into") { turnIntoOpen = true }
-                    DropdownMenu(expanded = turnIntoOpen, onDismissRequest = { turnIntoOpen = false }) {
-                        TextBlockTarget.entries.forEach { target ->
-                            DropdownMenuItem(
-                                text = { Text(target.label) },
-                                onClick = { turnIntoOpen = false; onTurnInto(target) },
-                            )
-                        }
-                    }
-                }
-            }
-            item("bold") { ToolbarTextButton("B", "Bold", FontWeight.Black) { onInlineFormat(InlineFormatAction.Bold) } }
-            item("italic") { ToolbarTextButton("I", "Italic", fontStyle = FontStyle.Italic) { onInlineFormat(InlineFormatAction.Italic) } }
-            item("strike") { ToolbarTextButton("S", "Strikethrough", textDecoration = TextDecoration.LineThrough) { onInlineFormat(InlineFormatAction.Strike) } }
-            item("code") { ToolbarTextButton("</>", "Inline code", fontFamily = FontFamily.Monospace) { onInlineFormat(InlineFormatAction.Code) } }
-            item("link") { ToolbarIconButton(Icons.Outlined.Link, "Link", onLink) }
-            item("bullet") { ToolbarIconButton(Icons.AutoMirrored.Outlined.FormatListBulleted, "Bullet list") { onTurnInto(TextBlockTarget.Bullet) } }
-            item("numbered") { ToolbarIconButton(Icons.Outlined.FormatListNumbered, "Numbered list") { onTurnInto(TextBlockTarget.Numbered) } }
-            item("checklist") { ToolbarIconButton(Icons.Outlined.CheckBox, "Checklist") { onTurnInto(TextBlockTarget.Checklist) } }
-            item("more") {
-                Box {
-                    ToolbarIconButton(Icons.Outlined.MoreVert, "More formatting") { overflowOpen = true }
-                    DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
-                        DropdownMenuItem(text = { Text("Quote") }, leadingIcon = { Icon(Icons.Outlined.FormatQuote, null) }, onClick = { overflowOpen = false; onTurnInto(TextBlockTarget.Quote) })
-                        DropdownMenuItem(text = { Text("Divider") }, leadingIcon = { Icon(Icons.Outlined.HorizontalRule, null) }, onClick = { overflowOpen = false; onTurnInto(TextBlockTarget.Divider) })
-                        DropdownMenuItem(text = { Text("Code block") }, leadingIcon = { Icon(Icons.Outlined.Code, null) }, onClick = { overflowOpen = false; onTurnInto(TextBlockTarget.Code) })
-                        DropdownMenuItem(text = { Text("Insert table") }, leadingIcon = { Icon(Icons.Outlined.TableChart, null) }, onClick = { overflowOpen = false; onInsert(InsertBlockType.Table) })
-                        DropdownMenuItem(text = { Text("Insert image") }, leadingIcon = { Icon(Icons.Outlined.Image, null) }, onClick = { overflowOpen = false; onInsert(InsertBlockType.Image) })
-                    }
-                }
-            }
-        }
-        if (expanded) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             LazyRow(
-                modifier = Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp),
+                modifier = Modifier.weight(1f).height((54f * toolbarScale).coerceAtLeast(48f).dp).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                item("font-sans") {
-                    ToolbarTextButton("Aa", "Use sans-serif document font", if (fontFamily == EditorFontFamily.Sans) FontWeight.Black else FontWeight.Normal) {
-                        onFontFamily(EditorFontFamily.Sans)
+                item("style") {
+                    Box(Modifier.editorCardAnchor(cards, "bar-style")) {
+                        ToolbarTextButton("T", "Text style", ambiguous = true, active = cards.isOpen("bar-style"), onClick = { openStyleCard() })
                     }
                 }
-                item("font-serif") {
-                    ToolbarTextButton("Ag", "Use serif document font", if (fontFamily == EditorFontFamily.Serif) FontWeight.Black else FontWeight.Normal, fontFamily = FontFamily.Serif) {
-                        onFontFamily(EditorFontFamily.Serif)
+                item("bold") { ToolbarTextButton("B", "Bold", FontWeight.Black, active = InlineMark.Bold in inlineStyle.marks) { onInlineFormat(InlineFormatAction.Bold) } }
+                item("italic") { ToolbarTextButton("I", "Italic", fontStyle = FontStyle.Italic, active = InlineMark.Italic in inlineStyle.marks) { onInlineFormat(InlineFormatAction.Italic) } }
+                item("underline") { ToolbarTextButton("U", "Underline", textDecoration = TextDecoration.Underline, active = InlineMark.Underline in inlineStyle.marks) { onInlineFormat(InlineFormatAction.Underline) } }
+                item("strike") { ToolbarTextButton("S", "Strikethrough", textDecoration = TextDecoration.LineThrough, active = InlineMark.Strikethrough in inlineStyle.marks) { onInlineFormat(InlineFormatAction.Strike) } }
+                item("highlight") {
+                    Box(Modifier.editorCardAnchor(cards, "bar-highlight")) {
+                        ToolbarIconButton(Icons.Outlined.FormatColorFill, "Highlight", ambiguous = true, active = inlineStyle.highlight != null || cards.isOpen("bar-highlight"), onClick = { openHighlightCard() })
                     }
                 }
-                item("font-smaller") { ToolbarTextButton("A−", "Decrease document font size") { onFontSize(fontSize - 0.1f) } }
-                item("font-size") { Text("${(85 + fontSize.coerceIn(0f, 1f) * 45).roundToInt()}%", Modifier.padding(horizontal = 8.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-                item("font-larger") { ToolbarTextButton("A+", "Increase document font size") { onFontSize(fontSize + 0.1f) } }
-                item("h1") { ToolbarTextButton("H1", "Heading 1") { onTurnInto(TextBlockTarget.Heading1) } }
-                item("h2") { ToolbarTextButton("H2", "Heading 2") { onTurnInto(TextBlockTarget.Heading2) } }
-                item("quote-expanded") { ToolbarIconButton(Icons.Outlined.FormatQuote, "Quote") { onTurnInto(TextBlockTarget.Quote) } }
-                item("table-expanded") { ToolbarIconButton(Icons.Outlined.TableChart, "Insert table") { onInsert(InsertBlockType.Table) } }
-                item("image-expanded") { ToolbarIconButton(Icons.Outlined.Image, "Insert image") { onInsert(InsertBlockType.Image) } }
+                item("font") {
+                    Box(Modifier.editorCardAnchor(cards, "bar-font")) {
+                        ToolbarTextButton("Aa", "Font", ambiguous = true, active = cards.isOpen("bar-font"), onClick = { openFontCard() })
+                    }
+                }
+                item("size") {
+                    Box(Modifier.editorCardAnchor(cards, "bar-size")) {
+                        ToolbarTextButton(activeSize?.roundToInt()?.toString() ?: "A↕", "Text size", ambiguous = true, active = activeSize != null || cards.isOpen("bar-size"), onClick = { openSizeCard() })
+                    }
+                }
+                item("align") {
+                    Box(Modifier.editorCardAnchor(cards, "bar-align")) {
+                        ToolbarIconButton(Icons.Outlined.FormatAlignLeft, "Alignment", ambiguous = true, active = cards.isOpen("bar-align"), onClick = { openAlignCard() })
+                    }
+                }
+                item("bullet") { ToolbarIconButton(Icons.AutoMirrored.Outlined.FormatListBulleted, "Bullet list") { onTurnInto(TextBlockTarget.Bullet) } }
+                item("numbered") { ToolbarIconButton(Icons.Outlined.FormatListNumbered, "Numbered list") { onTurnInto(TextBlockTarget.Numbered) } }
+                item("checklist") { ToolbarIconButton(Icons.Outlined.CheckBox, "Checklist", ambiguous = true, semanticAction = SemanticActionId.Checklist) { onTurnInto(TextBlockTarget.Checklist) } }
+                item("link") { ToolbarIconButton(Icons.Outlined.Link, "Link", ambiguous = true, onClick = onLink) }
+                item("code") { ToolbarTextButton("</>", "Inline code", fontFamily = FontFamily.Monospace, active = InlineMark.Code in inlineStyle.marks) { onInlineFormat(InlineFormatAction.Code) } }
             }
-        }
+            Surface(
+                onClick = onDone,
+                modifier = Modifier.padding(horizontal = 6.dp).size(38.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ) {
+                Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Check, "Done") }
+            }
         }
     }
 }
@@ -1244,25 +1899,116 @@ private fun ToolbarTextButton(
     fontStyle: FontStyle = FontStyle.Normal,
     textDecoration: TextDecoration = TextDecoration.None,
     fontFamily: FontFamily? = null,
+    ambiguous: Boolean = false,
+    active: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val toolbarScale = LocalEditorToolbarScale.current.coerceIn(0.5f, 2f)
+    val labelMode = LocalControlLabelMode.current
+    val showLabel = labelMode == ControlLabelMode.IconsAndText || (labelMode == ControlLabelMode.Adaptive && ambiguous)
     Surface(
-        modifier = Modifier.size(width = 44.dp, height = 40.dp).semantics { contentDescription = description },
-        shape = RoundedCornerShape(10.dp),
-        color = Color.Transparent,
+        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+            contentDescription = description
+            selected = active
+        },
+        shape = RoundedCornerShape((10f * toolbarScale.coerceAtMost(1.5f)).dp),
+        color = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        border = if (active) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         onClick = onClick,
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(label, fontWeight = fontWeight, fontStyle = fontStyle, textDecoration = textDecoration, fontFamily = fontFamily, fontSize = 14.sp)
+        Row(
+            modifier = Modifier.padding(horizontal = if (showLabel) 10.dp else 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, fontWeight = fontWeight, fontStyle = fontStyle, textDecoration = textDecoration, fontFamily = fontFamily, fontSize = (14f * toolbarScale).coerceIn(9f, 24f).sp)
+            if (showLabel && description != label) Text(description, fontSize = (12f * toolbarScale).coerceIn(9f, 18f).sp, maxLines = 1)
         }
     }
 }
 
 @Composable
-private fun ToolbarIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
-        Icon(icon, description, Modifier.size(20.dp))
+private fun ToolbarIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    ambiguous: Boolean = false,
+    active: Boolean = false,
+    semanticAction: SemanticActionId? = null,
+    onClick: () -> Unit,
+) {
+    val toolbarScale = LocalEditorToolbarScale.current.coerceIn(0.5f, 2f)
+    val labelMode = LocalControlLabelMode.current
+    val showLabel = labelMode == ControlLabelMode.IconsAndText || (labelMode == ControlLabelMode.Adaptive && ambiguous)
+    Surface(
+        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+            contentDescription = description
+            selected = active
+        },
+        shape = RoundedCornerShape((10f * toolbarScale.coerceAtMost(1.5f)).dp),
+        color = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        border = if (active) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        onClick = onClick,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = if (showLabel) 10.dp else 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (semanticAction != null) {
+                SemanticEditorIcon(semanticAction, null, Modifier.size((20f * toolbarScale).coerceIn(14f, 36f).dp))
+            } else Icon(icon, null, Modifier.size((20f * toolbarScale).coerceIn(14f, 36f).dp))
+            if (showLabel) Text(description, fontSize = (12f * toolbarScale).coerceIn(9f, 18f).sp, maxLines = 1)
+        }
     }
+}
+
+@Composable
+private fun HeaderActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    enabled: Boolean = true,
+    ambiguous: Boolean,
+    semanticAction: SemanticActionId? = null,
+    onClick: () -> Unit,
+) {
+    val toolbarScale = LocalEditorToolbarScale.current.coerceIn(0.5f, 2f)
+    val labelMode = LocalControlLabelMode.current
+    val showLabel = labelMode == ControlLabelMode.IconsAndText || (labelMode == ControlLabelMode.Adaptive && ambiguous)
+    Surface(
+        modifier = Modifier
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+            .alpha(if (enabled) 1f else 0.38f)
+            .semantics { contentDescription = description },
+        shape = RoundedCornerShape((10f * toolbarScale.coerceAtMost(1.5f)).dp),
+        color = Color.Transparent,
+        enabled = enabled,
+        onClick = onClick,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = if (showLabel) 10.dp else 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (semanticAction != null) {
+                SemanticEditorIcon(semanticAction, null, Modifier.size((22f * toolbarScale).coerceIn(14f, 38f).dp))
+            } else Icon(icon, null, Modifier.size((22f * toolbarScale).coerceIn(14f, 38f).dp))
+            if (showLabel) Text(description, fontSize = (12f * toolbarScale).coerceIn(9f, 18f).sp, maxLines = 1)
+        }
+    }
+}
+
+private fun DocumentLabelMode.resolve(global: ControlLabelMode): ControlLabelMode = when (this) {
+    DocumentLabelMode.UseGlobal -> global
+    DocumentLabelMode.Adaptive -> ControlLabelMode.Adaptive
+    DocumentLabelMode.IconsOnly -> ControlLabelMode.IconsOnly
+    DocumentLabelMode.IconsAndText -> ControlLabelMode.IconsAndText
+}
+
+private fun DocumentLabelMode.displayName(): String = when (this) {
+    DocumentLabelMode.UseGlobal -> "Use global setting"
+    DocumentLabelMode.Adaptive -> "Adaptive labels"
+    DocumentLabelMode.IconsOnly -> "Icons only"
+    DocumentLabelMode.IconsAndText -> "Icons + text"
 }
 
 @Composable
@@ -1389,6 +2135,10 @@ private fun List<InlineNode>.linkRanges(): List<LinkRange> {
                 is BoldInline -> visit(node.children)
                 is ItalicInline -> visit(node.children)
                 is StrikethroughInline -> visit(node.children)
+                is UnderlineInline -> visit(node.children)
+                is HighlightInline -> visit(node.children)
+                is FontFamilyInline -> visit(node.children)
+                is FontSizeInline -> visit(node.children)
                 is LinkInline -> {
                     visit(node.children)
                     result += LinkRange(start, offset, node)
@@ -1441,7 +2191,8 @@ private fun DocumentRangeToolbar(
 }
 
 private enum class BlockSurfaceMode { View, Edit }
-private enum class InsertBlockType { Text, Heading, BulletList, NumberedList, TodoList, Quote, Callout, Container, Divider, Code, Table, Image, File, Embed, Chart, Math, Mermaid }
+private enum class DocumentViewMode { PageView, ReadingView }
+private enum class InsertBlockType { Text, Heading, BulletList, NumberedList, TodoList, Quote, Callout, Container, Divider, Code, Table, Image, File, Embed, Shape, Chart, Math, Mermaid }
 
 /** Snap distance (dp) for the free-overlap alignment guides. */
 private const val FreeformSnapThresholdDp = 6f
@@ -1455,6 +2206,231 @@ private const val FreeformSnapThresholdDp = 6f
 class FreeformViewport {
     var offset by mutableStateOf(Offset.Zero)
     var scale by mutableFloatStateOf(1f)
+}
+
+@Composable
+private fun DocumentPageNavigator(
+    pageCount: Int,
+    activePage: Int,
+    blocks: List<DocumentBlock>,
+    layout: Map<String, FreeformPlacement>,
+    canvasSpec: DocCanvasSpec,
+    vertical: Boolean,
+    overflowPages: Int,
+    onSelect: (Int) -> Unit,
+    onAdd: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+    onMoveBack: () -> Unit,
+    onMoveForward: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var enlargedPage by remember(pageCount) { mutableStateOf<Int?>(null) }
+    val shape = RoundedCornerShape(18.dp)
+    Surface(
+        modifier = modifier.fillMaxWidth().widthIn(max = 760.dp).padding(horizontal = 10.dp, vertical = 8.dp),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = .97f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 8.dp,
+    ) {
+        if (vertical) {
+            Column(Modifier.width(112.dp).heightIn(max = 620.dp).padding(8.dp)) {
+                Text("Pages", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp))
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(pageCount) { index ->
+                        DocumentPageThumbnail(
+                            index = index,
+                            activePage = activePage,
+                            blocks = blocks,
+                            layout = layout,
+                            canvasSpec = canvasSpec,
+                            vertical = true,
+                            onSelect = onSelect,
+                            onEnlarge = { enlargedPage = it },
+                        )
+                    }
+                }
+                PageNavigatorActions(pageCount, activePage, onAdd, onDuplicate, onDelete, onMoveBack, onMoveForward)
+                if (overflowPages > 0) Text(
+                    "$overflowPages overflow page${if (overflowPages == 1) "" else "s"}",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        } else {
+            Column(Modifier.widthIn(max = 720.dp).padding(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(pageCount) { index ->
+                            DocumentPageThumbnail(
+                                index = index,
+                                activePage = activePage,
+                                blocks = blocks,
+                                layout = layout,
+                                canvasSpec = canvasSpec,
+                                vertical = false,
+                                onSelect = onSelect,
+                                onEnlarge = { enlargedPage = it },
+                            )
+                        }
+                    }
+                    PageNavigatorActions(pageCount, activePage, onAdd, onDuplicate, onDelete, onMoveBack, onMoveForward)
+                }
+                if (overflowPages > 0) Text(
+                    "Content extends past the last page. Add $overflowPages page${if (overflowPages == 1) "" else "s"} to reveal it.",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+                )
+            }
+        }
+    }
+    enlargedPage?.let { page ->
+        NorfoldDialog(
+            onDismissRequest = { enlargedPage = null },
+            title = { Text("Page ${page + 1} preview") },
+            text = {
+                DocumentPagePreview(
+                    pageIndex = page,
+                    blocks = blocks,
+                    layout = layout,
+                    canvasSpec = canvasSpec,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(canvasSpec.width / canvasSpec.height),
+                )
+            },
+            confirmButton = { TextButton(onClick = { enlargedPage = null }) { Text("Close") } },
+        )
+    }
+}
+
+@Composable
+private fun DocumentPageThumbnail(
+    index: Int,
+    activePage: Int,
+    blocks: List<DocumentBlock>,
+    layout: Map<String, FreeformPlacement>,
+    canvasSpec: DocCanvasSpec,
+    vertical: Boolean,
+    onSelect: (Int) -> Unit,
+    onEnlarge: (Int) -> Unit,
+) {
+    val active = index == activePage
+    Surface(
+        modifier = Modifier
+            .then(if (vertical) Modifier.width(78.dp) else Modifier.width(48.dp))
+            .aspectRatio(canvasSpec.width / canvasSpec.height)
+            .combinedClickable(
+                onClick = { onSelect(index) },
+                onLongClick = { onEnlarge(index) },
+                onLongClickLabel = "Enlarge page ${index + 1} preview",
+            )
+            .semantics {
+                contentDescription = "Page ${index + 1} live preview. Long press to enlarge."
+                selected = active
+            },
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            if (active) 2.dp else 1.dp,
+            if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+        ),
+    ) {
+        DocumentPagePreview(index, blocks, layout, canvasSpec, Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun DocumentPagePreview(
+    pageIndex: Int,
+    blocks: List<DocumentBlock>,
+    layout: Map<String, FreeformPlacement>,
+    canvasSpec: DocCanvasSpec,
+    modifier: Modifier = Modifier,
+) {
+    val spec = canvasSpec.normalized()
+    val pageOrigin = spec.pageOrigin(pageIndex)
+    val pageBlocks = remember(blocks, layout, spec, pageIndex) {
+        blocks.mapNotNull { block ->
+            layout[block.id]
+                ?.takeIf { spec.rawPageIndexOf(it) == pageIndex }
+                ?.let { placement -> block to placement }
+        }.sortedBy { it.second.z }
+    }
+    BoxWithConstraints(
+        modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface),
+    ) {
+        val previewTextSizeValue = (12f * (maxWidth.value / spec.width)).coerceIn(2.5f, 14f)
+        val previewTextSize = previewTextSizeValue.sp
+        pageBlocks.forEach { (block, placement) ->
+            val left = maxWidth * (placement.x / spec.width).coerceIn(0f, 1f)
+            val top = maxHeight * ((placement.y - pageOrigin) / spec.height).coerceIn(0f, 1f)
+            val width = maxWidth * (placement.width / spec.width).coerceIn(0.01f, 1f)
+            val height = maxHeight * (placement.height / spec.height).coerceIn(0.008f, 1f)
+            val text = block.plainText().trim()
+            Box(
+                Modifier
+                    .offset(x = left, y = top)
+                    .width(width)
+                    .height(height)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(
+                        if (text.isBlank()) MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f)
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = .035f),
+                    )
+                    .padding(horizontal = 1.dp),
+            ) {
+                if (text.isNotBlank()) {
+                    Text(
+                        text,
+                        fontSize = previewTextSize,
+                        lineHeight = previewTextSize * 1.15f,
+                        maxLines = 8,
+                        overflow = TextOverflow.Clip,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+        Text(
+            "${pageIndex + 1}",
+            modifier = Modifier.align(Alignment.BottomEnd).padding(3.dp),
+            fontSize = maxOf(previewTextSizeValue, 5f).sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .7f),
+        )
+    }
+}
+
+@Composable
+private fun PageNavigatorActions(
+    pageCount: Int,
+    activePage: Int,
+    onAdd: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+    onMoveBack: () -> Unit,
+    onMoveForward: () -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onMoveBack, enabled = activePage > 0, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Move page earlier", Modifier.size(17.dp))
+        }
+        IconButton(onClick = onMoveForward, enabled = activePage < pageCount - 1, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "Move page later", Modifier.size(18.dp))
+        }
+        IconButton(onClick = onDuplicate, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.Outlined.ContentCopy, "Duplicate page", Modifier.size(17.dp))
+        }
+        IconButton(onClick = onDelete, enabled = pageCount > 1, modifier = Modifier.size(34.dp)) {
+            Icon(Icons.Outlined.Delete, "Delete page", Modifier.size(17.dp))
+        }
+        IconButton(onClick = onAdd, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Outlined.Add, "Add page", Modifier.size(20.dp))
+        }
+    }
 }
 
 /**
@@ -1477,6 +2453,7 @@ private fun FreeformDocCanvas(
     blocks: List<DocumentBlock>,
     layout: Map<String, FreeformPlacement>,
     canvasSpec: DocCanvasSpec?,
+    activePage: Int,
     editMode: Boolean,
     onSeedLayout: (Map<String, FreeformPlacement>) -> Unit,
     onCommitPlacement: (String, FreeformPlacement) -> Unit,
@@ -1486,15 +2463,21 @@ private fun FreeformDocCanvas(
     onSendToBack: (String) -> Unit,
     onBackgroundTap: () -> Unit,
     onBackgroundDoubleTap: () -> Unit,
+    onEnterBlock: (String) -> Unit,
     viewport: FreeformViewport,
+    fitPageToWidth: Boolean,
     modifier: Modifier = Modifier,
     renderBlock: @Composable (DocumentBlock, contentEditing: Boolean) -> Unit,
 ) {
     // Blocks without a stored placement (first entry into Overlap mode, or newly inserted) cascade
     // down the page below the lowest existing block, each on its own fresh top layer.
-    val effectiveLayout = remember(blocks, layout) {
+    val bounded = canvasSpec?.normalized()
+    val selectedPage = bounded?.let { activePage.coerceIn(0, it.pageCount - 1) } ?: 0
+    val pageOrigin = bounded?.pageOrigin(selectedPage) ?: 0f
+    val effectiveLayout = remember(blocks, layout, bounded, selectedPage) {
         val merged = layout.toMutableMap()
-        var nextY = (layout.values.maxOfOrNull { it.y + it.height } ?: 0f) + 16f
+        val pagePlacements = bounded?.let { spec -> layout.values.filter { spec.rawPageIndexOf(it) == selectedPage } } ?: layout.values
+        var nextY = maxOf(pageOrigin + 16f, (pagePlacements.maxOfOrNull { it.y + it.height } ?: pageOrigin) + 16f)
         var nextZ = (layout.values.maxOfOrNull { it.z } ?: -1) + 1
         blocks.forEach { block ->
             if (block.id !in merged) {
@@ -1522,16 +2505,20 @@ private fun FreeformDocCanvas(
             if (stored.copy(z = 0) == local.copy(z = 0)) localPlacements.remove(id)
         }
     }
-    fun displayed(id: String, source: Map<String, FreeformPlacement> = effectiveLayout): FreeformPlacement {
+    fun storedPlacement(id: String, source: Map<String, FreeformPlacement> = effectiveLayout): FreeformPlacement {
         val stored = source[id] ?: FreeformPlacement()
         return (localPlacements[id] ?: stored).copy(z = stored.z)
     }
+    fun displayed(id: String, source: Map<String, FreeformPlacement> = effectiveLayout): FreeformPlacement =
+        storedPlacement(id, source).let { placement ->
+            if (bounded == null) placement else placement.copy(y = placement.y - pageOrigin)
+        }
     var movingId by remember { mutableStateOf<String?>(null) }
     // Selection: tap selects, tapping the selection again enters it for content editing.
     var selectedId by remember { mutableStateOf<String?>(null) }
     var enteredId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(editMode) {
-        if (!editMode) {
+    LaunchedEffect(editMode, selectedPage) {
+        if (!editMode || bounded != null) {
             selectedId = null
             enteredId = null
         }
@@ -1553,40 +2540,52 @@ private fun FreeformDocCanvas(
         }
         return best
     }
-    val zOrder = effectiveLayout.entries.sortedWith(compareBy({ it.value.z }, { it.key })).map { it.key }
-    val bounded = canvasSpec?.normalized()
-    val contentWidth = (bounded?.width ?: ((blocks.maxOfOrNull { block -> displayed(block.id).let { it.x + it.width } } ?: 480f) + 320f)).dp
-    val contentHeight = (bounded?.totalHeight ?: ((blocks.maxOfOrNull { block -> displayed(block.id).let { it.y + it.height } } ?: 480f) + 320f)).dp
+    val visibleBlocks = blocks.filter { block -> bounded == null || effectiveLayout[block.id]?.let(bounded::rawPageIndexOf) == selectedPage }
+    val zOrder = visibleBlocks.map { it.id }.sortedBy { effectiveLayout[it]?.z ?: 0 }
+    val contentWidth = (bounded?.width ?: ((visibleBlocks.maxOfOrNull { block -> displayed(block.id).let { it.x + it.width } } ?: 480f) + 320f)).dp
+    val contentHeight = (bounded?.height ?: ((visibleBlocks.maxOfOrNull { block -> displayed(block.id).let { it.y + it.height } } ?: 480f) + 320f)).dp
     val guideColor = MaterialTheme.colorScheme.primary
     val pageColor = MaterialTheme.colorScheme.surface
     val pageOutline = MaterialTheme.colorScheme.outlineVariant
+    val density = LocalDensity.current
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+    val fitPaddingPx = with(density) { 12.dp.toPx() }
+    val fittedScale = if (bounded != null && viewportSize.width > 0 && fitPageToWidth) {
+        ((viewportSize.width - fitPaddingPx * 2f) / with(density) { bounded.width.dp.toPx() })
+            .coerceIn(0.1f, 1f)
+    } else viewport.scale
+    LaunchedEffect(bounded, selectedPage, viewportSize, fitPageToWidth, fittedScale) {
+        if (bounded != null && viewportSize.width > 0 && fitPageToWidth) {
+            val pageWidthPx = with(density) { bounded.width.dp.toPx() } * fittedScale
+            viewport.scale = fittedScale
+            viewport.offset = Offset(
+                x = ((viewportSize.width - pageWidthPx) / 2f).coerceAtLeast(0f),
+                y = fitPaddingPx,
+            )
+        }
+    }
     Box(
         modifier
             .clipToBounds()
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = {
-                        // First tap calms the canvas (clears selection); only a tap on an already
-                        // calm background exits edit mode.
-                        if (selectedId != null || enteredId != null) {
-                            selectedId = null
-                            enteredId = null
-                        } else {
-                            onBackgroundTap()
-                        }
-                    },
-                    onDoubleTap = { onBackgroundDoubleTap() },
-                )
-            }
+            .onSizeChanged { viewportSize = it }
             .pointerInput(Unit) {
                 // Screen-space pinch-zoom + pan; zoom anchors at the gesture centroid so the point
                 // under the fingers stays put. Block-level drags consume their events first, which
                 // cancels this detector for that gesture.
                 detectTransformGestures { centroid, pan, zoom, _ ->
-                    val oldScale = viewport.scale
-                    val newScale = (oldScale * zoom).coerceIn(0.5f, 2.5f)
-                    viewport.offset = centroid - (centroid - viewport.offset) * (newScale / oldScale) + pan
-                    viewport.scale = newScale
+                    if (bounded != null && fitPageToWidth) {
+                        val pageWidthPx = with(density) { bounded.width.dp.toPx() } * fittedScale
+                        val pageHeightPx = with(density) { bounded.height.dp.toPx() } * fittedScale
+                        val centeredX = ((viewportSize.width - pageWidthPx) / 2f).coerceAtLeast(0f)
+                        val minimumY = minOf(fitPaddingPx, viewportSize.height - pageHeightPx - fitPaddingPx)
+                        viewport.scale = fittedScale
+                        viewport.offset = Offset(centeredX, (viewport.offset.y + pan.y).coerceIn(minimumY, fitPaddingPx))
+                    } else {
+                        val oldScale = viewport.scale
+                        val newScale = (oldScale * zoom).coerceIn(0.5f, 2.5f)
+                        viewport.offset = centroid - (centroid - viewport.offset) * (newScale / oldScale) + pan
+                        viewport.scale = newScale
+                    }
                 }
             },
     ) {
@@ -1603,12 +2602,9 @@ private fun FreeformDocCanvas(
                 .size(contentWidth, contentHeight)
                 .drawBehind {
                     bounded?.let { spec ->
-                        repeat(spec.pageCount) { pageIndex ->
-                            val top = (pageIndex * (spec.height + spec.pageGap)).dp.toPx()
-                            val height = spec.height.dp.toPx()
-                            drawRect(pageColor, topLeft = Offset(0f, top), size = androidx.compose.ui.geometry.Size(size.width, height))
-                            drawRect(pageOutline, topLeft = Offset(0f, top), size = androidx.compose.ui.geometry.Size(size.width, height), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
-                        }
+                        val height = spec.height.dp.toPx()
+                        drawRect(pageColor, size = androidx.compose.ui.geometry.Size(size.width, height))
+                        drawRect(pageOutline, size = androidx.compose.ui.geometry.Size(size.width, height), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
                     }
                     if (verticalGuides.isEmpty() && horizontalGuides.isEmpty()) return@drawBehind
                     val dash = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 6.dp.toPx()))
@@ -1620,37 +2616,83 @@ private fun FreeformDocCanvas(
                     }
                 },
         ) {
-            blocks.forEach { block ->
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .pointerInput(editMode) {
+                        detectTapGestures(
+                            onTap = {
+                                if (editMode && (selectedId != null || enteredId != null)) {
+                                    selectedId = null
+                                    enteredId = null
+                                } else if (editMode) {
+                                    onBackgroundTap()
+                                }
+                            },
+                            onDoubleTap = { if (!editMode) onBackgroundDoubleTap() },
+                        )
+                    },
+            )
+            visibleBlocks.forEach { block ->
                 key(block.id) {
                     val placement = displayed(block.id)
                     val moving = movingId == block.id
                     val selected = selectedId == block.id
                     val entered = enteredId == block.id
+                    val autoHeight = block.supportsAutoCanvasHeight()
+                    var measuredHeightPx by remember(block.id) { mutableIntStateOf(0) }
+                    val density = LocalDensity.current
+                    LaunchedEffect(measuredHeightPx, placement.height) {
+                        if (!autoHeight || measuredHeightPx <= 0) return@LaunchedEffect
+                        val measured = with(density) { measuredHeightPx.toDp().value }.coerceAtLeast(40f)
+                        if (abs(measured - placement.height) > 1f) {
+                            val stored = storedPlacement(block.id)
+                            val fitted = stored.copy(height = measured)
+                            localPlacements[block.id] = fitted
+                            onCommitPlacement(block.id, fitted)
+                        }
+                    }
                     var layerMenu by remember { mutableStateOf(false) }
                     Surface(
-                        color = if (editMode) MaterialTheme.colorScheme.surface.copy(alpha = 0.96f) else Color.Transparent,
+                        color = if (selected || entered) MaterialTheme.colorScheme.surface.copy(alpha = 0.96f) else Color.Transparent,
                         shape = RoundedCornerShape(10.dp),
-                        tonalElevation = if (editMode) 1.dp else 0.dp,
+                        tonalElevation = if (selected || entered) 1.dp else 0.dp,
                         modifier = Modifier
                             .offset { IntOffset(placement.x.dp.roundToPx(), placement.y.dp.roundToPx()) }
-                            .size(placement.width.dp, placement.height.dp)
+                            .then(
+                                if (autoHeight) Modifier.width(placement.width.dp).defaultMinSize(minHeight = 48.dp)
+                                else Modifier.size(placement.width.dp, placement.height.dp),
+                            )
                             .zIndex(placement.z.toFloat() + if (moving) 1000f else 0f)
                             .dragLift(lifted = moving, cornerRadius = 10.dp)
                             .then(
                                 when {
                                     selected || entered -> Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
-                                    editMode -> Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
                                     else -> Modifier
                                 },
                             ),
                     ) {
-                        Box(Modifier.fillMaxSize()) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .then(if (autoHeight) Modifier else Modifier.fillMaxSize())
+                                .onSizeChanged { measuredHeightPx = it.height },
+                        ) {
                             Box(
                                 Modifier
-                                    .fillMaxSize()
+                                    .fillMaxWidth()
+                                    .then(if (autoHeight) Modifier else Modifier.fillMaxSize())
                                     .clip(RoundedCornerShape(10.dp))
-                                    .padding(horizontal = if (editMode) 8.dp else 0.dp, vertical = if (editMode) 6.dp else 0.dp),
+                                    .padding(0.dp),
                             ) { renderBlock(block, entered) }
+                            if (editMode && !entered && block.plainText().isBlank()) {
+                                Text(
+                                    "Tap to write",
+                                    modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 12.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             if (editMode && !entered) {
                                 // Input overlay: intercepts pointer input so a tap selects (then enters)
                                 // the block instead of reaching its content, and dragging anywhere on the
@@ -1660,8 +2702,10 @@ private fun FreeformDocCanvas(
                                         .matchParentSize()
                                         .pointerInput(block.id) {
                                             detectTapGestures {
-                                                if (selectedId == block.id) {
+                                                if (selectedId == block.id || block.plainText().isBlank()) {
+                                                    selectedId = block.id
                                                     enteredId = block.id
+                                                    onEnterBlock(block.id)
                                                 } else {
                                                     selectedId = block.id
                                                     enteredId = null
@@ -1685,12 +2729,13 @@ private fun FreeformDocCanvas(
                                             ) { change, dragAmount ->
                                                 change.consume()
                                                 val stored = latestLayout.value[block.id] ?: FreeformPlacement()
-                                                val current = localPlacements[block.id] ?: stored
+                                                val currentStored = localPlacements[block.id] ?: stored
+                                                val current = if (bounded == null) currentStored else currentStored.copy(y = currentStored.y - pageOrigin)
                                                 var nx = current.x + dragAmount.x.toDp().value
                                                 var ny = (current.y + dragAmount.y.toDp().value).coerceAtLeast(0f)
                                                 clearGuides()
                                                 val others = latestBlocks.value
-                                                    .filter { it.id != block.id }
+                                                    .filter { it.id != block.id && (bounded == null || latestLayout.value[it.id]?.let(bounded::rawPageIndexOf) == selectedPage) }
                                                     .map { displayed(it.id, latestLayout.value) }
                                                 snapDelta(
                                                     listOf(nx, nx + current.width / 2f, nx + current.width),
@@ -1708,14 +2753,14 @@ private fun FreeformDocCanvas(
                                                 }
                                                 bounded?.let { spec ->
                                                     nx = nx.coerceIn(0f, (spec.width - current.width).coerceAtLeast(0f))
-                                                    ny = ny.coerceIn(0f, (spec.totalHeight - current.height).coerceAtLeast(0f))
+                                                    ny = ny.coerceIn(0f, (spec.height - current.height).coerceAtLeast(0f))
                                                 }
-                                                localPlacements[block.id] = current.copy(x = nx, y = ny)
+                                                localPlacements[block.id] = currentStored.copy(x = nx, y = ny + pageOrigin)
                                             }
                                         },
                                 )
                             }
-                            if (selected || entered) {
+                            if (selected && !entered) {
                                 Box(Modifier.align(Alignment.TopEnd).padding(2.dp)) {
                                     Icon(
                                         Icons.Outlined.Layers,
@@ -1727,7 +2772,7 @@ private fun FreeformDocCanvas(
                                             .clickable { layerMenu = true }
                                             .padding(4.dp),
                                     )
-                                    DropdownMenu(expanded = layerMenu, onDismissRequest = { layerMenu = false }) {
+                                    NorfoldDropdownMenu(expanded = layerMenu, onDismissRequest = { layerMenu = false }) {
                                         Text(
                                             "Layer ${zOrder.indexOf(block.id) + 1} of ${zOrder.size}",
                                             style = MaterialTheme.typography.labelSmall,
@@ -1756,12 +2801,13 @@ private fun FreeformDocCanvas(
                                             ) { change, dragAmount ->
                                                 change.consume()
                                                 val stored = latestLayout.value[block.id] ?: FreeformPlacement()
-                                                val current = localPlacements[block.id] ?: stored
+                                                val currentStored = localPlacements[block.id] ?: stored
+                                                val current = if (bounded == null) currentStored else currentStored.copy(y = currentStored.y - pageOrigin)
                                                 val maxWidth = bounded?.let { (it.width - current.x).coerceAtLeast(120f) } ?: Float.MAX_VALUE
-                                                val maxHeight = bounded?.let { (it.totalHeight - current.y).coerceAtLeast(64f) } ?: Float.MAX_VALUE
-                                                localPlacements[block.id] = current.copy(
+                                                val maxHeight = bounded?.let { (it.height - current.y).coerceAtLeast(64f) } ?: Float.MAX_VALUE
+                                                localPlacements[block.id] = currentStored.copy(
                                                     width = (current.width + dragAmount.x.toDp().value).coerceIn(120f, maxWidth),
-                                                    height = (current.height + dragAmount.y.toDp().value).coerceIn(64f, maxHeight),
+                                                    height = if (autoHeight) current.height else (current.height + dragAmount.y.toDp().value).coerceIn(64f, maxHeight),
                                                 )
                                             }
                                         },
@@ -1859,220 +2905,561 @@ private fun PaginatedDocPages(
 
 @Composable
 private fun BlockEditorHeader(
-    title: String,
+    modifier: Modifier = Modifier,
+    cards: EditorCardController,
     editMode: Boolean,
     canUndo: Boolean,
     canRedo: Boolean,
-    onTitleChange: (String) -> Unit,
+    focusedBlock: DocumentBlock?,
     onBack: () -> Unit,
     onMenu: () -> Unit,
     onToggleEdit: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
-    overlapMode: DocOverlapMode,
-    onSetOverlapMode: (DocOverlapMode) -> Unit,
+    onTurnInto: (TextBlockTarget) -> Unit,
+    onCaseTransform: ((String) -> String) -> Unit,
+    onClearFormatting: () -> Unit,
+    onSetAlignment: (BlockAlign) -> Unit,
+    onInsert: (InsertBlockType) -> Unit,
+    onInsertTable: (Int, Int) -> Unit,
+    onLink: () -> Unit,
+    onInsertEmoji: (String) -> Unit,
+    onReplaceBlock: (DocumentBlock) -> Unit,
+    onDeleteBlock: (String) -> Unit,
+    onDuplicateBlock: (DocumentBlock) -> Unit,
+    surface: EditorSurface,
     canvasSpec: DocCanvasSpec,
     minimumCanvasPages: Int,
     onSetCanvasSpec: (DocCanvasSpec) -> Unit,
-    paginatedView: Boolean,
-    onTogglePaginatedView: () -> Unit,
+    editorFontSize: Float,
+    onEditorFontSize: (Float) -> Unit,
+    documentPlainText: () -> String,
+    onFind: (String) -> Unit,
     onExportPdf: () -> Unit,
     onExportDocx: () -> Unit,
+    onCopyMarkdown: () -> Unit,
+    onMoveToTrash: () -> Unit,
 ) {
-    var titleValue by remember { mutableStateOf(TextFieldValue(title)) }
-    var titleFocused by remember { mutableStateOf(false) }
-    LaunchedEffect(title, titleFocused) {
-        if (!titleFocused && titleValue.composition == null && titleValue.text != title) {
-            titleValue = titleValue.copy(
-                text = title,
-                selection = TextRange(titleValue.selection.start.coerceAtMost(title.length), titleValue.selection.end.coerceAtMost(title.length)),
-                composition = null,
-            )
+    // Card content lambdas outlive the tap that opened them, so they must read live values;
+    // rememberUpdatedState keeps ✓ marks and segment selections current while a card stays open.
+    val focused by rememberUpdatedState(focusedBlock)
+    val spec by rememberUpdatedState(canvasSpec)
+    val zoom by rememberUpdatedState(editorFontSize)
+
+    fun openCaseCard() = cards.open("card-case", stacked = true) {
+        NorfoldPopupSectionLabel("Change case")
+        NorfoldPopupRow("Sentence case", onClick = { cards.closeAll(); onCaseTransform { s -> s.lowercase().replaceFirstChar { c -> c.uppercase() } } })
+        NorfoldPopupRow("lower case", onClick = { cards.closeAll(); onCaseTransform { s -> s.lowercase() } })
+        NorfoldPopupRow("UPPER CASE", onClick = { cards.closeAll(); onCaseTransform { s -> s.uppercase() } })
+        NorfoldPopupRow("Title Case", onClick = { cards.closeAll(); onCaseTransform { s -> s.split(" ").joinToString(" ") { w -> w.replaceFirstChar { c -> c.uppercase() } } } })
+    }
+
+    fun openTextCard() = cards.toggle("chip-text") {
+        val block = focused
+        NorfoldPopupSectionLabel("Turn into")
+        NorfoldPopupRow("Body text", selected = block is ParagraphBlock, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Paragraph) })
+        NorfoldPopupRow("Heading 1", selected = (block as? HeadingBlock)?.level == 1, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Heading1) })
+        NorfoldPopupRow("Heading 2", selected = (block as? HeadingBlock)?.level == 2, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Heading2) })
+        NorfoldPopupRow("Heading 3", selected = (block as? HeadingBlock)?.level == 3, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Heading3) })
+        NorfoldPopupRow("Quote", selected = block is QuoteBlock, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Quote) })
+        NorfoldPopupRow("Code block", selected = block is CodeBlock, onClick = { cards.closeAll(); onTurnInto(TextBlockTarget.Code) })
+        NorfoldPopupDivider()
+        NorfoldPopupRow("Change case", trailing = { Text("›") }, onClick = { openCaseCard() })
+        NorfoldPopupRow("Clear formatting", onClick = { cards.closeAll(); onClearFormatting() })
+    }
+
+    fun openParagraphCard() = cards.toggle("chip-paragraph") {
+        val block = focused
+        val align = when (block) {
+            is ParagraphBlock -> block.align
+            is HeadingBlock -> block.align
+            else -> null
+        }
+        NorfoldPopupSectionLabel("Alignment")
+        EditorCardSegmentRow(
+            segments = listOf(
+                EditorCardSegment("Start", icon = Icons.Outlined.FormatAlignLeft),
+                EditorCardSegment("Center", icon = Icons.Outlined.FormatAlignCenter),
+                EditorCardSegment("End", icon = Icons.Outlined.FormatAlignRight),
+                EditorCardSegment("Justify", icon = Icons.Outlined.FormatAlignJustify),
+            ),
+            selectedId = align?.name,
+            onSelect = { id -> onSetAlignment(BlockAlign.valueOf(id)) },
+        )
+        NorfoldPopupDivider()
+        NorfoldPopupSectionLabel("List")
+        NorfoldPopupRow("Bulleted list", icon = Icons.AutoMirrored.Outlined.FormatListBulleted, selected = block is BulletListBlock, onClick = { onTurnInto(TextBlockTarget.Bullet) })
+        NorfoldPopupRow("Numbered list", icon = Icons.Outlined.FormatListNumbered, selected = block is NumberedListBlock, onClick = { onTurnInto(TextBlockTarget.Numbered) })
+        NorfoldPopupRow("Checklist", icon = Icons.Outlined.CheckBox, selected = block is TodoListBlock, onClick = { onTurnInto(TextBlockTarget.Checklist) })
+    }
+
+    fun openTableSizeCard() = cards.open("card-table-size", stacked = true) {
+        NorfoldPopupSectionLabel("Table size")
+        listOf(2, 3, 4).forEach { n ->
+            NorfoldPopupRow("$n × $n", onClick = { cards.closeAll(); onInsertTable(n, n) })
         }
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
-            IconButton(onClick = onMenu) { Icon(Icons.Outlined.Menu, "Workspace") }
+
+    fun openEmojiCard() = cards.open("card-emoji", stacked = true) {
+        NorfoldPopupSectionLabel("Emoji")
+        EditorCardChoiceGrid(
+            choices = listOf("😀", "🙂", "😅", "😂", "😍", "🤔", "👍", "👏", "🔥", "✨", "✅", "⚠️", "❗", "💡", "📌")
+                .map { EditorCardChoice(id = it, label = "", glyph = it) },
+            columns = 5,
+            onPick = { unicode -> cards.closeAll(); onInsertEmoji(unicode) },
+        )
+    }
+
+    fun openInsertCard() = cards.toggle("chip-insert") {
+        NorfoldPopupSectionLabel("New block")
+        EditorCardChoiceGrid(
+            choices = listOf(
+                EditorCardChoice("image", "Image", icon = Icons.Outlined.Image),
+                EditorCardChoice("table", "Table", icon = Icons.Outlined.TableChart),
+                EditorCardChoice("chart", "Chart", glyph = "▥"),
+                EditorCardChoice("divider", "Divider", icon = Icons.Outlined.HorizontalRule),
+                EditorCardChoice("link", "Link", icon = Icons.Outlined.Link),
+                EditorCardChoice("emoji", "Emoji", glyph = "😀"),
+            ),
+            onPick = { id ->
+                when (id) {
+                    "image" -> { cards.closeAll(); onInsert(InsertBlockType.Image) }
+                    "table" -> openTableSizeCard()
+                    "chart" -> { cards.closeAll(); onInsert(InsertBlockType.Chart) }
+                    "divider" -> { cards.closeAll(); onInsert(InsertBlockType.Divider) }
+                    "link" -> { cards.closeAll(); onLink() }
+                    "emoji" -> openEmojiCard()
+                }
+            },
+        )
+    }
+
+    fun openZoomCard() = cards.open("card-zoom", stacked = true) {
+        NorfoldPopupSectionLabel("Zoom")
+        EditorCardStepperRow(
+            label = "Text zoom",
+            valueText = "${(85 + zoom.coerceIn(0f, 1f) * 45).roundToInt()}%",
+            onDecrease = { onEditorFontSize(zoom - 0.1f) },
+            onIncrease = { onEditorFontSize(zoom + 0.1f) },
+        )
+        NorfoldPopupDivider()
+        listOf("85%" to 0f, "100%" to 0.33f, "115%" to 0.66f, "130%" to 1f).forEach { (label, value) ->
+            NorfoldPopupRow(label, onClick = { onEditorFontSize(value) })
+        }
+    }
+
+    fun openLayoutCard() = cards.toggle("chip-layout") {
+        NorfoldPopupSectionLabel(if (surface == EditorSurface.Document) "Document pages" else "Flow note")
+        if (surface == EditorSurface.FlowNote) {
+            Text(
+                "Continuous writing surface · content grows with your note",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+        } else {
+            NorfoldPopupDivider()
+            NorfoldPopupSectionLabel("Canvas · ${spec.width.roundToInt()} × ${spec.height.roundToInt()} pt · ${spec.pageCount} page${if (spec.pageCount == 1) "" else "s"}")
+            NorfoldPopupRow("A4 portrait", onClick = { onSetCanvasSpec(spec.copy(preset = DocPagePreset.A4, width = 595f, height = 842f)) })
+            NorfoldPopupRow("US Letter portrait", onClick = { onSetCanvasSpec(spec.copy(preset = DocPagePreset.Letter, width = 612f, height = 792f)) })
+            NorfoldPopupRow("US Legal portrait", onClick = { onSetCanvasSpec(spec.copy(preset = DocPagePreset.Legal, width = 612f, height = 1008f)) })
+            NorfoldPopupRow("Swap portrait / landscape", icon = Icons.Outlined.ScreenRotation, onClick = { onSetCanvasSpec(spec.copy(width = spec.height, height = spec.width)) })
+            NorfoldPopupRow("Add page", onClick = { onSetCanvasSpec(spec.addPage()) })
+            if (spec.pageCount > minimumCanvasPages) {
+                NorfoldPopupRow("Remove last page", onClick = { onSetCanvasSpec(spec.removePage(spec.pageCount - 1)) })
+            }
+        }
+        NorfoldPopupDivider()
+        NorfoldPopupRow("Zoom", trailing = { Text("›") }, onClick = { openZoomCard() })
+        NorfoldPopupDivider()
+        NorfoldPopupSectionLabel("Toolbar labels")
+        DocumentLabelMode.entries.forEach { m ->
+            NorfoldPopupRow(m.displayName(), selected = spec.toolbarLabelMode == m, onClick = { onSetCanvasSpec(spec.copy(toolbarLabelMode = m)) })
+        }
+    }
+
+    fun openWordCountCard() = cards.open("card-wordcount", stacked = true) {
+        val text = documentPlainText()
+        val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
+        val chars = text.count { !it.isWhitespace() }
+        val minutes = if (words == 0) 0 else ((words + 199) / 200)
+        NorfoldPopupSectionLabel("Word count")
+        Text("$words words", Modifier.padding(horizontal = 10.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium)
+        Text("$chars characters", Modifier.padding(horizontal = 10.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium)
+        Text("~$minutes min read", Modifier.padding(horizontal = 10.dp, vertical = 4.dp), style = MaterialTheme.typography.bodyMedium)
+    }
+
+    fun openReviewCard() = cards.toggle("chip-review") {
+        NorfoldPopupSectionLabel("Review")
+        NorfoldPopupRow("Word count", trailing = { Text("›") }, onClick = { openWordCountCard() })
+    }
+
+    fun openFindCard() = cards.open("card-find", stacked = true) {
+        NorfoldPopupSectionLabel("Find in document")
+        var query by remember { mutableStateOf("") }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp).widthIn(min = 200.dp),
+            singleLine = true,
+            placeholder = { Text("Find…") },
+        )
+        NorfoldPopupRow("Go to match", icon = Icons.Outlined.Search, onClick = { onFind(query) })
+    }
+
+    fun openExportCard() = cards.open("card-export", stacked = true) {
+        NorfoldPopupSectionLabel("Export")
+        NorfoldPopupRow("PDF", icon = Icons.Outlined.PictureAsPdf, onClick = { cards.closeAll(); onExportPdf() })
+        NorfoldPopupRow("Editable DOCX", onClick = { cards.closeAll(); onExportDocx() })
+        NorfoldPopupRow("Copy as Markdown", icon = Icons.Outlined.ContentCopy, onClick = { cards.closeAll(); onCopyMarkdown() })
+    }
+
+    fun openTrashConfirmCard() = cards.open("card-trash", stacked = true) {
+        NorfoldPopupSectionLabel("Move to trash?")
+        NorfoldPopupRow("Delete document", icon = Icons.Outlined.Delete, destructive = true, onClick = { cards.closeAll(); onMoveToTrash() })
+    }
+
+    fun openMoreCard() = cards.toggle("chip-more") {
+        NorfoldPopupRow("Find", icon = Icons.Outlined.Search, trailing = { Text("›") }, onClick = { openFindCard() })
+        NorfoldPopupRow("Export", trailing = { Text("›") }, onClick = { openExportCard() })
+        NorfoldPopupDivider()
+        NorfoldPopupRow("Move to trash", icon = Icons.Outlined.Delete, destructive = true, trailing = { Text("›") }, onClick = { openTrashConfirmCard() })
+    }
+
+    fun openTableCard(table: TableBlock) = cards.toggle("chip-table") {
+        val columnCount = maxOf(table.headers.size, table.rows.maxOfOrNull { it.size } ?: 0).coerceAtLeast(1)
+        NorfoldPopupSectionLabel("Table")
+        NorfoldPopupRow("Add row", onClick = { cards.closeAll(); onReplaceBlock(table.copy(rows = table.rows + listOf(List(columnCount) { TableCell() }))) })
+        NorfoldPopupRow("Add column", onClick = { cards.closeAll(); onReplaceBlock(table.copy(headers = table.headers + TableCell(), rows = table.rows.map { it + TableCell() })) })
+        if (table.rows.isNotEmpty()) {
+            NorfoldPopupRow("Delete last row", onClick = { cards.closeAll(); onReplaceBlock(table.copy(rows = table.rows.dropLast(1))) })
+        }
+        if (columnCount > 1) {
+            NorfoldPopupRow("Delete last column", onClick = { cards.closeAll(); onReplaceBlock(table.copy(headers = table.headers.dropLast(1), rows = table.rows.map { it.dropLast(1) })) })
+        }
+        NorfoldPopupDivider()
+        NorfoldPopupRow("Delete table", destructive = true, onClick = { cards.closeAll(); onDeleteBlock(table.id) })
+    }
+
+    fun openImageCard(image: ImageBlock) = cards.toggle("chip-image") {
+        NorfoldPopupSectionLabel("Image")
+        NorfoldPopupRow("Duplicate", onClick = { cards.closeAll(); onDuplicateBlock(image) })
+        NorfoldPopupRow("Delete", destructive = true, onClick = { cards.closeAll(); onDeleteBlock(image.id) })
+    }
+
+    Surface(
+        modifier = modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shadowElevation = 10.dp,
+        tonalElevation = 2.dp,
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .heightIn(min = 54.dp)
+                .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HeaderActionButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", ambiguous = false, semanticAction = SemanticActionId.Back, onClick = onBack)
+            HeaderActionButton(Icons.Outlined.Menu, "Sidebar", ambiguous = false, semanticAction = SemanticActionId.Menu, onClick = onMenu)
+            HeaderActionButton(Icons.AutoMirrored.Outlined.Undo, "Undo", enabled = editMode && canUndo, ambiguous = false, semanticAction = SemanticActionId.Undo, onClick = onUndo)
+            HeaderActionButton(Icons.AutoMirrored.Outlined.Redo, "Redo", enabled = editMode && canRedo, ambiguous = false, semanticAction = SemanticActionId.Redo, onClick = onRedo)
+            Spacer(Modifier.width(1.dp).height(24.dp).background(MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = .14f)))
             if (editMode) {
-                BasicTextField(
-                    value = titleValue,
-                    onValueChange = { changed -> titleValue = changed; onTitleChange(changed.text) },
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp).onFocusChanged { titleFocused = it.isFocused },
-                    singleLine = false,
-                    maxLines = 3,
-                    textStyle = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                Spacer(Modifier.width(4.dp))
+                // Contextual chips: appear only while the matching block type holds the caret.
+                (focused as? TableBlock)?.let { table ->
+                    HeaderChip("Table", "chip-table", cards, contextual = true) { openTableCard(table) }
+                }
+                (focused as? ImageBlock)?.let { image ->
+                    HeaderChip("Image", "chip-image", cards, contextual = true) { openImageCard(image) }
+                }
+                HeaderChip("Text", "chip-text", cards) { openTextCard() }
+                HeaderChip("Paragraph", "chip-paragraph", cards) { openParagraphCard() }
+                HeaderChip("＋ Insert", "chip-insert", cards) { openInsertCard() }
+                HeaderChip(if (surface == EditorSurface.Document) "Pages" else "View", "chip-layout", cards) { openLayoutCard() }
+                HeaderChip("Review", "chip-review", cards) { openReviewCard() }
+                Spacer(Modifier.width(4.dp))
+            }
+            HeaderActionButton(
+                icon = if (editMode) Icons.Outlined.Visibility else Icons.Outlined.Edit,
+                description = if (editMode) "View document" else "Edit document",
+                ambiguous = true,
+                onClick = onToggleEdit,
+            )
+            Box(Modifier.editorCardAnchor(cards, "chip-more")) {
+                HeaderActionButton(Icons.Outlined.MoreVert, "More", ambiguous = true, semanticAction = SemanticActionId.More, onClick = { openMoreCard() })
+            }
+        }
+    }
+}
+
+/** View-mode mini rail: vertical pill, top-left (demo: ☰ panel · pencil edit · find). */
+@Composable
+private fun ViewModeRail(
+    onOpenPanel: () -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shadowElevation = 8.dp,
+        tonalElevation = 2.dp,
+    ) {
+        // Horizontal: sits above the reading text instead of overlapping its left edge.
+        Row(
+            Modifier.padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            RailButton(Icons.Outlined.Menu, "Document panel", onOpenPanel)
+            RailButton(Icons.Outlined.Edit, "Edit document", onEdit)
+            RailButton(Icons.Outlined.Search, "Find", onOpenPanel)
+        }
+    }
+}
+
+@Composable
+private fun RailButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.size(38.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    ) {
+        Box(contentAlignment = Alignment.Center) { Icon(icon, description, Modifier.size(20.dp)) }
+    }
+}
+
+/**
+ * Reader panel (demo, with the user's one change: opens from TOP CENTER on phone and tablet).
+ * Crumb · title rename · tool grid (view mode only) · heading search · ToC · words/saved/progress.
+ */
+@Composable
+private fun ReaderPanel(
+    modifier: Modifier,
+    title: String,
+    editMode: Boolean,
+    onTitleChange: (String) -> Unit,
+    words: Int,
+    saved: Boolean,
+    progress: Float,
+    outline: List<DocHeading>,
+    onJumpTo: (DocHeading) -> Unit,
+    onEdit: () -> Unit,
+    documentViewMode: DocumentViewMode?,
+    onDocumentViewMode: (DocumentViewMode) -> Unit,
+    fontSize: Float,
+    onFontSize: (Float) -> Unit,
+    onSpeak: () -> Unit,
+    onCopy: () -> Unit,
+    onExportPdf: () -> Unit,
+    onExportDocx: () -> Unit,
+    onOpenSidebar: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var headingQuery by remember { mutableStateOf("") }
+    var showZoom by remember { mutableStateOf(false) }
+    var showExport by remember { mutableStateOf(false) }
+    var titleValue by remember(title) { mutableStateOf(TextFieldValue(title)) }
+    val findFocus = remember { FocusRequester() }
+    Surface(
+        modifier = modifier.widthIn(max = 380.dp).fillMaxWidth(.92f).heightIn(max = 560.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 16.dp,
+        tonalElevation = 3.dp,
+    ) {
+        Column(Modifier.padding(14.dp).verticalScroll(rememberScrollState())) {
+            Surface(onClick = onOpenSidebar, color = Color.Transparent) {
+                Text(
+                    "Workspace ›",
+                    Modifier.padding(vertical = 2.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            } else {
-                Text(title, Modifier.weight(1f).padding(horizontal = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 3)
             }
-            AnimatedContent(editMode, label = "editor-mode") { editing ->
-                if (editing) Row {
-                    IconButton(onClick = onUndo, enabled = canUndo) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo") }
-                    IconButton(onClick = onRedo, enabled = canRedo) { Icon(Icons.AutoMirrored.Outlined.Redo, "Redo") }
-                } else IconButton(onClick = onToggleEdit) { Icon(Icons.Outlined.Edit, "Edit document") }
-            }
-            Box {
-                var showDocSettings by remember { mutableStateOf(false) }
-                IconButton(onClick = { showDocSettings = true }) { Icon(Icons.Outlined.MoreVert, "Document settings") }
-                DropdownMenu(expanded = showDocSettings, onDismissRequest = { showDocSettings = false }) {
-                    Text(
-                        "Document settings",
-                        Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Flow document")
-                                Text(
-                                    "Blocks flow in order and adapt to new space",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            if (overlapMode == DocOverlapMode.Reflow) {
-                                Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
-                            } else Spacer(Modifier.size(24.dp))
-                        },
-                        onClick = {
-                            showDocSettings = false
-                            if (overlapMode != DocOverlapMode.Reflow) onSetOverlapMode(DocOverlapMode.Reflow)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Document canvas")
-                                Text(
-                                    "Fixed-size pages with movable, resizable layers",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            if (overlapMode == DocOverlapMode.Bounded) {
-                                Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
-                            } else Spacer(Modifier.size(24.dp))
-                        },
-                        onClick = {
-                            showDocSettings = false
-                            if (overlapMode != DocOverlapMode.Bounded) onSetOverlapMode(DocOverlapMode.Bounded)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Infinite canvas")
-                                Text(
-                                    "Free canvas — place and overlap blocks anywhere",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        leadingIcon = {
-                            if (overlapMode == DocOverlapMode.Overlap) {
-                                Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
-                            } else Spacer(Modifier.size(24.dp))
-                        },
-                        onClick = {
-                            showDocSettings = false
-                            if (overlapMode != DocOverlapMode.Overlap) onSetOverlapMode(DocOverlapMode.Overlap)
-                        },
-                    )
-                    if (overlapMode == DocOverlapMode.Bounded) {
-                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                        Text(
-                            "Canvas · ${canvasSpec.width.roundToInt()} × ${canvasSpec.height.roundToInt()} pt · ${canvasSpec.pageCount} page${if (canvasSpec.pageCount == 1) "" else "s"}",
-                            Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        DropdownMenuItem(text = { Text("A4 portrait") }, onClick = { showDocSettings = false; onSetCanvasSpec(DocCanvasSpec.a4().copy(pageCount = canvasSpec.pageCount)) })
-                        DropdownMenuItem(text = { Text("US Letter portrait") }, onClick = { showDocSettings = false; onSetCanvasSpec(DocCanvasSpec.letter().copy(pageCount = canvasSpec.pageCount)) })
-                        DropdownMenuItem(text = { Text("US Legal portrait") }, onClick = { showDocSettings = false; onSetCanvasSpec(DocCanvasSpec.legal().copy(pageCount = canvasSpec.pageCount)) })
-                        DropdownMenuItem(
-                            text = { Text("Swap portrait / landscape") },
-                            onClick = { showDocSettings = false; onSetCanvasSpec(canvasSpec.copy(width = canvasSpec.height, height = canvasSpec.width)) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Add page") },
-                            onClick = { showDocSettings = false; onSetCanvasSpec(canvasSpec.copy(pageCount = canvasSpec.pageCount + 1).normalized()) },
-                        )
-                        if (canvasSpec.pageCount > minimumCanvasPages) {
-                            DropdownMenuItem(
-                                text = { Text("Remove last page") },
-                                onClick = { showDocSettings = false; onSetCanvasSpec(canvasSpec.copy(pageCount = canvasSpec.pageCount - 1).normalized()) },
-                            )
+            BasicTextField(
+                value = titleValue,
+                onValueChange = { changed -> titleValue = changed; onTitleChange(changed.text) },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            )
+            Text(
+                "Tap the name to rename",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!editMode) {
+                Spacer(Modifier.height(12.dp))
+                EditorCardChoiceGrid(
+                    choices = listOf(
+                        EditorCardChoice("edit", "Edit", icon = Icons.Outlined.Edit),
+                        EditorCardChoice("find", "Find", icon = Icons.Outlined.Search),
+                        EditorCardChoice("size", "Text size", glyph = "Aa"),
+                        EditorCardChoice("aloud", "Aloud", icon = Icons.AutoMirrored.Outlined.VolumeUp),
+                        EditorCardChoice("copy", "Copy", icon = Icons.Outlined.ContentCopy),
+                        EditorCardChoice("export", "Export", icon = Icons.Outlined.PictureAsPdf),
+                    ),
+                    onPick = { id ->
+                        when (id) {
+                            "edit" -> { onDismiss(); onEdit() }
+                            "find" -> runCatching { findFocus.requestFocus() }
+                            "size" -> { showZoom = !showZoom; showExport = false }
+                            "aloud" -> onSpeak()
+                            "copy" -> onCopy()
+                            "export" -> { showExport = !showExport; showZoom = false }
                         }
-                    }
-                    if (overlapMode == DocOverlapMode.Reflow) {
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Paginated view")
-                                    Text(
-                                        "Preview the document as fixed A4 pages",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                            leadingIcon = {
-                                if (paginatedView) {
-                                    Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
-                                } else Spacer(Modifier.size(24.dp))
-                            },
-                            onClick = {
-                                showDocSettings = false
-                                onTogglePaginatedView()
-                            },
-                        )
-                    }
-                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Export PDF")
-                                Text(
-                                    "Print or save via the system print dialog",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                        leadingIcon = { Icon(Icons.Outlined.PictureAsPdf, null) },
-                        onClick = {
-                            showDocSettings = false
-                            onExportPdf()
-                        },
+                    },
+                )
+                if (documentViewMode != null) {
+                    Spacer(Modifier.height(10.dp))
+                    NorfoldPopupSectionLabel("Document view")
+                    NorfoldPopupRow(
+                        text = "Page view",
+                        icon = Icons.Outlined.Fullscreen,
+                        selected = documentViewMode == DocumentViewMode.PageView,
+                        onClick = { onDocumentViewMode(DocumentViewMode.PageView) },
+                        trailing = { if (documentViewMode == DocumentViewMode.PageView) Icon(Icons.Outlined.Check, null, Modifier.size(18.dp)) },
                     )
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Export editable DOCX")
-                                Text(
-                                    "Preserves headings and text flow; free positioning is flattened",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                    NorfoldPopupRow(
+                        text = "Reading view",
+                        icon = Icons.Outlined.FormatAlignLeft,
+                        selected = documentViewMode == DocumentViewMode.ReadingView,
+                        onClick = { onDocumentViewMode(DocumentViewMode.ReadingView) },
+                        trailing = { if (documentViewMode == DocumentViewMode.ReadingView) Icon(Icons.Outlined.Check, null, Modifier.size(18.dp)) },
+                    )
+                    Text(
+                        if (documentViewMode == DocumentViewMode.PageView) {
+                            "Keeps the fixed page layout and shrinks the whole page to fit this screen."
+                        } else {
+                            "Reflows the same content for comfortable reading. The saved page layout does not change."
                         },
-                        onClick = {
-                            showDocSettings = false
-                            onExportDocx()
-                        },
+                        Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
+            if (showZoom) {
+                EditorCardStepperRow(
+                    label = "Text zoom",
+                    valueText = "${(85 + fontSize.coerceIn(0f, 1f) * 45).roundToInt()}%",
+                    onDecrease = { onFontSize(fontSize - 0.1f) },
+                    onIncrease = { onFontSize(fontSize + 0.1f) },
+                )
+            }
+            if (showExport) {
+                NorfoldPopupRow("PDF", icon = Icons.Outlined.PictureAsPdf, onClick = { onDismiss(); onExportPdf() })
+                NorfoldPopupRow("Editable DOCX", onClick = { onDismiss(); onExportDocx() })
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = headingQuery,
+                onValueChange = { headingQuery = it },
+                modifier = Modifier.fillMaxWidth().focusRequester(findFocus),
+                singleLine = true,
+                placeholder = { Text("Find a heading") },
+                leadingIcon = { Icon(Icons.Outlined.Search, null, Modifier.size(18.dp)) },
+            )
+            Spacer(Modifier.height(6.dp))
+            NorfoldPopupSectionLabel("On this page")
+            val filtered = outline.filter { headingQuery.isBlank() || it.label.contains(headingQuery, ignoreCase = true) }
+            if (filtered.isEmpty()) {
+                Text(
+                    if (outline.isEmpty()) "No headings yet" else "No matching headings",
+                    Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            filtered.forEach { heading ->
+                NorfoldPopupRow(
+                    text = heading.label,
+                    modifier = Modifier.padding(start = ((heading.level - 1).coerceAtMost(3) * 12).dp),
+                    onClick = { onJumpTo(heading) },
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$words words",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (saved) "Saved ✓" else "Saving…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(progress.coerceIn(0f, 1f))
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+            }
         }
+    }
+}
+
+/** Top-bar chip: pill trigger for an anchored editor card; ring highlights while its card is open. */
+@Composable
+private fun HeaderChip(
+    label: String,
+    cardKey: String,
+    cards: EditorCardController,
+    contextual: Boolean = false,
+    onOpen: () -> Unit,
+) {
+    val active = cards.isOpen(cardKey)
+    Surface(
+        modifier = Modifier.padding(horizontal = 2.dp).editorCardAnchor(cards, cardKey),
+        shape = RoundedCornerShape(10.dp),
+        color = when {
+            active -> MaterialTheme.colorScheme.surface
+            contextual -> MaterialTheme.colorScheme.primary.copy(alpha = .14f)
+            else -> MaterialTheme.colorScheme.surface.copy(alpha = .55f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            if (active) 1.5.dp else 1.dp,
+            if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = .6f),
+        ),
+        onClick = onOpen,
+    ) {
+        Text(
+            label,
+            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
     }
 }
 
@@ -2082,6 +3469,8 @@ private fun SharedBlockRow(
     block: DocumentBlock,
     index: Int,
     mode: BlockSurfaceMode,
+    documentDensity: Density,
+    documentFontFamily: FontFamily,
     focus: BlockCursor?,
     onFocusConsumed: () -> Unit,
     onReplace: (DocumentBlock) -> Unit,
@@ -2107,6 +3496,7 @@ private fun SharedBlockRow(
     onEditMath: (MathBlock) -> Unit,
     onEditDiagram: (MermaidBlock) -> Unit,
     onSelectionChange: (EditorSelection) -> Unit,
+    chromeVisible: Boolean,
     nested: Boolean = false,
     onWrap: (ContainerAxis) -> Unit = {},
     onUnwrap: () -> Unit = {},
@@ -2124,19 +3514,9 @@ private fun SharedBlockRow(
     isDragHovered: Boolean = false,
     dragHoverEdge: Edge? = null,
 ) {
+    val hapticView = LocalView.current
     var menu by remember(block.id) { mutableStateOf(false) }
-    var insertMenu by remember(block.id) { mutableStateOf(false) }
     val rangeSelectable = block is ParagraphBlock || block is HeadingBlock
-    val menuStyle = LocalContextualMenuStyle.current
-    val menuColor = LocalContextualMenuColor.current
-    val menuShape = when (menuStyle) {
-        ContextualMenuStyle.Pill -> RoundedCornerShape(18.dp)
-        ContextualMenuStyle.Block -> RoundedCornerShape(8.dp)
-        ContextualMenuStyle.Minimal -> RoundedCornerShape(2.dp)
-    }
-    val menuContainer = if (menuColor == ContextualMenuColor.AppAccent) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else MaterialTheme.colorScheme.surface
     // Report window bounds for drag hit-testing; clear on dispose so stale rects never match.
     DisposableEffect(block.id) { onDispose { onReportBounds(null) } }
     val dropHintColor = MaterialTheme.colorScheme.primary
@@ -2153,7 +3533,7 @@ private fun SharedBlockRow(
         ),
         verticalAlignment = Alignment.Top,
     ) {
-        if (mode == BlockSurfaceMode.Edit) {
+        if (mode == BlockSurfaceMode.Edit && chromeVisible) {
             // Drag handle: works at any depth. Reports the window pointer while dragging so the host can
             // hit-test across containers and drop (reorder, move into a group, or edge-split into a new row).
             var handleOrigin by remember(block.id) { mutableStateOf(Offset.Zero) }
@@ -2165,18 +3545,22 @@ private fun SharedBlockRow(
                     .onGloballyPositioned { handleOrigin = it.positionInWindow() }
                     .pointerInput(block.id) {
                         detectDragGestures(
-                            onDragStart = { local -> dragPos = handleOrigin + local; onDragBegin(); onDragTo(dragPos) },
+                            onDragStart = { local ->
+                                hapticView.performNorfoldHaptic(NorfoldHaptic.DragStart)
+                                dragPos = handleOrigin + local
+                                onDragBegin()
+                                onDragTo(dragPos)
+                            },
                             onDrag = { change, amount -> change.consume(); dragPos += amount; onDragTo(dragPos) },
-                            onDragEnd = { onDragDrop() },
+                            onDragEnd = {
+                                onDragDrop()
+                                hapticView.performNorfoldHaptic(NorfoldHaptic.Confirm)
+                            },
                             onDragCancel = { onDragAbort() },
                         )
                     },
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Box {
-                IconButton(onClick = { insertMenu = true }, modifier = Modifier.size(38.dp)) { Icon(Icons.Outlined.Add, "Insert below", Modifier.size(18.dp)) }
-                InsertBlockMenu(insertMenu, { insertMenu = false }) { insertMenu = false; onInsert(it) }
-            }
         }
         Box(
             Modifier.weight(1f)
@@ -2197,6 +3581,10 @@ private fun SharedBlockRow(
                     if (mode == BlockSurfaceMode.View) Modifier.combinedClickable(onClick = {}, onLongClick = { menu = true }) else Modifier,
                 ),
         ) {
+            CompositionLocalProvider(
+                LocalDensity provides documentDensity,
+                LocalTextStyle provides LocalTextStyle.current.copy(fontFamily = documentFontFamily),
+            ) {
             RenderBlock(
                 block = block,
                 mode = mode,
@@ -2219,21 +3607,19 @@ private fun SharedBlockRow(
                 onSelectionChange = onSelectionChange,
                 renderChild = renderChild,
             )
+            }
             if (rangeSelectionActive && rangeSelectable) {
                 Box(Modifier.matchParentSize().clickable(onClick = onExtendRangeSelection))
             }
         }
-        if (mode == BlockSurfaceMode.Edit || menu) {
+        if ((mode == BlockSurfaceMode.Edit && chromeVisible) || menu) {
             Box {
-                if (mode == BlockSurfaceMode.Edit) {
+                if (mode == BlockSurfaceMode.Edit && chromeVisible) {
                     IconButton(onClick = { menu = true }, modifier = Modifier.size(38.dp)) { Icon(Icons.Outlined.MoreVert, "Block actions", Modifier.size(18.dp)) }
                 }
-                DropdownMenu(
+                NorfoldDropdownMenu(
                     expanded = menu,
                     onDismissRequest = { menu = false },
-                    shape = menuShape,
-                    containerColor = menuContainer,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 ) {
                     when (block) {
                         is ChartBlock -> DropdownMenuItem({ Text("Edit chart") }, onClick = { menu = false; onEditChart(block) })
@@ -2302,6 +3688,12 @@ private fun DocumentBlock.isTextFamily(): Boolean = when (this) {
     else -> false
 }
 
+private fun DocumentBlock.supportsAutoCanvasHeight(): Boolean = when (this) {
+    is ParagraphBlock, is HeadingBlock, is BulletListBlock, is NumberedListBlock,
+    is TodoListBlock, is QuoteBlock, is CalloutBlock, is ContainerBlock -> true
+    else -> false
+}
+
 @Composable
 private fun BlockCloneContent(block: DocumentBlock) {
     RenderBlock(
@@ -2367,8 +3759,8 @@ private fun RenderBlock(
                 )
             }
         }
-        is ParagraphBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface))
-        is HeadingBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = when (block.level) { 1 -> 30.sp; 2 -> 24.sp; else -> 20.sp }, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface))
+        is ParagraphBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface, textAlign = block.align.toTextAlign()))
+        is HeadingBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = when (block.level) { 1 -> 30.sp; 2 -> 24.sp; else -> 20.sp }, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, textAlign = block.align.toTextAlign()))
         is BulletListBlock -> if (mode == BlockSurfaceMode.View) ListBlock(block.items.map { it.content }, "•") else EditableList(
             items = block.items,
             marker = { "•" },
@@ -2437,16 +3829,34 @@ private fun RenderBlock(
             }
         }
         is CalloutBlock -> Surface(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f), shape = RoundedCornerShape(10.dp)) { Column(Modifier.padding(12.dp)) {
-            if (mode == BlockSurfaceMode.Edit) {
-                SimpleBlockTextField(block.title, { onReplace(block.copy(title = it)) }, Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold)
-                SimpleBlockTextField(block.children.joinToString("\n") { it.plainText() }, { onReplace(block.copy(children = listOf(ParagraphBlock(content = listOf(InlineText(it)))))) }, Modifier.fillMaxWidth().padding(top = 6.dp))
-            } else {
-                Text(block.title, fontWeight = FontWeight.Bold)
-                block.children.forEach { child ->
-                    InlineRichText(
-                        nodes = child.editableInlineContent() ?: listOf(InlineText(child.plainText())),
-                        modifier = Modifier.fillMaxWidth(),
+            // Title row doubles as the toggle: chevron collapses the body (details/toggle block).
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = { onReplace(block.copy(collapsed = !block.collapsed)) },
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        if (block.collapsed) Icons.AutoMirrored.Outlined.KeyboardArrowRight else Icons.Outlined.KeyboardArrowDown,
+                        if (block.collapsed) "Expand" else "Collapse",
+                        Modifier.size(20.dp),
                     )
+                }
+                if (mode == BlockSurfaceMode.Edit) {
+                    SimpleBlockTextField(block.title, { onReplace(block.copy(title = it)) }, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                } else {
+                    Text(block.title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                }
+            }
+            if (!block.collapsed) {
+                if (mode == BlockSurfaceMode.Edit) {
+                    SimpleBlockTextField(block.children.joinToString("\n") { it.plainText() }, { onReplace(block.copy(children = listOf(ParagraphBlock(content = listOf(InlineText(it)))))) }, Modifier.fillMaxWidth().padding(top = 6.dp))
+                } else {
+                    block.children.forEach { child ->
+                        InlineRichText(
+                            nodes = child.editableInlineContent() ?: listOf(InlineText(child.plainText())),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         } }
@@ -2472,6 +3882,7 @@ private fun RenderBlock(
         is ChartBlock -> EditableChartBlock(block, mode, onReplace, onEditChart)
         is MathBlock -> EditableMathBlock(block, mode, onReplace, onEditMath)
         is MermaidBlock -> EditableMermaidBlock(block, mode, onReplace, onEditDiagram)
+        is ShapeBlock -> EditableShapeBlock(block, mode, onReplace)
     }
 }
 
@@ -2552,8 +3963,9 @@ private fun InlineTextBlock(
 ) {
     val plain = content.joinToString("") { it.plainText() }
     val emojiMap = LocalEmojiShortcodes.current
+    val resolvedStyle = LocalTextStyle.current.merge(style)
     if (mode == BlockSurfaceMode.View) {
-        InlineRichText(content, Modifier.fillMaxWidth().padding(vertical = 7.dp), style)
+        InlineRichText(content, Modifier.fillMaxWidth().padding(vertical = 7.dp), resolvedStyle)
     } else {
         var value by remember(id) { mutableStateOf(TextFieldValue(plain)) }
         var slashMenu by remember(id) { mutableStateOf(false) }
@@ -2578,8 +3990,8 @@ private fun InlineTextBlock(
             )
         }
 
-        LaunchedEffect(plain, focused) {
-            if (!focused && value.composition == null && plain != value.text) {
+        LaunchedEffect(plain) {
+            if (value.composition == null && plain != value.text) {
                 value = value.copy(
                     text = plain,
                     selection = TextRange(
@@ -2628,6 +4040,17 @@ private fun InlineTextBlock(
                     } else -1
                     val newline = insertion.takeIf { it >= 0 && changed.text.getOrNull(it) == '\n' }
                     when {
+                        changed.composition != null -> {
+                            // Keep an IME composition local. Persisting each intermediate syllable
+                            // breaks composing keyboards and pollutes undo with half-finished text.
+                            value = changed
+                            publishSelection(changed)
+                        }
+                        previous.composition != null -> {
+                            value = changed
+                            onText(plain, changed.text)
+                            publishSelection(changed)
+                        }
                         pastedLink != null -> {
                             val selectedText = previous.text.substring(pastedLink.start, pastedLink.end)
                             value = previous.copy(selection = TextRange(pastedLink.end))
@@ -2672,7 +4095,7 @@ private fun InlineTextBlock(
                         }
                     }
                 },
-                textStyle = style,
+                textStyle = resolvedStyle,
                 visualTransformation = editingVisual,
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 onTextLayout = { textLayout = it },
@@ -2795,6 +4218,151 @@ private fun EditableMermaidBlock(block: MermaidBlock, mode: BlockSurfaceMode, on
 }
 
 @Composable
+private fun EditableShapeBlock(
+    block: ShapeBlock,
+    mode: BlockSurfaceMode,
+    onReplace: (DocumentBlock) -> Unit,
+) {
+    var catalogOpen by remember { mutableStateOf(false) }
+    val fill = Color(block.fillColor)
+    val stroke = Color(block.strokeColor)
+    val vectorSvg = remember(block.vectorAsset?.svg) { block.vectorAsset?.svg?.toByteArray(Charsets.UTF_8) }
+    if (catalogOpen) {
+        ShapeCatalogSheet(
+            selectedAssetId = block.vectorAsset?.id,
+            selectedPrimitive = block.kind,
+            tint = fill,
+            onDismiss = { catalogOpen = false },
+            onSelectPrimitive = { kind -> onReplace(block.copy(kind = kind, vectorAsset = null)) },
+            onSelectAsset = { asset -> onReplace(block.copy(vectorAsset = asset)) },
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(block.displayHeightDp.coerceIn(80f, 560f).dp)
+                .graphicsLayer { rotationZ = block.rotationDegrees.coerceIn(-180f, 180f) },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (vectorSvg != null) {
+                AsyncImage(
+                    model = vectorSvg,
+                    contentDescription = block.vectorAsset?.title,
+                    modifier = Modifier.fillMaxSize().padding(18.dp),
+                    contentScale = ContentScale.Fit,
+                    colorFilter = ColorFilter.tint(fill),
+                )
+            } else Canvas(Modifier.fillMaxSize().padding(12.dp)) {
+                val strokeStyle = Stroke(width = block.strokeWidthDp.coerceIn(0.5f, 16f).dp.toPx())
+                val w = size.width
+                val h = size.height
+                fun polygon(points: List<Offset>): Path = Path().apply {
+                    points.firstOrNull()?.let { moveTo(it.x, it.y) }
+                    points.drop(1).forEach { lineTo(it.x, it.y) }
+                    close()
+                }
+                fun drawFilledPath(path: Path) {
+                    drawPath(path, fill)
+                    drawPath(path, stroke, style = strokeStyle)
+                }
+                when (block.kind) {
+                    ShapeKind.Rectangle -> {
+                        drawRect(fill)
+                        drawRect(stroke, style = strokeStyle)
+                    }
+                    ShapeKind.RoundedRectangle -> {
+                        val radius = CornerRadius(minOf(w, h) * 0.12f)
+                        drawRoundRect(fill, cornerRadius = radius)
+                        drawRoundRect(stroke, cornerRadius = radius, style = strokeStyle)
+                    }
+                    ShapeKind.Ellipse -> {
+                        drawOval(fill)
+                        drawOval(stroke, style = strokeStyle)
+                    }
+                    ShapeKind.Triangle -> drawFilledPath(polygon(listOf(Offset(w / 2f, 0f), Offset(w, h), Offset(0f, h))))
+                    ShapeKind.Diamond -> drawFilledPath(polygon(listOf(Offset(w / 2f, 0f), Offset(w, h / 2f), Offset(w / 2f, h), Offset(0f, h / 2f))))
+                    ShapeKind.Arrow -> drawFilledPath(
+                        polygon(
+                            listOf(
+                                Offset(0f, h * .34f), Offset(w * .62f, h * .34f), Offset(w * .62f, 0f),
+                                Offset(w, h / 2f), Offset(w * .62f, h), Offset(w * .62f, h * .66f), Offset(0f, h * .66f),
+                            ),
+                        ),
+                    )
+                    ShapeKind.Line -> drawLine(stroke, Offset(0f, h / 2f), Offset(w, h / 2f), strokeWidth = strokeStyle.width)
+                    ShapeKind.Star -> {
+                        val center = Offset(w / 2f, h / 2f)
+                        val outer = minOf(w, h) / 2f
+                        val inner = outer * .42f
+                        val points = (0 until 10).map { index ->
+                            val radius = if (index % 2 == 0) outer else inner
+                            val angle = -PI / 2 + index * PI / 5
+                            Offset(center.x + cos(angle).toFloat() * radius, center.y + sin(angle).toFloat() * radius)
+                        }
+                        drawFilledPath(polygon(points))
+                    }
+                    ShapeKind.SpeechBubble -> {
+                        val bodyHeight = h * .78f
+                        val radius = CornerRadius(minOf(w, bodyHeight) * .12f)
+                        drawRoundRect(fill, size = androidx.compose.ui.geometry.Size(w, bodyHeight), cornerRadius = radius)
+                        drawRoundRect(stroke, size = androidx.compose.ui.geometry.Size(w, bodyHeight), cornerRadius = radius, style = strokeStyle)
+                        drawFilledPath(polygon(listOf(Offset(w * .18f, bodyHeight - 2f), Offset(w * .34f, bodyHeight - 2f), Offset(w * .18f, h))))
+                    }
+                    ShapeKind.Hexagon -> drawFilledPath(
+                        polygon(listOf(Offset(w * .25f, 0f), Offset(w * .75f, 0f), Offset(w, h / 2f), Offset(w * .75f, h), Offset(w * .25f, h), Offset(0f, h / 2f))),
+                    )
+                }
+            }
+            if (block.text.isNotBlank()) {
+                Text(
+                    block.text,
+                    Modifier.padding(28.dp),
+                    color = if (fill.luminance() < .45f) Color.White else Color.Black,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (mode == BlockSurfaceMode.Edit) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { catalogOpen = true }) {
+                    Text(block.vectorAsset?.title ?: block.kind.name.replace("RoundedRectangle", "Rounded rectangle").replace("SpeechBubble", "Speech bubble"))
+                }
+                TextButton(onClick = { onReplace(block.copy(rotationDegrees = block.rotationDegrees - 15f)) }) { Text("Rotate −") }
+                TextButton(onClick = { onReplace(block.copy(rotationDegrees = block.rotationDegrees + 15f)) }) { Text("Rotate +") }
+            }
+            block.vectorAsset?.let { asset ->
+                Text(
+                    "${asset.collection} • ${asset.spdxLicense} • saved offline",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            SimpleLabeledBlockField("Shape text", block.text) { onReplace(block.copy(text = it)) }
+            Text("Fill", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(listOf(0xFF6F36FF, 0xFF2F80ED, 0xFF00A67E, 0xFFF2994A, 0xFFEB5757, 0xFFF2F2F2, 0xFF202537)) { color ->
+                    Surface(
+                        modifier = Modifier.size(36.dp),
+                        shape = CircleShape,
+                        color = Color(color),
+                        border = BorderStroke(if (color == block.fillColor) 3.dp else 1.dp, if (color == block.fillColor) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+                        onClick = { onReplace(block.copy(fillColor = color)) },
+                    ) {}
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onReplace(block.copy(displayHeightDp = (block.displayHeightDp - 24f).coerceAtLeast(80f))) }) { Text("Shorter") }
+                TextButton(onClick = { onReplace(block.copy(displayHeightDp = (block.displayHeightDp + 24f).coerceAtMost(560f))) }) { Text("Taller") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun EditableChartBlock(block: ChartBlock, mode: BlockSurfaceMode, onReplace: (DocumentBlock) -> Unit, onEditChart: (ChartBlock) -> Unit) {
     Column {
         if (mode == BlockSurfaceMode.Edit) {
@@ -2913,7 +4481,7 @@ private fun EditableListItem(
                     }
                 }
             },
-            textStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp, color = MaterialTheme.colorScheme.onSurface),
+            textStyle = LocalTextStyle.current.merge(TextStyle(fontSize = 16.sp, lineHeight = 24.sp, color = MaterialTheme.colorScheme.onSurface)),
             visualTransformation = editingVisual,
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             onTextLayout = { textLayout = it },
@@ -3044,7 +4612,7 @@ private fun TodoItemTextField(
                 publishSelection(changed)
             }
         },
-        textStyle = TextStyle(fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface),
+        textStyle = LocalTextStyle.current.merge(TextStyle(fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)),
         visualTransformation = editingVisual,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         onTextLayout = { textLayout = it },
@@ -3356,7 +4924,7 @@ private fun NativeTable(table: TableBlock, mode: BlockSurfaceMode, onReplace: (D
     }
     }
 
-    DropdownMenu(columnMenu, { columnMenu = false }) {
+    NorfoldDropdownMenu(columnMenu, { columnMenu = false }) {
         val column = selectedColumn.coerceIn(0, columnCount - 1)
         fun insertColumn(index: Int) {
             val at = index.coerceIn(0, columnCount)
@@ -3400,7 +4968,7 @@ private fun NativeTable(table: TableBlock, mode: BlockSurfaceMode, onReplace: (D
             ); selectedColumn = -1; columnMenu = false
         })
     }
-    DropdownMenu(rowMenu, { rowMenu = false }) {
+    NorfoldDropdownMenu(rowMenu, { rowMenu = false }) {
         val row = selectedRow.coerceIn(0, normalizedRows().lastIndex.coerceAtLeast(0))
         fun insertRow(index: Int) {
             replace(rows = normalizedRows().toMutableList().apply { add(index.coerceIn(0, size), List(columnCount) { TableCell() }) })
@@ -3713,23 +5281,92 @@ private fun StableLandscapeOrientationEffect(enabled: Boolean) {
     Box { TextButton({ open = true }) { Icon(Icons.Outlined.Add, null); Text("Type / to insert a block") }; InsertBlockMenu(open, { open = false }) { open = false; onInsert(it) } }
 }
 
-@Composable private fun InsertBlockMenu(open: Boolean, dismiss: () -> Unit, query: String = "", select: (InsertBlockType) -> Unit) {
-    val normalized = query.trim().lowercase()
-    val matches = InsertBlockType.entries.filter { type ->
-        val label = type.name.replace(Regex("([a-z])([A-Z])"), "$1 $2")
-        normalized.isBlank() || label.lowercase().contains(normalized) || when (type) {
-            InsertBlockType.Chart -> normalized in setOf("plot", "graph", "histogram", "draw graph")
-            InsertBlockType.TodoList -> normalized in setOf("checklist", "task")
-            InsertBlockType.Embed -> normalized in setOf("link", "url")
-            InsertBlockType.Math -> normalized in setOf("equation", "formula", "latex")
-            InsertBlockType.Container -> normalized in setOf("columns", "layout", "group", "row", "column", "split")
-            else -> false
-        }
+// Session-scoped recents for the insert menu (research 7b); deliberately not persisted.
+private val recentInsertTypes = mutableStateListOf<InsertBlockType>()
+
+private fun insertTypeLabel(type: InsertBlockType): String = when (type) {
+    InsertBlockType.TodoList -> "To-do list"
+    InsertBlockType.BulletList -> "Bulleted list"
+    InsertBlockType.NumberedList -> "Numbered list"
+    InsertBlockType.Mermaid -> "Diagram"
+    InsertBlockType.Container -> "Columns"
+    InsertBlockType.Callout -> "Toggle"
+    else -> type.name.replace(Regex("([a-z])([A-Z])"), "$1 $2")
+}
+
+// Sectioned per research 7b: everyday blocks first, media together, power blocks last.
+private val insertMenuSections = listOf(
+    "Basic" to listOf(
+        InsertBlockType.Text, InsertBlockType.Heading, InsertBlockType.BulletList,
+        InsertBlockType.NumberedList, InsertBlockType.TodoList, InsertBlockType.Quote,
+        InsertBlockType.Callout, InsertBlockType.Divider,
+    ),
+    "Media" to listOf(InsertBlockType.Image, InsertBlockType.File, InsertBlockType.Embed),
+    "Advanced" to listOf(
+        InsertBlockType.Table, InsertBlockType.Chart, InsertBlockType.Code,
+        InsertBlockType.Math, InsertBlockType.Mermaid, InsertBlockType.Container,
+        InsertBlockType.Shape,
+    ),
+)
+
+private fun insertTypeMatches(type: InsertBlockType, normalized: String): Boolean {
+    if (normalized.isBlank()) return true
+    if (insertTypeLabel(type).lowercase().contains(normalized)) return true
+    return when (type) {
+        InsertBlockType.Chart -> normalized in setOf("plot", "graph", "histogram", "draw graph")
+        InsertBlockType.TodoList -> normalized in setOf("checklist", "task")
+        InsertBlockType.Embed -> normalized in setOf("link", "url")
+        InsertBlockType.Math -> normalized in setOf("equation", "formula", "latex")
+        InsertBlockType.Container -> normalized in setOf("columns", "layout", "group", "row", "column", "split")
+        InsertBlockType.Callout -> normalized in setOf("callout", "details", "collapse", "toggle")
+        InsertBlockType.Mermaid -> normalized in setOf("mermaid", "flowchart")
+        else -> false
     }
-    DropdownMenu(open, dismiss) {
-        if (query.isNotBlank()) Text("/$query", Modifier.padding(horizontal = 12.dp, vertical = 7.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        matches.forEach { type -> DropdownMenuItem({ Text(type.name.replace(Regex("([a-z])([A-Z])"), "$1 $2")) }, onClick = { select(type) }) }
-        if (matches.isEmpty()) Text("No matching block", Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable private fun InsertBlockMenu(open: Boolean, dismiss: () -> Unit, query: String = "", select: (InsertBlockType) -> Unit) {
+    // Slash-typing drives the query inline; the button-opened menu gets its own search field.
+    var localQuery by remember(open) { mutableStateOf("") }
+    val slashDriven = query.isNotBlank()
+    val normalized = (if (slashDriven) query else localQuery).trim().lowercase()
+    val pick: (InsertBlockType) -> Unit = { type ->
+        recentInsertTypes.remove(type)
+        recentInsertTypes.add(0, type)
+        while (recentInsertTypes.size > 4) recentInsertTypes.removeAt(recentInsertTypes.lastIndex)
+        select(type)
+    }
+    NorfoldDropdownMenu(open, dismiss) {
+        if (slashDriven) {
+            Text("/$query", Modifier.padding(horizontal = 12.dp, vertical = 7.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            OutlinedTextField(
+                value = localQuery,
+                onValueChange = { localQuery = it },
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp).width(232.dp),
+                placeholder = { Text("Search blocks", fontSize = 12.sp) },
+                textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
+                singleLine = true,
+                shape = RoundedCornerShape(10.dp),
+            )
+        }
+        if (normalized.isBlank()) {
+            if (!slashDriven && recentInsertTypes.isNotEmpty()) {
+                Text("RECENT", Modifier.padding(horizontal = 12.dp, vertical = 5.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                recentInsertTypes.toList().forEach { type ->
+                    DropdownMenuItem({ Text(insertTypeLabel(type)) }, onClick = { pick(type) })
+                }
+            }
+            insertMenuSections.forEach { (title, types) ->
+                Text(title.uppercase(), Modifier.padding(horizontal = 12.dp, vertical = 5.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                types.forEach { type ->
+                    DropdownMenuItem({ Text(insertTypeLabel(type)) }, onClick = { pick(type) })
+                }
+            }
+        } else {
+            val matches = InsertBlockType.entries.filter { insertTypeMatches(it, normalized) }
+            matches.forEach { type -> DropdownMenuItem({ Text(insertTypeLabel(type)) }, onClick = { pick(type) }) }
+            if (matches.isEmpty()) Text("No matching block", Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -3755,6 +5392,7 @@ private fun newDocumentBlock(type: InsertBlockType): DocumentBlock = when (type)
     InsertBlockType.Image -> ImageBlock()
     InsertBlockType.File -> FileBlock()
     InsertBlockType.Embed -> EmbedBlock()
+    InsertBlockType.Shape -> ShapeBlock()
     InsertBlockType.Chart -> ChartBlock()
     InsertBlockType.Math -> MathBlock(tex = "x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}")
     InsertBlockType.Mermaid -> MermaidBlock(code = "graph TD\n  A[Start] --> B[Done]")
@@ -3767,7 +5405,7 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is NumberedListBlock -> NumberedListBlock(start = block.start, items = block.items)
     is TodoListBlock -> TodoListBlock(items = block.items)
     is QuoteBlock -> QuoteBlock(children = block.children)
-    is CalloutBlock -> CalloutBlock(tone = block.tone, title = block.title, children = block.children)
+    is CalloutBlock -> CalloutBlock(tone = block.tone, title = block.title, collapsed = block.collapsed, children = block.children)
     is ContainerBlock -> ContainerBlock(axis = block.axis, children = block.children.map(::duplicateBlock), weights = block.weights)
     is DividerBlock -> DividerBlock()
     is CodeBlock -> CodeBlock(language = block.language, code = block.code, editorHeightDp = block.editorHeightDp)
@@ -3778,6 +5416,7 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is ChartBlock -> ChartBlock(vegaLiteSpec = block.vegaLiteSpec, editorHeightDp = block.editorHeightDp)
     is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp)
     is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp)
+    is ShapeBlock -> block.copy(id = java.util.UUID.randomUUID().toString())
     is UnknownBlock -> BlockDocumentJson.reidentify(block)
 }
 
@@ -3799,6 +5438,7 @@ private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
     is ChartBlock -> copy(id = id)
     is MathBlock -> copy(id = id)
     is MermaidBlock -> copy(id = id)
+    is ShapeBlock -> copy(id = id)
     is UnknownBlock -> BlockDocumentJson.reidentify(this, id)
 }
 
@@ -3810,10 +5450,11 @@ private fun InlineRichText(
 ) {
     val colors = MaterialTheme.colorScheme
     val annotated = rememberInlineAnnotated(nodes)
+    val inherited = LocalTextStyle.current
     Text(
         text = annotated,
         modifier = modifier,
-        style = TextStyle(color = colors.onSurface).merge(style),
+        style = inherited.merge(TextStyle(color = colors.onSurface)).merge(style),
     )
 }
 
@@ -3855,6 +5496,10 @@ private fun inlineAnnotated(
             is BoldInline -> appendNodes(node.children, inherited.merge(SpanStyle(fontWeight = FontWeight.Bold)))
             is ItalicInline -> appendNodes(node.children, inherited.merge(SpanStyle(fontStyle = FontStyle.Italic)))
             is StrikethroughInline -> appendNodes(node.children, inherited.merge(SpanStyle(textDecoration = TextDecoration.LineThrough)))
+            is UnderlineInline -> appendNodes(node.children, inherited.merge(SpanStyle(textDecoration = TextDecoration.Underline)))
+            is HighlightInline -> appendNodes(node.children, inherited.merge(SpanStyle(background = highlightColor(node.color))))
+            is FontFamilyInline -> appendNodes(node.children, inherited.merge(SpanStyle(fontFamily = NorfoldFontFamilies.resolve(node.family))))
+            is FontSizeInline -> appendNodes(node.children, inherited.merge(SpanStyle(fontSize = node.sizeSp.coerceIn(6f, 144f).sp)))
             is CodeInline -> withStyle(inherited.merge(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground.copy(alpha = .55f)))) { append(node.value) }
             is LinkInline -> {
                 withLink(
@@ -3876,6 +5521,26 @@ private fun inlineAnnotated(
     }
     appendNodes(nodes)
 }
+
+/**
+ * Highlight palette. The document stores a named token (or hex string); tokens resolve to fixed
+ * pastels so a highlight reads the same in light and dark themes. Null = default yellow.
+ */
+private fun BlockAlign.toTextAlign(): TextAlign = when (this) {
+    BlockAlign.Start -> TextAlign.Start
+    BlockAlign.Center -> TextAlign.Center
+    BlockAlign.End -> TextAlign.End
+    BlockAlign.Justify -> TextAlign.Justify
+}
+
+internal fun highlightColor(token: String?): Color = when (token) {
+    null, "yellow" -> Color(0xFFFFF176)
+    "green" -> Color(0xFFAED581)
+    "blue" -> Color(0xFF81D4FA)
+    "pink" -> Color(0xFFF48FB1)
+    "orange" -> Color(0xFFFFB74D)
+    else -> runCatching { Color(android.graphics.Color.parseColor(token)) }.getOrDefault(Color(0xFFFFF176))
+}.copy(alpha = .55f)
 
 private val LocalEmojiShortcodes = staticCompositionLocalOf<Map<String, String>> { emptyMap() }
 private val EmojiShortcodePattern = Regex(":([a-zA-Z0-9_+\\-]+):")
@@ -3935,6 +5600,10 @@ private fun findEmojiEndingAt(nodes: List<InlineNode>, offset: Int): EmojiSpan? 
                 is BoldInline -> visit(node.children)
                 is ItalicInline -> visit(node.children)
                 is StrikethroughInline -> visit(node.children)
+                is UnderlineInline -> visit(node.children)
+                is HighlightInline -> visit(node.children)
+                is FontFamilyInline -> visit(node.children)
+                is FontSizeInline -> visit(node.children)
                 is LinkInline -> visit(node.children)
                 is EmojiInline -> {
                     val end = cursor + node.unicode.length

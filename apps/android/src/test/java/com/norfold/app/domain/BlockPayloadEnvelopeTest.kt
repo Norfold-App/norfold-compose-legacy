@@ -24,6 +24,16 @@ class BlockPayloadEnvelopeTest {
     }
 
     @Test
+    fun `legacy render mode is removed without weakening unknown field protection`() {
+        val legacyTable = """{"kind":"table","id":"legacy-table","headers":[],"rows":[],"columnWidthsDp":[],"columnAlignments":[],"renderMode":"Render"}"""
+
+        assertEquals(TableBlock(id = "legacy-table"), BlockDocumentJson.decodeBlock(legacyTable))
+
+        val unrelatedUnknownField = """{"kind":"table","id":"future-table","headers":[],"rows":[],"futureLayout":"holographic"}"""
+        assertTrue(BlockDocumentJson.decodeBlock(unrelatedUnknownField) is UnknownBlock)
+    }
+
+    @Test
     fun `unknown kind is preserved verbatim through load and save`() {
         val foreign = """{"v":1,"block":{"kind":"hologram","id":"abc-123","beam":42}}"""
 

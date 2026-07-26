@@ -35,8 +35,6 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TrackChanges
 import com.norfold.app.ui.components.NorfoldDialog
@@ -53,7 +51,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
@@ -67,17 +64,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.norfold.app.branding.AnimatedNorfoldLogo
-import com.norfold.app.branding.palette
 import com.norfold.app.domain.CalendarEventSource
 import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.GoalStatus
 import com.norfold.app.domain.TaskStatus
-import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.WeekHourBands
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.NorfoldCard
+import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.NorfoldMetric
 import com.norfold.app.ui.components.NorfoldPageHeader
 import com.norfold.app.ui.components.NorfoldSegmentedControl
@@ -94,87 +89,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.roundToInt
 
 @Composable
-private fun LegacyNorfoldOnboardingScreen(state: DocsUiState, viewModel: DocsViewModel) {
-    var step by remember { mutableIntStateOf(0) }
-    var workspaceName by remember { mutableStateOf("My Workspace") }
-    var purpose by remember { mutableStateOf("Personal") }
-    var theme by remember { mutableStateOf(ThemeMode.System) }
-
-    Box(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(Modifier.fillMaxWidth().width(440.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(22.dp)) {
-            AnimatedNorfoldLogo(size = if (step == 0) 126.dp else 74.dp, palette = state.settings.themeProfile.palette(), animate = step == 0)
-            when (step) {
-                0 -> {
-                    Text("Norfold", style = MaterialTheme.typography.headlineLarge)
-                    Text("Your own private workspace.", color = MaterialTheme.colorScheme.primary, fontSize = 15.sp)
-                    Text("Docs, tasks, projects, files, calendar and conversations stay organized in one local-first workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                    Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text("Get started") }
-                    Text("Works offline. Connect an account only when you need sync or collaboration.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, textAlign = TextAlign.Center)
-                }
-                1 -> {
-                    Text("Private by default", style = MaterialTheme.typography.headlineMedium)
-                    Text("Local workspaces never leave this device unless you explicitly export or connect sync.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                    NorfoldCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            OnboardingFact(Icons.Outlined.Lock, "Encrypted backups", "Your backup password stays on your device.")
-                            OnboardingFact(Icons.Outlined.CheckCircle, "Guest workspace", "No account is required to use the complete local app.")
-                            OnboardingFact(Icons.Outlined.Schedule, "Connect later", "Cloud sync and teams can be enabled from Settings.")
-                        }
-                    }
-                    Button(onClick = { step = 2 }, Modifier.fillMaxWidth()) { Text("Continue offline") }
-                }
-                2 -> {
-                    Text("Create your workspace", style = MaterialTheme.typography.headlineMedium)
-                    OutlinedTextField(workspaceName, { workspaceName = it.take(40) }, Modifier.fillMaxWidth(), label = { Text("Workspace name") }, singleLine = true, shape = RoundedCornerShape(10.dp))
-                    Text("What will you use Norfold for?", Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("Personal" to "Docs, tasks and daily planning", "Work" to "Tasks, docs and collaboration", "Study" to "Research and assignments", "Creative" to "Ideas, drafts and inspiration").forEach { (name, detail) ->
-                            Surface(
-                                Modifier.fillMaxWidth().clickable { purpose = name },
-                                shape = RoundedCornerShape(10.dp),
-                                border = BorderStroke(1.dp, if (purpose == name) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
-                                color = if (purpose == name) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                            ) {
-                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Outlined.Folder, null, tint = MaterialTheme.colorScheme.primary)
-                                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(name, fontWeight = FontWeight.SemiBold); Text(detail, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                                    if (purpose == name) Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-                                }
-                            }
-                        }
-                    }
-                    Button(onClick = { step = 3 }, enabled = workspaceName.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("Continue") }
-                }
-                else -> {
-                    Text("Choose an appearance", style = MaterialTheme.typography.headlineMedium)
-                    NorfoldSegmentedControl(ThemeMode.entries.map { it.name }, theme.name, { theme = ThemeMode.valueOf(it) }, Modifier.fillMaxWidth())
-                    NorfoldCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(workspaceName.ifBlank { "My Workspace" }, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text("$purpose workspace", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                            Text("You can change colors, density and typography from Appearance at any time.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                        }
-                    }
-                    Button(onClick = { viewModel.finishOnboarding(workspaceName, purpose, theme) }, modifier = Modifier.fillMaxWidth().height(50.dp)) { Text("Enter workspace") }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { repeat(4) { index -> Box(Modifier.size(if (index == step) 18.dp else 6.dp, 6.dp).background(if (index == step) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, CircleShape)) } }
-        }
-    }
-}
-
-@Composable
-private fun OnboardingFact(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, detail: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Surface(shape = RoundedCornerShape(9.dp), color = MaterialTheme.colorScheme.primaryContainer) { Icon(icon, null, Modifier.padding(8.dp), tint = MaterialTheme.colorScheme.primary) }
-        Column { Text(title, fontWeight = FontWeight.SemiBold); Text(detail, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-    }
-}
-
-@Composable
 fun GoalsScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var createOpen by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -187,7 +101,16 @@ fun GoalsScreen(state: DocsUiState, viewModel: DocsViewModel) {
             }
         }
         items(state.goals, key = { it.id }) { goal -> GoalRow(goal, viewModel) }
-        if (state.goals.isEmpty()) item { EmptyPlanningCard("No goals yet", "Add a measurable outcome to track your progress.") { createOpen = true } }
+        if (state.goals.isEmpty()) {
+            item {
+                NorfoldEmptyState(
+                    icon = Icons.Outlined.TrackChanges,
+                    title = "No goals yet",
+                    detail = "Add a measurable outcome to track your progress.",
+                    action = { Button(onClick = { createOpen = true }) { Text("New goal") } },
+                )
+            }
+        }
     }
     if (createOpen) GoalCreateDialog({ createOpen = false }) { title -> viewModel.createGoal(title); createOpen = false }
 }
@@ -747,7 +670,18 @@ private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>, onEventCli
 
 @Composable
 private fun AgendaPanel(events: List<PlanningEvent>, onEventClick: (PlanningEvent) -> Unit) {
-    NorfoldCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(horizontal = 14.dp)) { if (events.isEmpty()) Text("No scheduled work", Modifier.padding(vertical = 20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant); events.forEach { EventRow(it, onEventClick) } } }
+    NorfoldCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 14.dp)) {
+            if (events.isEmpty()) {
+                NorfoldEmptyState(
+                    icon = Icons.Outlined.CalendarMonth,
+                    title = "No scheduled work",
+                    detail = "Tasks and events with dates show up here as your agenda.",
+                )
+            }
+            events.forEach { EventRow(it, onEventClick) }
+        }
+    }
 }
 
 @Composable
@@ -758,7 +692,7 @@ private fun DayAgenda(date: LocalDate, events: List<PlanningEvent>, onEventClick
 @Composable
 private fun EventRow(event: PlanningEvent, onClick: (PlanningEvent) -> Unit) {
     Row(Modifier.fillMaxWidth().clickable { onClick(event) }.padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(4.dp).height(38.dp).background(event.color, RoundedCornerShape(999.dp)))
+        Box(Modifier.width(4.dp).height(38.dp).background(event.color, CircleShape))
         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(event.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp); Text(event.detail.ifBlank { event.source }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Text(event.time?.format(DateTimeFormatter.ofPattern("h:mm a")) ?: "All day", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -778,11 +712,6 @@ private fun openPlanningDocument(
         val task = state.tasks.firstOrNull { it.id == taskId } ?: return
         if (onTaskClick != null) onTaskClick(task) else viewModel.openTaskDocument(task)
     }
-}
-
-@Composable
-private fun EmptyPlanningCard(title: String, detail: String, onCreate: () -> Unit) {
-    NorfoldCard(Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center); Button(onClick = onCreate) { Text("Create") } } }
 }
 
 @Composable

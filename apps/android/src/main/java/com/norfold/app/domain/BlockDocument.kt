@@ -42,13 +42,22 @@ sealed interface DocumentBlock {
     fun plainText(): String
 }
 
+/** Text-block alignment; Start is the wire-format default so legacy documents decode unchanged. */
+@Serializable
+enum class BlockAlign {
+    @SerialName("start") Start,
+    @SerialName("center") Center,
+    @SerialName("end") End,
+    @SerialName("justify") Justify,
+}
+
 @Serializable @SerialName("paragraph")
-data class ParagraphBlock(override val id: String = blockId(), val content: List<InlineNode> = emptyList()) : DocumentBlock {
+data class ParagraphBlock(override val id: String = blockId(), val content: List<InlineNode> = emptyList(), val align: BlockAlign = BlockAlign.Start) : DocumentBlock {
     override fun plainText() = content.plainText()
 }
 
 @Serializable @SerialName("heading")
-data class HeadingBlock(override val id: String = blockId(), val level: Int = 1, val content: List<InlineNode> = emptyList()) : DocumentBlock {
+data class HeadingBlock(override val id: String = blockId(), val level: Int = 1, val content: List<InlineNode> = emptyList(), val align: BlockAlign = BlockAlign.Start) : DocumentBlock {
     override fun plainText() = content.plainText()
 }
 
@@ -88,6 +97,9 @@ data class CalloutBlock(
     override val id: String = blockId(),
     val tone: String = "note",
     val title: String = "Note",
+    // Toggle/details behavior: a collapsed callout shows only its title row. Default keeps
+    // every existing document expanded, so old payloads decode unchanged.
+    val collapsed: Boolean = false,
     val children: List<DocumentBlock> = emptyList(),
 ) : DocumentBlock {
     override fun plainText() = listOf(title, children.joinToString("\n") { it.plainText() }).filter(String::isNotBlank).joinToString("\n")
@@ -201,6 +213,35 @@ data class MermaidBlock(
     override fun plainText() = code
 }
 
+@Serializable
+enum class ShapeKind { Rectangle, RoundedRectangle, Ellipse, Triangle, Diamond, Arrow, Line, Star, SpeechBubble, Hexagon }
+
+@Serializable
+data class VectorShapeAsset(
+    val id: String,
+    val title: String,
+    val collection: String,
+    val spdxLicense: String,
+    val sourceUrl: String,
+    val svg: String,
+)
+
+@Serializable @SerialName("shape")
+data class ShapeBlock(
+    override val id: String = blockId(),
+    // "kind" is the polymorphic class discriminator in BlockDocumentJson — must serialize under a different key.
+    @SerialName("shapeKind") val kind: ShapeKind = ShapeKind.RoundedRectangle,
+    val text: String = "",
+    val fillColor: Long = 0xFF6F36FF,
+    val strokeColor: Long = 0xFFD8C8FF,
+    val strokeWidthDp: Float = 2f,
+    val displayHeightDp: Float = 180f,
+    val rotationDegrees: Float = 0f,
+    val vectorAsset: VectorShapeAsset? = null,
+) : DocumentBlock {
+    override fun plainText() = text
+}
+
 /**
  * A block whose stored payload this app version couldn't decode — a newer schema version, an
  * unknown kind, or corrupt JSON. [rawJson] holds the exact stored payload; saving writes it back
@@ -219,6 +260,10 @@ sealed interface InlineNode { fun plainText(): String }
 @Serializable @SerialName("bold") data class BoldInline(val children: List<InlineNode>) : InlineNode { override fun plainText() = children.plainText() }
 @Serializable @SerialName("italic") data class ItalicInline(val children: List<InlineNode>) : InlineNode { override fun plainText() = children.plainText() }
 @Serializable @SerialName("strike") data class StrikethroughInline(val children: List<InlineNode>) : InlineNode { override fun plainText() = children.plainText() }
+@Serializable @SerialName("underline") data class UnderlineInline(val children: List<InlineNode>) : InlineNode { override fun plainText() = children.plainText() }
+@Serializable @SerialName("highlight") data class HighlightInline(val color: String? = null, val children: List<InlineNode> = emptyList()) : InlineNode { override fun plainText() = children.plainText() }
+@Serializable @SerialName("font_family") data class FontFamilyInline(val family: String, val children: List<InlineNode> = emptyList()) : InlineNode { override fun plainText() = children.plainText() }
+@Serializable @SerialName("font_size") data class FontSizeInline(val sizeSp: Float, val children: List<InlineNode> = emptyList()) : InlineNode { override fun plainText() = children.plainText() }
 @Serializable @SerialName("code") data class CodeInline(val value: String) : InlineNode { override fun plainText() = value }
 @Serializable @SerialName("link") data class LinkInline(val url: String, val children: List<InlineNode>) : InlineNode { override fun plainText() = children.plainText() }
 @Serializable @SerialName("emoji") data class EmojiInline(val shortcode: String, val unicode: String) : InlineNode { override fun plainText() = unicode }
@@ -254,7 +299,8 @@ object BlockDocumentJson {
         val version = if (enveloped) (root["v"] as? JsonPrimitive)?.intOrNull ?: Int.MAX_VALUE else 0
         val inner = if (enveloped) root.getValue("block").jsonObject else root
         if (version > SCHEMA_VERSION) return UnknownBlock(id = inner.blockIdOrNew(), rawJson = payload)
-        val block = runCatching { format.decodeFromJsonElement(DocumentBlock.serializer(), inner) }.getOrNull()
+        val migrated = if (version == 0) migrateLegacyV0Block(inner) else inner
+        val block = runCatching { format.decodeFromJsonElement(DocumentBlock.serializer(), migrated) }.getOrNull()
             ?: return UnknownBlock(id = inner.blockIdOrNew(), rawJson = payload)
         // A persisted unknown wrapper may become decodable once the app learns its kind — try once.
         if (block is UnknownBlock && recover && block.rawJson.isNotBlank() && block.rawJson != payload) {
@@ -262,6 +308,20 @@ object BlockDocumentJson {
             if (recovered !is UnknownBlock) return recovered
         }
         return block
+    }
+
+    /**
+     * Early pre-envelope builds persisted a UI-only `renderMode` property on renderable blocks.
+     * The property never changed document content and was later retired. Remove only this known
+     * v0 field; all other unknown fields remain strict and therefore round-trip as [UnknownBlock].
+     */
+    private fun migrateLegacyV0Block(block: JsonObject): JsonObject {
+        val kind = (block["kind"] as? JsonPrimitive)?.contentOrNull
+        return if (kind in setOf("table", "math", "mermaid", "chart", "code") && "renderMode" in block) {
+            JsonObject(block - "renderMode")
+        } else {
+            block
+        }
     }
 
     private fun JsonObject.blockIdOrNew() = (this["id"] as? JsonPrimitive)?.contentOrNull ?: blockId()

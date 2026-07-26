@@ -30,9 +30,8 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.TaskAlt
-import androidx.compose.material.icons.outlined.TrackChanges
-import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.GridView
@@ -41,16 +40,16 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ElevatedButton
-import com.norfold.app.ui.components.NorfoldDialog
+import com.norfold.app.ui.components.WorkspaceIconBadge
+import com.norfold.app.ui.components.SemanticAppIcon
+import com.norfold.app.domain.SemanticActionId
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,7 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.Destination
-import com.norfold.app.domain.GoalStatus
+import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.TaskStatus
 import com.norfold.app.domain.WorkspaceActivity
 import com.norfold.app.domain.WorkspaceFileItem
@@ -77,6 +76,7 @@ import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.GlobalSearchBar
+import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.pressScale
 import java.time.Instant
 import java.time.ZoneId
@@ -89,7 +89,8 @@ private enum class DatabaseViewMode(val label: String) { Table("Table"), List("L
 @Composable
 fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: Boolean = false) {
     LazyColumn(
-        Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp),
+        Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 18.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 118.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -115,7 +116,7 @@ fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: 
                     EmptyActionCard(
                         title = "Inbox is ready",
                         detail = "Quick docs, files, imports, links, screenshots, and voice captures land here.",
-                        action = "New doc",
+                        action = "New note",
                         onAction = viewModel::createNote,
                     )
                 }
@@ -130,13 +131,13 @@ fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: 
                             }
                         }
                         if (state.tasks.none { it.status != TaskStatus.Done }) {
-                            EmptyActionCard("No open tasks", "Plan the next thing from the task board.", "Add task", viewModel::createTaskAndOpen)
+                            EmptyActionCard("No open tasks", "Plan the next thing from the task board.", "Add task", Icons.Outlined.TaskAlt, viewModel::createTaskAndOpen)
                         }
                     }
                 }
             }
             item {
-                HubSection("Continue writing", "Recent docs") {
+                HubSection("Continue writing", "Recent notes and documents") {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(state.notes.take(8)) { note ->
                             Surface(
@@ -156,31 +157,8 @@ fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: 
             }
             item {
                 HubSection("Workspace activity", "Latest changes") {
-                    ActivityList(state.workspaceActivities.take(5))
+                    ActivityList(state.workspaceActivities.take(5), state, viewModel)
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FirstRunSetupCard(viewModel: DocsViewModel) {
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.13f),
-        tonalElevation = 2.dp,
-    ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Workspace setup", fontWeight = FontWeight.Black, fontSize = 16.sp)
-            Text(
-                "Create locally, restore from backup, or connect sync when you are ready.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-            )
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuickChip("Create now", Icons.Outlined.Add, viewModel::createNote)
-                QuickChip("Restore", Icons.Outlined.CloudDone) { viewModel.go(Destination.Settings) }
-                QuickChip("Import", Icons.Outlined.Folder) { viewModel.go(Destination.Settings) }
             }
         }
     }
@@ -192,11 +170,16 @@ private fun WorkspaceHero(state: DocsUiState, viewModel: DocsViewModel, inboxMod
     Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-                    Text((active?.icon ?: state.settings.workspaceIcon).take(2), color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Black, fontSize = 20.sp)
-                }
+                WorkspaceIconBadge(
+                    icon = active?.icon ?: state.settings.workspaceIcon,
+                    iconKind = active?.iconKind ?: state.settings.workspaceIconKind,
+                    iconUri = active?.iconUri ?: state.settings.workspaceIconUri,
+                    size = 52.dp,
+                    corner = 16.dp,
+                    fontSize = 20.sp,
+                )
                 Column(Modifier.weight(1f)) {
-                    Text(if (inboxMode) "Inbox" else "Good day, ${state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "Aftab" } }}", fontWeight = FontWeight.Black, fontSize = 22.sp)
+                    Text(if (inboxMode) "Inbox" else "Good day, ${state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "there" } }}", fontWeight = FontWeight.Black, fontSize = 22.sp)
                     Text(active?.name ?: state.settings.workspaceName, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
                 Icon(Icons.Outlined.Home, null, tint = MaterialTheme.colorScheme.primary)
@@ -213,8 +196,9 @@ private fun HubSearchBar(viewModel: DocsViewModel) {
 @Composable
 private fun HubStats(state: DocsUiState, viewModel: DocsViewModel) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatCard("Docs", state.notes.size.toString(), Icons.Outlined.Description, Modifier.weight(1f)) { viewModel.go(Destination.NotesHome) }
-        StatCard("Tasks", state.tasks.size.toString(), Icons.Outlined.TaskAlt, Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
+        StatCard("Notes", state.notes.count { it.overlapMode == DocOverlapMode.Reflow }.toString(), SemanticActionId.AppNotes, Modifier.weight(1f)) { viewModel.openNotesLibrary() }
+        StatCard("Documents", state.notes.count { it.overlapMode == DocOverlapMode.Bounded }.toString(), SemanticActionId.AppDocuments, Modifier.weight(1f)) { viewModel.openDocumentsLibrary() }
+        StatCard("Tasks", state.tasks.size.toString(), SemanticActionId.AppTasks, Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
     }
 }
 
@@ -269,9 +253,19 @@ private fun PlanningProgressCard(
 
 @Composable
 private fun StatCard(label: String, value: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    StatCard(label, value, modifier, onClick) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary) }
+}
+
+@Composable
+private fun StatCard(label: String, value: String, icon: SemanticActionId, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    StatCard(label, value, modifier, onClick) { SemanticAppIcon(icon, null, tint = MaterialTheme.colorScheme.primary) }
+}
+
+@Composable
+private fun StatCard(label: String, value: String, modifier: Modifier, onClick: () -> Unit, iconContent: @Composable () -> Unit) {
     Surface(modifier.clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            iconContent()
             Text(value, fontWeight = FontWeight.Black, fontSize = 20.sp)
             Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -281,18 +275,29 @@ private fun StatCard(label: String, value: String, icon: ImageVector, modifier: 
 @Composable
 private fun QuickCaptureRow(viewModel: DocsViewModel) {
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        QuickChip("Doc", Icons.Outlined.Add, viewModel::createNote)
-        QuickChip("Task", Icons.Outlined.Check, viewModel::createTaskAndOpen)
-        QuickChip("Calendar", Icons.Outlined.CalendarMonth) { viewModel.openTaskCalendar() }
-        QuickChip("Chat", Icons.Outlined.ChatBubbleOutline) { viewModel.go(Destination.Chat) }
+        QuickChip("Note", SemanticActionId.AppNotes, viewModel::createNote)
+        QuickChip("Document", SemanticActionId.AppDocuments, viewModel::createDocument)
+        QuickChip("Task", SemanticActionId.AppTasks, viewModel::createTaskAndOpen)
+        QuickChip("Calendar", SemanticActionId.AppToday) { viewModel.openTaskCalendar() }
+        QuickChip("Chat", SemanticActionId.AppChat) { viewModel.openChatInbox() }
     }
 }
 
 @Composable
 private fun QuickChip(label: String, icon: ImageVector, onClick: () -> Unit) {
-    Surface(Modifier.clickable(onClick = onClick), shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)) {
+    Surface(Modifier.clickable(onClick = onClick), shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+            Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun QuickChip(label: String, icon: SemanticActionId, onClick: () -> Unit) {
+    Surface(Modifier.clickable(onClick = onClick), shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            SemanticAppIcon(icon, null, Modifier.size(16.dp), MaterialTheme.colorScheme.primary)
             Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -328,41 +333,38 @@ private fun CompactHubRow(title: String, detail: String, icon: ImageVector, modi
 }
 
 @Composable
-private fun EmptyActionCard(title: String, detail: String, action: String, onAction: () -> Unit) {
-    Card(shape = RoundedCornerShape(20.dp)) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(title, fontWeight = FontWeight.Black)
-            Text(detail, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Button(onClick = onAction) { Text(action) }
-        }
-    }
+private fun EmptyActionCard(title: String, detail: String, action: String, icon: ImageVector = Icons.Outlined.Add, onAction: () -> Unit) {
+    NorfoldEmptyState(
+        icon = icon,
+        title = title,
+        detail = detail,
+        action = { Button(onClick = onAction) { Text(action) } },
+    )
 }
 
 @Composable
-private fun SyncSummaryCard(state: DocsUiState, viewModel: DocsViewModel) {
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(Modifier.size(72.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Outlined.CloudDone, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(34.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(if (state.syncing) "Syncing" else "All caught up", fontWeight = FontWeight.Black)
-                Text("Conflicts ${state.settings.syncConflictCount} · Files ${state.workspaceFiles.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(state.settings.lastSyncAt?.let(::relative) ?: "No sync yet", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-            }
-            TextButton(onClick = { viewModel.go(Destination.SyncMonitor) }) { Text("Open") }
-        }
-    }
-}
-
-@Composable
-private fun ActivityList(items: List<WorkspaceActivity>) {
+private fun ActivityList(items: List<WorkspaceActivity>, state: DocsUiState, viewModel: DocsViewModel) {
     if (items.isEmpty()) {
-        EmptyActionCard("No activity yet", "Changes across the workspace will appear here.", "Rebuild index") {}
+        EmptyActionCard(
+            "No activity yet",
+            "Changes across the workspace will appear here.",
+            "Rebuild index",
+            Icons.Outlined.Star,
+            viewModel::rebuildWorkspaceIndex,
+        )
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items.forEach { activity ->
-                CompactHubRow(activity.title, "${activity.actor} · ${relative(activity.createdAt)} · ${activity.detail}", Icons.Outlined.Star) {}
+                CompactHubRow(
+                    activity.title,
+                    "${activity.actor} · ${relative(activity.createdAt)} · ${activity.detail}",
+                    Icons.Outlined.Star,
+                ) {
+                    val obj = activity.objectId?.let { objectId ->
+                        state.workspaceObjects.firstOrNull { it.id == objectId }
+                    }
+                    if (obj != null) viewModel.openWorkspaceObject(obj) else viewModel.go(Destination.Activity)
+                }
             }
         }
     }
@@ -375,16 +377,32 @@ fun FilesLibraryScreen(state: DocsUiState, viewModel: DocsViewModel, onPickFile:
         item { GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar) }
         item { Button(onClick = onPickFile, modifier = Modifier.fillMaxWidth()) { Text("Upload") } }
         if (state.workspaceFiles.isEmpty()) {
-            item { EmptyActionCard("No files yet", "Upload PDFs, images, audio, markdown, ZIPs, and project assets.", "Upload file", onPickFile) }
+            item { EmptyActionCard("No files yet", "Upload PDFs, images, audio, markdown, ZIPs, and project assets.", "Upload file", Icons.Outlined.Folder, onPickFile) }
         } else {
-            items(state.workspaceFiles, key = { it.id }) { file -> FileRow(file, Modifier.animateItem()) }
+            items(state.workspaceFiles, key = { it.id }) { file ->
+                FileRow(
+                    file = file,
+                    modifier = Modifier.animateItem(),
+                    onClick = {
+                        state.workspaceObjects
+                            .firstOrNull { it.id == file.objectId }
+                            ?.let(viewModel::openWorkspaceObject)
+                    },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun FileRow(file: WorkspaceFileItem, modifier: Modifier = Modifier) {
-    CompactHubRow(file.displayName, "${file.mimeType} · ${bytes(file.sizeBytes)} · ${relative(file.updatedAt)}", Icons.Outlined.Folder, modifier) {}
+private fun FileRow(file: WorkspaceFileItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    CompactHubRow(
+        file.displayName,
+        "${file.mimeType} · ${bytes(file.sizeBytes)} · ${relative(file.updatedAt)}",
+        Icons.Outlined.Folder,
+        modifier,
+        onClick,
+    )
 }
 
 @Composable
@@ -429,6 +447,7 @@ fun DatabaseScreen(state: DocsUiState, viewModel: DocsViewModel) {
                     title = "No matching objects",
                     detail = "Clear filters or rebuild the workspace index from Activity.",
                     action = "Rebuild index",
+                    icon = Icons.Outlined.GridView,
                     onAction = viewModel::rebuildWorkspaceIndex,
                 )
             }
@@ -484,7 +503,7 @@ fun DatabaseScreen(state: DocsUiState, viewModel: DocsViewModel) {
 private fun DatabaseChip(label: String, selected: Boolean, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(999.dp),
+        shape = CircleShape,
         color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.54f),
     ) {
         Text(
@@ -672,7 +691,7 @@ fun GraphScreen(state: DocsUiState, viewModel: DocsViewModel) {
         Text("Objects ${state.workspaceObjects.size} · Links ${state.workspaceObjectLinks.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(state.workspaceObjects.take(16)) { obj ->
-                Surface(Modifier.clickable { viewModel.openWorkspaceObject(obj) }, shape = RoundedCornerShape(999.dp), color = Color(obj.color).copy(alpha = 0.18f)) {
+                Surface(Modifier.clickable { viewModel.openWorkspaceObject(obj) }, shape = CircleShape, color = Color(obj.color).copy(alpha = 0.18f)) {
                     Text(obj.title, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                 }
             }
@@ -757,7 +776,7 @@ fun TemplatesScreen(state: DocsUiState, viewModel: DocsViewModel) {
         item { Text("Templates", fontWeight = FontWeight.Black, fontSize = 28.sp) }
         items(templates) { name ->
             CompactHubRow(name, "Workspace structure with docs, tasks, files, and boards", Icons.Outlined.Tag) {
-                viewModel.createWorkspace(name)
+                viewModel.createWorkspace(name, template = name)
             }
         }
     }
@@ -767,11 +786,12 @@ fun TemplatesScreen(state: DocsUiState, viewModel: DocsViewModel) {
 fun CommandPaletteScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var query by remember { mutableStateOf("") }
     val commands: List<Pair<String, () -> Unit>> = listOf(
-        "Create doc" to { viewModel.createNote(); Unit },
+        "Create note" to { viewModel.createNote(); Unit },
+        "Create document" to { viewModel.createDocument(); Unit },
         "Create task" to { viewModel.createTaskAndOpen(); Unit },
         "Open files" to { viewModel.go(Destination.Files); Unit },
         "Open graph" to { viewModel.go(Destination.Graph); Unit },
-        "Open sync" to { viewModel.go(Destination.SyncMonitor); Unit },
+        "Open sync settings" to { viewModel.go(Destination.Settings); Unit },
         "Open settings" to { viewModel.go(Destination.Settings); Unit },
         "Rebuild workspace index" to { viewModel.rebuildWorkspaceIndex(); Unit },
     ).filter { it.first.contains(query, ignoreCase = true) || query.isBlank() }
@@ -792,71 +812,6 @@ fun CommandPaletteScreen(state: DocsUiState, viewModel: DocsViewModel) {
     }
 }
 
-@Composable
-private fun ObjectInspectorDialog(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel, onDismiss: () -> Unit) {
-    var comment by remember(obj.id) { mutableStateOf("") }
-    val links = state.workspaceObjectLinks.filter { it.fromObjectId == obj.id || it.toObjectId == obj.id }
-    val comments = state.workspaceComments.filter { it.objectId == obj.id }
-    val history = state.workspaceObjectHistory.filter { it.objectId == obj.id }.take(8)
-    NorfoldDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(obj.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-        text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item {
-                    Text("${obj.objectType.label()} · ${relative(obj.updatedAt)}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-                    Text(obj.summary.ifBlank { "No summary yet." }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                }
-                item { Text("Links", fontWeight = FontWeight.Bold) }
-                if (links.isEmpty()) {
-                    item { Text("No backlinks or related objects yet.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                } else {
-                    items(links) { link ->
-                        val otherId = if (link.fromObjectId == obj.id) link.toObjectId else link.fromObjectId
-                        val other = state.workspaceObjects.firstOrNull { it.id == otherId }
-                        Text("${link.linkType.name}: ${other?.title ?: otherId}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                item { Text("Comments", fontWeight = FontWeight.Bold) }
-                items(comments.take(5)) { item ->
-                    Text("${item.authorDisplayName}: ${item.body}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                item {
-                    OutlinedTextField(
-                        value = comment,
-                        onValueChange = { comment = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        label = { Text("Add comment") },
-                    )
-                }
-                item { Text("History", fontWeight = FontWeight.Bold) }
-                if (history.isEmpty()) {
-                    item { Text("No history recorded yet.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                } else {
-                    items(history) { item ->
-                        Text("${item.historyType.name} · ${item.actor} · ${relative(item.createdAt)}\n${item.summary}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (comment.isNotBlank()) {
-                        viewModel.addWorkspaceComment(obj.id, comment)
-                        comment = ""
-                    } else {
-                        viewModel.openWorkspaceObject(obj)
-                        onDismiss()
-                    }
-                },
-            ) { Text(if (comment.isBlank()) "Open" else "Comment") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
-}
-
 private fun iconForObject(type: WorkspaceObjectType): ImageVector = when (type) {
     WorkspaceObjectType.Note -> Icons.Outlined.Folder
     WorkspaceObjectType.Task -> Icons.Outlined.Check
@@ -864,6 +819,7 @@ private fun iconForObject(type: WorkspaceObjectType): ImageVector = when (type) 
     WorkspaceObjectType.CalendarEvent -> Icons.Outlined.Star
     WorkspaceObjectType.File -> Icons.Outlined.Folder
     WorkspaceObjectType.ChatMessage -> Icons.Outlined.ChatBubbleOutline
+    WorkspaceObjectType.ChatChannel -> Icons.Outlined.ChatBubbleOutline
     WorkspaceObjectType.DatabaseRow -> Icons.Outlined.GridView
     WorkspaceObjectType.Workspace -> Icons.Outlined.Home
     WorkspaceObjectType.System -> Icons.Outlined.Difference

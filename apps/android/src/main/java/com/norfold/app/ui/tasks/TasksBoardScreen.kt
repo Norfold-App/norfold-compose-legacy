@@ -64,7 +64,6 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.StarBorder
-import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Edit
@@ -84,10 +83,10 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.TableRows
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.Title
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.ViewAgenda
 import androidx.compose.material.icons.automirrored.outlined.Send
 import com.norfold.app.ui.components.NorfoldDialog
+import com.norfold.app.ui.components.popOnChange
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
@@ -96,7 +95,6 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
@@ -139,6 +137,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -147,6 +146,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -159,8 +159,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.ui.components.NorfoldContentDialog
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import com.norfold.app.ui.screens.CalendarWorkspaceScreen
 import com.norfold.app.ui.dnd.DropSlot
@@ -188,10 +186,10 @@ import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.WorkspaceFileItem
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
-import com.norfold.app.ui.LocalContextualMenuColor
-import com.norfold.app.ui.LocalContextualMenuStyle
-import com.norfold.app.domain.ContextualMenuColor
-import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.ui.feedback.NorfoldHaptic
+import com.norfold.app.ui.feedback.performNorfoldHaptic
+import com.norfold.app.ui.components.NorfoldAnchoredPopupAt
+import com.norfold.app.ui.components.NorfoldDropdownMenu
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -211,18 +209,6 @@ private enum class TaskTableColumn(val label: String, val width: Dp, val compact
     Files("Files", 190.dp, 126.dp),
     PriorityAssignee("Priority / Assignee", 210.dp, 140.dp),
 }
-
-private data class TaskCreationPayload(
-    val title: String,
-    val column: TaskColumnItem,
-    val propertyValues: Map<TaskPropertyType, String>,
-    val checklistItems: List<String>,
-)
-
-private data class PendingTaskCreation(
-    val existingTaskIds: Set<Long>,
-    val payload: TaskCreationPayload,
-)
 
 private data class PendingTaskSwipe(
     val task: TaskItem,
@@ -253,17 +239,14 @@ fun TasksBoardScreen(
     var chartConfig by remember { mutableStateOf(TaskChartSpecBuilder.Config()) }
     var showChartConfig by remember { mutableStateOf(false) }
     var editingTask by remember { mutableStateOf<TaskItem?>(null) }
-    var pendingDeleteIds by remember { mutableStateOf(setOf<Long>()) }
     val swipeSnackbar = remember { SnackbarHostState() }
     val swipeScope = rememberCoroutineScope()
-    var creatingTask by remember { mutableStateOf(false) }
-    var createSeedColumn by remember { mutableStateOf<TaskColumnItem?>(null) }
-    var pendingCreation by remember { mutableStateOf<PendingTaskCreation?>(null) }
+    val hapticView = LocalView.current
     var boardName by remember { mutableStateOf("") }
     var newBoardName by remember { mutableStateOf("") }
     var newColumnName by remember { mutableStateOf("") }
     var interactionStatus by remember { mutableStateOf(TaskInteractionStatus(engine = kanbanEngine)) }
-    LaunchedEffect(editingTask?.id, creatingTask) { onTaskDetailOpenChange(editingTask != null || creatingTask) }
+    LaunchedEffect(editingTask?.id) { onTaskDetailOpenChange(editingTask != null) }
     val selectedBoard = state.taskBoards.firstOrNull { it.id == state.settings.taskSelectedBoardId }
         ?: state.taskBoards.firstOrNull()
     val selectedBoardId = selectedBoard?.id ?: 1L
@@ -281,7 +264,6 @@ fun TasksBoardScreen(
         .filterTasks(query, assigneeFilter, labelFilter, priorityFilter)
         .sortedFor(sort)
         .let { if (sortDescending && sort != TaskWorkspaceSort.Manual) it.asReversed() else it }
-        .filterNot { it.id in pendingDeleteIds }
     val swipeStartAction = state.settings.taskSwipeStartAction
     val swipeEndAction = state.settings.taskSwipeEndAction
     val runSwipeAction: (TaskItem, TaskGestureAction) -> Unit = { task, action ->
@@ -289,6 +271,7 @@ fun TasksBoardScreen(
             TaskGestureAction.Complete -> {
                 val prior = task.status
                 viewModel.moveTask(task, if (prior == TaskStatus.Done) TaskStatus.Todo else TaskStatus.Done)
+                hapticView.performNorfoldHaptic(NorfoldHaptic.Confirm)
                 if (prior != TaskStatus.Done) {
                     swipeScope.launch {
                         val result = swipeSnackbar.showSnackbar("Task completed", actionLabel = "Undo", duration = SnackbarDuration.Short)
@@ -297,12 +280,7 @@ fun TasksBoardScreen(
                 }
             }
             TaskGestureAction.Delete -> {
-                pendingDeleteIds = pendingDeleteIds + task.id
-                swipeScope.launch {
-                    val result = swipeSnackbar.showSnackbar("Task deleted", actionLabel = "Undo", duration = SnackbarDuration.Long)
-                    if (result != SnackbarResult.ActionPerformed) viewModel.deleteTask(task)
-                    pendingDeleteIds = pendingDeleteIds - task.id
-                }
+                viewModel.deleteTask(task)
             }
             TaskGestureAction.None -> Unit
         }
@@ -339,27 +317,6 @@ fun TasksBoardScreen(
         }
     }
 
-    // After the ViewModel inserts the new task, find it and apply the drafted property values.
-    LaunchedEffect(boardTasks, taskProperties, pendingCreation) {
-        val pending = pendingCreation ?: return@LaunchedEffect
-        val created = boardTasks
-            .asSequence()
-            .filter { it.id !in pending.existingTaskIds }
-            .filter { it.taskColumnId == pending.payload.column.id }
-            .filter { it.title == pending.payload.title }
-            .maxByOrNull { it.id }
-            ?: return@LaunchedEffect
-        pending.payload.propertyValues.forEach { (type, raw) ->
-            taskProperties.firstOrNull { it.type == type }?.let { property ->
-                viewModel.setTaskPropertyValue(created, property, raw)
-            }
-        }
-        taskProperties.firstOrNull { it.type == TaskPropertyType.Checklist }?.let { property ->
-            pending.payload.checklistItems.forEach { text -> viewModel.addChecklistItem(created, property, text) }
-        }
-        pendingCreation = null
-    }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -391,7 +348,13 @@ fun TasksBoardScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 18.dp),
             ) {
-                if (currentView == TaskWorkspaceView.Board) {
+                if (columns.isEmpty()) {
+                    EmptyTaskBoardSetup(
+                        boardName = selectedBoard?.name ?: "Task board",
+                        onCreateColumn = { name -> viewModel.createTaskColumn(selectedBoardId, name) },
+                        modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 24.dp),
+                    )
+                } else if (currentView == TaskWorkspaceView.Board) {
                     TaskKanbanBoard(
                         columns = columns,
                         tasks = filteredTasks,
@@ -401,8 +364,7 @@ fun TasksBoardScreen(
                         compact = state.settings.taskCompactLayout,
                         onTaskClick = { editingTask = it },
                         onAddTask = { column ->
-                            createSeedColumn = column
-                            creatingTask = true
+                            viewModel.createTaskDraft(column) { created -> editingTask = created }
                         },
                         onMoveTask = { taskId, columnId, index -> viewModel.moveTaskToColumnAtIndex(taskId, columnId, index) },
                         onRenameColumn = { column, name -> viewModel.renameTaskColumn(column, name) },
@@ -424,8 +386,7 @@ fun TasksBoardScreen(
                         onPickAttachment = onPickTaskAttachment,
                         onTaskClick = { editingTask = it },
                         onNewTask = {
-                            createSeedColumn = null
-                            creatingTask = true
+                            viewModel.createTaskDraft { created -> editingTask = created }
                         },
                         modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 16.dp),
                         swipeStartAction = swipeStartAction,
@@ -466,8 +427,7 @@ fun TasksBoardScreen(
                                         onPropertyClick = { task, property -> editingTask = task },
                                         onTaskClick = { editingTask = it },
                                         onNewTask = { column ->
-                                            createSeedColumn = column
-                                            creatingTask = true
+                                            viewModel.createTaskDraft(column) { created -> editingTask = created }
                                         },
                                         swipeStartAction = swipeStartAction,
                                         swipeEndAction = swipeEndAction,
@@ -580,35 +540,9 @@ fun TasksBoardScreen(
                     viewModel.deleteTask(task)
                     editingTask = null
                 },
-                onDismiss = { editingTask = null },
-            )
-        }
-
-        if (creatingTask && columns.isNotEmpty()) {
-            AdaptiveTaskPage(
-                task = null,
-                properties = taskProperties,
-                propertyValues = taskPropertyValues,
-                checklistItems = taskChecklistItems,
-                columns = columns,
-                tags = state.tags,
-                boardName = selectedBoard?.name ?: "Default board",
-                taskObjectId = null,
-                comments = state.workspaceComments,
-                files = state.workspaceFiles,
-                viewModel = viewModel,
-                onPickAttachment = {},
-                onDelete = {},
                 onDismiss = {
-                    creatingTask = false
-                    createSeedColumn = null
-                },
-                initialColumn = createSeedColumn,
-                onCreate = { payload ->
-                    pendingCreation = PendingTaskCreation(boardTasks.mapTo(mutableSetOf()) { it.id }, payload)
-                    viewModel.addTaskToColumn(payload.title, payload.column)
-                    creatingTask = false
-                    createSeedColumn = null
+                    viewModel.discardTaskDraftIfUntouched(task)
+                    editingTask = null
                 },
             )
         }
@@ -617,6 +551,68 @@ fun TasksBoardScreen(
             hostState = swipeSnackbar,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp).zIndex(30f),
         )
+    }
+}
+
+@Composable
+private fun EmptyTaskBoardSetup(
+    boardName: String,
+    onCreateColumn: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var columnName by rememberSaveable { mutableStateOf("") }
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f),
+            modifier = Modifier.size(88.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Outlined.ViewAgenda,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(38.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        Text("Build your workflow", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "$boardName is empty. Add only the columns that match how you work.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 460.dp),
+        )
+        Spacer(Modifier.height(20.dp))
+        OutlinedTextField(
+            value = columnName,
+            onValueChange = { columnName = it },
+            label = { Text("First column name") },
+            placeholder = { Text("Examples: Inbox, Next, Ideas") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
+            colors = taskTextFieldColors(),
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            enabled = columnName.isNotBlank(),
+            onClick = {
+                onCreateColumn(columnName.trim())
+                columnName = ""
+            },
+        ) {
+            Icon(Icons.Outlined.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Create first column")
+        }
     }
 }
 
@@ -687,7 +683,7 @@ private fun TaskHeader(
                 }
             },
             placeholder = { Text("Search tasks, assignees, labels") },
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = taskTextFieldColors(),
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -764,6 +760,7 @@ private fun TaskPointerKanbanBoard(
 ) {
     var showNewColumnDialog by remember { mutableStateOf(false) }
     var newColumnName by remember { mutableStateOf("") }
+    val hapticView = LocalView.current
     val listState = rememberLazyListState()
     val dragState = remember { BoardDragState() }
     val density = LocalDensity.current
@@ -793,6 +790,7 @@ private fun TaskPointerKanbanBoard(
                     val hit = dragState.hitCard(down.position) ?: return@awaitEachGesture
                     val longPress = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
                     val grabOffset = longPress.position - hit.bounds.topLeft
+                    hapticView.performNorfoldHaptic(NorfoldHaptic.DragStart)
                     dragState.start(hit.task, longPress.position, grabOffset)
                     onInteractionStatus(dragState.status(engine, "Dragging ${hit.task.title.ifBlank { "Untitled task" }}"))
                     drag(longPress.id) { change ->
@@ -810,7 +808,10 @@ private fun TaskPointerKanbanBoard(
                     }
                     dragState.clear(keepLastDrop = dropText)
                     onInteractionStatus(TaskInteractionStatus(engine = engine, lastDrop = dropText))
-                    if (task != null && target != null) onMoveTask(task.id, target.columnId, target.index)
+                    if (task != null && target != null) {
+                        onMoveTask(task.id, target.columnId, target.index)
+                        hapticView.performNorfoldHaptic(NorfoldHaptic.Confirm)
+                    }
                 }
             },
     ) {
@@ -927,6 +928,7 @@ private fun TaskKanbanColumn(
     enableCardDrag: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val hapticView = LocalView.current
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var renameValue by remember(column.id, column.name) { mutableStateOf(column.name) }
@@ -963,7 +965,7 @@ private fun TaskKanbanColumn(
                 } else {
                     Box(Modifier.size(12.dp).clip(CircleShape).background(columnColor))
                     Spacer(Modifier.width(8.dp))
-                    Text(column.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, fontSize = 18.sp)
+                    Text(column.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 17.sp)
                     StatusCount(tasks.size)
                     Box {
                         IconButton(onClick = { menuOpen = true }) { Icon(Icons.Outlined.MoreVert, null) }
@@ -1013,7 +1015,10 @@ private fun TaskKanbanColumn(
                         onBoundsChanged = { bounds ->
                             drag.cardBounds[task.id] = TaskCardBounds(task.id, column.id, drag.toBoardRect(bounds))
                         },
-                        onDragStart = { pointer, grabOffset -> drag.start(task, drag.toBoardOffset(pointer), grabOffset) },
+                        onDragStart = { pointer, grabOffset ->
+                            hapticView.performNorfoldHaptic(NorfoldHaptic.DragStart)
+                            drag.start(task, drag.toBoardOffset(pointer), grabOffset)
+                        },
                         onDragMove = onDragMove,
                         onDrop = onDrop,
                         enableCardDrag = enableCardDrag,
@@ -1025,7 +1030,7 @@ private fun TaskKanbanColumn(
             }
             Surface(
                 modifier = Modifier.fillMaxWidth().clickable { onAddTask() },
-                shape = RoundedCornerShape(9.dp),
+                shape = RoundedCornerShape(10.dp),
                 color = Color.Transparent,
                 border = BorderStroke(1.dp, columnColor.copy(alpha = 0.55f)),
             ) {
@@ -1324,17 +1329,6 @@ private fun TaskDatabaseTable(
     }
 }
 
-@Composable
-private fun CompactTaskDraftField(label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier,
-        singleLine = true,
-        label = { Text(label) },
-        colors = taskTextFieldColors(),
-    )
-}
 
 @Composable
 private fun MultiPropertyPickerDialog(
@@ -1353,10 +1347,9 @@ private fun MultiPropertyPickerDialog(
     NorfoldContentDialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp).heightIn(max = 640.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 16.dp,
+            tonalElevation = 6.dp,
         ) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(if (confirming) "Confirm properties" else "Add properties", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
@@ -1413,13 +1406,6 @@ private fun MultiPropertyPickerDialog(
     }
 }
 
-private fun parseTaskDraftDate(value: String): Long? {
-    val input = value.trim()
-    if (input.isBlank()) return null
-    return listOf("yyyy-MM-dd HH:mm", "yyyy-MM-dd").firstNotNullOfOrNull { pattern ->
-        runCatching { SimpleDateFormat(pattern, Locale.US).apply { isLenient = false }.parse(input)?.time }.getOrNull()
-    }
-}
 
 @Composable
 private fun TaskTableHeaderCell(column: TaskTableColumn, compact: Boolean) {
@@ -1443,7 +1429,7 @@ private fun TaskTableHeaderCell(column: TaskTableColumn, compact: Boolean) {
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Icon(icon, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(column.label, fontSize = if (compact) 9.sp else 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        Text(column.label, fontSize = if (compact) 10.sp else 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
     }
 }
 
@@ -1486,7 +1472,7 @@ private fun TaskTableDataCell(
             TaskTableColumn.Name -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 VerticalReorderHandle(rowHeight = rowHeight, onStep = onReorder, size = if (compact) 18.dp else 28.dp)
                 if (!compact) Icon(Icons.Outlined.Title, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
-                Text(task.title.ifBlank { "Untitled task" }, Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = if (compact) 9.sp else 12.sp)
+                Text(task.title.ifBlank { "Untitled task" }, Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = if (compact) 10.sp else 12.sp)
                 IconButton(onClick = onOpenTask, modifier = Modifier.size(if (compact) 20.dp else 28.dp)) {
                     Icon(Icons.Outlined.MoreVert, "Open task", Modifier.size(if (compact) 13.dp else 16.dp))
                 }
@@ -1505,14 +1491,14 @@ private fun TaskTableDataCell(
                                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
                                 shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.clickable { onAlternateSelect(bounds) },
-                            ) { Text("#$label", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), fontSize = 9.sp, color = MaterialTheme.colorScheme.onSecondaryContainer) }
+                            ) { Text("#$label", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSecondaryContainer) }
                         }
                     }
                 } else if (alternateProperty != null) {
                     Text(
                         "+ tag",
                         modifier = Modifier.padding(top = 6.dp).clickable { onAlternateSelect(bounds) },
-                        fontSize = 9.sp,
+                        fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
@@ -1619,11 +1605,11 @@ private fun CompactGroupedTaskTable(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         columns.forEach { column ->
             val columnTasks = tasks.filter { it.taskColumnId == column.id }.sortedBy { it.sortOrder }
-            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+            Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.size(14.dp).clip(CircleShape).background(column.resolvedColor()))
-                        Text(column.name, fontWeight = FontWeight.Black, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                        Text(column.name, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.weight(1f))
                         StatusCount(columnTasks.size)
                         IconButton(onClick = { collapsed[column.id] = !(collapsed[column.id] ?: false) }) {
                             Icon(if (collapsed[column.id] == true) Icons.Outlined.Add else Icons.Outlined.TableRows, null)
@@ -1633,7 +1619,7 @@ private fun CompactGroupedTaskTable(
                         columnTasks.forEachIndexed { index, task ->
                             TaskSwipeRow(task = task, startAction = swipeStartAction, endAction = swipeEndAction, onAction = onSwipeAction) {
                             Surface(
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(12.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier.fillMaxWidth().animateContentSize(),
@@ -1682,7 +1668,7 @@ private fun CompactGroupedTaskTable(
                         }
                         Surface(
                             modifier = Modifier.fillMaxWidth().clickable { onNewTask(column) },
-                            shape = RoundedCornerShape(9.dp),
+                            shape = RoundedCornerShape(10.dp),
                             color = Color.Transparent,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         ) {
@@ -1712,17 +1698,17 @@ private fun FocusedTaskPropertyDialog(
     onPickAttachment: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var newStatus by remember { mutableStateOf("") }
-    val compact = LocalConfiguration.current.screenWidthDp < 720
     val editorContent: @Composable () -> Unit = {
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxWidth().padding(16.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Icon(property.type.icon(), null, tint = MaterialTheme.colorScheme.primary)
-                Text(property.name, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
-                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close") }
+            if (property.type !in setOf(TaskPropertyType.Status, TaskPropertyType.Priority, TaskPropertyType.Assignee, TaskPropertyType.Person)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(property.type.icon(), null, tint = MaterialTheme.colorScheme.primary)
+                    Text(property.name, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close") }
+                }
             }
             when (property.type) {
                 TaskPropertyType.Status -> {
@@ -1739,10 +1725,6 @@ private fun FocusedTaskPropertyDialog(
                             }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(newStatus, { newStatus = it }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("Create new status") }, colors = taskTextFieldColors())
-                        IconButton(onClick = { if (newStatus.isNotBlank()) { viewModel.createTaskColumn(task.taskBoardId, newStatus.trim()); newStatus = "" } }) { Icon(Icons.Outlined.Add, null) }
-                    }
                 }
                 TaskPropertyType.Checklist -> ChecklistPropertyEditor(task, property, checklistItems, viewModel)
                 TaskPropertyType.Checkbox -> CheckboxPropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
@@ -1750,41 +1732,76 @@ private fun FocusedTaskPropertyDialog(
                 TaskPropertyType.CreatedAt -> ReadOnlyPropertyValue(shortTime(task.createdAt))
                 TaskPropertyType.LastModified -> ReadOnlyPropertyValue(shortTime(task.updatedAt))
                 TaskPropertyType.DueDate, TaskPropertyType.Date -> DatePropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
-                TaskPropertyType.Priority -> ChoicePropertyEditor(task, property, task.priority.name, TaskPriority.entries.map { it.name }, viewModel)
+                TaskPropertyType.Priority -> TaskPriority.entries.forEach { priority ->
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (priority == task.priority) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .36f),
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            viewModel.setTaskPropertyValue(task, property, priority.name)
+                            onDismiss()
+                        },
+                    ) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(priority.label(), Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                            if (priority == task.priority) Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                TaskPropertyType.Assignee, TaskPropertyType.Person -> {
+                    val options = listOf(task.assignee, "@owner", "").distinct()
+                    options.forEach { assignee ->
+                        val label = assignee.ifBlank { "Unassigned" }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (assignee == task.assignee) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .36f),
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                viewModel.setTaskPropertyValue(task, property, assignee)
+                                onDismiss()
+                            },
+                        ) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                AssigneeAvatar(label)
+                                Spacer(Modifier.width(10.dp))
+                                Text(label, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                                if (assignee == task.assignee) Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
                 TaskPropertyType.Labels, TaskPropertyType.Multiselect -> TaskLabelsPropertyEditor(task, property, value?.valueJson.orEmpty(), tags, viewModel)
                 else -> TextPropertyEditor(task, property, property.displayValue(task, value?.valueJson.orEmpty()), viewModel)
             }
-            Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+            if (property.type !in setOf(TaskPropertyType.Status, TaskPropertyType.Priority, TaskPropertyType.Assignee, TaskPropertyType.Person)) {
+                Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+            }
         }
     }
-    if (compact) {
-        NorfoldBottomSheet(onDismissRequest = onDismiss) {
-            Box(Modifier.fillMaxWidth().heightIn(max = 680.dp).verticalScroll(rememberScrollState())) { editorContent() }
-            Spacer(Modifier.navigationBarsPadding())
-        }
-    } else {
+    run {
         val density = LocalDensity.current
         val configuration = LocalConfiguration.current
-        val popupWidth = 380.dp
-        val maxHeight = 620.dp
-        val offset = with(density) {
+        val popupWidth = minOf(330.dp, (configuration.screenWidthDp - 24).coerceAtLeast(220).dp)
+        val maxHeight = minOf(620, (configuration.screenHeightDp - 24).coerceAtLeast(240)).dp
+        val anchorBounds = with(density) {
             val screenWidth = configuration.screenWidthDp.dp.roundToPx()
-            val screenHeight = configuration.screenHeightDp.dp.roundToPx()
             val width = popupWidth.roundToPx()
-            val height = maxHeight.roundToPx()
-            IntOffset(
-                x = (anchor?.left?.roundToInt() ?: (screenWidth - width) / 2).coerceIn(0, (screenWidth - width).coerceAtLeast(0)),
-                y = (anchor?.bottom?.roundToInt() ?: 80).coerceIn(0, (screenHeight - height).coerceAtLeast(0)),
+            val anchorBottom = anchor?.bottom?.roundToInt() ?: 80
+            val anchorTop = anchor?.top?.roundToInt() ?: anchorBottom
+            val left = (anchor?.left?.roundToInt() ?: (screenWidth - width) / 2)
+                .coerceIn(0, (screenWidth - width).coerceAtLeast(0))
+            androidx.compose.ui.unit.IntRect(
+                left = left,
+                top = anchorTop,
+                right = anchor?.right?.roundToInt() ?: (left + width),
+                bottom = anchorBottom,
             )
         }
-        Popup(alignment = Alignment.TopStart, offset = offset, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
-            Surface(
-                modifier = Modifier.width(popupWidth).heightIn(max = maxHeight).verticalScroll(rememberScrollState()),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                shadowElevation = 12.dp,
-            ) { editorContent() }
+        NorfoldAnchoredPopupAt(
+            anchorBounds = anchorBounds,
+            onDismissRequest = onDismiss,
+            modifier = Modifier.width(popupWidth).heightIn(max = maxHeight).verticalScroll(rememberScrollState()),
+            focusable = true,
+        ) {
+            editorContent()
         }
     }
 }
@@ -1870,67 +1887,6 @@ private fun TaskLabelsPropertyEditor(
 private fun normalizeTaskTag(value: String): String = value.trim().trimStart('#').replace(Regex("\\s+"), " ")
 
 @Composable
-private fun TaskTableRow(
-    cells: List<String>,
-    rowId: Long = -1L,
-    header: Boolean = false,
-    progressColumn: Int = -1,
-    progress: Int? = null,
-    selectedCell: Pair<Long, Int>? = null,
-    onCellClick: (Int) -> Unit = {},
-    onClick: () -> Unit,
-) {
-    val border = MaterialTheme.colorScheme.outlineVariant
-    // IntrinsicSize.Min makes the row exactly as tall as its tallest cell, and fillMaxHeight
-    // stretches every cell to that height — so a row with a 10-line cell is 10 lines everywhere.
-    Row(
-        modifier = Modifier
-            .height(IntrinsicSize.Min)
-            .clickable(onClick = onClick),
-    ) {
-        cells.forEachIndexed { index, cell ->
-            val selected = selectedCell == (rowId to index)
-            Column(
-                modifier = Modifier
-                    .width(
-                        when (index) {
-                            0 -> 220.dp
-                            progressColumn -> 190.dp
-                            else -> 180.dp
-                        },
-                    )
-                    .fillMaxHeight()
-                    .heightIn(min = if (header) 48.dp else 72.dp)
-                    .background(
-                        when {
-                            selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)
-                            header -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
-                            else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.20f)
-                        },
-                    )
-                    .border(if (selected) 2.4.dp else 1.35.dp, if (selected) MaterialTheme.colorScheme.primary else border)
-                    .clickable {
-                        onCellClick(index)
-                        if (!header) onClick()
-                    }
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    cell,
-                    fontWeight = if (header || index == 0) FontWeight.Bold else FontWeight.Medium,
-                    color = if (header) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (index == progressColumn && progress != null) {
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(4.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun TaskTimelineView(tasks: List<TaskItem>, columns: List<TaskColumnItem>, onTaskClick: (TaskItem) -> Unit) {
     val dated = tasks.filter { it.startAt != null || it.dueAt != null }.sortedBy { it.startAt ?: it.dueAt }
     val origin = dated.minOfOrNull { startOfDay(it.startAt ?: it.dueAt!!) } ?: startOfDay(System.currentTimeMillis())
@@ -1943,7 +1899,7 @@ private fun TaskTimelineView(tasks: List<TaskItem>, columns: List<TaskColumnItem
                 Text("Add a start or due date to place tasks on the timeline.", Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
-            Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))) {
+            Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))) {
                 Row {
                     Spacer(Modifier.width(190.dp))
                     repeat(14) { day ->
@@ -1963,7 +1919,7 @@ private fun TaskTimelineView(tasks: List<TaskItem>, columns: List<TaskColumnItem
                             Surface(
                                 color = task.resolveAccent(column?.resolvedColor() ?: MaterialTheme.colorScheme.primary).copy(alpha = .22f),
                                 contentColor = MaterialTheme.colorScheme.onSurface,
-                                shape = RoundedCornerShape(9.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.padding(top = 10.dp).width(dayWidth * spanDays).height(38.dp).offset(x = dayWidth * offsetDays).clickable { onTaskClick(task) },
                             ) { Text(task.title, Modifier.padding(horizontal = 10.dp, vertical = 9.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                         }
@@ -2007,7 +1963,7 @@ private fun MatrixQuadrant(
     modifier: Modifier = Modifier,
     onTaskClick: (TaskItem) -> Unit,
 ) {
-    Surface(color = container.copy(alpha = 0.5f), shape = RoundedCornerShape(18.dp), modifier = modifier.height(268.dp).animateContentSize()) {
+    Surface(color = container.copy(alpha = 0.5f), shape = RoundedCornerShape(16.dp), modifier = modifier.height(268.dp).animateContentSize()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -2117,12 +2073,13 @@ private fun TaskListView(
             TaskSwipeRow(task = task, startAction = swipeStartAction, endAction = swipeEndAction, onAction = onSwipeAction) {
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth().clickable { onTaskClick(task) },
             ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Icon(if (task.status == TaskStatus.Done) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked, null)
+                        // Brand pop when the status flips — completing a task should feel like the logo dot.
+                        Icon(if (task.status == TaskStatus.Done) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked, null, modifier = Modifier.popOnChange(task.status == TaskStatus.Done))
                         Column(Modifier.weight(1f)) {
                             Text(task.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(columns.firstOrNull { it.id == task.taskColumnId }?.name ?: task.status.label(), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2351,11 +2308,11 @@ private fun NativeTaskChart(slices: List<TaskChartSpecBuilder.Slice>) {
                 val label = listOf(slice.group, slice.stack).filter(String::isNotBlank).joinToString(" · ")
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(label, Modifier.widthIn(min = 88.dp, max = 150.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
-                    Box(Modifier.weight(1f).padding(horizontal = 10.dp).height(12.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(999.dp))) {
+                    Box(Modifier.weight(1f).padding(horizontal = 10.dp).height(12.dp).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)) {
                         Box(
                             Modifier.fillMaxWidth((slice.value / maximum).toFloat().coerceIn(0.02f, 1f))
                                 .fillMaxHeight()
-                                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(999.dp)),
+                                .background(MaterialTheme.colorScheme.primary, CircleShape),
                         )
                     }
                     Text(slice.value.toTaskChartLabel(), fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -2387,7 +2344,7 @@ private fun TaskGalleryView(
                         onAction = onSwipeAction,
                         modifier = Modifier.weight(1f),
                     ) {
-                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().height(142.dp).clickable { onTaskClick(task) }) {
+                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().height(142.dp).clickable { onTaskClick(task) }) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
                             Text(task.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             task.progressFromChecklist(checklistItems)?.let { progress ->
@@ -2442,7 +2399,7 @@ private fun TaskRailPanel(
     val activeFilters = listOf(assigneeFilter.isNotBlank(), labelFilter.isNotBlank(), priorityFilter != null).count { it }
     val selectedBoardName = boards.firstOrNull { it.id == selectedBoardId }?.name ?: "Default board"
     AnimatedVisibility(visible = action != null, modifier = modifier) {
-        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(22.dp), tonalElevation = 6.dp) {
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp), tonalElevation = 6.dp) {
             Column(
                 Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2542,7 +2499,7 @@ private fun TaskRailPanel(
                 boards.forEach { board ->
                     Surface(
                         color = if (board.id == selectedBoardId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier.fillMaxWidth().clickable { onSelectBoard(board.id) },
                     ) {
@@ -2591,9 +2548,9 @@ private fun TaskRailRow(
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
@@ -2641,7 +2598,7 @@ private fun FilterChips(title: String, values: List<String>, selected: String, o
 
 @Composable
 private fun AdaptiveTaskPage(
-    task: TaskItem?,
+    task: TaskItem,
     properties: List<TaskPropertyDefinition>,
     propertyValues: List<TaskPropertyValue>,
     checklistItems: List<TaskChecklistItem>,
@@ -2655,8 +2612,6 @@ private fun AdaptiveTaskPage(
     onPickAttachment: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
-    initialColumn: TaskColumnItem? = null,
-    onCreate: (TaskCreationPayload) -> Unit = {},
 ) {
     BackHandler(onBack = onDismiss)
     BoxWithConstraints(
@@ -2676,37 +2631,47 @@ private fun AdaptiveTaskPage(
                 .navigationBarsPadding()
                 .imePadding(),
         ) {
-            if (task == null) {
-                NewTaskPageContent(
-                    columns = columns,
-                    properties = properties,
-                    initialColumn = initialColumn,
-                    boardName = boardName,
-                    onDismiss = onDismiss,
-                    onCreate = onCreate,
-                )
-                return@Surface
-            }
             var showPicker by remember { mutableStateOf(false) }
             var commentDraft by remember(task.id) { mutableStateOf("") }
             val sortedProperties = properties.sortedWith(compareBy<TaskPropertyDefinition> { it.sortOrder }.thenBy { it.id })
+            val nameProperty = sortedProperties.firstOrNull { it.type == TaskPropertyType.Name }
+            var editingTitle by remember(task.id) { mutableStateOf(task.title == "New task") }
+            var titleDraft by remember(task.id, task.title) {
+                mutableStateOf(if (task.title == "New task") "" else task.title)
+            }
+            val persistTitle = {
+                val nextTitle = titleDraft.trim()
+                if (nextTitle.isNotBlank() && nextTitle != task.title) {
+                    if (nameProperty != null) {
+                        viewModel.setTaskPropertyValue(task, nameProperty, nextTitle)
+                    } else {
+                        viewModel.updateTaskDetails(
+                            task = task,
+                            title = nextTitle,
+                            description = task.description,
+                            status = task.status,
+                            priority = task.priority,
+                            dueAt = task.dueAt,
+                            assignee = task.assignee,
+                            labels = task.labels,
+                        )
+                    }
+                }
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp),
                 contentPadding = PaddingValues(bottom = if (sidePanel) 24.dp else 124.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item {
-                    val nameProperty = sortedProperties.firstOrNull { it.type == TaskPropertyType.Name }
-                    var editingTitle by remember(task.id) { mutableStateOf(false) }
-                    var titleDraft by remember(task.id, task.title) { mutableStateOf(task.title) }
                     var starred by remember(task.id) { mutableStateOf(false) }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         IconButton(
                             onClick = onDismiss,
                             modifier = Modifier
                                 .size(46.dp)
-                                .shadow(3.dp, RoundedCornerShape(14.dp))
-                                .clip(RoundedCornerShape(14.dp))
+                                .shadow(3.dp, RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(MaterialTheme.colorScheme.surface),
                         ) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", modifier = Modifier.size(20.dp)) }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2726,7 +2691,7 @@ private fun AdaptiveTaskPage(
                                     }) { Text("Cancel") }
                                     Button(
                                         onClick = {
-                                            nameProperty?.let { property -> viewModel.setTaskPropertyValue(task, property, titleDraft) }
+                                            persistTitle()
                                             editingTitle = false
                                         },
                                         enabled = titleDraft.isNotBlank(),
@@ -2755,7 +2720,11 @@ private fun AdaptiveTaskPage(
                             )
                         }
                         Button(
-                            onClick = onDismiss,
+                            onClick = {
+                                persistTitle()
+                                onDismiss()
+                            },
+                            enabled = !editingTitle || titleDraft.isNotBlank(),
                             shape = RoundedCornerShape(20.dp),
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
                         ) { Text("Save", fontWeight = FontWeight.Bold) }
@@ -2826,7 +2795,7 @@ private fun AdaptiveTaskPage(
                 }
                 item {
                     // Always-present Details card (mockup) — independent of user-added properties.
-                    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Icon(Icons.Outlined.Event, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
@@ -2847,7 +2816,7 @@ private fun AdaptiveTaskPage(
                     DashedActionButton(text = "New property", onClick = { showPicker = true })
                 }
                 item {
-                    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+                    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Icon(Icons.Outlined.ChatBubbleOutline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
@@ -2896,149 +2865,6 @@ private fun AdaptiveTaskPage(
     }
 }
 
-@Composable
-private fun NewTaskPageContent(
-    columns: List<TaskColumnItem>,
-    properties: List<TaskPropertyDefinition>,
-    initialColumn: TaskColumnItem?,
-    boardName: String,
-    onDismiss: () -> Unit,
-    onCreate: (TaskCreationPayload) -> Unit,
-) {
-    var title by remember { mutableStateOf("") }
-    var start by remember { mutableStateOf("") }
-    var end by remember { mutableStateOf("") }
-    var due by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var checklist by remember { mutableStateOf("") }
-    var selectedColumn by remember(columns) { mutableStateOf(initialColumn ?: columns.first()) }
-    var priority by remember { mutableStateOf(TaskPriority.Normal) }
-    val canCreate = title.isNotBlank()
-    val create = {
-        val startAt = parseTaskDraftDate(start)
-        val endAt = parseTaskDraftDate(end)
-        val dueAt = parseTaskDraftDate(due)
-        val timed = listOf(start, end, due).any { it.contains(':') }
-        val values = buildMap {
-            put(TaskPropertyType.Status, selectedColumn.name)
-            put(TaskPropertyType.Priority, priority.name)
-            if (note.isNotBlank()) put(TaskPropertyType.Text, note.trim())
-            if (startAt != null || endAt != null) {
-                val type = if (properties.any { it.type == TaskPropertyType.Date }) TaskPropertyType.Date else TaskPropertyType.DueDate
-                put(type, TaskDateRangeCodec.encode(TaskDateRange(startAt, endAt, allDay = !timed)))
-            }
-            if (dueAt != null) {
-                put(TaskPropertyType.DueDate, TaskDateRangeCodec.encode(TaskDateRange(startAt ?: dueAt, dueAt, allDay = !timed)))
-            }
-        }
-        onCreate(
-            TaskCreationPayload(
-                title = title.trim(),
-                column = selectedColumn,
-                propertyValues = values,
-                checklistItems = checklist.lineSequence().map(String::trim).filter(String::isNotBlank).toList(),
-            ),
-        )
-    }
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp),
-        contentPadding = PaddingValues(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .size(46.dp)
-                        .shadow(3.dp, RoundedCornerShape(14.dp))
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surface),
-                ) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", modifier = Modifier.size(20.dp)) }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("New task", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-                    Row {
-                        Text("In ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                        Text(boardName, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Button(
-                    onClick = create,
-                    enabled = canCreate,
-                    shape = RoundedCornerShape(20.dp),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
-                ) { Text("Create", fontWeight = FontWeight.Bold) }
-            }
-        }
-        item {
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text("Title") },
-                colors = taskTextFieldColors(),
-            )
-        }
-        item {
-            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Status", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(columns, key = { it.id }) { column ->
-                            AssistChip(
-                                onClick = { selectedColumn = column },
-                                label = { Text(if (selectedColumn.id == column.id) "${column.name} ✓" else column.name) },
-                            )
-                        }
-                    }
-                    Text("Priority", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(TaskPriority.entries) { option ->
-                            AssistChip(
-                                onClick = { priority = option },
-                                label = { Text(if (priority == option) "${option.label()} ✓" else option.label()) },
-                            )
-                        }
-                    }
-                    Text("Dates", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        CompactTaskDraftField("Start", start, { start = it }, Modifier.fillMaxWidth())
-                        CompactTaskDraftField("End", end, { end = it }, Modifier.fillMaxWidth())
-                        CompactTaskDraftField("Due", due, { due = it }, Modifier.fillMaxWidth())
-                    }
-                    Text("Use YYYY-MM-DD for all-day work or YYYY-MM-DD HH:mm for an exact time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-        item {
-            OutlinedTextField(
-                value = note,
-                onValueChange = { note = it },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 86.dp),
-                label = { Text("Note") },
-                colors = taskTextFieldColors(),
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = checklist,
-                onValueChange = { checklist = it },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 92.dp),
-                label = { Text("Checklist") },
-                supportingText = { Text("One item per line") },
-                colors = taskTextFieldColors(),
-            )
-        }
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-                Button(enabled = canCreate, onClick = create) { Text("Create") }
-            }
-        }
-    }
-}
-
 private fun Modifier.dashedOutline(color: Color, radius: Dp): Modifier = drawBehind {
     val strokeWidth = 1.dp.toPx()
     drawRoundRect(
@@ -3073,13 +2899,13 @@ private fun DashedActionButton(text: String, onClick: () -> Unit) {
 @Composable
 private fun TaskFilesSection(files: List<WorkspaceFileItem>, onAttach: () -> Unit, onRemove: (WorkspaceFileItem) -> Unit) {
     val context = LocalContext.current
-    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.AttachFile, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Text("Files & media", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                Surface(shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                Surface(shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
                     TextButton(onClick = onAttach) { Text("Attach") }
                 }
             }
@@ -3100,7 +2926,7 @@ private fun TaskFilesSection(files: List<WorkspaceFileItem>, onAttach: () -> Uni
                         Text("No files attached", fontWeight = FontWeight.Bold)
                         Text("Attach files or images to this task", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                     }
-                    FilledTonalButton(onClick = onAttach, shape = RoundedCornerShape(14.dp)) { Text("Attach") }
+                    FilledTonalButton(onClick = onAttach, shape = RoundedCornerShape(12.dp)) { Text("Attach") }
                 }
             }
             files.forEach { file ->
@@ -3144,7 +2970,7 @@ private fun TaskItem.resolveAccent(fallback: Color): Color =
 
 @Composable
 private fun TaskColorPalette(task: TaskItem, viewModel: DocsViewModel) {
-    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -3201,8 +3027,9 @@ private fun MainPropertiesCard(
     viewModel: DocsViewModel,
 ) {
     var editing by remember(task.id) { mutableStateOf<TaskPropertyDefinition?>(null) }
+    var editingAnchor by remember(task.id) { mutableStateOf<Rect?>(null) }
     var expanded by remember(task.id) { mutableStateOf(true) }
-    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -3223,6 +3050,8 @@ private fun MainPropertiesCard(
                             value = mainPropertyDisplay(task, property, value, columns),
                             showLabelChips = property.type == TaskPropertyType.Labels || property.type == TaskPropertyType.Multiselect,
                             showCalendar = property.type == TaskPropertyType.Date || property.type == TaskPropertyType.DueDate,
+                            active = editing?.id == property.id,
+                            onBoundsChanged = { editingAnchor = it },
                             onClick = { editing = property },
                         )
                     }
@@ -3238,7 +3067,7 @@ private fun MainPropertiesCard(
             checklistItems = emptyList(),
             columns = columns,
             tags = tags,
-            anchor = null,
+            anchor = editingAnchor,
             viewModel = viewModel,
             onPickAttachment = {},
             onDismiss = { editing = null },
@@ -3253,13 +3082,17 @@ private fun MainPropertyRow(
     value: String,
     showLabelChips: Boolean,
     showCalendar: Boolean,
+    active: Boolean,
+    onBoundsChanged: (Rect) -> Unit,
     onClick: () -> Unit,
 ) {
+    var bounds by remember { mutableStateOf(Rect.Zero) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .onGloballyPositioned { bounds = it.boundsInWindow() }
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
+            .clickable { onBoundsChanged(bounds); onClick() }
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -3275,7 +3108,7 @@ private fun MainPropertyRow(
         Surface(
             color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            border = BorderStroke(if (active) 2.dp else 1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.weight(1f),
         ) {
             Row(
@@ -3324,7 +3157,7 @@ private fun TaskChecklistSummaryCard(
     val progress = if (items.isEmpty()) 0f else completed.toFloat() / items.size
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         tonalElevation = 1.dp,
         shadowElevation = 1.dp,
         modifier = Modifier.fillMaxWidth(),
@@ -3375,7 +3208,7 @@ private fun TaskChecklistSummaryCard(
                             singleLine = true,
                             placeholder = { Text("Add a new item") },
                             colors = taskTextFieldColors(),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(12.dp),
                         )
                         FilledTonalButton(
                             onClick = {
@@ -3383,7 +3216,7 @@ private fun TaskChecklistSummaryCard(
                                 newItem = ""
                             },
                             enabled = newItem.isNotBlank(),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(12.dp),
                         ) { Text("Add") }
                     }
                 }
@@ -3402,7 +3235,7 @@ private fun TaskNotesSection(
     if (property.hiddenWhenEmpty && displayed.isBlank()) return
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         tonalElevation = 1.dp,
         shadowElevation = 1.dp,
         modifier = Modifier.fillMaxWidth(),
@@ -3447,184 +3280,15 @@ private fun mainPropertyDisplay(
     else -> property.displayValue(task, value?.valueJson.orEmpty())
 }
 
-/** Popup editor for a single main property, chosen by [property] type. */
-@Composable
-private fun MainPropertyEditDialog(
-    task: TaskItem,
-    property: TaskPropertyDefinition,
-    value: TaskPropertyValue?,
-    columns: List<TaskColumnItem>,
-    viewModel: DocsViewModel,
-    onDismiss: () -> Unit,
-) {
-    when (property.type) {
-        TaskPropertyType.Status -> NorfoldDialog(
-            onDismissRequest = onDismiss,
-            confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-            title = { Text("Status") },
-            text = {
-                Column {
-                    columns.forEach { column ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { viewModel.moveTaskToColumn(task, column); onDismiss() }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = task.taskColumnId == column.id, onClick = { viewModel.moveTaskToColumn(task, column); onDismiss() })
-                            Text(column.name)
-                        }
-                    }
-                }
-            },
-        )
-        TaskPropertyType.Priority -> {
-            var draft by remember(task.id, property.id) { mutableStateOf(task.priority.name) }
-            NorfoldDialog(
-                onDismissRequest = onDismiss,
-                confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft); onDismiss() }) { Text("Save") } },
-                dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-                title = { Text("Priority") },
-                text = {
-                    Column {
-                        TaskPriority.entries.forEach { priority ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { draft = priority.name }
-                                    .padding(vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RadioButton(selected = draft == priority.name, onClick = { draft = priority.name })
-                                Text(priority.name)
-                            }
-                        }
-                    }
-                },
-            )
-        }
-        TaskPropertyType.DueDate, TaskPropertyType.Date -> NorfoldDialog(
-            onDismissRequest = onDismiss,
-            confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-            title = { Text(property.name) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    DatePropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
-                }
-            },
-        )
-        TaskPropertyType.Checkbox -> {
-            var draft by remember(task.id, property.id) { mutableStateOf((value?.valueJson ?: "").toBoolean()) }
-            NorfoldDialog(
-                onDismissRequest = onDismiss,
-                confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft.toString()); onDismiss() }) { Text("Save") } },
-                dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-                title = { Text(property.name) },
-                text = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = draft, onCheckedChange = { draft = it })
-                        Text(if (draft) "Checked" else "Unchecked")
-                    }
-                },
-            )
-        }
-        else -> {
-            var draft by remember(task.id, property.id) { mutableStateOf(value?.valueJson.orEmpty()) }
-            NorfoldDialog(
-                onDismissRequest = onDismiss,
-                confirmButton = { TextButton(onClick = { viewModel.setTaskPropertyValue(task, property, draft); onDismiss() }) { Text("Save") } },
-                dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-                title = { Text(property.name) },
-                text = {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text(property.type.defaultPropertyName()) },
-                        colors = taskTextFieldColors(),
-                    )
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun TaskPropertyBlock(
-    task: TaskItem,
-    property: TaskPropertyDefinition,
-    propertyIndex: Int,
-    propertyCount: Int,
-    value: TaskPropertyValue?,
-    checklistItems: List<TaskChecklistItem>,
-    columns: List<TaskColumnItem>,
-    viewModel: DocsViewModel,
-    onPickAttachment: () -> Unit,
-) {
-    if (property.hiddenWhenEmpty && value?.valueJson.isNullOrBlank() && checklistItems.isEmpty()) return
-    var menuOpen by remember { mutableStateOf(false) }
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                VerticalReorderHandle(enabled = propertyCount > 1, rowHeight = 96.dp) { delta ->
-                    viewModel.reorderTaskPropertyToIndex(property, (propertyIndex + delta).coerceIn(0, propertyCount - 1))
-                }
-                Icon(property.type.icon(), null, tint = MaterialTheme.colorScheme.primary)
-                Text(property.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                if (property.type == TaskPropertyType.Checklist) {
-                    checklistItems.progressPercent()?.let { Text("$it%", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Outlined.MoreVert, null) }
-                NorfoldTaskMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(text = { Text(if (property.hiddenWhenEmpty) "Always show" else "Hide when empty") }, leadingIcon = { Icon(Icons.Outlined.Visibility, null) }, onClick = { viewModel.updateTaskPropertyDefinition(property, property.name, property.type, !property.hiddenWhenEmpty); menuOpen = false })
-                    DropdownMenuItem(text = { Text("Duplicate") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) }, onClick = { viewModel.duplicateTaskProperty(property); menuOpen = false })
-                    DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { viewModel.deleteTaskProperty(property); menuOpen = false })
-                }
-            }
-            when (property.type) {
-                TaskPropertyType.Checklist -> ChecklistPropertyEditor(task, property, checklistItems, viewModel)
-                TaskPropertyType.Checkbox -> CheckboxPropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
-                TaskPropertyType.FilesMedia -> FilesPropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel, onPickAttachment)
-                TaskPropertyType.CreatedAt -> ReadOnlyPropertyValue(shortTime(task.createdAt))
-                TaskPropertyType.LastModified -> ReadOnlyPropertyValue(shortTime(task.updatedAt))
-                TaskPropertyType.DueDate, TaskPropertyType.Date -> DatePropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
-                TaskPropertyType.Status -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    columns.forEach { column ->
-                        Surface(
-                            color = if (task.taskColumnId == column.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth().clickable { viewModel.moveTaskToColumn(task, column) },
-                        ) { Text(column.name, Modifier.padding(10.dp), fontWeight = FontWeight.Bold) }
-                    }
-                }
-                TaskPropertyType.Priority -> ChoicePropertyEditor(task, property, task.priority.name, TaskPriority.entries.map { it.name }, viewModel)
-                else -> TextPropertyEditor(task, property, property.displayValue(task, value?.valueJson.orEmpty()), viewModel)
-            }
-        }
-    }
-}
-
 @Composable
 private fun NorfoldTaskMenu(
     expanded: Boolean,
     onDismissRequest: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    val style = LocalContextualMenuStyle.current
-    val colorMode = LocalContextualMenuColor.current
-    DropdownMenu(
+    NorfoldDropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
-        shape = when (style) {
-            ContextualMenuStyle.Pill -> RoundedCornerShape(18.dp)
-            ContextualMenuStyle.Block -> RoundedCornerShape(8.dp)
-            ContextualMenuStyle.Minimal -> RoundedCornerShape(2.dp)
-        },
-        containerColor = if (colorMode == ContextualMenuColor.AppAccent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) { content() }
 }
 
@@ -3666,7 +3330,7 @@ private fun VerticalReorderHandle(enabled: Boolean = true, rowHeight: Dp = 64.dp
 private fun PropertyPreviewCard(value: String, property: TaskPropertyDefinition) {
     Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.68f),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(
@@ -3740,7 +3404,23 @@ private fun DatePropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
         viewModel.setTaskPropertyValue(task, property, TaskDateRangeCodec.encode(draft))
     }
 
-    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+    fun dayOffset(days: Int): Long = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+        add(Calendar.DAY_OF_YEAR, days)
+    }.timeInMillis
+
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { AssistChip(onClick = { val at = dayOffset(0); persist(draft.copy(startAt = at, endAt = at, allDay = true)) }, label = { Text("Today") }) }
+        item { AssistChip(onClick = { val at = dayOffset(1); persist(draft.copy(startAt = at, endAt = at, allDay = true)) }, label = { Text("Tomorrow") }) }
+        item { AssistChip(onClick = { val at = dayOffset(7); persist(draft.copy(startAt = at, endAt = at, allDay = true)) }, label = { Text("Next week") }) }
+        item { AssistChip(onClick = { persist(TaskDateRange(null, null, draft.allDay, draft.reminderMinutesBefore)) }, label = { Text("No date") }) }
+        item { AssistChip(onClick = { pickingStart = true; showPicker = true }, label = { Text("Custom…") }) }
+    }
+
+    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(Icons.Outlined.Event, null, tint = MaterialTheme.colorScheme.primary)
             Text(
@@ -3838,40 +3518,6 @@ private fun DatePropertyEditor(task: TaskItem, property: TaskPropertyDefinition,
 }
 
 @Composable
-private fun ChoicePropertyEditor(task: TaskItem, property: TaskPropertyDefinition, selected: String, choices: List<String>, viewModel: DocsViewModel) {
-    var editing by remember(task.id, property.id, selected) { mutableStateOf(selected.isBlank()) }
-    var draft by remember(task.id, property.id, selected) { mutableStateOf(selected) }
-    if (!editing) {
-        PropertyPreviewCard(draft, property)
-        TextButton(onClick = { editing = true }) {
-            Icon(Icons.Outlined.Edit, null)
-            Spacer(Modifier.width(6.dp))
-            Text("Edit")
-        }
-        return
-    }
-    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(choices) { choice ->
-                    AssistChip(onClick = { draft = choice }, label = { Text(if (choice == draft) "$choice ✓" else choice) })
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = {
-                    draft = selected
-                    editing = false
-                }) { Text("Cancel") }
-                Button(onClick = {
-                    viewModel.setTaskPropertyValue(task, property, draft)
-                    editing = false
-                }) { Text("Save") }
-            }
-        }
-    }
-}
-
-@Composable
 private fun CheckboxPropertyEditor(task: TaskItem, property: TaskPropertyDefinition, raw: String, viewModel: DocsViewModel) {
     val checked = raw.toBoolean()
     var editing by remember(task.id, property.id, raw) { mutableStateOf(raw.isBlank()) }
@@ -3885,7 +3531,7 @@ private fun CheckboxPropertyEditor(task: TaskItem, property: TaskPropertyDefinit
         }
         return
     }
-    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = draft, onCheckedChange = { draft = it })
@@ -3979,61 +3625,6 @@ private fun TaskPropertyPicker(onDismiss: () -> Unit, onPick: (TaskPropertyType)
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
-}
-
-@Composable
-private fun TaskDetailDialog(
-    task: TaskItem,
-    onPickAttachment: () -> Unit,
-    onDelete: () -> Unit,
-    onSave: (String, String, TaskStatus, TaskPriority, Long?, String, String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var title by remember(task.id) { mutableStateOf(task.title) }
-    var description by remember(task.id) { mutableStateOf(task.description) }
-    var status by remember(task.id) { mutableStateOf(task.status) }
-    var priority by remember(task.id) { mutableStateOf(task.priority) }
-    var assignee by remember(task.id) { mutableStateOf(task.assignee.ifBlank { "@owner" }) }
-    var labels by remember(task.id) { mutableStateOf(task.labels) }
-    var dueAt by remember(task.id) { mutableStateOf(task.dueAt) }
-    NorfoldContentDialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Task", fontWeight = FontWeight.Black, fontSize = 24.sp)
-                OutlinedTextField(title, { title = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Name") }, colors = taskTextFieldColors())
-                OutlinedTextField(description, { description = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp), label = { Text("Docs") }, colors = taskTextFieldColors())
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(TaskStatus.entries) { value -> AssistChip(onClick = { status = value }, label = { Text(if (status == value) "${value.label()} ✓" else value.label()) }) }
-                }
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(TaskPriority.entries) { value -> AssistChip(onClick = { priority = value }, label = { Text(if (priority == value) "${value.label()} ✓" else value.label()) }) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(onClick = { dueAt = System.currentTimeMillis() }, label = { Text("Today") })
-                    AssistChip(onClick = { dueAt = System.currentTimeMillis() + 86_400_000L }, label = { Text("Tomorrow") })
-                    AssistChip(onClick = { dueAt = null }, label = { Text("No date") })
-                }
-                OutlinedTextField(assignee, { assignee = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Assignee") }, colors = taskTextFieldColors())
-                OutlinedTextField(labels, { labels = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Labels") }, colors = taskTextFieldColors())
-                if (task.attachmentName != null) TinyMeta("File: ${task.attachmentName}")
-                FilledTonalButton(onClick = onPickAttachment) {
-                    Icon(Icons.Outlined.AttachFile, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Attach file/media")
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = onDelete) {
-                        Icon(Icons.Outlined.Delete, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Delete")
-                    }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
-                    Button(onClick = { onSave(title, description, status, priority, dueAt, assignee, labels) }) { Text("Save") }
-                }
-            }
-        }
-    }
 }
 
 @Stable
@@ -4144,19 +3735,6 @@ private data class TaskCardHit(
 )
 
 @Composable
-private fun DropIndicator() {
-    Surface(
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth().height(42.dp),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text("Drop here", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
 private fun StatusCount(count: Int) {
     Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), contentColor = MaterialTheme.colorScheme.primary, shape = CircleShape) {
         Text(count.toString(), modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp), fontWeight = FontWeight.Bold)
@@ -4190,13 +3768,6 @@ private fun AssigneeAvatar(name: String) {
 private fun TinyMeta(text: String) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f), shape = RoundedCornerShape(10.dp)) {
         Text(text, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-    }
-}
-
-@Composable
-private fun EmptyTaskState(text: String) {
-    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-        Text(text, modifier = Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

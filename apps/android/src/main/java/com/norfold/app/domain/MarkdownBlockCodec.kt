@@ -340,6 +340,12 @@ object MarkdownBlockCodec {
         is ChartBlock -> "```vega-lite\n${block.vegaLiteSpec}\n```"
         is MathBlock -> if (block.display) "$$\n${block.tex}\n$$" else "$${block.tex}$"
         is MermaidBlock -> "```mermaid\n${block.code}\n```"
+        is ShapeBlock -> buildString {
+            append("> [Shape: ").append(block.vectorAsset?.title ?: block.kind.name)
+            block.vectorAsset?.let { append(" • ").append(it.collection) }
+            append(']')
+            if (block.text.isNotBlank()) append(' ').append(block.text)
+        }
     }
 
     /**
@@ -382,6 +388,12 @@ object MarkdownBlockCodec {
         is BoldInline -> "**${inline.children.markdown()}**"
         is ItalicInline -> "*${inline.children.markdown()}*"
         is StrikethroughInline -> "~~${inline.children.markdown()}~~"
+        // No GFM syntax for these: export as inline HTML / extended-markdown marks (export-only;
+        // the canonical persistence format is the block JSON, not markdown).
+        is UnderlineInline -> "<u>${inline.children.markdown()}</u>"
+        is HighlightInline -> "==${inline.children.markdown()}=="
+        is FontFamilyInline -> "<span style=\"font-family:'${inline.family.htmlAttribute()}'\">${inline.children.markdown()}</span>"
+        is FontSizeInline -> "<span style=\"font-size:${inline.sizeSp.coerceIn(6f, 144f)}pt\">${inline.children.markdown()}</span>"
         is CodeInline -> "`${inline.value}`"
         is LinkInline -> "[${inline.children.markdown()}](${inline.url})"
         is EmojiInline -> inline.shortcode
@@ -389,6 +401,12 @@ object MarkdownBlockCodec {
         is TagInline -> "#${inline.value}"
         is MentionInline -> "@${inline.value}"
     } }
+
+    private fun String.htmlAttribute(): String = replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
 
     private fun mergeText(nodes: List<InlineNode>) = nodes.fold(mutableListOf<InlineNode>()) { acc, node ->
         if (node is InlineText && acc.lastOrNull() is InlineText) {
