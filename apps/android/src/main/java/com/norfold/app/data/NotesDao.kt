@@ -813,4 +813,34 @@ interface NotesDao {
 
     @Query("DELETE FROM remote_object_bindings")
     suspend fun clearRemoteBindings()
+
+    @Upsert
+    suspend fun upsertSecureChatOutbox(entity: SecureChatOutboxEntity)
+
+    @Query("SELECT * FROM secure_chat_outbox WHERE nextAttemptAt <= :now ORDER BY createdAt, id LIMIT :limit")
+    suspend fun pendingSecureChatOutbox(now: Long, limit: Int): List<SecureChatOutboxEntity>
+
+    @Query("DELETE FROM secure_chat_outbox WHERE id = :id")
+    suspend fun deleteSecureChatOutbox(id: String)
+
+    @Query("UPDATE secure_chat_outbox SET attemptCount = attemptCount + 1, nextAttemptAt = :nextAttemptAt, lastError = :lastError WHERE id = :id")
+    suspend fun failSecureChatOutbox(id: String, nextAttemptAt: Long, lastError: String)
+
+    @Upsert
+    suspend fun upsertSecureChatRelayCheckpoint(entity: SecureChatRelayCheckpointEntity)
+
+    @Query("SELECT * FROM secure_chat_relay_checkpoints WHERE deviceId = :deviceId AND cryptoGeneration = :generation")
+    suspend fun secureChatRelayCheckpoint(deviceId: String, generation: Int): SecureChatRelayCheckpointEntity?
+
+    @Upsert
+    suspend fun upsertSecureChatTombstone(entity: SecureChatTombstoneEntity)
+
+    @Query("SELECT * FROM secure_chat_tombstones WHERE messageSyncId = :messageSyncId")
+    suspend fun secureChatTombstone(messageSyncId: String): SecureChatTombstoneEntity?
+
+    @Upsert
+    suspend fun upsertPrivateChatArchiveManifest(entity: PrivateChatArchiveManifestEntity)
+
+    @Query("SELECT * FROM private_chat_archive_manifests ORDER BY updatedAt DESC")
+    suspend fun privateChatArchiveManifests(): List<PrivateChatArchiveManifestEntity>
 }

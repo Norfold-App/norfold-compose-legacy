@@ -30,6 +30,8 @@ class SecureChatBackend(context: Context) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
     private val client get() = NorfoldSupabase.client
 
+    fun currentDevicePublic(): DevicePublicMaterial = identityStore.publicIdentity()
+
     @Serializable
     data class RemoteDeviceCredential(
         @SerialName("device_id") val deviceId: String,
@@ -120,6 +122,7 @@ class SecureChatBackend(context: Context) {
 
     suspend fun sendMutation(
         conversationId: String,
+        clientSyncId: String,
         targetMessageId: String,
         type: String,
         body: String = "",
@@ -131,7 +134,7 @@ class SecureChatBackend(context: Context) {
         val createdAt = System.currentTimeMillis()
         return sendPayload(
             conversationId = conversationId,
-            clientSyncId = java.util.UUID.randomUUID().toString(),
+            clientSyncId = clientSyncId,
             payload = SecureChatPayloadV1(
                 type = type,
                 body = body,

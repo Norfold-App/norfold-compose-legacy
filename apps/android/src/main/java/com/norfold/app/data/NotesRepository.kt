@@ -2512,6 +2512,58 @@ class DocsRepository(private val database: NorfoldDatabase) {
         return true
     }
 
+    suspend fun enqueueSecureChatOperation(operation: SecureChatOutboxEntity) {
+        dao.upsertSecureChatOutbox(operation)
+    }
+
+    suspend fun pendingSecureChatOperations(limit: Int = 100): List<SecureChatOutboxEntity> =
+        dao.pendingSecureChatOutbox(System.currentTimeMillis(), limit.coerceIn(1, 250))
+
+    suspend fun completeSecureChatOperation(id: String) {
+        dao.deleteSecureChatOutbox(id)
+    }
+
+    suspend fun failSecureChatOperation(operation: SecureChatOutboxEntity, failure: Throwable) {
+        val exponent = operation.attemptCount.coerceIn(0, 8)
+        val delayMs = (2_000L shl exponent).coerceAtMost(5 * 60_000L)
+        dao.failSecureChatOutbox(
+            id = operation.id,
+            nextAttemptAt = System.currentTimeMillis() + delayMs,
+            lastError = failure.message.orEmpty().take(240),
+        )
+    }
+
+    suspend fun recordSecureRelayCheckpoint(
+        deviceId: String,
+        generation: Int,
+        createdAt: String,
+        relayId: String,
+    ) {
+        dao.upsertSecureChatRelayCheckpoint(
+            SecureChatRelayCheckpointEntity(
+                deviceId = deviceId,
+                cryptoGeneration = generation,
+                lastRelayCreatedAt = createdAt,
+                lastRelayId = relayId,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    suspend fun recordSecureChatTombstone(
+        messageSyncId: String,
+        conversationId: String,
+        reason: String,
+        destructiveAt: Long = System.currentTimeMillis(),
+    ) {
+        dao.upsertSecureChatTombstone(
+            SecureChatTombstoneEntity(messageSyncId, conversationId, destructiveAt, reason),
+        )
+    }
+
+    suspend fun hasSecureChatTombstone(messageSyncId: String): Boolean =
+        dao.secureChatTombstone(messageSyncId) != null
+
     /** Deletes a channel and every message scoped to it. General (null channel) is never deletable. */
     suspend fun deleteChatChannel(channelId: Long) {
         dao.deleteChatMessagesForChannel(channelId)
