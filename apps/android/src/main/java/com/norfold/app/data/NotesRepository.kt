@@ -1222,6 +1222,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                                 ?.let(::chatSecurityModeName) ?: local.securityMode,
                             securityEpochId = content["securityEpochId"]?.jsonPrimitive?.contentOrNull
                                 ?: local.securityEpochId,
+                            expiresAt = content["expiresAt"]?.jsonPrimitive?.longOrNull ?: local.expiresAt,
                         ),
                     )
                 }
@@ -1265,6 +1266,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     securityMode = content["securityMode"]?.jsonPrimitive?.contentOrNull
                         ?.let(::chatSecurityModeName),
                     securityEpochId = content["securityEpochId"]?.jsonPrimitive?.contentOrNull,
+                    expiresAt = content["expiresAt"]?.jsonPrimitive?.longOrNull,
                     workspaceId = localWorkspaceId,
                 ),
             )
@@ -2166,6 +2168,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         createdAt: Long = System.currentTimeMillis(),
         channelId: Long? = null,
         replyPreview: String? = null,
+        expiresAt: Long? = null,
     ): Long {
         val id = dao.insertChatMessage(
             ChatMessageEntity(
@@ -2182,6 +2185,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 workspaceId = activeWs(),
                 channelId = channelId,
                 replyPreview = replyPreview,
+                expiresAt = expiresAt,
             ),
         )
         // Only the shared General feed feeds the workspace graph/activity. Topic/DM/group messages
@@ -2303,6 +2307,13 @@ class DocsRepository(private val database: NorfoldDatabase) {
     /** Pins or unpins a conversation in the chat inbox. */
     suspend fun setChatChannelPinned(channelId: Long, pinned: Boolean) {
         dao.setChatChannelPinned(channelId, pinned)
+    }
+
+    suspend fun setChatChannelDefaultLifespan(channelId: Long, seconds: Long?) {
+        require(seconds == null || seconds in 60L..31_536_000L) {
+            "Message lifespan must be between one minute and one year."
+        }
+        dao.setChatChannelDefaultLifespan(channelId, seconds)
     }
 
     /**
@@ -2439,6 +2450,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         isOwn: Boolean,
         securityEpochId: String? = null,
         originPayloadJson: String? = null,
+        expiresAt: Long? = null,
     ): Boolean = database.withTransaction {
         val ws = activeWs()
         // Own messages already have a local row + binding (keyed by the same
@@ -2459,6 +2471,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 securityMode = securityEpochId?.let { ChatSecurityMode.EndToEndEncrypted.name },
                 securityEpochId = securityEpochId,
                 originPayloadJson = originPayloadJson,
+                expiresAt = expiresAt,
             ),
         )
         dao.insertRemoteBinding(
@@ -2489,6 +2502,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         isOwn: Boolean,
         securityEpochId: String,
         originPayloadJson: String? = null,
+        expiresAt: Long? = null,
     ): Boolean = database.withTransaction {
         val existing = dao.remoteBindingBySyncId(
             localWorkspaceId,
@@ -2509,6 +2523,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 securityMode = ChatSecurityMode.EndToEndEncrypted.name,
                 securityEpochId = securityEpochId,
                 originPayloadJson = originPayloadJson,
+                expiresAt = expiresAt,
             ),
         )
         dao.insertRemoteBinding(
@@ -2820,6 +2835,46 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     suspend fun hasSecureChatTombstone(messageSyncId: String): Boolean =
         dao.secureChatTombstone(messageSyncId) != null
+
+    suspend fun mergeSecureChatTombstones(rows: List<SecureChatTombstoneEntity>) =
+        database.withTransaction {
+            rows.forEach { row ->
+                dao.upsertSecureChatTombstone(row)
+                dao.bindingBySyncIdAnyWorkspace(WorkspaceObjectType.ChatMessage.name, row.messageSyncId)
+                    ?.let { dao.deleteChatMessage(it.localId) }
+            }
+        }
+
+    /**
+     * Removes locally expired content and records the same anti-resurrection marker used by
+     * remote expiry. The server remains authoritative for other devices; this makes the active
+     * device deterministic even while offline.
+     */
+    suspend fun purgeExpiredChatMessages(now: Long = System.currentTimeMillis()): Int =
+        database.withTransaction {
+            var removed = 0
+            dao.expiredChatMessages(now).forEach { message ->
+                val binding = dao.remoteBinding(
+                    message.workspaceId,
+                    WorkspaceObjectType.ChatMessage.name,
+                    message.id,
+                )
+                val syncId = binding?.syncId
+                if (syncId != null) {
+                    val conversationId = message.channelId
+                        ?.let { dao.chatChannelById(it) }
+                        ?.let { it.accountConversationId ?: it.syncId }
+                        ?: remoteWorkspaceId(message.workspaceId)
+                        ?: "workspace:${message.workspaceId}"
+                    dao.upsertSecureChatTombstone(
+                        SecureChatTombstoneEntity(syncId, conversationId, message.expiresAt ?: now, "expired"),
+                    )
+                }
+                dao.deleteChatMessage(message.id)
+                removed += 1
+            }
+            removed
+        }
 
     /** Deletes a channel and every message scoped to it. General (null channel) is never deletable. */
     suspend fun deleteChatChannel(channelId: Long) {
@@ -3409,6 +3464,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                         securityMode = it.securityMode.name,
                         securityEpochId = it.securityEpochId,
                         acknowledgedSecurityEpochId = it.acknowledgedSecurityEpochId,
+                        defaultLifespanSeconds = it.defaultLifespanSeconds,
                     ),
                 )
             }
@@ -3438,7 +3494,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
                         starred = it.starred,
                         securityMode = it.securityMode?.name,
                         securityEpochId = it.securityEpochId,
+                        originPayloadJson = it.originPayloadJson,
                         securityEventId = it.securityEventId,
+                        expiresAt = it.expiresAt,
                     ),
                 )
             }

@@ -552,6 +552,12 @@ interface NotesDao {
     @Query("UPDATE chat_messages SET originPayloadJson = :originPayloadJson WHERE id = :id")
     suspend fun setChatMessageOriginPayload(id: Long, originPayloadJson: String)
 
+    @Query("UPDATE chat_channels SET defaultLifespanSeconds = :seconds WHERE id = :id")
+    suspend fun setChatChannelDefaultLifespan(id: Long, seconds: Long?)
+
+    @Query("SELECT * FROM chat_messages WHERE expiresAt IS NOT NULL AND expiresAt <= :now ORDER BY expiresAt ASC LIMIT :limit")
+    suspend fun expiredChatMessages(now: Long, limit: Int = 500): List<ChatMessageEntity>
+
     // Forward-only batch upgrade: Sent -> Delivered -> Viewed, never backwards.
     // The CASE ranking makes replayed receipt events harmless.
     @Query(

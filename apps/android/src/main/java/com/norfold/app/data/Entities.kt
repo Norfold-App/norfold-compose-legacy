@@ -328,6 +328,7 @@ data class TaskChecklistItemEntity(
     tableName = "chat_messages",
     indices = [
         Index("createdAt"),
+        Index("expiresAt"),
         Index("workspaceId"),
         Index("channelId"),
         Index(value = ["workspaceId", "securityEventId"], unique = true),
@@ -364,6 +365,7 @@ data class ChatMessageEntity(
     val originPayloadJson: String? = null,
     // Stable server event id keeps durable security dividers idempotent across refresh/restore.
     val securityEventId: String? = null,
+    val expiresAt: Long? = null,
 )
 
 @Entity(
@@ -403,6 +405,7 @@ data class ChatChannelEntity(
     val securityMode: String = ChatSecurityMode.EndToEndEncrypted.name,
     val securityEpochId: String? = null,
     val acknowledgedSecurityEpochId: String? = null,
+    val defaultLifespanSeconds: Long? = null,
 )
 
 // The workspace roster: one row per invited member, keyed by remote profile UUID so the same
@@ -861,6 +864,7 @@ fun ChatMessageEntity.toDomain() = ChatMessageItem(
     securityEpochId = securityEpochId,
     originPayloadJson = originPayloadJson,
     securityEventId = securityEventId,
+    expiresAt = expiresAt,
 )
 
 fun ChatChannelEntity.toDomain() = ChatChannel(
@@ -885,6 +889,7 @@ fun ChatChannelEntity.toDomain() = ChatChannel(
         ?: ChatSecurityMode.EndToEndEncrypted,
     securityEpochId = securityEpochId,
     acknowledgedSecurityEpochId = acknowledgedSecurityEpochId,
+    defaultLifespanSeconds = defaultLifespanSeconds,
 )
 fun WorkspaceMemberEntity.toDomain() = com.norfold.app.domain.WorkspaceMember(
     userId = userId,

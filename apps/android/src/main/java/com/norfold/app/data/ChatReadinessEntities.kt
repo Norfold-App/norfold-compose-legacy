@@ -24,6 +24,7 @@ data class SecureChatOutboxEntity(
     val editedAt: Long? = null,
     val reactionsJson: String? = null,
     val pinned: Boolean? = null,
+    val expiresAt: Long? = null,
     val attemptCount: Int = 0,
     val nextAttemptAt: Long = 0L,
     val lastError: String? = null,

@@ -119,6 +119,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.ShapeLine
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -1777,6 +1778,9 @@ private fun ConversationDetailsSheet(
                 ?: ChatConversationPrefs.NotificationLevel.All,
         )
     }
+    var lifespanSeconds by remember(channel?.id, channel?.defaultLifespanSeconds) {
+        mutableStateOf(channel?.defaultLifespanSeconds)
+    }
     var editingGroup by remember(channel?.id) { mutableStateOf(false) }
     var confirmingLeave by remember(channel?.id) { mutableStateOf(false) }
     val scroll = rememberScrollState()
@@ -1928,6 +1932,38 @@ private fun ConversationDetailsSheet(
                                 viewModel.setChatConversationNotificationLevel(channel, level)
                             },
                             label = { Text(if (notificationLevel == level) "✓ $label" else label) },
+                        )
+                    }
+                }
+                Text(
+                    "Your disappearing messages",
+                    Modifier.padding(start = 20.dp, top = 18.dp, bottom = 6.dp),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Only messages you send after this change are affected.",
+                    Modifier.padding(horizontal = 20.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        null to "Off",
+                        86_400L to "24 hours",
+                        604_800L to "7 days",
+                        2_592_000L to "30 days",
+                    ).forEach { (seconds, label) ->
+                        AssistChip(
+                            onClick = {
+                                lifespanSeconds = seconds
+                                viewModel.setChatChannelDefaultLifespan(channel, seconds)
+                            },
+                            label = { Text(if (lifespanSeconds == seconds) "✓ $label" else label) },
                         )
                     }
                 }
@@ -2850,6 +2886,12 @@ private fun ChatBubble(
                             color = textColor.copy(alpha = 0.6f),
                         )
                         if (chat.pinned) Icon(Icons.Outlined.PushPin, "Pinned message", tint = textColor.copy(alpha = 0.7f), modifier = Modifier.size(11.dp))
+                        if (chat.expiresAt != null) Icon(
+                            Icons.Outlined.Timer,
+                            "Disappearing message",
+                            tint = textColor.copy(alpha = 0.7f),
+                            modifier = Modifier.size(12.dp),
+                        )
                         if (mine) {
                             // Receipt vocabulary (WhatsApp/Telegram hybrid): clock = local only,
                             // muted single tick = sent, muted double tick = delivered, and a bright

@@ -47,7 +47,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SecureChatUserHiddenEntity::class,
         PrivateChatArchiveManifestEntity::class,
     ],
-    version = 49,
+    version = 50,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -108,6 +108,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_46_47,
                     MIGRATION_47_48,
                     MIGRATION_48_49,
+                    MIGRATION_49_50,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -269,6 +270,14 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_user_hidden_conversationId ON secure_chat_user_hidden(conversationId)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_user_hidden_hiddenAt ON secure_chat_user_hidden(hiddenAt)")
+            }
+        }
+        internal val MIGRATION_49_50 = object : Migration(49, 50) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN expiresAt INTEGER")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_expiresAt ON chat_messages(expiresAt)")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN defaultLifespanSeconds INTEGER")
+                db.execSQL("ALTER TABLE secure_chat_outbox ADD COLUMN expiresAt INTEGER")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds
