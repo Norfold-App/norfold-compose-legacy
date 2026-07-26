@@ -143,6 +143,7 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
@@ -226,6 +227,7 @@ import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.PermMedia
 import androidx.compose.material.icons.outlined.Star
@@ -264,6 +266,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     var notePickerOpen by remember { mutableStateOf(false) }
     var gifPickerOpen by remember { mutableStateOf(false) }
     var messageActions by remember { mutableStateOf<ChatMessageItem?>(null) }
+    var reportTarget by remember { mutableStateOf<ChatMessageItem?>(null) }
     var whoReacted by remember { mutableStateOf<ChatMessageItem?>(null) }
     var forwardTarget by remember { mutableStateOf<ChatMessageItem?>(null) }
     // Multi-select mode: a non-null set enables selection UI; forwarding a batch reuses forwardTarget.
@@ -527,6 +530,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                 message = target,
                 canUnsend = viewModel.canUnsendChatMessage(target),
                 canEdit = target.authorUsername.equals(currentUsername, true) && target.body.isNotBlank(),
+                canReport = viewModel.canReportChatMessage(target),
                 onReply = { replyTarget = target; editingTarget = null; messageActions = null },
                 onEdit = { editingTarget = target; replyTarget = null; message = TextFieldValue(target.body, TextRange(target.body.length)); messageActions = null },
                 onTogglePin = { viewModel.setChatMessagePinned(target, !target.pinned); messageActions = null },
@@ -546,7 +550,21 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                     viewModel.unsendChatMessage(target)
                     messageActions = null
                 },
+                onReport = {
+                    reportTarget = target
+                    messageActions = null
+                },
                 onDismiss = { messageActions = null },
+            )
+        }
+        reportTarget?.let { target ->
+            ReportMessageDialog(
+                message = target,
+                onSubmit = { category, note, alsoBlock ->
+                    viewModel.reportChatMessage(target, category, note, alsoBlock)
+                    reportTarget = null
+                },
+                onDismiss = { reportTarget = null },
             )
         }
         whoReacted?.let { target ->
@@ -3465,6 +3483,7 @@ private fun MessageActionsSheet(
     message: ChatMessageItem,
     canUnsend: Boolean,
     canEdit: Boolean,
+    canReport: Boolean,
     onReply: () -> Unit,
     onEdit: () -> Unit,
     onTogglePin: () -> Unit,
@@ -3475,6 +3494,7 @@ private fun MessageActionsSheet(
     onCopy: () -> Unit,
     onDeleteForMe: () -> Unit,
     onUnsend: () -> Unit,
+    onReport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     // Spring-pop entrance: scale from 0.85 → 1.0 with a snappy spring.
@@ -3542,7 +3562,100 @@ private fun MessageActionsSheet(
                     onClick = onToggleStar,
                 )
                 MessageActionRow(Icons.Outlined.Delete, "Delete for me", onClick = onDeleteForMe)
+                if (canReport) MessageActionRow(Icons.Outlined.Flag, "Report message", destructive = true, onClick = onReport)
                 if (canUnsend) MessageActionRow(Icons.Outlined.Undo, "Unsend for everyone", destructive = true, onClick = onUnsend)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReportMessageDialog(
+    message: ChatMessageItem,
+    onSubmit: (ChatBackend.AbuseReportCategory, String, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var category by remember(message.id) { mutableStateOf<ChatBackend.AbuseReportCategory?>(null) }
+    var note by remember(message.id) { mutableStateOf("") }
+    var alsoBlock by remember(message.id) { mutableStateOf(false) }
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 620.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Report message", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    "Norfold will receive the message reference, sender, timing, category, and the note you type below. End-to-end encrypted message text and attachments are not uploaded.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    "From ${message.authorDisplayName.ifBlank { "@${message.authorUsername}" }}",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                )
+                ChatBackend.AbuseReportCategory.entries.forEach { option ->
+                    Surface(
+                        onClick = { category = option },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (category == option) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(
+                                if (category == option) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                                null,
+                                modifier = Modifier.size(19.dp),
+                            )
+                            Text(option.label, fontSize = 14.sp)
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { if (it.length <= 1_000) note = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Optional note to the safety team") },
+                    supportingText = { Text("${note.length}/1000 · Only add details you choose to share") },
+                    minLines = 3,
+                    maxLines = 6,
+                    shape = RoundedCornerShape(16.dp),
+                )
+                Row(
+                    Modifier.fillMaxWidth().clickable { alsoBlock = !alsoBlock },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = alsoBlock, onCheckedChange = { alsoBlock = it })
+                    Column(Modifier.weight(1f)) {
+                        Text("Block this account too", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Stops direct contact. Shared team messages stay visible.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    Button(
+                        enabled = category != null,
+                        onClick = { category?.let { onSubmit(it, note, alsoBlock) } },
+                    ) { Text(if (alsoBlock) "Report and block" else "Send report") }
+                }
             }
         }
     }
