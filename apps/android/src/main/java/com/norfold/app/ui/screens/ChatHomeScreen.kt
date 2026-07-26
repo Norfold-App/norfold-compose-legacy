@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAddAlt
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.Button
@@ -79,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.norfold.app.cloud.NorfoldSocial
+import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatMessageItem
@@ -123,9 +127,15 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var archiveRestoreProvider by remember { mutableStateOf<String?>(null) }
     var archiveRecoveryMaterial by remember { mutableStateOf("") }
     val requests by viewModel.contactRequests.collectAsState()
+    val requestPreferences by viewModel.messageRequestPreferences.collectAsState()
+    val serviceCapabilities by viewModel.chatServiceCapabilities.collectAsState()
     val personalConversations by viewModel.personalConversations.collectAsState()
     val privateArchive by viewModel.privateChatArchiveState.collectAsState()
     val archiveRestorePending = privateArchive.status.startsWith("Earlier encrypted Chat archive found")
+    LaunchedEffect(Unit) {
+        viewModel.refreshSocialGraph()
+        viewModel.refreshChatServiceCapabilities()
+    }
 
     val currentUsername = state.settings.syncUserName.ifBlank { "you" }
     // chatReadSerial bumps whenever a conversation is opened/left, recomputing the badges.
@@ -206,6 +216,7 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
         val contacts by viewModel.socialContacts.collectAsState()
         NewGroupDialog(
             contacts = contacts,
+            maxSelectedMembers = (serviceCapabilities.personalGroupMembersMax - 1).coerceAtLeast(1),
             onDismiss = { showCreateGroup = false },
             onCreate = { name, memberIds ->
                 viewModel.createChatGroup(name, memberIds)
@@ -311,10 +322,14 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
     if (chatSection == com.norfold.app.domain.ChatSection.Requests) {
         ContactRequestsHome(
             requests = requests,
+            preferences = requestPreferences,
             onOpen = viewModel::openContactRequest,
             onAccept = { viewModel.respondToContactRequest(it, accept = true) },
             onDecline = { viewModel.respondToContactRequest(it, accept = false) },
             onBlock = viewModel::blockContactRequest,
+            onSavePreferences = { sender, pending, files, followups ->
+                viewModel.saveMessageRequestPreferences(sender, pending, files, followups)
+            },
         )
         return
     }
@@ -517,19 +532,42 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
 @Composable
 private fun ContactRequestsHome(
     requests: List<NorfoldSocial.RemoteContactRequest>,
+    preferences: ChatBackend.MessageRequestPreferences,
     onOpen: (NorfoldSocial.RemoteContactRequest) -> Unit,
     onAccept: (NorfoldSocial.RemoteContactRequest) -> Unit,
     onDecline: (NorfoldSocial.RemoteContactRequest) -> Unit,
     onBlock: (NorfoldSocial.RemoteContactRequest) -> Unit,
+    onSavePreferences: (String, String, String, Int) -> Unit,
 ) {
+    var privacyOpen by remember { mutableStateOf(false) }
+    if (privacyOpen) {
+        MessageRequestPrivacyDialog(
+            current = preferences,
+            onSave = { sender, pending, files, followups ->
+                onSavePreferences(sender, pending, files, followups)
+                privacyOpen = false
+            },
+            onDismiss = { privacyOpen = false },
+        )
+    }
     Column(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp)) {
-            Text("Requests", fontWeight = FontWeight.Black, fontSize = 26.sp)
-            Text(
-                "Messages from people you have not connected with yet",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-            )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Requests", fontWeight = FontWeight.Black, fontSize = 26.sp)
+                Text(
+                    "Messages from people you have not connected with yet",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+            FilledTonalButton(onClick = { privacyOpen = true }) {
+                Icon(Icons.Outlined.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Privacy")
+            }
         }
         if (requests.isEmpty()) {
             NorfoldEmptyState(
@@ -595,6 +633,103 @@ private fun ContactRequestsHome(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageRequestPrivacyDialog(
+    current: ChatBackend.MessageRequestPreferences,
+    onSave: (String, String, String, Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var senderPolicy by remember(current) { mutableStateOf(current.senderPolicy) }
+    var pendingBehavior by remember(current) { mutableStateOf(current.pendingBehavior) }
+    var filePolicy by remember(current) { mutableStateOf(current.requestFilePolicy) }
+    var followups by remember(current) { mutableStateOf(current.limitedFollowups.coerceIn(0, 5)) }
+    NorfoldDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Message-request privacy") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                RequestPreferenceChoice(
+                    title = "Who may request",
+                    selected = senderPolicy,
+                    choices = listOf(
+                        "shared_workspace" to "Shared workspaces",
+                        "anyone" to "Anyone",
+                        "nobody" to "Nobody",
+                    ),
+                    onSelect = { senderPolicy = it },
+                )
+                RequestPreferenceChoice(
+                    title = "While waiting for your decision",
+                    selected = pendingBehavior,
+                    choices = listOf(
+                        "first_only" to "First message only",
+                        "limited_followups" to "Limited follow-ups",
+                        "until_decided" to "Allow until decided",
+                    ),
+                    onSelect = { pendingBehavior = it },
+                )
+                if (pendingBehavior == "limited_followups") {
+                    Text("Follow-up messages: $followups", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        items((0..5).toList()) { count ->
+                            FilterChip(
+                                selected = followups == count,
+                                onClick = { followups = count },
+                                label = { Text(count.toString()) },
+                            )
+                        }
+                    }
+                }
+                RequestPreferenceChoice(
+                    title = "Files in pending requests",
+                    selected = filePolicy,
+                    choices = listOf(
+                        "none" to "No files",
+                        "images" to "Images only",
+                        "files" to "All supported files",
+                    ),
+                    onSelect = { filePolicy = it },
+                )
+                Text(
+                    "Blocking always overrides these choices. Requests stay separate until you accept or reply.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            Button(onClick = { onSave(senderPolicy, pendingBehavior, filePolicy, followups) }) {
+                Text("Save")
+            }
+        },
+    )
+}
+
+@Composable
+private fun RequestPreferenceChoice(
+    title: String,
+    selected: String,
+    choices: List<Pair<String, String>>,
+    onSelect: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            items(choices, key = { it.first }) { (value, label) ->
+                FilterChip(
+                    selected = selected == value,
+                    onClick = { onSelect(value) },
+                    label = { Text(label) },
+                )
             }
         }
     }
@@ -1163,6 +1298,7 @@ private fun NewDirectMessageDialog(
 @Composable
 internal fun NewGroupDialog(
     contacts: List<com.norfold.app.cloud.NorfoldSocial.RemoteContact>,
+    maxSelectedMembers: Int = 7,
     onDismiss: () -> Unit,
     onCreate: (name: String, memberIds: List<String>) -> Unit,
 ) {
@@ -1194,6 +1330,11 @@ internal fun NewGroupDialog(
                     placeholder = { Text("Search contacts") },
                     leadingIcon = { Icon(Icons.Outlined.Search, null, Modifier.size(18.dp)) },
                 )
+                Text(
+                    "${selected.size}/$maxSelectedMembers people selected · current Chat beta limit",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                )
                 if (contacts.isEmpty()) {
                     Text(
                         "You have no contacts yet. Add people from the People tab, then create a group.",
@@ -1219,7 +1360,11 @@ internal fun NewGroupDialog(
                             .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent)
                             .combinedClickable(
                                 onClick = {
-                                    if (isSelected) selected.remove(contact.contactId) else selected.add(contact.contactId)
+                                    if (isSelected) {
+                                        selected.remove(contact.contactId)
+                                    } else if (selected.size < maxSelectedMembers) {
+                                        selected.add(contact.contactId)
+                                    }
                                 },
                                 onLongClick = null,
                             )

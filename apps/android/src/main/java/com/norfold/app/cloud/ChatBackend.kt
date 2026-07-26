@@ -143,6 +143,58 @@ object ChatBackend {
         Other("other", "Something else"),
     }
 
+    @Serializable
+    data class ChatServiceCapabilities(
+        @SerialName("capability_version") val capabilityVersion: Int = 1,
+        @SerialName("service_mode") val serviceMode: String = "normal",
+        @SerialName("workspace_members_max") val workspaceMembersMax: Int = 4,
+        @SerialName("personal_group_members_max") val personalGroupMembersMax: Int = 8,
+        @SerialName("authorized_devices_max") val authorizedDevicesMax: Int = 5,
+        @SerialName("concurrent_chat_devices_max") val concurrentChatDevicesMax: Int = 3,
+        @SerialName("files_per_rolling_24h") val filesPerRolling24h: Int = 5,
+        @SerialName("max_single_file_bytes") val maxSingleFileBytes: Long = 25L * 1024L * 1024L,
+        @SerialName("upload_bytes_per_rolling_24h") val uploadBytesPerRolling24h: Long = 50L * 1024L * 1024L,
+        @SerialName("dm_outstanding_relay_bytes") val dmOutstandingRelayBytes: Long = 50L * 1024L * 1024L,
+        @SerialName("group_outstanding_relay_bytes") val groupOutstandingRelayBytes: Long = 100L * 1024L * 1024L,
+        @SerialName("channel_outstanding_relay_bytes") val channelOutstandingRelayBytes: Long = 100L * 1024L * 1024L,
+        @SerialName("workspace_outstanding_relay_bytes") val workspaceOutstandingRelayBytes: Long = 100L * 1024L * 1024L,
+        @SerialName("account_deletion_max_grace_days") val accountDeletionMaxGraceDays: Int = 30,
+        @SerialName("presence_refresh_seconds") val presenceRefreshSeconds: Int = 15,
+        @SerialName("background_refresh_seconds") val backgroundRefreshSeconds: Int = 4,
+        @SerialName("media_upload_enabled") val mediaUploadEnabled: Boolean = true,
+        @SerialName("rich_previews_enabled") val richPreviewsEnabled: Boolean = true,
+        @SerialName("realtime_presence_enabled") val realtimePresenceEnabled: Boolean = true,
+        val explanation: String = "Chat is operating normally. Pre-beta transfer and membership limits apply.",
+        @SerialName("updated_at") val updatedAt: String? = null,
+    ) {
+        val isConserving: Boolean get() = serviceMode == "conserve"
+        val isDegraded: Boolean get() = serviceMode == "degraded"
+    }
+
+    @Serializable
+    data class MessageRequestPreferences(
+        @SerialName("owner_id") val ownerId: String = "",
+        @SerialName("sender_policy") val senderPolicy: String = "shared_workspace",
+        @SerialName("pending_behavior") val pendingBehavior: String = "first_only",
+        @SerialName("request_file_policy") val requestFilePolicy: String = "none",
+        @SerialName("limited_followups") val limitedFollowups: Int = 2,
+        @SerialName("updated_at") val updatedAt: String? = null,
+    )
+
+    suspend fun effectiveCapabilities(): ChatServiceCapabilities = client.postgrest.rpc(
+        function = "chat_effective_capabilities",
+    ).decodeList<ChatServiceCapabilities>().singleOrNull()
+        ?: error("Chat service capabilities are unavailable.")
+
+    suspend fun messageRequestPreferences(): MessageRequestPreferences {
+        val accountId = NorfoldSupabase.currentAccountId()
+            ?: error("Sign in before reading message-request privacy.")
+        return client.postgrest["message_request_preferences"].select {
+            filter { eq("owner_id", accountId) }
+        }.decodeList<MessageRequestPreferences>().singleOrNull()
+            ?: MessageRequestPreferences(ownerId = accountId)
+    }
+
     suspend fun registerWorkspaceChannel(
         workspaceId: String,
         channelId: String,

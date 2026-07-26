@@ -510,6 +510,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val _workspaceChatSecurity = MutableStateFlow<ChatBackend.WorkspaceSecuritySnapshot?>(null)
     val workspaceChatSecurity: StateFlow<ChatBackend.WorkspaceSecuritySnapshot?> =
         _workspaceChatSecurity.asStateFlow()
+    private val _chatServiceCapabilities = MutableStateFlow(ChatBackend.ChatServiceCapabilities())
+    val chatServiceCapabilities: StateFlow<ChatBackend.ChatServiceCapabilities> =
+        _chatServiceCapabilities.asStateFlow()
     private val _teamInviteShare = MutableStateFlow<TeamInviteShare?>(null)
     val teamInviteShare: StateFlow<TeamInviteShare?> = _teamInviteShare.asStateFlow()
     private val _documentPresence = MutableStateFlow<List<DocumentPresenceState>>(emptyList())
@@ -574,6 +577,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val chatAvailability = MutableStateFlow(NorfoldPresence.Availability.Online)
     // Ephemeral Realtime presence state. Never persisted and automatically expires remotely.
     private val chatTyping = MutableStateFlow<String?>(null)
+    private var lastChatTypingPublishAtElapsedMs = 0L
     private val pendingDeletionState = combine(
         pendingNoteDeleteIds,
         pendingTaskDeleteIds,
@@ -1338,7 +1342,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             accountConversationObserver = viewModelScope.launch {
                 val settings = state.value.settings
                 val userId = NorfoldSupabase.currentAccountId()
-                val presenceJob = if (userId == null) null else launch {
+                val presenceJob = if (
+                    userId == null || !chatServiceCapabilities.value.realtimePresenceEnabled
+                ) null else launch {
                     runCatching {
                         NorfoldPresence.accountConversationPresence(
                             conversationId = conversationId,
@@ -1358,7 +1364,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 val receiptJob = launch {
                     while (kotlinx.coroutines.currentCoroutineContext().isActive) {
                         refreshChatReceipts()
-                        delay(4_000L)
+                        delay(chatServiceCapabilities.value.backgroundRefreshSeconds * 1_000L)
                     }
                 }
                 try {
@@ -1455,6 +1461,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val settings = state.value.settings
         val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return
         if (!NorfoldSupabase.isSignedIn()) return
+        if (!chatServiceCapabilities.value.realtimePresenceEnabled) {
+            _workspacePresence.value = emptyList()
+            return
+        }
         val userId = NorfoldSupabase.currentAccountId() ?: return
         runCatching {
             NorfoldPresence.workspacePresence(
@@ -1480,7 +1490,19 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Publishes a short-lived typing hint scoped to the currently open shared conversation. */
     fun setChatTyping(typing: Boolean) {
-        chatTyping.value = if (typing && chatConversationOpen.value) {
+        if (!typing) {
+            chatTyping.value = null
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (
+            chatServiceCapabilities.value.isConserving &&
+            now - lastChatTypingPublishAtElapsedMs < 5_000L
+        ) return
+        lastChatTypingPublishAtElapsedMs = now
+        chatTyping.value = if (
+            chatConversationOpen.value && chatServiceCapabilities.value.realtimePresenceEnabled
+        ) {
             activeChatChannelId.value
                 ?.let { id -> state.value.chatChannels.firstOrNull { it.id == id }?.syncId }
                 ?: "general"
@@ -1987,6 +2009,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val _contactRequests = MutableStateFlow<List<NorfoldSocial.RemoteContactRequest>>(emptyList())
     val contactRequests: StateFlow<List<NorfoldSocial.RemoteContactRequest>> = _contactRequests.asStateFlow()
 
+    private val _messageRequestPreferences = MutableStateFlow(ChatBackend.MessageRequestPreferences())
+    val messageRequestPreferences: StateFlow<ChatBackend.MessageRequestPreferences> =
+        _messageRequestPreferences.asStateFlow()
+
     private val _blockedAccountIds = MutableStateFlow<Set<String>>(emptySet())
     val blockedAccountIds: StateFlow<Set<String>> = _blockedAccountIds.asStateFlow()
 
@@ -2016,6 +2042,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshSocialGraph() = viewModelScope.launch {
         runCatching { NorfoldSocial.myContacts() }.onSuccess { _socialContacts.value = it }
         runCatching { NorfoldSocial.myContactRequests() }.onSuccess { _contactRequests.value = it }
+        runCatching { ChatBackend.messageRequestPreferences() }
+            .onSuccess { _messageRequestPreferences.value = it }
         runCatching { NorfoldSocial.myBlockedAccounts() }
             .onSuccess { rows -> _blockedAccountIds.value = rows.mapTo(linkedSetOf()) { it.blockedId } }
         runCatching { NorfoldSocial.myDirectConversations() }
@@ -2028,6 +2056,32 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 // parent. Quiet on failure: the social backend may not be deployed yet.
                 conversations.forEach { convo -> runCatching { materializeAccountConversation(convo) } }
             }
+    }
+
+    fun saveMessageRequestPreferences(
+        senderPolicy: String,
+        pendingBehavior: String,
+        filePolicy: String,
+        limitedFollowups: Int,
+    ) = viewModelScope.launch {
+        if (!NorfoldSupabase.isSignedIn()) {
+            emitError("Sign in before changing message-request privacy.")
+            return@launch
+        }
+        runCatching {
+            ChatBackend.updateMessageRequestPreferences(
+                senderPolicy = senderPolicy,
+                pendingBehavior = pendingBehavior,
+                filePolicy = filePolicy,
+                limitedFollowups = limitedFollowups,
+            )
+            ChatBackend.messageRequestPreferences()
+        }.onSuccess {
+            _messageRequestPreferences.value = it
+            emitSuccess("Message-request privacy updated.")
+        }.onFailure {
+            emitError(authFailureMessage(it, "Couldn't update message-request privacy."))
+        }
     }
 
     /**
@@ -2120,7 +2174,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     val pending = secureChatBackend.pending()
                     pending.forEach { remote -> importSecureMessage(remote) }
                     retryDelayMs = 2_000L
-                    delay(if (pending.isEmpty()) 4_000L else 250L)
+                    delay(
+                        if (pending.isEmpty()) {
+                            chatServiceCapabilities.value.backgroundRefreshSeconds * 1_000L
+                        } else 250L
+                    )
                 } catch (cancellation: CancellationException) {
                     throw cancellation
                 } catch (failure: Throwable) {
@@ -2843,6 +2901,18 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         Log.e("NorfoldAuth", "auth failure (fallback: $fallback)", error)
         val detail = generateSequence(error) { it.cause }.joinToString(" ") { it.message.orEmpty() }.lowercase()
         return when {
+            "personal_group_member_beta_limit" in detail ->
+                "This group has reached the current Chat beta limit of ${chatServiceCapabilities.value.personalGroupMembersMax} people."
+            "workspace_member_beta_limit" in detail || "workspace_channel_member_beta_limit" in detail ->
+                "This workspace has reached the current Chat beta limit of ${chatServiceCapabilities.value.workspaceMembersMax} people."
+            "request_media_policy_denied" in detail ->
+                "That person doesn't allow this kind of file in pending message requests."
+            "request_policy_denied" in detail ->
+                "That person isn't accepting another message from this request."
+            "chat_rate_limit:stranger_request" in detail ->
+                "You've started several new conversations recently. Existing chats still work; wait before contacting someone new."
+            "chat_rate_limit" in detail ->
+                "Chat is receiving actions too quickly. Wait a moment and try again."
             listOf("unable to resolve host", "network is unreachable", "failed to connect", "timeout").any(detail::contains) ->
                 "Couldn't reach Norfold Cloud. Check your connection and try again."
             "rate" in detail && ("limit" in detail || "many" in detail) ->
@@ -3058,6 +3128,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         _cloudAuthProvider.value = provider.takeUnless { it == CloudAuthProvider.None } ?: _cloudAuthProvider.value
         _accountCoordinatorState.value = AccountCoordinatorState.CloudSessionReady
         installationIdentity.bindAccount(accountId)
+        refreshChatServiceCapabilitiesNow()
         runCatching { pushRegistrationClient.registerCurrentToken() }
             .onFailure { Log.w("NorfoldPush", "Post-login token registration deferred", it) }
         runCatching {
@@ -3095,6 +3166,23 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         NorfoldWorkScheduler.reconcile(app, repository.settingsValue())
+    }
+
+    fun refreshChatServiceCapabilities() = viewModelScope.launch {
+        refreshChatServiceCapabilitiesNow()
+    }
+
+    private suspend fun refreshChatServiceCapabilitiesNow() {
+        if (!NorfoldSupabase.isSignedIn()) {
+            _chatServiceCapabilities.value = ChatBackend.ChatServiceCapabilities()
+            return
+        }
+        runCatching { ChatBackend.effectiveCapabilities() }
+            .onSuccess { capabilities ->
+                _chatServiceCapabilities.value = capabilities
+                if (!capabilities.realtimePresenceEnabled) chatTyping.value = null
+            }
+            .onFailure { Log.w("NorfoldChat", "Chat capability refresh deferred", it) }
     }
 
     private suspend fun refreshTeamBinding() {
@@ -3199,6 +3287,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 _teamCollaborationStatus.value = "Team workspace · sign in to sync"
                 return@launch
             }
+            refreshChatServiceCapabilitiesNow()
             // Push before pull: messages that were saved locally while offline or after a failed
             // send reach the team on the next refresh, as the send-failure toast promises.
             state.value.chatChannels
@@ -4469,6 +4558,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         sendChatAttachments(listOfNotNull(uri))
     }
 
+    private fun chatFileLimitBytes(): Long = chatServiceCapabilities.value.maxSingleFileBytes
+        .coerceIn(0L, MaxClientAttachmentSafetyBytes)
+
+    private fun chatFileLimitMegabytes(): Long = (chatFileLimitBytes() / (1024L * 1024L)).coerceAtLeast(1L)
+
     /**
      * One message per picked file, saved to chat immediately (offline-first). Delivery to the
      * team happens through a single sequential upload worker, so picking hundreds of photos
@@ -4488,13 +4582,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 return@launch
             }
+            val fileLimit = chatFileLimitBytes()
             var oversized = 0
             for (uri in uris) {
                 val name = displayName(uri)
                 val size = displaySize(uri)
                 // Cap check happens on provider metadata, before a single byte is read; the
                 // streaming cap in the worker backstops providers that report 0 for SIZE.
-                if (size > MaxTeamFileBytes) {
+                if (size > fileLimit) {
                     oversized += 1
                     continue
                 }
@@ -4509,7 +4604,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (oversized > 0) {
                 val counted = if (oversized == 1) "1 file wasn't sent" else "$oversized files weren't sent"
-                emitError("$counted — files up to ${MaxTeamFileBytes / (1024 * 1024)} MB on the free plan.")
+                emitError("$counted — the current Chat beta limit is ${chatFileLimitMegabytes()} MB per file.")
             }
             drainChatUploads()
         }
@@ -4519,6 +4614,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val channel = channelId?.let { repository.chatChannelById(it) }
         if (channel?.scope == ChatScope.Account) {
             require(NorfoldSupabase.isSignedIn()) { "Sign in before attaching files to a personal chat." }
+            require(chatServiceCapabilities.value.mediaUploadEnabled) {
+                chatServiceCapabilities.value.explanation
+            }
             return
         }
         val workspaceId = state.value.settings.activeWorkspaceId
@@ -4526,9 +4624,32 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         require(NorfoldSupabase.isSignedIn()) {
             "Sign in before attaching a file to a shared workspace."
         }
+        require(chatServiceCapabilities.value.mediaUploadEnabled) {
+            chatServiceCapabilities.value.explanation
+        }
         val security = ChatBackend.ensureWorkspaceSecurityEpoch(remoteWorkspaceId, channel?.syncId)
         require(security.acknowledged) {
             "Review and acknowledge this workspace's security details before attaching files."
+        }
+    }
+
+    private fun chatTransferFailureMessage(name: String, failure: Throwable): String {
+        val detail = failure.message.orEmpty()
+        return when {
+            detail.contains("chat_media_temporarily_unavailable", ignoreCase = true) ->
+                "\"$name\" is saved here. ${chatServiceCapabilities.value.explanation}"
+            detail.contains("chat_daily_file_count_limit", ignoreCase = true) ->
+                "\"$name\" is saved here. This account has reached today's Chat beta file-count limit. Retry after the rolling window clears."
+            detail.contains("chat_daily_upload_bytes_limit", ignoreCase = true) ->
+                "\"$name\" is saved here. This account has reached today's Chat beta transfer allowance. Retry later."
+            detail.contains("outstanding_bytes_limit", ignoreCase = true) ->
+                "\"$name\" is saved here. This conversation's encrypted transfer space is full; retry after earlier transfers expire or are removed."
+            detail.contains("chat_file_too_large", ignoreCase = true) ||
+                detail.contains("chat_ciphertext_too_large", ignoreCase = true) ->
+                "\"$name\" is saved here. The current Chat beta limit is ${chatFileLimitMegabytes()} MB per file."
+            detail.contains("chat_rate_limit", ignoreCase = true) ->
+                "\"$name\" is saved here. Chat is receiving transfers too quickly; wait a moment and retry."
+            else -> "\"$name\" didn't reach the conversation. Tap retry above the message box."
         }
     }
 
@@ -4768,8 +4889,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 publishChatUploads()
                 val settings = state.value.settings
                 val delivered = runCatching {
+                    require(chatServiceCapabilities.value.mediaUploadEnabled) {
+                        chatServiceCapabilities.value.explanation
+                    }
+                    val fileLimit = chatFileLimitBytes()
                     val rawBytes = withContext(Dispatchers.IO) {
-                        openChatUploadInput(task.uri).use { it.readBytesCapped(MaxTeamFileBytes) }
+                        openChatUploadInput(task.uri).use { it.readBytesCapped(fileLimit) }
                     }
                     val (bytes, mime) = compressImageForUpload(rawBytes, task.mime)
                     val workspaceSecurity = remoteWorkspaceId?.let { workspaceId ->
@@ -4877,7 +5002,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     failure is CancellationException -> throw failure
                     failure is TeamUploadTooLargeException -> {
                         chatUploadQueue.remove(task)
-                        emitError("\"${task.name}\" stays on this device — files up to ${MaxTeamFileBytes / (1024 * 1024)} MB on the free plan.")
+                        emitError("\"${task.name}\" stays on this device — the current Chat beta limit is ${chatFileLimitMegabytes()} MB per file.")
                     }
                     else -> {
                         Log.e(
@@ -4888,7 +5013,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         task.attempts += 1
                         if (task.attempts >= MaxChatUploadAttempts) {
                             task.failed = true
-                            emitError("\"${task.name}\" didn't reach the team. Tap retry above the message box.")
+                            emitError(chatTransferFailureMessage(task.name, failure))
                         }
                     }
                 }
@@ -5177,7 +5302,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         if (target.isFile && target.length() == descriptor.plaintextSize) return@withContext target
         val source = ChatMediaBackend.signedDownloadUrl(descriptor.mediaId)
         val ciphertext = openAttachmentStream(source).use { input ->
-            input.readBytesCapped(descriptor.ciphertextSize.coerceAtMost(MaxTeamFileBytes + 1024L * 1024L))
+            input.readBytesCapped(
+                descriptor.ciphertextSize.coerceAtMost(MaxClientAttachmentSafetyBytes + 1024L * 1024L),
+            )
         }
         val plaintext = ChatMediaCrypto.decrypt(ciphertext, descriptor)
         val temporary = File(target.parentFile, "${target.name}.part")
@@ -6601,6 +6728,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         // Free-plan per-file cap, enforced before a single byte is read. The server bucket
         // stays at 100 MB so a paid tier is a config change, not a migration (chat spec §4).
         const val MaxTeamFileBytes = 25L * 1024L * 1024L
+        // A defensive in-process allocation ceiling. Product limits come from the authenticated
+        // capability RPC; this prevents a compromised/misconfigured server value from requesting
+        // an unbounded allocation on a phone.
+        const val MaxClientAttachmentSafetyBytes = 100L * 1024L * 1024L
         // Images above this recompress toward it before upload, like the big messengers do.
         const val ImageRecompressThresholdBytes = 2L * 1024L * 1024L
         const val MaxCompressedImageDimensionPx = 2048
