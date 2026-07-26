@@ -1,5 +1,8 @@
 package com.norfold.app.ui.screens
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.os.PersistableBundle
 import android.app.Activity
 import android.Manifest
 import android.content.ClipboardManager
@@ -76,6 +79,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -132,6 +136,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -171,6 +176,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
@@ -185,6 +191,7 @@ import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatReceiptStatus
 import com.norfold.app.domain.ChatSecurityMode
+import com.norfold.app.domain.ChatScope
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ConflictSideSummary
 import com.norfold.app.domain.Destination
@@ -196,6 +203,7 @@ import com.norfold.app.ui.VoiceRecordingState
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.SemanticColors
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.PrivateChatArchiveUiState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -246,6 +254,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     var toolsExpanded by remember { mutableStateOf(false) }
     var detailsOpen by remember { mutableStateOf(false) }
     var securityDetailsOpen by remember { mutableStateOf(false) }
+    var archiveDetailsOpen by remember { mutableStateOf(false) }
     var rulesReviewChannelId by remember { mutableStateOf<Long?>(null) }
     // Profile viewer target: (username, displayName). Opened from the details roster or a DM header.
     var profileTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -268,6 +277,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     val teamWorkspaceId by viewModel.teamWorkspaceRemoteId.collectAsState()
     val collaborationStatus by viewModel.teamCollaborationStatus.collectAsState()
     val workspaceSecurity by viewModel.workspaceChatSecurity.collectAsState()
+    val privateArchive by viewModel.privateChatArchiveState.collectAsState()
     val recordingState by viewModel.voiceRecordingState.collectAsState()
     val chatUploads by viewModel.chatUploads.collectAsState()
     val chatAudio by viewModel.chatAudio.collectAsState()
@@ -351,6 +361,18 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             onDismiss = { securityDetailsOpen = false },
         )
     }
+    if (archiveDetailsOpen && activeChannel?.scope == ChatScope.Account) {
+        PrivateChatArchiveDetails(
+            state = privateArchive,
+            onUpdate = viewModel::writePrivateChatArchiveNow,
+            onRevealRecovery = viewModel::revealPrivateChatRecoveryMaterial,
+            onHideRecovery = viewModel::hidePrivateChatRecoveryMaterial,
+            onDismiss = {
+                viewModel.hidePrivateChatRecoveryMaterial()
+                archiveDetailsOpen = false
+            },
+        )
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -426,6 +448,38 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                             "Security epoch ${security.epochNumber}${if (security.acknowledged) " · reviewed" else " · review required"}",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+        }
+        if (activeChannel?.scope == ChatScope.Account) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .clickable { archiveDetailsOpen = true },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Lock,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text("End-to-end encrypted", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(
+                            privateArchive.status,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -969,6 +1023,102 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                 }
                 }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivateChatArchiveDetails(
+    state: PrivateChatArchiveUiState,
+    onUpdate: () -> Unit,
+    onRevealRecovery: () -> Unit,
+    onHideRecovery: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    NorfoldContentDialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp,
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(13.dp),
+            ) {
+                Text("Private Chat archive", fontWeight = FontWeight.Black, fontSize = 22.sp)
+                Text(
+                    "Direct messages and personal groups are encrypted before a provider receives them. Live device keys, outbox operations, and workspace Chat are not stored in this archive.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp,
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Text(state.status, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (state.providerIds.isEmpty()) "No completed provider write in this session"
+                            else state.providerIds.sorted().joinToString(prefix = "Protected on "),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+                FilledTonalButton(onClick = onUpdate, modifier = Modifier.fillMaxWidth()) {
+                    Text("Update encrypted archive now")
+                }
+                Text(
+                    "Portable recovery material can restore the archive when the original device is unavailable. Norfold support cannot recreate it.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+                val recovery = state.recoveryMaterial
+                if (recovery == null) {
+                    OutlinedButton(onClick = onRevealRecovery, modifier = Modifier.fillMaxWidth()) {
+                        Text("Reveal recovery material")
+                    }
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                "Store this somewhere private. Anyone with it and your encrypted archive can read that archive.",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            SelectionContainer {
+                                Text(recovery, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = {
+                                    val clip = ClipData.newPlainText("Norfold private Chat recovery", recovery)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        clip.description.extras = PersistableBundle().apply {
+                                            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                                        }
+                                    }
+                                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                        .setPrimaryClip(clip)
+                                    onHideRecovery()
+                                }) { Text("Copy and hide") }
+                                TextButton(onClick = onHideRecovery) { Text("Hide") }
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Done") }
             }
         }
     }

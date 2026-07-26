@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAddAlt
 import androidx.compose.material.icons.outlined.PushPin
@@ -119,8 +120,12 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var showStarred by remember { mutableStateOf(false) }
     var createMenuOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<ChatChannel?>(null) }
+    var archiveRestoreProvider by remember { mutableStateOf<String?>(null) }
+    var archiveRecoveryMaterial by remember { mutableStateOf("") }
     val requests by viewModel.contactRequests.collectAsState()
     val personalConversations by viewModel.personalConversations.collectAsState()
+    val privateArchive by viewModel.privateChatArchiveState.collectAsState()
+    val archiveRestorePending = privateArchive.status.startsWith("Earlier encrypted Chat archive found")
 
     val currentUsername = state.settings.syncUserName.ifBlank { "you" }
     // chatReadSerial bumps whenever a conversation is opened/left, recomputing the badges.
@@ -252,6 +257,56 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
             },
         )
     }
+    archiveRestoreProvider?.let { providerId ->
+        NorfoldDialog(
+            onDismissRequest = {
+                archiveRestoreProvider = null
+                archiveRecoveryMaterial = ""
+            },
+            title = { Text("Restore private Chat history?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (providerId == "local-device") {
+                            "Norfold will first use this device's protected key. If Android can no longer unlock it, enter the recovery material you saved earlier."
+                        } else {
+                            "Enter the portable recovery material saved from a trusted device. It never goes to Norfold or the archive provider."
+                        },
+                    )
+                    OutlinedTextField(
+                        value = archiveRecoveryMaterial,
+                        onValueChange = { archiveRecoveryMaterial = it.trim() },
+                        label = {
+                            Text(
+                                if (providerId == "local-device") "Recovery material (optional)"
+                                else "Recovery material",
+                            )
+                        },
+                        singleLine = true,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    archiveRestoreProvider = null
+                    archiveRecoveryMaterial = ""
+                }) { Text("Cancel") }
+            },
+            confirmButton = {
+                Button(
+                    enabled = providerId == "local-device" || archiveRecoveryMaterial.isNotBlank(),
+                    onClick = {
+                        viewModel.restorePrivateChatArchive(
+                            providerId = providerId,
+                            recoveryMaterial = archiveRecoveryMaterial.takeIf(String::isNotBlank),
+                        )
+                        archiveRestoreProvider = null
+                        archiveRecoveryMaterial = ""
+                    },
+                ) { Text("Restore") }
+            },
+        )
+    }
 
     if (chatSection == com.norfold.app.domain.ChatSection.Requests) {
         ContactRequestsHome(
@@ -311,6 +366,53 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 148.dp),
             ) {
+                if (archiveRestorePending) {
+                    item(key = "private-chat-archive-restore") {
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                        ) {
+                            Column(
+                                Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Icon(Icons.Outlined.Lock, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            "Earlier private Chat history found",
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        )
+                                        Text(
+                                            "Choose a provider to merge it, or keep this device's current history. Nothing is overwritten silently.",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        )
+                                    }
+                                }
+                                privateArchive.providerIds.sorted().forEach { providerId ->
+                                    FilledTonalButton(
+                                        onClick = { archiveRestoreProvider = providerId },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(
+                                            if (providerId == "local-device") "Restore from this device"
+                                            else "Restore from Google Drive app data",
+                                        )
+                                    }
+                                }
+                                TextButton(onClick = viewModel::keepCurrentPrivateChatHistory) {
+                                    Text("Keep current device history")
+                                }
+                            }
+                        }
+                    }
+                }
                 if (filtered.isEmpty()) {
                     item {
                         if (query.isBlank() && filter == ChatInboxFilter.All) {

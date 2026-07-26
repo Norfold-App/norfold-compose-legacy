@@ -25,6 +25,11 @@ import com.norfold.app.data.DiagnosticsStore
 import com.norfold.app.data.GoogleDriveApiSyncStore
 import com.norfold.app.data.GoogleDriveAuthStore
 import com.norfold.app.data.GoogleDriveBackupManifest
+import com.norfold.app.data.chat.GoogleDriveChatArchiveProvider
+import com.norfold.app.data.chat.LocalChatArchiveProvider
+import com.norfold.app.data.chat.PrivateChatArchiveCoordinator
+import com.norfold.app.data.chat.PrivateChatArchiveRestoreResult
+import com.norfold.app.data.chat.TinkChatArchiveCrypto
 import com.norfold.app.data.InstallationIdentityStore
 import com.norfold.app.data.NorfoldWorkScheduler
 import com.norfold.app.data.NorfoldDatabase
@@ -160,6 +165,13 @@ data class TeamInviteShare(
     val email: String,
     val token: String,
     val expiresAt: String,
+)
+
+data class PrivateChatArchiveUiState(
+    val status: String = "Private Chat archive will start after an encrypted direct conversation exists.",
+    val lastWrittenAt: Long? = null,
+    val providerIds: Set<String> = emptySet(),
+    val recoveryMaterial: String? = null,
 )
 
 data class OnboardingSetupPreferences(
@@ -422,14 +434,27 @@ enum class CloudAuthProvider { None, Google, Email }
 @OptIn(ExperimentalCoroutinesApi::class)
 class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
-    private val repository = DocsRepository(NorfoldDatabase.get(application))
+    private val database = NorfoldDatabase.get(application)
+    private val repository = DocsRepository(database)
     private val syncStore = CloudFolderSyncStore(application)
     private val googleDriveAuthStore = GoogleDriveAuthStore(application)
     private val googleDriveApiSyncStore = GoogleDriveApiSyncStore(application, googleDriveAuthStore)
+    private val privateChatArchive = PrivateChatArchiveCoordinator(
+        database = database,
+        crypto = TinkChatArchiveCrypto(application),
+        localProvider = LocalChatArchiveProvider(application),
+        cloudProvider = GoogleDriveChatArchiveProvider(googleDriveApiSyncStore),
+    )
     private val installationIdentity = InstallationIdentityStore(application)
     private val syncSecretStore = SyncSecretStore(application)
     private val pushRegistrationClient = PushRegistrationClient(application)
     private val secureChatBackend = SecureChatBackend(application)
+    private val _privateChatArchiveState = MutableStateFlow(PrivateChatArchiveUiState())
+    val privateChatArchiveState: StateFlow<PrivateChatArchiveUiState> =
+        _privateChatArchiveState.asStateFlow()
+    private var privateChatArchiveJob: Job? = null
+    private var privateChatArchiveRestorePending = false
+    private var privateChatArchiveDiscoveryComplete = false
     private val backupStore = BackupFolderStore(application)
     private val diagnosticsStore = DiagnosticsStore(application)
     private val networkMonitor = NetworkMonitor(application)
@@ -719,7 +744,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DocsUiState())
 
     init {
+        repository.setActiveChatAccount(NorfoldSupabase.currentAccountId())
         initialize()
+        viewModelScope.launch {
+            repository.chatMessages.collect { schedulePrivateChatArchive() }
+        }
         // Session restore from disk finishes after process start; without this, a signed-in user
         // cold-starts into "sign in to sync" until they touch an auth screen.
         NorfoldSupabase.sessionStatusFlow()?.let { statusFlow ->
@@ -727,10 +756,134 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 statusFlow.collect {
                     refreshCloudAccountState()
                     refreshTeamBinding()
-                    if (NorfoldSupabase.isSignedIn()) coordinateCloudAccount()
+                    if (NorfoldSupabase.isSignedIn()) {
+                        coordinateCloudAccount()
+                        schedulePrivateChatArchive(delayMs = 1_000L)
+                    }
                 }
             }
         }
+    }
+
+    private fun schedulePrivateChatArchive(delayMs: Long = 12_000L) {
+        if (
+            !NorfoldSupabase.isSignedIn() ||
+            !privateChatArchiveDiscoveryComplete ||
+            privateChatArchiveRestorePending
+        ) return
+        privateChatArchiveJob?.cancel()
+        privateChatArchiveJob = viewModelScope.launch {
+            delay(delayMs)
+            if (state.value.chatChannels.none { it.scope == ChatScope.Account }) return@launch
+            writePrivateChatArchive(showFeedback = false)
+        }
+    }
+
+    fun writePrivateChatArchiveNow() {
+        if (!privateChatArchiveDiscoveryComplete || privateChatArchiveRestorePending) {
+            emitInfo("Choose whether to restore the earlier private Chat archive first")
+            return
+        }
+        privateChatArchiveJob?.cancel()
+        privateChatArchiveJob = viewModelScope.launch { writePrivateChatArchive(showFeedback = true) }
+    }
+
+    private suspend fun writePrivateChatArchive(showFeedback: Boolean) {
+        val accountId = NorfoldSupabase.currentAccountId() ?: return
+        _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+            status = "Encrypting private Chat archive…",
+        )
+        runCatching {
+            privateChatArchive.write(
+                accountId = accountId,
+                includeCloud = googleDriveAuthStore.hasAuthState(),
+            )
+        }.onSuccess { result ->
+            _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+                status = if (result.providerFailures.isEmpty()) {
+                    "Private Chat archive protected"
+                } else {
+                    "Saved locally · cloud archive needs attention"
+                },
+                lastWrittenAt = result.updatedAt,
+                providerIds = result.providersWritten,
+            )
+            runCatching { secureChatBackend.registerCurrentDevice(archiveCapable = true) }
+            if (showFeedback) emitSuccess("Private Chat archive updated")
+        }.onFailure {
+            _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+                status = "Private Chat archive failed · tap to retry",
+            )
+            if (showFeedback) emitError("Couldn't update the private Chat archive. Your device history is unchanged.")
+        }
+    }
+
+    fun revealPrivateChatRecoveryMaterial() = viewModelScope.launch(Dispatchers.IO) {
+        val accountId = NorfoldSupabase.currentAccountId() ?: return@launch
+        runCatching { privateChatArchive.getOrCreateRecoveryMaterial(accountId) }
+            .onSuccess { material ->
+                _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+                    recoveryMaterial = material,
+                )
+            }
+            .onFailure { emitError("Couldn't unlock private Chat recovery material on this device.") }
+    }
+
+    fun hidePrivateChatRecoveryMaterial() {
+        _privateChatArchiveState.value = _privateChatArchiveState.value.copy(recoveryMaterial = null)
+    }
+
+    fun restorePrivateChatArchive(providerId: String, recoveryMaterial: String? = null) =
+        viewModelScope.launch {
+            val accountId = NorfoldSupabase.currentAccountId() ?: return@launch
+            _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+                status = "Restoring private Chat archive…",
+            )
+            runCatching {
+                privateChatArchive.restore(accountId, providerId, recoveryMaterial)
+            }.onSuccess(::handlePrivateChatArchiveRestore)
+                .onFailure {
+                    _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+                        status = "Private Chat restore failed · history was not replaced",
+                    )
+                    emitError("Couldn't restore that private Chat archive. Check the provider and recovery material.")
+                }
+        }
+
+    private fun handlePrivateChatArchiveRestore(result: PrivateChatArchiveRestoreResult) {
+        privateChatArchiveRestorePending = false
+        _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+            status = "Private Chat history restored",
+            providerIds = _privateChatArchiveState.value.providerIds + result.providerId,
+        )
+        emitSuccess(
+            "Restored ${result.messagesAdded} messages in ${result.conversationsAdded} conversations",
+        )
+    }
+
+    fun keepCurrentPrivateChatHistory() {
+        privateChatArchiveRestorePending = false
+        _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+            status = "Current device history kept · archive will update after changes",
+        )
+        schedulePrivateChatArchive(delayMs = 1_000L)
+    }
+
+    private suspend fun discoverPrivateChatArchive(accountId: String) {
+        privateChatArchiveDiscoveryComplete = false
+        val providers = privateChatArchive.availableProviders(accountId)
+        val hasLocalHistory = privateChatArchive.hasLocalAccountHistory(accountId)
+        privateChatArchiveRestorePending = providers.isNotEmpty() && !hasLocalHistory
+        privateChatArchiveDiscoveryComplete = true
+        _privateChatArchiveState.value = _privateChatArchiveState.value.copy(
+            status = when {
+                privateChatArchiveRestorePending ->
+                    "Earlier encrypted Chat archive found · choose restore or keep this device"
+                providers.isNotEmpty() -> "Private Chat archive protected"
+                else -> "Private Chat archive will start after an encrypted direct conversation exists."
+            },
+            providerIds = providers,
+        )
     }
 
     fun retryInitialization() {
@@ -2594,14 +2747,31 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun signOutCloudAccount() = viewModelScope.launch {
         runCatching {
+            NorfoldSupabase.currentAccountId()?.let { accountId ->
+                runCatching {
+                    privateChatArchive.write(
+                        accountId = accountId,
+                        includeCloud = googleDriveAuthStore.hasAuthState(),
+                    )
+                }.onFailure { Log.w("NorfoldArchive", "Final private Chat archive deferred", it) }
+            }
             pushRegistrationClient.disableCurrentToken()
             NorfoldSupabase.signOut()
         }
             .onSuccess {
                 // Mutual-contact state is per-account; the next sign-in starts fresh.
                 MutualChatContacts.clear(app)
+                privateChatArchiveJob?.cancel()
+                privateChatArchiveJob = null
+                privateChatArchiveRestorePending = false
+                privateChatArchiveDiscoveryComplete = false
                 secureRelayObserver?.cancel()
                 secureRelayObserver = null
+                _socialContacts.value = emptyList()
+                _contactRequests.value = emptyList()
+                _blockedAccountIds.value = emptySet()
+                _personalConversations.value = emptyList()
+                _privateChatArchiveState.value = PrivateChatArchiveUiState()
                 installationIdentity.bindAccount(null)
                 NorfoldWorkScheduler.cancelAccountWork(app)
                 _cloudAuthProvider.value = CloudAuthProvider.None
@@ -2616,6 +2786,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refreshCloudAccountState() {
         _cloudAccountEmail.value = NorfoldSupabase.currentAccountEmail()
+        repository.setActiveChatAccount(NorfoldSupabase.currentAccountId())
         if (!NorfoldSupabase.isSignedIn()) _accountCoordinatorState.value = AccountCoordinatorState.SignedOut
     }
 
@@ -2630,7 +2801,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { pushRegistrationClient.registerCurrentToken() }
             .onFailure { Log.w("NorfoldPush", "Post-login token registration deferred", it) }
         runCatching {
-            secureChatBackend.registerCurrentDevice()
+            secureChatBackend.registerCurrentDevice(archiveCapable = true)
             secureChatBackend.renewLease()
         }.onSuccess {
             startSecureRelayObserver()
@@ -2642,6 +2813,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         if (!current.autoBackup) repository.updateSettings(current.copy(autoBackup = true))
         _accountCoordinatorState.value = AccountCoordinatorState.DiscoveringBackupsAndMemberships
         refreshTeamBinding()
+        discoverPrivateChatArchive(accountId)
         if (!googleDriveAuthStore.hasAuthState()) {
             _driveBackups.value = emptyList()
             _accountCoordinatorState.value = AccountCoordinatorState.BackupSetupRequired

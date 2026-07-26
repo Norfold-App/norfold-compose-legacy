@@ -322,6 +322,8 @@ data class ChatChannel(
     // Scope discriminator: null = workspace channel; non-null = account-level
     // direct_conversations.id. Only the network send/receive path branches on this.
     val accountConversationId: String? = null,
+    // Local privacy boundary for account conversations. Never inferred from the active workspace.
+    val accountOwnerId: String? = null,
     // Rich-group metadata (personal groups). Empty/default for topics + DMs.
     val coverUri: String? = null,
     val description: String = "",

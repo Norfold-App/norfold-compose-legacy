@@ -239,13 +239,22 @@ interface NotesDao {
     suspend fun checklistItemById(id: Long): TaskChecklistItemEntity?
 
     @Query(
-        "SELECT * FROM chat_messages WHERE workspaceId = :ws OR channelId IN " +
-            "(SELECT id FROM chat_channels WHERE accountConversationId IS NOT NULL) ORDER BY createdAt ASC",
+        "SELECT * FROM chat_messages WHERE " +
+            "(workspaceId = :ws AND (channelId IS NULL OR channelId IN " +
+            "(SELECT id FROM chat_channels WHERE workspaceId = :ws AND accountConversationId IS NULL))) OR " +
+            "channelId IN (SELECT id FROM chat_channels WHERE accountOwnerId = :accountId) " +
+            "ORDER BY createdAt ASC",
     )
-    fun observeChatMessages(ws: Long): Flow<List<ChatMessageEntity>>
+    fun observeChatMessages(ws: Long, accountId: String?): Flow<List<ChatMessageEntity>>
 
     @Query("SELECT * FROM chat_messages ORDER BY createdAt ASC")
     suspend fun allChatMessages(): List<ChatMessageEntity>
+
+    @Query(
+        "SELECT * FROM chat_messages WHERE channelId IS NULL OR channelId IN " +
+            "(SELECT id FROM chat_channels WHERE accountConversationId IS NULL) ORDER BY createdAt ASC",
+    )
+    suspend fun allWorkspaceChatMessages(): List<ChatMessageEntity>
 
     @Query("SELECT * FROM chat_messages WHERE workspaceId = :ws ORDER BY createdAt ASC")
     suspend fun chatMessages(ws: Long): List<ChatMessageEntity>
@@ -318,6 +327,12 @@ interface NotesDao {
 
     @Query("SELECT * FROM remote_object_bindings WHERE objectType = :objectType AND remoteId = :remoteId LIMIT 1")
     suspend fun bindingByRemoteIdAnyWorkspace(objectType: String, remoteId: String): RemoteObjectBindingEntity?
+
+    @Query("SELECT * FROM remote_object_bindings WHERE objectType = :objectType AND syncId = :syncId LIMIT 1")
+    suspend fun bindingBySyncIdAnyWorkspace(objectType: String, syncId: String): RemoteObjectBindingEntity?
+
+    @Query("SELECT * FROM remote_object_bindings WHERE objectType = :objectType ORDER BY updatedAt ASC")
+    suspend fun remoteBindingsByType(objectType: String): List<RemoteObjectBindingEntity>
 
     @Query("SELECT * FROM sync_tombstones WHERE workspaceId = :ws AND acknowledgedAt IS NULL ORDER BY deletedAt ASC")
     suspend fun pendingTombstones(ws: Long): List<SyncTombstoneEntity>
@@ -441,11 +456,18 @@ interface NotesDao {
     @Query("UPDATE chat_messages SET securityMode = :securityMode, securityEpochId = :securityEpochId WHERE id = :id")
     suspend fun setChatMessageSecurity(id: Long, securityMode: String, securityEpochId: String)
 
-    @Query("SELECT * FROM chat_channels WHERE workspaceId = :ws OR accountConversationId IS NOT NULL ORDER BY createdAt ASC")
-    fun observeChatChannels(ws: Long): Flow<List<ChatChannelEntity>>
+    @Query(
+        "SELECT * FROM chat_channels WHERE " +
+            "(workspaceId = :ws AND accountConversationId IS NULL) OR accountOwnerId = :accountId " +
+            "ORDER BY createdAt ASC",
+    )
+    fun observeChatChannels(ws: Long, accountId: String?): Flow<List<ChatChannelEntity>>
 
     @Query("SELECT * FROM chat_channels ORDER BY createdAt ASC")
     suspend fun allChatChannels(): List<ChatChannelEntity>
+
+    @Query("SELECT * FROM chat_channels WHERE accountConversationId IS NULL ORDER BY createdAt ASC")
+    suspend fun allWorkspaceChatChannels(): List<ChatChannelEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChatChannel(entity: ChatChannelEntity): Long
@@ -470,8 +492,24 @@ interface NotesDao {
     @Query("SELECT * FROM chat_channels WHERE workspaceId = :ws AND kind = :kind AND counterpartUsername = :counterpart LIMIT 1")
     suspend fun chatChannelByCounterpart(ws: Long, kind: String, counterpart: String): ChatChannelEntity?
 
-    @Query("SELECT * FROM chat_channels WHERE accountConversationId = :accountConversationId LIMIT 1")
-    suspend fun chatChannelByAccountConversation(accountConversationId: String): ChatChannelEntity?
+    @Query(
+        "SELECT * FROM chat_channels WHERE accountOwnerId = :accountId " +
+            "AND accountConversationId = :accountConversationId LIMIT 1",
+    )
+    suspend fun chatChannelByAccountConversation(
+        accountId: String,
+        accountConversationId: String,
+    ): ChatChannelEntity?
+
+    @Query("SELECT * FROM chat_channels WHERE accountOwnerId = :accountId ORDER BY createdAt ASC")
+    suspend fun accountChatChannels(accountId: String): List<ChatChannelEntity>
+
+    @Query(
+        "SELECT chat_messages.* FROM chat_messages INNER JOIN chat_channels " +
+            "ON chat_channels.id = chat_messages.channelId " +
+            "WHERE chat_channels.accountOwnerId = :accountId ORDER BY chat_messages.createdAt ASC",
+    )
+    suspend fun accountChatMessages(accountId: String): List<ChatMessageEntity>
 
     @Query("UPDATE chat_channels SET pinned = :pinned WHERE id = :id")
     suspend fun setChatChannelPinned(id: Long, pinned: Boolean)
@@ -857,6 +895,9 @@ interface NotesDao {
 
     @Query("SELECT * FROM secure_chat_tombstones WHERE messageSyncId = :messageSyncId")
     suspend fun secureChatTombstone(messageSyncId: String): SecureChatTombstoneEntity?
+
+    @Query("SELECT * FROM secure_chat_tombstones ORDER BY destructiveAt ASC")
+    suspend fun secureChatTombstones(): List<SecureChatTombstoneEntity>
 
     @Upsert
     suspend fun upsertPrivateChatArchiveManifest(entity: PrivateChatArchiveManifestEntity)
