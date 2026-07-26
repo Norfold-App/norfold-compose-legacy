@@ -31,6 +31,7 @@ import com.norfold.app.data.NorfoldDatabase
 import com.norfold.app.data.NetworkMonitor
 import com.norfold.app.data.DocsRepository
 import com.norfold.app.data.SyncSecretStore
+import com.norfold.app.data.SecureChatOutboxEntity
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.AppIconFamily
 import com.norfold.app.domain.BackupCodec
@@ -1679,6 +1680,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         secureChatBackend.renewLease()
                         nextLeaseAt = now + 60_000L
                     }
+                    drainSecureChatOutbox()
                     val pending = secureChatBackend.pending()
                     pending.forEach { remote -> importSecureAccountMessage(remote) }
                     retryDelayMs = 2_000L
@@ -1690,6 +1692,53 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     delay(retryDelayMs)
                     retryDelayMs = (retryDelayMs * 2).coerceAtMost(30_000L)
                 }
+            }
+        }
+    }
+
+    private suspend fun drainSecureChatOutbox() {
+        val pending = repository.pendingSecureChatOperations()
+        for (operation in pending) {
+            try {
+                if (operation.operation == "text") {
+                    secureChatBackend.sendText(
+                        conversationId = operation.conversationId,
+                        clientSyncId = operation.id,
+                        body = operation.body,
+                        createdAt = operation.createdAt,
+                        replyPreview = operation.replyPreview,
+                    )
+                    repository.localChatMessageIdBySyncId(operation.workspaceId, operation.id)?.let { localId ->
+                        repository.bindAccountDirectMessage(localId, operation.id)
+                        repository.setChatMessageReceiptStatus(localId, ChatReceiptStatus.Sent)
+                    }
+                } else {
+                    val target = operation.targetMessageSyncId
+                        ?: error("Secure mutation is missing its target message.")
+                    secureChatBackend.sendMutation(
+                        conversationId = operation.conversationId,
+                        clientSyncId = operation.id,
+                        targetMessageId = target,
+                        type = operation.operation,
+                        body = operation.body,
+                        editedAt = operation.editedAt,
+                        reactionsJson = operation.reactionsJson,
+                        pinned = operation.pinned,
+                    )
+                    if (operation.operation == "delete_everyone") {
+                        repository.recordSecureChatTombstone(
+                            target,
+                            operation.conversationId,
+                            "delete_everyone",
+                        )
+                    }
+                }
+                repository.completeSecureChatOperation(operation.id)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (failure: Throwable) {
+                repository.failSecureChatOperation(operation, failure)
+                return
             }
         }
     }
@@ -1718,10 +1767,24 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 pinned = decrypted.payload.pinned,
             )
             if (!applied && decrypted.payload.type != "delete_everyone") return
+            if (decrypted.payload.type == "delete_everyone") {
+                repository.recordSecureChatTombstone(
+                    target,
+                    decrypted.conversationId,
+                    "delete_everyone",
+                    destructiveAt = decrypted.payload.createdAt,
+                )
+            }
             secureChatBackend.acknowledge(
                 decrypted.relayId,
                 read = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId,
             )
+            recordSecureRelayCheckpoint(remote)
+            return
+        }
+        if (repository.hasSecureChatTombstone(decrypted.clientSyncId)) {
+            secureChatBackend.acknowledge(decrypted.relayId, read = false)
+            recordSecureRelayCheckpoint(remote)
             return
         }
         val myId = NorfoldSupabase.currentAccountId()
@@ -1740,7 +1803,18 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         )
         val viewed = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId
         secureChatBackend.acknowledge(decrypted.relayId, read = viewed)
+        recordSecureRelayCheckpoint(remote)
         _teamCollaborationStatus.value = "Direct · encrypted"
+    }
+
+    private suspend fun recordSecureRelayCheckpoint(remote: SecureChatBackend.PendingRelay) {
+        val device = secureChatBackend.currentDevicePublic()
+        repository.recordSecureRelayCheckpoint(
+            deviceId = device.deviceId,
+            generation = device.generation,
+            createdAt = remote.createdAt,
+            relayId = remote.relayId,
+        )
     }
 
     /** Best-effort (username, displayName) for an account sender UUID. */
@@ -2281,6 +2355,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             secureChatBackend.renewLease()
         }.onSuccess {
             startSecureRelayObserver()
+            drainSecureChatOutbox()
             retryPendingTeamChatSends()
         }
             .onFailure { Log.w("NorfoldSecureChat", "Secure device registration deferred", it) }
@@ -2630,19 +2705,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             val (message, syncId) = pending
             val channel = message.channelId?.let { repository.chatChannelById(it) }
             if (channel?.scope == ChatScope.Account) {
-                val conversationId = channel.accountConversationId ?: continue
-                val delivered = runCatching {
-                    secureChatBackend.sendText(
-                        conversationId = conversationId,
-                        clientSyncId = syncId,
-                        body = message.body,
-                        createdAt = message.createdAt,
-                        replyPreview = message.replyPreview,
-                    )
-                }.isSuccess
-                if (!delivered) return
-                repository.bindAccountDirectMessage(message.id, syncId)
-                repository.setChatMessageReceiptStatus(message.id, ChatReceiptStatus.Sent)
+                // Account operations have their own durable, idempotent outbox.
                 continue
             }
             val workspaceTarget = remoteWorkspaceId ?: continue
@@ -3314,6 +3377,18 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             val conversationId = activeChannel.accountConversationId ?: return@launch
             val syncId = UUID.randomUUID().toString()
             repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
+            val outboxOperation = SecureChatOutboxEntity(
+                id = syncId,
+                workspaceId = settings.activeWorkspaceId,
+                conversationId = conversationId,
+                operation = "text",
+                body = body.trim(),
+                createdAt = createdAt,
+                replyPreview = replyTo?.let {
+                    "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}"
+                },
+            )
+            repository.enqueueSecureChatOperation(outboxOperation)
             if (!NorfoldSupabase.isSignedIn()) {
                 notifySignedOutChatSend()
                 return@launch
@@ -3329,10 +3404,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     },
                 )
             }.onSuccess {
+                repository.completeSecureChatOperation(syncId)
                 repository.bindAccountDirectMessage(localId, syncId)
                 repository.setChatMessageReceiptStatus(localId, ChatReceiptStatus.Sent)
                 _teamCollaborationStatus.value = "Direct · encrypted"
             }.onFailure {
+                repository.failSecureChatOperation(outboxOperation, it)
                 _teamCollaborationStatus.value = if (networkOnline.value) "Saved locally · direct sync failed" else "Offline · message saved locally"
                 emitError("Message saved locally, but direct sync couldn't finish. It'll retry.")
             }
@@ -3433,9 +3510,24 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val channel = message.channelId?.let { repository.chatChannelById(it) }
         if (channel?.scope == ChatScope.Account) {
             val conversationId = channel.accountConversationId ?: return
+            val operationId = UUID.randomUUID().toString()
+            val outboxOperation = SecureChatOutboxEntity(
+                id = operationId,
+                workspaceId = settings.activeWorkspaceId,
+                conversationId = conversationId,
+                operation = mutationType,
+                targetMessageSyncId = binding.syncId,
+                body = message.body,
+                createdAt = System.currentTimeMillis(),
+                editedAt = message.editedAt,
+                reactionsJson = message.reactionsJson,
+                pinned = message.pinned,
+            )
+            repository.enqueueSecureChatOperation(outboxOperation)
             runCatching {
                 secureChatBackend.sendMutation(
                     conversationId = conversationId,
+                    clientSyncId = operationId,
                     targetMessageId = binding.syncId,
                     type = mutationType,
                     body = message.body,
@@ -3443,7 +3535,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     reactionsJson = message.reactionsJson,
                     pinned = message.pinned,
                 )
-            }.onFailure { emitError("Saved here, but the encrypted update will retry after reconnection.") }
+            }.onSuccess { repository.completeSecureChatOperation(operationId) }
+                .onFailure {
+                    repository.failSecureChatOperation(outboxOperation, it)
+                    emitError("Saved here, but the encrypted update will retry after reconnection.")
+                }
             return
         }
         val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return
@@ -3509,14 +3605,29 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val channel = message.channelId?.let { repository.chatChannelById(it) }
         if (channel?.scope == ChatScope.Account) {
             val conversationId = channel.accountConversationId ?: return@launch
+            val operationId = UUID.randomUUID().toString()
+            val outboxOperation = SecureChatOutboxEntity(
+                id = operationId,
+                workspaceId = settings.activeWorkspaceId,
+                conversationId = conversationId,
+                operation = "delete_everyone",
+                targetMessageSyncId = syncId,
+                createdAt = System.currentTimeMillis(),
+            )
+            repository.enqueueSecureChatOperation(outboxOperation)
             runCatching {
                 secureChatBackend.sendMutation(
                     conversationId = conversationId,
+                    clientSyncId = operationId,
                     targetMessageId = syncId,
                     type = "delete_everyone",
                 )
+            }.onSuccess {
+                repository.completeSecureChatOperation(operationId)
+                repository.recordSecureChatTombstone(syncId, conversationId, "delete_everyone")
             }.onFailure {
                 if (it is CancellationException) throw it
+                repository.failSecureChatOperation(outboxOperation, it)
                 emitError("Removed here, but the encrypted unsend couldn't reach other devices yet.")
             }
             return@launch

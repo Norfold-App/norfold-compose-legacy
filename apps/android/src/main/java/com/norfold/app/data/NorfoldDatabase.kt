@@ -41,8 +41,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncTombstoneEntity::class,
         DeviceSettingsProfileEntity::class,
         AppSettingsEntity::class,
+        SecureChatOutboxEntity::class,
+        SecureChatRelayCheckpointEntity::class,
+        SecureChatTombstoneEntity::class,
+        PrivateChatArchiveManifestEntity::class,
     ],
-    version = 45,
+    version = 46,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -99,6 +103,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_42_43,
                     MIGRATION_43_44,
                     MIGRATION_44_45,
+                    MIGRATION_45_46,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -159,6 +164,63 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE chat_channels ADD COLUMN acknowledgedSecurityEpochId TEXT")
                 // Account DMs/groups are permanently E2EE. Existing workspace topics were public.
                 db.execSQL("UPDATE chat_channels SET visibility = CASE WHEN accountConversationId IS NULL THEN 'Public' ELSE 'Private' END")
+            }
+        }
+        internal val MIGRATION_45_46 = object : Migration(45, 46) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS secure_chat_outbox (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        workspaceId INTEGER NOT NULL,
+                        conversationId TEXT NOT NULL,
+                        operation TEXT NOT NULL,
+                        targetMessageSyncId TEXT,
+                        body TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        replyPreview TEXT,
+                        editedAt INTEGER,
+                        reactionsJson TEXT,
+                        pinned INTEGER,
+                        attemptCount INTEGER NOT NULL,
+                        nextAttemptAt INTEGER NOT NULL,
+                        lastError TEXT
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_outbox_workspaceId ON secure_chat_outbox(workspaceId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_outbox_conversationId ON secure_chat_outbox(conversationId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_outbox_nextAttemptAt ON secure_chat_outbox(nextAttemptAt)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS secure_chat_relay_checkpoints (
+                        deviceId TEXT NOT NULL,
+                        cryptoGeneration INTEGER NOT NULL,
+                        lastRelayCreatedAt TEXT NOT NULL,
+                        lastRelayId TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        PRIMARY KEY(deviceId, cryptoGeneration)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS secure_chat_tombstones (
+                        messageSyncId TEXT NOT NULL PRIMARY KEY,
+                        conversationId TEXT NOT NULL,
+                        destructiveAt INTEGER NOT NULL,
+                        reason TEXT NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_tombstones_conversationId ON secure_chat_tombstones(conversationId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_tombstones_destructiveAt ON secure_chat_tombstones(destructiveAt)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS private_chat_archive_manifests (
+                        archiveId TEXT NOT NULL,
+                        providerId TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        lastMessageCreatedAt INTEGER NOT NULL,
+                        messageCount INTEGER NOT NULL,
+                        encryptedSizeBytes INTEGER NOT NULL,
+                        PRIMARY KEY(archiveId, providerId)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_private_chat_archive_manifests_updatedAt ON private_chat_archive_manifests(updatedAt)")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds
