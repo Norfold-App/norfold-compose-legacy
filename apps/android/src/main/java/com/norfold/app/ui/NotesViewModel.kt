@@ -117,7 +117,9 @@ import com.norfold.app.data.ChatReadMarkers
 import com.norfold.app.data.ChatConversationPrefs
 import com.norfold.app.cloud.DocumentPresenceState
 import com.norfold.app.cloud.ChatBackend
+import com.norfold.app.cloud.ChatMediaBackend
 import com.norfold.app.cloud.SecureChatBackend
+import com.norfold.app.domain.chat.ChatMediaCrypto
 import com.norfold.app.cloud.toWorkspaceMember
 import com.norfold.app.ui.feedback.UiFeedback
 import com.norfold.app.ui.feedback.UiFeedbackAction
@@ -415,7 +417,9 @@ private data class ChatUploadTask(
     val authorDisplayName: String,
     val syncId: String,
     val idempotencyKey: String,
+    val localChannelId: Long? = null,
     val channelSyncId: String? = null,
+    val expiresAt: Long? = null,
     var attempts: Int = 0,
     var failed: Boolean = false,
 )
@@ -2410,7 +2414,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             localWorkspaceId ?: return
         }
         val accountId = NorfoldSupabase.currentAccountId()
-        if (decrypted.payload.type != "text") {
+        if (decrypted.payload.type !in setOf("text", "media")) {
             val target = decrypted.payload.targetMessageId ?: return
             if (accountId != null && repository.hasSecureChatUserHidden(accountId, target)) {
                 secureChatBackend.acknowledge(decrypted.relayId, read = false)
@@ -2469,6 +2473,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 securityEpochId = decrypted.securityEpochId,
                 originPayloadJson = decrypted.originPayloadJson,
                 expiresAt = decrypted.payload.expiresAt,
+                attachment = decrypted.payload.attachment,
             )
         } else {
             repository.importSecureWorkspaceMessage(
@@ -2485,6 +2490,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 securityEpochId = decrypted.securityEpochId,
                 originPayloadJson = decrypted.originPayloadJson,
                 expiresAt = decrypted.payload.expiresAt,
+                attachment = decrypted.payload.attachment,
             )
         }
         val viewed = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId
@@ -4474,7 +4480,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val settings = state.value.settings
             val channelId = activeChatChannelId.value
-            val transportCheck = runCatching { managedAttachmentSecurity(channelId) }
+            val transportCheck = runCatching { validateAttachmentDestination(channelId) }
             if (transportCheck.isFailure) {
                 emitError(
                     transportCheck.exceptionOrNull()?.message
@@ -4509,28 +4515,21 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Media E2EE is a separate phase. Until its ciphertext relay lands, refuse to
-     * leak account/E2EE workspace files through the Managed object/storage path.
-     */
-    private suspend fun managedAttachmentSecurity(channelId: Long?): ChatBackend.WorkspaceSecuritySnapshot? {
+    private suspend fun validateAttachmentDestination(channelId: Long?) {
         val channel = channelId?.let { repository.chatChannelById(it) }
-        require(channel?.scope != ChatScope.Account) {
-            "Encrypted personal attachments aren't available in this build yet. Nothing was uploaded."
+        if (channel?.scope == ChatScope.Account) {
+            require(NorfoldSupabase.isSignedIn()) { "Sign in before attaching files to a personal chat." }
+            return
         }
         val workspaceId = state.value.settings.activeWorkspaceId
-        val remoteWorkspaceId = repository.remoteWorkspaceId(workspaceId) ?: return null
+        val remoteWorkspaceId = repository.remoteWorkspaceId(workspaceId) ?: return
         require(NorfoldSupabase.isSignedIn()) {
             "Sign in before attaching a file to a shared workspace."
         }
         val security = ChatBackend.ensureWorkspaceSecurityEpoch(remoteWorkspaceId, channel?.syncId)
-        require(security.securityMode == ChatSecurityMode.Managed) {
-            "Encrypted workspace attachments aren't available in this build yet. Nothing was uploaded."
-        }
         require(security.acknowledged) {
             "Review and acknowledge this workspace's security details before attaching files."
         }
-        return security
     }
 
     private val _gifPicker = MutableStateFlow(GifPickerState())
@@ -4564,7 +4563,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val settings = state.value.settings
             val channelId = activeChatChannelId.value
-            val securityResult = runCatching { managedAttachmentSecurity(channelId) }
+            val securityResult = runCatching { validateAttachmentDestination(channelId) }
             if (securityResult.isFailure) {
                 emitError(
                     securityResult.exceptionOrNull()?.message
@@ -4572,49 +4571,19 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 return@launch
             }
-            val managedSecurity = securityResult.getOrThrow()
+            securityResult.getOrThrow()
             val createdAt = System.currentTimeMillis()
-            val username = settings.syncUserName.ifBlank { "you" }
-            val displayName = settings.syncPublicName.ifBlank { username }
             val name = "${gif.title.ifBlank { "KLIPY GIF" }.sanitizeFileName()}.gif"
-            val localId = repository.sendChat(
-                username = username,
-                displayName = displayName,
+            enqueueChatUpload(
+                settings = settings,
+                uriString = gif.originalUrl,
+                name = name,
+                mime = "image/gif",
+                size = 0,
                 body = "",
-                color = settings.accentColor,
-                attachmentName = name,
-                attachmentMimeType = "image/gif",
-                attachmentUri = gif.originalUrl,
-                createdAt = createdAt,
-                channelId = channelId,
+                createdAtOverride = createdAt,
             )
-            // Provider content remains provider-hosted: do not proxy, cache, or re-upload it.
-            if (NorfoldSupabase.isSignedIn()) {
-                val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId)
-                if (remoteWorkspaceId != null && managedSecurity != null) {
-                    val syncId = UUID.randomUUID().toString()
-                    repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
-                    runCatching {
-                        ChatBackend.sendManagedWorkspaceMessage(
-                            remoteWorkspaceId = remoteWorkspaceId,
-                            deviceId = settings.settingsDeviceId,
-                            username = username,
-                            displayName = displayName,
-                            body = "",
-                            color = settings.accentColor,
-                            createdAt = createdAt,
-                            security = managedSecurity,
-                            attachmentName = name,
-                            attachmentMimeType = "image/gif",
-                            attachmentExternalUrl = gif.originalUrl,
-                            syncId = syncId,
-                            idempotencyKey = syncId,
-                            channelSyncId = channelId?.let { id -> state.value.chatChannels.firstOrNull { it.id == id }?.syncId },
-                        )
-                    }.onSuccess { repository.bindRemoteChatMessage(settings.activeWorkspaceId, localId, it) }
-                        .onFailure { emitError("GIF saved here, but it didn't reach the team. Try again when you're online.") }
-                }
-            }
+            drainChatUploads()
         }
     }
 
@@ -4626,11 +4595,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         mime: String,
         size: Long,
         body: String,
+        createdAtOverride: Long? = null,
     ): Long {
-        val createdAt = System.currentTimeMillis()
+        val createdAt = createdAtOverride ?: System.currentTimeMillis()
         val username = settings.syncUserName.ifBlank { "you" }
         val authorDisplayName = settings.syncPublicName.ifBlank { settings.syncUserName.ifBlank { "You" } }
         val channelId = activeChatChannelId.value
+        val channel = channelId?.let { id -> state.value.chatChannels.firstOrNull { it.id == id } }
+        val expiresAt = channel?.defaultLifespanSeconds?.let { createdAt + it * 1_000L }
         val localId = repository.sendChat(
             username = username,
             displayName = authorDisplayName,
@@ -4642,12 +4614,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             attachmentSizeBytes = size,
             createdAt = createdAt,
             channelId = channelId,
+            expiresAt = expiresAt,
         )
         val channelSyncId = channelId?.let { id -> state.value.chatChannels.firstOrNull { it.id == id }?.syncId }
         val syncId = UUID.randomUUID().toString()
-        if (repository.remoteWorkspaceId(settings.activeWorkspaceId) != null) {
-            repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
-        }
+        val remoteRequired = channel?.scope == ChatScope.Account ||
+            repository.remoteWorkspaceId(settings.activeWorkspaceId) != null
+        if (!remoteRequired) return localId
+        repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
         chatUploadQueue.addLast(
             ChatUploadTask(
                 localWorkspaceId = settings.activeWorkspaceId,
@@ -4663,7 +4637,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 authorDisplayName = authorDisplayName,
                 syncId = syncId,
                 idempotencyKey = UUID.randomUUID().toString(),
+                localChannelId = channelId,
                 channelSyncId = channelSyncId,
+                expiresAt = expiresAt,
             ),
         )
         persistChatUploadQueue()
@@ -4713,7 +4689,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     .put("authorDisplayName", task.authorDisplayName)
                     .put("syncId", task.syncId)
                     .put("idempotencyKey", task.idempotencyKey)
-                    .put("channelSyncId", task.channelSyncId),
+                    .put("localChannelId", task.localChannelId)
+                    .put("channelSyncId", task.channelSyncId)
+                    .put("expiresAt", task.expiresAt),
             )
         }
         chatUploadPrefs.edit().putString("queue", array.toString()).apply()
@@ -4742,7 +4720,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         authorDisplayName = entry.getString("authorDisplayName"),
                         syncId = entry.getString("syncId"),
                         idempotencyKey = entry.getString("idempotencyKey"),
+                        localChannelId = entry.optLong("localChannelId")
+                            .takeIf { entry.has("localChannelId") && !entry.isNull("localChannelId") },
                         channelSyncId = entry.optString("channelSyncId").takeIf { it.isNotBlank() && it != "null" },
+                        expiresAt = entry.optLong("expiresAt")
+                            .takeIf { entry.has("expiresAt") && !entry.isNull("expiresAt") },
                     ),
                 )
             }
@@ -4770,8 +4752,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     notifySignedOutChatSend()
                     break
                 }
-                val remoteWorkspaceId = repository.remoteWorkspaceId(task.localWorkspaceId)
-                if (remoteWorkspaceId == null) {
+                val channel = task.localChannelId?.let { repository.chatChannelById(it) }
+                val accountConversationId = channel?.takeIf { it.scope == ChatScope.Account }?.accountConversationId
+                val remoteWorkspaceId = if (accountConversationId == null) {
+                    repository.remoteWorkspaceId(task.localWorkspaceId)
+                } else null
+                if (remoteWorkspaceId == null && accountConversationId == null) {
                     // Local-only workspace: the message already lives in chat; nothing to deliver.
                     chatUploadQueue.remove(task)
                     persistChatUploadQueue()
@@ -4782,44 +4768,104 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 publishChatUploads()
                 val settings = state.value.settings
                 val delivered = runCatching {
-                    val security = ChatBackend.ensureWorkspaceSecurityEpoch(
-                        workspaceId = remoteWorkspaceId,
-                        channelId = task.channelSyncId,
-                    )
-                    require(security.securityMode == ChatSecurityMode.Managed) {
-                        "Encrypted workspace attachments aren't available in this build yet. Nothing was uploaded."
-                    }
-                    require(security.acknowledged) {
-                        "Review and acknowledge this workspace's security details before attaching files."
-                    }
                     val rawBytes = withContext(Dispatchers.IO) {
                         openChatUploadInput(task.uri).use { it.readBytesCapped(MaxTeamFileBytes) }
                     }
                     val (bytes, mime) = compressImageForUpload(rawBytes, task.mime)
-                    val storagePath = NorfoldSupabase.uploadWorkspaceFile(
-                        remoteWorkspaceId = remoteWorkspaceId,
+                    val workspaceSecurity = remoteWorkspaceId?.let { workspaceId ->
+                        ChatBackend.ensureWorkspaceSecurityEpoch(workspaceId, task.channelSyncId).also { security ->
+                            require(security.acknowledged) {
+                                "Review and acknowledge this workspace's security details before attaching files."
+                            }
+                        }
+                    }
+                    val securityEpochId = if (accountConversationId != null) {
+                        secureChatBackend.prepareAccountSecurityEpoch(accountConversationId)
+                    } else {
+                        requireNotNull(workspaceSecurity?.securityEpochId) { "Workspace Chat security epoch is unavailable." }
+                    }
+                    val reservation = ChatMediaBackend.reserve(
+                        securityEpochId = securityEpochId,
+                        messageSyncId = task.syncId,
+                        plaintextBytes = bytes.size.toLong(),
+                        ciphertextBytes = ChatMediaCrypto.encryptedSize(bytes.size.toLong()),
+                        mediaCategory = chatMediaCategory(mime),
+                        contentExpiresAt = task.expiresAt,
+                    )
+                    val encrypted = ChatMediaCrypto.encrypt(
+                        plaintext = bytes,
+                        mediaId = reservation.mediaId,
+                        storagePath = reservation.storagePath,
+                        messageId = task.syncId,
+                        securityEpochId = securityEpochId,
                         displayName = task.name,
                         mimeType = mime,
-                        bytes = bytes,
                     )
-                    val remote = ChatBackend.sendManagedWorkspaceMessage(
-                        remoteWorkspaceId = remoteWorkspaceId,
-                        deviceId = settings.settingsDeviceId,
-                        username = task.username,
-                        displayName = task.authorDisplayName,
-                        body = task.body,
-                        color = task.color,
-                        createdAt = task.createdAt,
-                        security = security,
-                        syncId = task.syncId,
-                        idempotencyKey = task.idempotencyKey,
-                        attachmentName = task.name,
-                        attachmentMimeType = mime,
-                        attachmentSizeBytes = bytes.size.toLong(),
-                        attachmentStoragePath = storagePath,
-                        channelSyncId = task.channelSyncId,
+                    ChatMediaBackend.upload(
+                        reservation = reservation,
+                        ciphertext = encrypted.ciphertext,
+                        ciphertextSha256 = encrypted.descriptor.ciphertextSha256,
                     )
-                    repository.bindRemoteChatMessage(task.localWorkspaceId, task.localId, remote)
+                    when {
+                        accountConversationId != null -> {
+                            val sent = secureChatBackend.sendAccountMedia(
+                                conversationId = accountConversationId,
+                                securityEpochId = securityEpochId,
+                                clientSyncId = task.syncId,
+                                body = task.body,
+                                createdAt = task.createdAt,
+                                attachment = encrypted.descriptor,
+                                expiresAt = task.expiresAt,
+                            )
+                            repository.bindAccountDirectMessage(task.localId, task.syncId)
+                            repository.setChatMessageSecurity(task.localId, ChatSecurityMode.EndToEndEncrypted, securityEpochId)
+                            repository.setChatMessageOriginPayload(task.localId, sent.originPayloadJson)
+                        }
+                        workspaceSecurity?.securityMode == ChatSecurityMode.EndToEndEncrypted -> {
+                            val sent = secureChatBackend.sendWorkspaceMedia(
+                                workspaceId = requireNotNull(remoteWorkspaceId),
+                                channelId = task.channelSyncId,
+                                securityEpochId = securityEpochId,
+                                clientSyncId = task.syncId,
+                                body = task.body,
+                                createdAt = task.createdAt,
+                                attachment = encrypted.descriptor,
+                                expiresAt = task.expiresAt,
+                            )
+                            repository.bindSecureChatMessage(
+                                localWorkspaceId = task.localWorkspaceId,
+                                localMessageId = task.localId,
+                                clientSyncId = task.syncId,
+                                relayId = sent.relayId,
+                            )
+                            repository.setChatMessageSecurity(task.localId, ChatSecurityMode.EndToEndEncrypted, securityEpochId)
+                            repository.setChatMessageOriginPayload(task.localId, sent.originPayloadJson)
+                        }
+                        else -> {
+                            val remote = ChatBackend.sendManagedWorkspaceMessage(
+                                remoteWorkspaceId = requireNotNull(remoteWorkspaceId),
+                                deviceId = settings.settingsDeviceId,
+                                username = task.username,
+                                displayName = task.authorDisplayName,
+                                body = task.body,
+                                color = task.color,
+                                createdAt = task.createdAt,
+                                security = requireNotNull(workspaceSecurity),
+                                syncId = task.syncId,
+                                idempotencyKey = task.idempotencyKey,
+                                attachmentName = task.name,
+                                attachmentMimeType = mime,
+                                attachmentSizeBytes = bytes.size.toLong(),
+                                secureAttachment = encrypted.descriptor,
+                                channelSyncId = task.channelSyncId,
+                                expiresAt = task.expiresAt,
+                            )
+                            repository.bindRemoteChatMessage(task.localWorkspaceId, task.localId, remote)
+                            repository.setChatMessageSecurity(task.localId, ChatSecurityMode.Managed, securityEpochId)
+                        }
+                    }
+                    repository.setChatMessageAttachmentUri(task.localId, ChatMediaCrypto.toUri(encrypted.descriptor))
+                    repository.setChatMessageReceiptStatus(task.localId, ChatReceiptStatus.Sent)
                 }
                 uploadingLocalId = null
                 val failure = delivered.exceptionOrNull()
@@ -4866,6 +4912,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             "http", "https" -> openAttachmentStream(uriString)
             else -> app.contentResolver.openInputStream(uri) ?: error("File is not readable")
         }
+    }
+
+    private fun chatMediaCategory(mime: String): String = when {
+        mime.startsWith("image/") -> "image"
+        mime.startsWith("video/") -> "video"
+        mime.startsWith("audio/") -> "audio"
+        mime == "application/pdf" || mime.startsWith("text/") -> "document"
+        else -> "other"
     }
 
     /** Recompress large images the way messengers do (~2 MB target); other types pass through. */
@@ -5107,9 +5161,32 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Local uris play/open directly; norfold-cloud:// storage paths need a signed URL. */
     private suspend fun resolveChatAttachmentSource(uriString: String): String? = when {
+        uriString.startsWith(ChatMediaCrypto.UriPrefix) -> ChatMediaCrypto.fromUri(uriString)?.let { descriptor ->
+            runCatching { Uri.fromFile(materializeSecureChatMedia(descriptor)).toString() }.getOrNull()
+        }
         uriString.startsWith("norfold-cloud://") ->
             runCatching { NorfoldSupabase.workspaceFileUrl(uriString.removePrefix("norfold-cloud://")) }.getOrNull()
         else -> uriString
+    }
+
+    private suspend fun materializeSecureChatMedia(
+        descriptor: com.norfold.app.domain.chat.SecureChatAttachmentV1,
+    ): File = withContext(Dispatchers.IO) {
+        val suffix = descriptor.displayName.substringAfterLast('.', "bin").take(8).sanitizeFileName()
+        val target = File(app.cacheDir, "secure-chat-${descriptor.mediaId}.$suffix")
+        if (target.isFile && target.length() == descriptor.plaintextSize) return@withContext target
+        val source = ChatMediaBackend.signedDownloadUrl(descriptor.mediaId)
+        val ciphertext = openAttachmentStream(source).use { input ->
+            input.readBytesCapped(descriptor.ciphertextSize.coerceAtMost(MaxTeamFileBytes + 1024L * 1024L))
+        }
+        val plaintext = ChatMediaCrypto.decrypt(ciphertext, descriptor)
+        val temporary = File(target.parentFile, "${target.name}.part")
+        temporary.outputStream().use { it.write(plaintext) }
+        if (!temporary.renameTo(target)) {
+            target.outputStream().use { it.write(plaintext) }
+            temporary.delete()
+        }
+        target
     }
 
     suspend fun chatAttachmentPreviewSource(message: ChatMessageItem): String? =

@@ -76,6 +76,8 @@ import com.norfold.app.domain.WorkspaceObjectHistory
 import com.norfold.app.domain.WorkspaceObjectLink
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.findById
+import com.norfold.app.domain.chat.ChatMediaCrypto
+import com.norfold.app.domain.chat.SecureChatAttachmentV1
 import com.norfold.app.domain.toDeviceSettingsProfile
 import androidx.room.withTransaction
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -91,6 +93,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
 import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1070,7 +1074,12 @@ class DocsRepository(private val database: NorfoldDatabase) {
         )
         val remoteUri = remote.content?.get("attachmentExternalUrl")?.jsonPrimitive?.contentOrNull
             ?: remote.content?.get("attachmentStoragePath")?.jsonPrimitive?.contentOrNull?.let { "norfold-cloud://$it" }
-        if (remoteUri != null) dao.setChatMessageAttachmentUri(localMessageId, remoteUri)
+        val secureUri = remote.content?.get("secureAttachment")?.let { element ->
+            runCatching {
+                ChatMediaCrypto.toUri(Json.decodeFromJsonElement<SecureChatAttachmentV1>(element))
+            }.getOrNull()
+        }
+        (secureUri ?: remoteUri)?.let { dao.setChatMessageAttachmentUri(localMessageId, it) }
     }
 
     suspend fun bindRemoteChatChannel(
@@ -1247,6 +1256,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
             // norfold-cloud:// scheme so the UI knows to resolve a signed URL on demand.
             val attachmentStoragePath = content["attachmentStoragePath"]?.jsonPrimitive?.contentOrNull
             val attachmentExternalUrl = content["attachmentExternalUrl"]?.jsonPrimitive?.contentOrNull
+            val secureAttachment = content["secureAttachment"]?.let { element ->
+                runCatching { Json.decodeFromJsonElement<SecureChatAttachmentV1>(element) }.getOrNull()
+            }
             val localId = dao.insertChatMessage(
                 ChatMessageEntity(
                     authorUsername = username,
@@ -1254,10 +1266,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     body = body,
                     color = color,
                     createdAt = createdAt,
-                    attachmentName = content["attachmentName"]?.jsonPrimitive?.contentOrNull,
-                    attachmentMimeType = content["attachmentMimeType"]?.jsonPrimitive?.contentOrNull,
-                    attachmentSizeBytes = content["attachmentSizeBytes"]?.jsonPrimitive?.longOrNull,
-                    attachmentUri = attachmentExternalUrl ?: attachmentStoragePath?.let { "norfold-cloud://$it" },
+                    attachmentName = secureAttachment?.displayName
+                        ?: content["attachmentName"]?.jsonPrimitive?.contentOrNull,
+                    attachmentMimeType = secureAttachment?.mimeType
+                        ?: content["attachmentMimeType"]?.jsonPrimitive?.contentOrNull,
+                    attachmentSizeBytes = secureAttachment?.plaintextSize
+                        ?: content["attachmentSizeBytes"]?.jsonPrimitive?.longOrNull,
+                    attachmentUri = secureAttachment?.let(ChatMediaCrypto::toUri)
+                        ?: attachmentExternalUrl
+                        ?: attachmentStoragePath?.let { "norfold-cloud://$it" },
                     replyPreview = content["replyPreview"]?.jsonPrimitive?.contentOrNull,
                     editedAt = content["editedAt"]?.jsonPrimitive?.longOrNull,
                     reactionsJson = content["reactionsJson"]?.jsonPrimitive?.contentOrNull ?: "{}",
@@ -2394,6 +2411,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun chatMessageById(messageId: Long): ChatMessageItem? =
         dao.chatMessageById(messageId)?.toDomain()
 
+    suspend fun setChatMessageAttachmentUri(messageId: Long, uri: String) {
+        dao.setChatMessageAttachmentUri(messageId, uri)
+    }
+
     suspend fun setChatMessageSecurity(
         messageId: Long,
         mode: ChatSecurityMode,
@@ -2451,6 +2472,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         securityEpochId: String? = null,
         originPayloadJson: String? = null,
         expiresAt: Long? = null,
+        attachment: SecureChatAttachmentV1? = null,
     ): Boolean = database.withTransaction {
         val ws = activeWs()
         // Own messages already have a local row + binding (keyed by the same
@@ -2472,6 +2494,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 securityEpochId = securityEpochId,
                 originPayloadJson = originPayloadJson,
                 expiresAt = expiresAt,
+                attachmentName = attachment?.displayName,
+                attachmentMimeType = attachment?.mimeType,
+                attachmentSizeBytes = attachment?.plaintextSize,
+                attachmentUri = attachment?.let(ChatMediaCrypto::toUri),
             ),
         )
         dao.insertRemoteBinding(
@@ -2503,6 +2529,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         securityEpochId: String,
         originPayloadJson: String? = null,
         expiresAt: Long? = null,
+        attachment: SecureChatAttachmentV1? = null,
     ): Boolean = database.withTransaction {
         val existing = dao.remoteBindingBySyncId(
             localWorkspaceId,
@@ -2524,6 +2551,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 securityEpochId = securityEpochId,
                 originPayloadJson = originPayloadJson,
                 expiresAt = expiresAt,
+                attachmentName = attachment?.displayName,
+                attachmentMimeType = attachment?.mimeType,
+                attachmentSizeBytes = attachment?.plaintextSize,
+                attachmentUri = attachment?.let(ChatMediaCrypto::toUri),
             ),
         )
         dao.insertRemoteBinding(
