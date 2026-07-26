@@ -104,6 +104,7 @@ import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
@@ -282,6 +283,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     val teamWorkspaceId by viewModel.teamWorkspaceRemoteId.collectAsState()
     val collaborationStatus by viewModel.teamCollaborationStatus.collectAsState()
     val workspaceSecurity by viewModel.workspaceChatSecurity.collectAsState()
+    val serviceCapabilities by viewModel.chatServiceCapabilities.collectAsState()
     val privateArchive by viewModel.privateChatArchiveState.collectAsState()
     val recordingState by viewModel.voiceRecordingState.collectAsState()
     val chatUploads by viewModel.chatUploads.collectAsState()
@@ -416,6 +418,45 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             onTitleClick = { detailsOpen = true },
             onSearch = { chatSearchOpen = !chatSearchOpen; if (!chatSearchOpen) chatQuery = "" },
         )
+        if (serviceCapabilities.isConserving || serviceCapabilities.isDegraded) {
+            Surface(
+                color = if (serviceCapabilities.isDegraded) {
+                    MaterialTheme.colorScheme.errorContainer
+                } else {
+                    MaterialTheme.colorScheme.tertiaryContainer
+                },
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .clickable { viewModel.refreshChatServiceCapabilities() },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    Icon(Icons.Outlined.Info, contentDescription = null)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (serviceCapabilities.isDegraded) "Reduced Chat service" else "Chat is conserving capacity",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                        )
+                        Text(
+                            serviceCapabilities.explanation,
+                            fontSize = 11.sp,
+                            color = if (serviceCapabilities.isDegraded) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.onTertiaryContainer
+                            },
+                        )
+                        Text("Tap to check again", fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
         visibleWorkspaceSecurity?.let { security ->
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -824,6 +865,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                     onOpenAttachment = viewModel::openChatAttachment,
                     onResolveAttachment = viewModel::chatAttachmentPreviewSource,
                     attachmentGroup = group,
+                    richPreviewsEnabled = serviceCapabilities.richPreviewsEnabled,
                     onPlayOnlineVideo = { onlineVideoId = it },
                     onReply = { if (!selecting) { replyTarget = chat; editingTarget = null } },
                     onLongPress = { if (!selecting) messageActions = it },
@@ -2890,6 +2932,7 @@ private fun ChatBubble(
     onOpenAttachment: (ChatMessageItem) -> Unit,
     onResolveAttachment: suspend (ChatMessageItem) -> String?,
     attachmentGroup: List<ChatMessageItem> = listOf(chat),
+    richPreviewsEnabled: Boolean,
     onPlayOnlineVideo: (String) -> Unit,
     onReply: (ChatMessageItem) -> Unit,
     onLongPress: (ChatMessageItem) -> Unit = {},
@@ -3074,14 +3117,17 @@ private fun ChatBubble(
                                 fontSize = if (emojiOnly) 44.sp else 15.sp,
                                 lineHeight = if (emojiOnly) 52.sp else 21.sp,
                             )
-                            youtubeVideoId(displayBody)?.let { id ->
-                                ChatOnlineVideoCard(videoId = id, onPlay = { onPlayOnlineVideo(id) })
-                            }
-                            // Generic OpenGraph unfurl for any other link (YouTube already has its
-                            // own richer card above). Keeps chat parity with WhatsApp/Telegram.
-                            if (youtubeVideoId(displayBody) == null && chat.attachmentName.isNullOrBlank()) {
-                                firstLinkPreviewUrl(displayBody)?.let { url ->
-                                    ChatLinkPreviewCard(url = url, tint = textColor)
+                            if (richPreviewsEnabled) {
+                                youtubeVideoId(displayBody)?.let { id ->
+                                    ChatOnlineVideoCard(videoId = id, onPlay = { onPlayOnlineVideo(id) })
+                                }
+                                // Generic OpenGraph unfurl for any other link (YouTube already has
+                                // its own richer card above). Service conserve/degraded modes leave
+                                // the link readable but pause remote preview work.
+                                if (youtubeVideoId(displayBody) == null && chat.attachmentName.isNullOrBlank()) {
+                                    firstLinkPreviewUrl(displayBody)?.let { url ->
+                                        ChatLinkPreviewCard(url = url, tint = textColor)
+                                    }
                                 }
                             }
                         }
