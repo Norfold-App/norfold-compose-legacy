@@ -12,6 +12,10 @@ data class SecureChatOutboxEntity(
     val id: String,
     val workspaceId: Long,
     val conversationId: String,
+    /** Non-null only for workspace Chat. Null keeps account DM/group routing unambiguous. */
+    val remoteWorkspaceId: String? = null,
+    /** Null means the workspace General conversation. */
+    val channelSyncId: String? = null,
     val operation: String,
     val targetMessageSyncId: String? = null,
     val body: String = "",

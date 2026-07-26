@@ -41,6 +41,7 @@ import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ChatReceiptStatus
+import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.ChatScope
 import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.domain.Destination
@@ -134,6 +135,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -474,6 +476,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     val teamWorkspaceRemoteId: StateFlow<String?> = _teamWorkspaceRemoteId.asStateFlow()
     private val _teamCollaborationStatus = MutableStateFlow("Local collaboration")
     val teamCollaborationStatus: StateFlow<String> = _teamCollaborationStatus.asStateFlow()
+    private val _workspaceChatSecurity = MutableStateFlow<ChatBackend.WorkspaceSecuritySnapshot?>(null)
+    val workspaceChatSecurity: StateFlow<ChatBackend.WorkspaceSecuritySnapshot?> =
+        _workspaceChatSecurity.asStateFlow()
     private val _teamInviteShare = MutableStateFlow<TeamInviteShare?>(null)
     val teamInviteShare: StateFlow<TeamInviteShare?> = _teamInviteShare.asStateFlow()
     private val _documentPresence = MutableStateFlow<List<DocumentPresenceState>>(emptyList())
@@ -1040,8 +1045,115 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         chatConversationOpen.value = true
         markChatConversationRead(channelId)
         observeActiveAccountConversation(channelId)
+        refreshWorkspaceChatSecurity(channelId)
         closeSidebar()
         if (state.value.destination != Destination.Chat) go(Destination.Chat)
+    }
+
+    fun refreshWorkspaceChatSecurity(channelId: Long? = activeChatChannelId.value) {
+        viewModelScope.launch {
+            val localWorkspaceId = state.value.settings.activeWorkspaceId
+            val remoteWorkspaceId = repository.remoteWorkspaceId(localWorkspaceId)
+            val channel = channelId?.let { repository.chatChannelById(it) }
+            if (remoteWorkspaceId == null || channel?.scope == ChatScope.Account || !NorfoldSupabase.isSignedIn()) {
+                _workspaceChatSecurity.value = null
+                return@launch
+            }
+            runCatching {
+                ChatBackend.workspaceSecuritySnapshot(remoteWorkspaceId, channel?.syncId)
+            }.onSuccess { security ->
+                applyWorkspaceChatSecurity(localWorkspaceId, remoteWorkspaceId, channel, security)
+            }.onFailure {
+                _workspaceChatSecurity.value = null
+                _teamCollaborationStatus.value = "Workspace security unavailable · sending paused"
+            }
+        }
+    }
+
+    private suspend fun applyWorkspaceChatSecurity(
+        localWorkspaceId: Long,
+        remoteWorkspaceId: String,
+        channel: ChatChannel?,
+        security: ChatBackend.WorkspaceSecuritySnapshot,
+    ) {
+        _workspaceChatSecurity.value = security
+        runCatching { ChatBackend.workspaceSecurityEvents(remoteWorkspaceId) }
+            .onSuccess { events ->
+                repository.importWorkspaceChatSecurityEvents(localWorkspaceId, events)
+            }
+        channel?.let {
+            repository.updateChatChannelSecurity(
+                channelId = it.id,
+                mode = security.securityMode,
+                securityEpochId = security.securityEpochId,
+                acknowledged = security.acknowledged,
+            )
+        }
+        _teamCollaborationStatus.value = when (security.securityMode) {
+            ChatSecurityMode.EndToEndEncrypted -> "Team workspace · end-to-end encrypted"
+            ChatSecurityMode.Managed -> "Team workspace · managed"
+        }
+    }
+
+    /** Keeps mode changes and their durable divider visible to every foreground member. */
+    suspend fun observeWorkspaceChatSecurityWhileVisible() {
+        val localWorkspaceId = repository.activeWorkspaceIdValue()
+        val remoteWorkspaceId = repository.remoteWorkspaceId(localWorkspaceId) ?: return
+        if (!NorfoldSupabase.isSignedIn()) return
+        activeChatChannelId.collectLatest { channelId ->
+            val channel = channelId?.let { repository.chatChannelById(it) }
+            if (channel?.scope == ChatScope.Account) {
+                _workspaceChatSecurity.value = null
+                return@collectLatest
+            }
+            ChatBackend.workspaceSecurityChanges(remoteWorkspaceId, channel?.syncId).collect { security ->
+                applyWorkspaceChatSecurity(localWorkspaceId, remoteWorkspaceId, channel, security)
+            }
+        }
+    }
+
+    fun acknowledgeWorkspaceChatSecurity() = viewModelScope.launch {
+        val security = _workspaceChatSecurity.value ?: return@launch
+        runCatching {
+            ChatBackend.acknowledgeWorkspaceSecurity(
+                workspaceId = security.workspaceId,
+                securityVersion = security.securityVersion,
+            )
+            ChatBackend.workspaceSecuritySnapshot(
+                workspaceId = security.workspaceId,
+                channelId = activeChatChannelId.value?.let { repository.chatChannelById(it)?.syncId },
+            )
+        }.onSuccess {
+            _workspaceChatSecurity.value = it
+            activeChatChannelId.value?.let { channelId ->
+                repository.updateChatChannelSecurity(
+                    channelId = channelId,
+                    mode = it.securityMode,
+                    securityEpochId = it.securityEpochId,
+                    acknowledged = true,
+                )
+            }
+            repository.wakeSecureWorkspaceChatOperations(it.workspaceId)
+            drainSecureChatOutbox()
+            emitSuccess("Workspace security details acknowledged")
+        }.onFailure { emitError("Couldn't save the security acknowledgement. Try again.") }
+    }
+
+    fun changeWorkspaceChatSecurityMode(mode: ChatSecurityMode) = viewModelScope.launch {
+        val security = _workspaceChatSecurity.value ?: return@launch
+        runCatching {
+            ChatBackend.setWorkspaceSecurityMode(
+                workspaceId = security.workspaceId,
+                mode = mode,
+                expectedSecurityVersion = security.securityVersion,
+            )
+        }.onSuccess {
+            _workspaceChatSecurity.value = it
+            emitInfo("Workspace security changed. Every member must review the new security epoch.")
+            refreshWorkspaceChatSecurity()
+        }.onFailure {
+            emitError(authFailureMessage(it, "Couldn't change workspace security. Verify every member has an authorized device."))
+        }
     }
 
     /**
@@ -1532,7 +1644,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             channelId = channel.syncId,
             visibility = channel.visibility,
         )
-        val remote = NorfoldSupabase.upsertTeamChatChannel(
+        val security = ChatBackend.workspaceSecuritySnapshot(remoteWorkspaceId, channel.syncId)
+        repository.updateChatChannelSecurity(
+            channelId = channel.id,
+            mode = security.securityMode,
+            securityEpochId = security.securityEpochId,
+            acknowledged = security.acknowledged,
+        )
+        val remote = ChatBackend.upsertWorkspaceChannel(
             remoteWorkspaceId = remoteWorkspaceId,
             deviceId = settings.settingsDeviceId,
             syncId = channel.syncId,
@@ -1540,6 +1659,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             name = channel.name,
             icon = channel.icon,
             createdAt = channel.createdAt,
+            visibility = channel.visibility,
+            security = security,
             participantUserIds = participantUserIds,
             participantUsernames = participantUsernames,
             participantDisplayNames = participantDisplayNames,
@@ -1682,7 +1803,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     drainSecureChatOutbox()
                     val pending = secureChatBackend.pending()
-                    pending.forEach { remote -> importSecureAccountMessage(remote) }
+                    pending.forEach { remote -> importSecureMessage(remote) }
                     retryDelayMs = 2_000L
                     delay(if (pending.isEmpty()) 4_000L else 250L)
                 } catch (cancellation: CancellationException) {
@@ -1700,7 +1821,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val pending = repository.pendingSecureChatOperations()
         for (operation in pending) {
             try {
-                if (operation.operation == "text") {
+                if (operation.remoteWorkspaceId != null) {
+                    drainWorkspaceChatOperation(operation)
+                } else if (operation.operation == "text") {
                     secureChatBackend.sendText(
                         conversationId = operation.conversationId,
                         clientSyncId = operation.id,
@@ -1743,22 +1866,162 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun importSecureAccountMessage(
+    private suspend fun drainWorkspaceChatOperation(operation: SecureChatOutboxEntity) {
+        val remoteWorkspaceId = requireNotNull(operation.remoteWorkspaceId)
+        val security = ChatBackend.ensureWorkspaceSecurityEpoch(
+            workspaceId = remoteWorkspaceId,
+            channelId = operation.channelSyncId,
+        )
+        _workspaceChatSecurity.value = security
+        require(security.acknowledged) {
+            "Workspace security disclosure acknowledgement is required."
+        }
+        val localMessageId = repository.localChatMessageIdBySyncId(operation.workspaceId, operation.id)
+        val localMessage = localMessageId?.let { repository.chatMessageById(it) }
+
+        if (operation.operation == "text") {
+            val message = requireNotNull(localMessage) { "Local workspace message is missing." }
+            when (security.securityMode) {
+                ChatSecurityMode.EndToEndEncrypted -> {
+                    val relayId = secureChatBackend.sendWorkspaceText(
+                        workspaceId = remoteWorkspaceId,
+                        channelId = operation.channelSyncId,
+                        clientSyncId = operation.id,
+                        body = operation.body,
+                        createdAt = operation.createdAt,
+                        replyPreview = operation.replyPreview,
+                    )
+                    val epochId = requireNotNull(security.securityEpochId)
+                    repository.setChatMessageSecurity(message.id, security.securityMode, epochId)
+                    repository.bindSecureChatMessage(
+                        localWorkspaceId = operation.workspaceId,
+                        localMessageId = message.id,
+                        clientSyncId = operation.id,
+                        relayId = relayId,
+                    )
+                }
+                ChatSecurityMode.Managed -> {
+                    val remote = ChatBackend.sendManagedWorkspaceMessage(
+                        remoteWorkspaceId = remoteWorkspaceId,
+                        deviceId = state.value.settings.settingsDeviceId,
+                        username = message.authorUsername,
+                        displayName = message.authorDisplayName,
+                        body = operation.body,
+                        color = message.color,
+                        createdAt = operation.createdAt,
+                        syncId = operation.id,
+                        idempotencyKey = operation.id,
+                        security = security,
+                        channelSyncId = operation.channelSyncId,
+                        replyPreview = operation.replyPreview,
+                    )
+                    repository.bindRemoteChatMessage(operation.workspaceId, message.id, remote)
+                    repository.setChatMessageSecurity(
+                        message.id,
+                        security.securityMode,
+                        requireNotNull(security.securityEpochId),
+                    )
+                }
+            }
+            repository.setChatMessageReceiptStatus(message.id, ChatReceiptStatus.Sent)
+            return
+        }
+
+        val targetSyncId = requireNotNull(operation.targetMessageSyncId) {
+            "Workspace mutation is missing its target message."
+        }
+        when (security.securityMode) {
+            ChatSecurityMode.EndToEndEncrypted -> secureChatBackend.sendWorkspaceMutation(
+                workspaceId = remoteWorkspaceId,
+                channelId = operation.channelSyncId,
+                clientSyncId = operation.id,
+                targetMessageId = targetSyncId,
+                type = operation.operation,
+                body = operation.body,
+                editedAt = operation.editedAt,
+                reactionsJson = operation.reactionsJson,
+                pinned = operation.pinned,
+            )
+            ChatSecurityMode.Managed -> {
+                if (operation.operation == "delete_everyone") {
+                    val binding = repository.chatMessageRemoteBindingBySyncId(
+                        operation.workspaceId,
+                        targetSyncId,
+                    )
+                    ChatBackend.deleteManagedWorkspaceMessage(
+                        remoteWorkspaceId = remoteWorkspaceId,
+                        deviceId = state.value.settings.settingsDeviceId,
+                        targetSyncId = targetSyncId,
+                        idempotencyKey = operation.id,
+                        baseVersion = binding?.remoteVersion,
+                    )
+                    repository.recordSecureChatTombstone(
+                        targetSyncId,
+                        operation.conversationId,
+                        "delete_everyone",
+                    )
+                    return
+                }
+                val targetId = repository.localChatMessageIdBySyncId(operation.workspaceId, targetSyncId)
+                val target = targetId?.let { repository.chatMessageById(it) }
+                    ?: error("Managed workspace mutation target is missing.")
+                val remote = ChatBackend.sendManagedWorkspaceMessage(
+                    remoteWorkspaceId = remoteWorkspaceId,
+                    deviceId = state.value.settings.settingsDeviceId,
+                    username = target.authorUsername,
+                    displayName = target.authorDisplayName,
+                    body = operation.body.ifBlank { target.body },
+                    color = target.color,
+                    createdAt = target.createdAt,
+                    syncId = targetSyncId,
+                    idempotencyKey = operation.id,
+                    security = security,
+                    channelSyncId = operation.channelSyncId,
+                    replyPreview = target.replyPreview,
+                    editedAt = operation.editedAt,
+                    reactionsJson = operation.reactionsJson,
+                    pinned = operation.pinned,
+                    baseVersion = repository.chatMessageRemoteBinding(operation.workspaceId, target.id)?.remoteVersion,
+                )
+                repository.bindRemoteChatMessage(operation.workspaceId, target.id, remote)
+            }
+        }
+        if (operation.operation == "delete_everyone") {
+            repository.recordSecureChatTombstone(
+                targetSyncId,
+                operation.conversationId,
+                "delete_everyone",
+            )
+        }
+    }
+
+    private suspend fun importSecureMessage(
         remote: SecureChatBackend.PendingRelay,
     ) {
         val decrypted = secureChatBackend.decrypt(remote)
-        var localChannelId = repository.accountChannelId(decrypted.conversationId)
-        if (localChannelId == null) {
+        var accountChannelId = repository.accountChannelId(decrypted.conversationId)
+        var localWorkspaceId = repository.localWorkspaceIdForRemote(decrypted.conversationId)
+        var workspaceChannel = repository.workspaceChannelBySyncId(decrypted.conversationId)
+        if (accountChannelId == null && localWorkspaceId == null && workspaceChannel == null) {
             val conversations = NorfoldSocial.myDirectConversations()
             _personalConversations.value = conversations
             conversations.firstOrNull { it.conversationId == decrypted.conversationId }
-                ?.let { localChannelId = materializeAccountConversation(it) }
+                ?.let { accountChannelId = materializeAccountConversation(it) }
         }
-        val resolvedChannelId = localChannelId ?: return
+        val isAccount = accountChannelId != null
+        val resolvedChannelId: Long? = accountChannelId ?: workspaceChannel?.id
+        if (!isAccount) {
+            localWorkspaceId = localWorkspaceId ?: workspaceChannel?.workspaceId
+        }
+        val resolvedWorkspaceId = if (isAccount) {
+            repository.activeWorkspaceIdValue()
+        } else {
+            localWorkspaceId ?: return
+        }
         if (decrypted.payload.type != "text") {
             val target = decrypted.payload.targetMessageId ?: return
             val applied = repository.applySecureChatMutation(
-                localWorkspaceId = repository.activeWorkspaceIdValue(),
+                localWorkspaceId = resolvedWorkspaceId,
                 targetSyncId = target,
                 type = decrypted.payload.type,
                 body = decrypted.payload.body,
@@ -1790,21 +2053,37 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val myId = NorfoldSupabase.currentAccountId()
         val isOwn = myId != null && decrypted.senderId == myId
         val identity = resolveAccountSender(decrypted.senderId, isOwn)
-        repository.importAccountDirectMessage(
-            localChannelId = resolvedChannelId,
-            clientSyncId = decrypted.clientSyncId,
-            remoteMessageId = decrypted.relayId,
-            senderUsername = identity.first,
-            senderDisplayName = identity.second,
-            body = decrypted.payload.body,
-            color = state.value.settings.accentColor,
-            createdAt = decrypted.payload.createdAt,
-            isOwn = isOwn,
-        )
+        if (isAccount) {
+            repository.importAccountDirectMessage(
+                localChannelId = requireNotNull(resolvedChannelId),
+                clientSyncId = decrypted.clientSyncId,
+                remoteMessageId = decrypted.relayId,
+                senderUsername = identity.first,
+                senderDisplayName = identity.second,
+                body = decrypted.payload.body,
+                color = state.value.settings.accentColor,
+                createdAt = decrypted.payload.createdAt,
+                isOwn = isOwn,
+            )
+        } else {
+            repository.importSecureWorkspaceMessage(
+                localWorkspaceId = resolvedWorkspaceId,
+                localChannelId = resolvedChannelId,
+                clientSyncId = decrypted.clientSyncId,
+                relayId = decrypted.relayId,
+                senderUsername = identity.first,
+                senderDisplayName = identity.second,
+                body = decrypted.payload.body,
+                color = state.value.settings.accentColor,
+                createdAt = decrypted.payload.createdAt,
+                isOwn = isOwn,
+                securityEpochId = decrypted.securityEpochId,
+            )
+        }
         val viewed = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId
         secureChatBackend.acknowledge(decrypted.relayId, read = viewed)
         recordSecureRelayCheckpoint(remote)
-        _teamCollaborationStatus.value = "Direct · encrypted"
+        _teamCollaborationStatus.value = if (isAccount) "Direct · encrypted" else "Team workspace · end-to-end encrypted"
     }
 
     private suspend fun recordSecureRelayCheckpoint(remote: SecureChatBackend.PendingRelay) {
@@ -2699,7 +2978,6 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         if (!NorfoldSupabase.isSignedIn()) return
         val localWorkspaceId = repository.activeWorkspaceIdValue()
         val remoteWorkspaceId = repository.remoteWorkspaceId(localWorkspaceId)
-        val settings = state.value.settings
         val batch = repository.pendingRemoteChatMessages(localWorkspaceId, MaxTeamChatRetryBatch)
         for (pending in batch) {
             val (message, syncId) = pending
@@ -2709,26 +2987,21 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 continue
             }
             val workspaceTarget = remoteWorkspaceId ?: continue
-            val remote = runCatching {
-                NorfoldSupabase.sendTeamChatMessage(
+            repository.enqueueSecureChatOperation(
+                SecureChatOutboxEntity(
+                    id = syncId,
+                    workspaceId = localWorkspaceId,
+                    conversationId = channel?.syncId ?: workspaceTarget,
                     remoteWorkspaceId = workspaceTarget,
-                    deviceId = settings.settingsDeviceId,
-                    username = message.authorUsername,
-                    displayName = message.authorDisplayName,
+                    channelSyncId = channel?.syncId,
+                    operation = "text",
                     body = message.body,
-                    color = message.color,
                     createdAt = message.createdAt,
-                    syncId = syncId,
-                    idempotencyKey = syncId,
                     replyPreview = message.replyPreview,
-                    channelSyncId = message.channelId?.let { id -> state.value.chatChannels.firstOrNull { it.id == id }?.syncId },
-                )
-            }.getOrElse {
-                if (it is CancellationException) throw it
-                return
-            }
-            runCatching { repository.bindRemoteChatMessage(localWorkspaceId, message.id, remote) }
+                ),
+            )
         }
+        drainSecureChatOutbox()
     }
 
     // Minor 16: signed-out sends used to fail with only a status-line change, indistinguishable
@@ -3419,47 +3692,47 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return@launch
         val syncId = UUID.randomUUID().toString()
         repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
-        val pending = PendingTeamChatSend(
+        val outboxOperation = SecureChatOutboxEntity(
+            id = syncId,
+            workspaceId = settings.activeWorkspaceId,
+            conversationId = activeChannel?.syncId ?: remoteWorkspaceId,
             remoteWorkspaceId = remoteWorkspaceId,
-            deviceId = settings.settingsDeviceId,
-            username = settings.syncUserName.ifBlank { "you" },
-            displayName = settings.syncPublicName.ifBlank { settings.syncUserName.ifBlank { "You" } },
-            body = body.trim(),
-            color = settings.accentColor,
-            createdAt = createdAt,
-            syncId = syncId,
-            idempotencyKey = syncId,
-            replyPreview = replyTo?.let { "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}" },
             channelSyncId = activeChannel?.syncId,
+            operation = "text",
+            body = body.trim(),
+            createdAt = createdAt,
+            replyPreview = replyTo?.let { "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}" },
         )
+        repository.enqueueSecureChatOperation(outboxOperation)
         if (!NorfoldSupabase.isSignedIn()) {
             notifySignedOutChatSend()
             return@launch
         }
         runCatching {
-            NorfoldSupabase.sendTeamChatMessage(
-                remoteWorkspaceId = pending.remoteWorkspaceId,
-                deviceId = pending.deviceId,
-                username = pending.username,
-                displayName = pending.displayName,
-                body = pending.body,
-                color = pending.color,
-                createdAt = pending.createdAt,
-                syncId = pending.syncId,
-                idempotencyKey = pending.idempotencyKey,
-                replyPreview = pending.replyPreview,
-                channelSyncId = pending.channelSyncId,
-            )
-        }.onSuccess { remote ->
-            repository.bindRemoteChatMessage(settings.activeWorkspaceId, localId, remote)
-            // First receipt stage: the server accepted the message (single tick).
-            repository.setChatMessageReceiptStatus(localId, ChatReceiptStatus.Sent)
-            _teamCollaborationStatus.value = "Team workspace · connected"
-            // The network just proved itself — flush earlier messages still waiting to go out.
+            drainWorkspaceChatOperation(outboxOperation)
+            repository.completeSecureChatOperation(syncId)
+        }.onSuccess {
+            _teamCollaborationStatus.value = when (_workspaceChatSecurity.value?.securityMode) {
+                ChatSecurityMode.EndToEndEncrypted -> "Team workspace · end-to-end encrypted"
+                ChatSecurityMode.Managed -> "Team workspace · managed"
+                null -> "Team workspace · connected"
+            }
             retryPendingTeamChatSends()
         }.onFailure {
-            _teamCollaborationStatus.value = if (networkOnline.value) "Saved locally · team sync failed" else "Offline · message saved locally"
-            emitError("Message saved locally, but team sync couldn't finish. Tap the chat status to retry.")
+            repository.failSecureChatOperation(outboxOperation, it)
+            _teamCollaborationStatus.value = when {
+                it.message?.contains("acknowledge", ignoreCase = true) == true ->
+                    "Review workspace security before sending"
+                networkOnline.value -> "Saved locally · secure team sync paused"
+                else -> "Offline · message saved locally"
+            }
+            emitError(
+                if (it.message?.contains("acknowledge", ignoreCase = true) == true) {
+                    "Review and acknowledge this workspace's security details. Your message is saved locally."
+                } else {
+                    "Message saved locally, but secure team sync couldn't finish. It'll retry."
+                },
+            )
         }
     }
 
@@ -3543,32 +3816,29 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return
+        val operationId = UUID.randomUUID().toString()
+        val outboxOperation = SecureChatOutboxEntity(
+            id = operationId,
+            workspaceId = settings.activeWorkspaceId,
+            conversationId = channel?.syncId ?: remoteWorkspaceId,
+            remoteWorkspaceId = remoteWorkspaceId,
+            channelSyncId = channel?.syncId,
+            operation = mutationType,
+            targetMessageSyncId = binding.syncId,
+            body = message.body,
+            createdAt = System.currentTimeMillis(),
+            editedAt = message.editedAt,
+            reactionsJson = message.reactionsJson,
+            pinned = message.pinned,
+        )
+        repository.enqueueSecureChatOperation(outboxOperation)
         runCatching {
-            NorfoldSupabase.sendTeamChatMessage(
-                remoteWorkspaceId = remoteWorkspaceId,
-                deviceId = settings.settingsDeviceId,
-                username = message.authorUsername,
-                displayName = message.authorDisplayName,
-                body = message.body,
-                color = message.color,
-                createdAt = message.createdAt,
-                syncId = binding.syncId,
-                idempotencyKey = UUID.randomUUID().toString(),
-                attachmentName = message.attachmentName,
-                attachmentMimeType = message.attachmentMimeType,
-                attachmentSizeBytes = message.attachmentSizeBytes,
-                attachmentStoragePath = message.attachmentUri?.removePrefix("norfold-cloud://")
-                    ?.takeIf { message.attachmentUri?.startsWith("norfold-cloud://") == true },
-                attachmentExternalUrl = message.attachmentUri?.takeIf { it.startsWith("http://") || it.startsWith("https://") },
-                replyPreview = message.replyPreview,
-                channelSyncId = message.channelId?.let { id -> state.value.chatChannels.firstOrNull { it.id == id }?.syncId },
-                editedAt = message.editedAt,
-                reactionsJson = message.reactionsJson,
-                pinned = message.pinned,
-                baseVersion = binding.remoteVersion,
-            )
-        }.onSuccess { repository.bindRemoteChatMessage(settings.activeWorkspaceId, message.id, it) }
-            .onFailure { emitError("Saved here, but the team update will need another connection.") }
+            drainWorkspaceChatOperation(outboxOperation)
+            repository.completeSecureChatOperation(operationId)
+        }.onFailure {
+            repository.failSecureChatOperation(outboxOperation, it)
+            emitError("Saved here, but the secure team update will retry after reconnection.")
+        }
     }
 
     /**
@@ -3633,11 +3903,25 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             return@launch
         }
         val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return@launch
+        val operationId = UUID.randomUUID().toString()
+        val outboxOperation = SecureChatOutboxEntity(
+            id = operationId,
+            workspaceId = settings.activeWorkspaceId,
+            conversationId = channel?.syncId ?: remoteWorkspaceId,
+            remoteWorkspaceId = remoteWorkspaceId,
+            channelSyncId = channel?.syncId,
+            operation = "delete_everyone",
+            targetMessageSyncId = syncId,
+            createdAt = System.currentTimeMillis(),
+        )
+        repository.enqueueSecureChatOperation(outboxOperation)
         runCatching {
-            NorfoldSupabase.deleteTeamChatMessage(remoteWorkspaceId, syncId, settings.settingsDeviceId)
+            drainWorkspaceChatOperation(outboxOperation)
+            repository.completeSecureChatOperation(operationId)
         }.onFailure {
             if (it is CancellationException) throw it
-            emitError("Removed here, but the team copy couldn't be unsent yet. It will still show for others.")
+            repository.failSecureChatOperation(outboxOperation, it)
+            emitError("Removed here, but the secure team unsend will retry after reconnection.")
         }
     }
 
@@ -3655,6 +3939,15 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         uris.forEach { persistReadPermission(it) }
         viewModelScope.launch {
             val settings = state.value.settings
+            val channelId = activeChatChannelId.value
+            val transportCheck = runCatching { managedAttachmentSecurity(channelId) }
+            if (transportCheck.isFailure) {
+                emitError(
+                    transportCheck.exceptionOrNull()?.message
+                        ?: "Attachments are unavailable for this conversation.",
+                )
+                return@launch
+            }
             var oversized = 0
             for (uri in uris) {
                 val name = displayName(uri)
@@ -3680,6 +3973,30 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             }
             drainChatUploads()
         }
+    }
+
+    /**
+     * Media E2EE is a separate phase. Until its ciphertext relay lands, refuse to
+     * leak account/E2EE workspace files through the Managed object/storage path.
+     */
+    private suspend fun managedAttachmentSecurity(channelId: Long?): ChatBackend.WorkspaceSecuritySnapshot? {
+        val channel = channelId?.let { repository.chatChannelById(it) }
+        require(channel?.scope != ChatScope.Account) {
+            "Encrypted personal attachments aren't available in this build yet. Nothing was uploaded."
+        }
+        val workspaceId = state.value.settings.activeWorkspaceId
+        val remoteWorkspaceId = repository.remoteWorkspaceId(workspaceId) ?: return null
+        require(NorfoldSupabase.isSignedIn()) {
+            "Sign in before attaching a file to a shared workspace."
+        }
+        val security = ChatBackend.ensureWorkspaceSecurityEpoch(remoteWorkspaceId, channel?.syncId)
+        require(security.securityMode == ChatSecurityMode.Managed) {
+            "Encrypted workspace attachments aren't available in this build yet. Nothing was uploaded."
+        }
+        require(security.acknowledged) {
+            "Review and acknowledge this workspace's security details before attaching files."
+        }
+        return security
     }
 
     private val _gifPicker = MutableStateFlow(GifPickerState())
@@ -3712,11 +4029,20 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         lastGifSendAt = now
         viewModelScope.launch {
             val settings = state.value.settings
+            val channelId = activeChatChannelId.value
+            val securityResult = runCatching { managedAttachmentSecurity(channelId) }
+            if (securityResult.isFailure) {
+                emitError(
+                    securityResult.exceptionOrNull()?.message
+                        ?: "GIFs are unavailable for this conversation.",
+                )
+                return@launch
+            }
+            val managedSecurity = securityResult.getOrThrow()
             val createdAt = System.currentTimeMillis()
             val username = settings.syncUserName.ifBlank { "you" }
             val displayName = settings.syncPublicName.ifBlank { username }
             val name = "${gif.title.ifBlank { "KLIPY GIF" }.sanitizeFileName()}.gif"
-            val channelId = activeChatChannelId.value
             val localId = repository.sendChat(
                 username = username,
                 displayName = displayName,
@@ -3731,11 +4057,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             // Provider content remains provider-hosted: do not proxy, cache, or re-upload it.
             if (NorfoldSupabase.isSignedIn()) {
                 val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId)
-                if (remoteWorkspaceId != null) {
+                if (remoteWorkspaceId != null && managedSecurity != null) {
                     val syncId = UUID.randomUUID().toString()
                     repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
                     runCatching {
-                        NorfoldSupabase.sendTeamChatMessage(
+                        ChatBackend.sendManagedWorkspaceMessage(
                             remoteWorkspaceId = remoteWorkspaceId,
                             deviceId = settings.settingsDeviceId,
                             username = username,
@@ -3743,6 +4069,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                             body = "",
                             color = settings.accentColor,
                             createdAt = createdAt,
+                            security = managedSecurity,
                             attachmentName = name,
                             attachmentMimeType = "image/gif",
                             attachmentExternalUrl = gif.originalUrl,
@@ -3921,6 +4248,16 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 publishChatUploads()
                 val settings = state.value.settings
                 val delivered = runCatching {
+                    val security = ChatBackend.ensureWorkspaceSecurityEpoch(
+                        workspaceId = remoteWorkspaceId,
+                        channelId = task.channelSyncId,
+                    )
+                    require(security.securityMode == ChatSecurityMode.Managed) {
+                        "Encrypted workspace attachments aren't available in this build yet. Nothing was uploaded."
+                    }
+                    require(security.acknowledged) {
+                        "Review and acknowledge this workspace's security details before attaching files."
+                    }
                     val rawBytes = withContext(Dispatchers.IO) {
                         openChatUploadInput(task.uri).use { it.readBytesCapped(MaxTeamFileBytes) }
                     }
@@ -3931,7 +4268,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         mimeType = mime,
                         bytes = bytes,
                     )
-                    val remote = NorfoldSupabase.sendTeamChatMessage(
+                    val remote = ChatBackend.sendManagedWorkspaceMessage(
                         remoteWorkspaceId = remoteWorkspaceId,
                         deviceId = settings.settingsDeviceId,
                         username = task.username,
@@ -3939,6 +4276,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         body = task.body,
                         color = task.color,
                         createdAt = task.createdAt,
+                        security = security,
                         syncId = task.syncId,
                         idempotencyKey = task.idempotencyKey,
                         attachmentName = task.name,

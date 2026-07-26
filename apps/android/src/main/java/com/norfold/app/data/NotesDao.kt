@@ -435,6 +435,12 @@ interface NotesDao {
     @Query("SELECT * FROM chat_messages WHERE id = :id LIMIT 1")
     suspend fun chatMessageById(id: Long): ChatMessageEntity?
 
+    @Query("SELECT * FROM chat_messages WHERE workspaceId = :workspaceId AND securityEventId = :eventId LIMIT 1")
+    suspend fun chatMessageBySecurityEventId(workspaceId: Long, eventId: String): ChatMessageEntity?
+
+    @Query("UPDATE chat_messages SET securityMode = :securityMode, securityEpochId = :securityEpochId WHERE id = :id")
+    suspend fun setChatMessageSecurity(id: Long, securityMode: String, securityEpochId: String)
+
     @Query("SELECT * FROM chat_channels WHERE workspaceId = :ws OR accountConversationId IS NOT NULL ORDER BY createdAt ASC")
     fun observeChatChannels(ws: Long): Flow<List<ChatChannelEntity>>
 
@@ -444,8 +450,19 @@ interface NotesDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChatChannel(entity: ChatChannelEntity): Long
 
+    @Query("UPDATE chat_channels SET securityMode = :securityMode, securityEpochId = :securityEpochId, acknowledgedSecurityEpochId = :acknowledgedSecurityEpochId WHERE id = :id")
+    suspend fun setChatChannelSecurity(
+        id: Long,
+        securityMode: String,
+        securityEpochId: String?,
+        acknowledgedSecurityEpochId: String?,
+    )
+
     @Query("SELECT * FROM chat_channels WHERE workspaceId = :ws AND syncId = :syncId LIMIT 1")
     suspend fun chatChannelBySyncId(ws: Long, syncId: String): ChatChannelEntity?
+
+    @Query("SELECT * FROM chat_channels WHERE syncId = :syncId LIMIT 1")
+    suspend fun chatChannelBySyncIdAnyWorkspace(syncId: String): ChatChannelEntity?
 
     @Query("SELECT * FROM chat_channels WHERE id = :id LIMIT 1")
     suspend fun chatChannelById(id: Long): ChatChannelEntity?
@@ -825,6 +842,9 @@ interface NotesDao {
 
     @Query("UPDATE secure_chat_outbox SET attemptCount = attemptCount + 1, nextAttemptAt = :nextAttemptAt, lastError = :lastError WHERE id = :id")
     suspend fun failSecureChatOutbox(id: String, nextAttemptAt: Long, lastError: String)
+
+    @Query("UPDATE secure_chat_outbox SET nextAttemptAt = 0, lastError = NULL WHERE remoteWorkspaceId = :remoteWorkspaceId")
+    suspend fun wakeSecureChatOutbox(remoteWorkspaceId: String)
 
     @Upsert
     suspend fun upsertSecureChatRelayCheckpoint(entity: SecureChatRelayCheckpointEntity)

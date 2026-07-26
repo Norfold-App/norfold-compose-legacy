@@ -17,6 +17,15 @@ class BackupCodecTest {
             createdAt = 1234,
             workspaceId = 8,
             pinned = true,
+            accountConversationId = "2a120226-6d06-418a-910d-4ed10cbd3c42",
+            coverUri = "content://group-cover",
+            description = "Private planning",
+            rules = "Be kind",
+            rulesReminderDays = 14,
+            visibility = ChatChannelVisibility.Private,
+            securityMode = ChatSecurityMode.EndToEndEncrypted,
+            securityEpochId = "987a1e95-2fa6-447a-bb38-1721081b45c8",
+            acknowledgedSecurityEpochId = "987a1e95-2fa6-447a-bb38-1721081b45c8",
         )
 
         val restored = BackupCodec.decode(BackupCodec.encode(BackupSnapshot(
@@ -29,6 +38,39 @@ class BackupCodecTest {
             .chatChannels.single()
 
         assertEquals(channel, restored)
+    }
+
+    @Test
+    fun chatMessageBackupPreservesImmutableSecuritySemantics() {
+        val message = ChatMessageItem(
+            id = 9,
+            authorUsername = "member",
+            authorDisplayName = "Member",
+            body = "Encrypted then, encrypted forever",
+            color = 0xFF8B5CF6,
+            createdAt = 22,
+            workspaceId = 8,
+            channelId = 44,
+            receiptStatus = ChatReceiptStatus.Delivered,
+            starred = true,
+            securityMode = ChatSecurityMode.EndToEndEncrypted,
+            securityEpochId = "987a1e95-2fa6-447a-bb38-1721081b45c8",
+            securityEventId = "10693dfa-0fc3-45bb-9910-af9d20eb958a",
+        )
+
+        val restored = BackupCodec.decode(
+            BackupCodec.encode(
+                BackupSnapshot(
+                    notes = emptyList(),
+                    notebooks = emptyList(),
+                    tags = emptyList(),
+                    attachments = emptyList(),
+                    chatMessages = listOf(message),
+                ),
+            ),
+        ).chatMessages.single()
+
+        assertEquals(message, restored)
     }
 
     @Test

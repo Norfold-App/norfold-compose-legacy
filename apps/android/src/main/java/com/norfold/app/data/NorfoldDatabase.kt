@@ -46,7 +46,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SecureChatTombstoneEntity::class,
         PrivateChatArchiveManifestEntity::class,
     ],
-    version = 46,
+    version = 47,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -104,6 +104,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_43_44,
                     MIGRATION_44_45,
                     MIGRATION_45_46,
+                    MIGRATION_46_47,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -221,6 +222,16 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_private_chat_archive_manifests_updatedAt ON private_chat_archive_manifests(updatedAt)")
+            }
+        }
+        internal val MIGRATION_46_47 = object : Migration(46, 47) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE secure_chat_outbox ADD COLUMN remoteWorkspaceId TEXT")
+                db.execSQL("ALTER TABLE secure_chat_outbox ADD COLUMN channelSyncId TEXT")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN securityMode TEXT")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN securityEpochId TEXT")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN securityEventId TEXT")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_chat_messages_workspaceId_securityEventId ON chat_messages(workspaceId, securityEventId)")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds

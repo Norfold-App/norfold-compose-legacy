@@ -278,6 +278,10 @@ data class ChatMessageItem(
     val pinned: Boolean = false,
     // Private per-user bookmark; never leaves the device.
     val starred: Boolean = false,
+    // Null means legacy/unclassified history. Never relabel old content after a mode change.
+    val securityMode: ChatSecurityMode? = null,
+    val securityEpochId: String? = null,
+    val securityEventId: String? = null,
 )
 
 /**

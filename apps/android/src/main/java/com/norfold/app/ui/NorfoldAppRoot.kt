@@ -598,6 +598,7 @@ private fun NotesApp(
             // Presence joins alongside the live message stream; both end (and we
             // leave the presence roster) when the Chat destination goes away.
             launch { viewModel.observeWorkspacePresenceWhileVisible() }
+            launch { viewModel.observeWorkspaceChatSecurityWhileVisible() }
             viewModel.observeTeamChatWhileVisible()
         }
     }
