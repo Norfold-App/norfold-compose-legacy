@@ -14,8 +14,10 @@ import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
+import com.norfold.app.domain.ChatChannelVisibility
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ChatReceiptStatus
+import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
 import com.norfold.app.domain.ControlLabelMode
@@ -371,6 +373,11 @@ data class ChatChannelEntity(
     val description: String = "",
     val rules: String = "",
     val rulesReminderDays: Int = 7,
+    // Explicit, durable privacy/security metadata. Membership never determines visibility.
+    val visibility: String = ChatChannelVisibility.Public.name,
+    val securityMode: String = ChatSecurityMode.EndToEndEncrypted.name,
+    val securityEpochId: String? = null,
+    val acknowledgedSecurityEpochId: String? = null,
 )
 
 // The workspace roster: one row per invited member, keyed by remote profile UUID so the same
@@ -840,6 +847,12 @@ fun ChatChannelEntity.toDomain() = ChatChannel(
     description = description,
     rules = rules,
     rulesReminderDays = rulesReminderDays,
+    visibility = ChatChannelVisibility.entries.firstOrNull { it.name == visibility }
+        ?: ChatChannelVisibility.Private,
+    securityMode = ChatSecurityMode.entries.firstOrNull { it.name == securityMode }
+        ?: ChatSecurityMode.EndToEndEncrypted,
+    securityEpochId = securityEpochId,
+    acknowledgedSecurityEpochId = acknowledgedSecurityEpochId,
 )
 fun WorkspaceMemberEntity.toDomain() = com.norfold.app.domain.WorkspaceMember(
     userId = userId,

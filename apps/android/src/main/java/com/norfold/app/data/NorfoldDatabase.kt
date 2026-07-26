@@ -42,7 +42,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DeviceSettingsProfileEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 44,
+    version = 45,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -98,6 +98,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_41_42,
                     MIGRATION_42_43,
                     MIGRATION_43_44,
+                    MIGRATION_44_45,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -148,6 +149,16 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE chat_channels ADD COLUMN rules TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE chat_channels ADD COLUMN rulesReminderDays INTEGER NOT NULL DEFAULT 7")
                 db.execSQL("ALTER TABLE chat_messages ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        internal val MIGRATION_44_45 = object : Migration(44, 45) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN visibility TEXT NOT NULL DEFAULT 'Public'")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN securityMode TEXT NOT NULL DEFAULT 'EndToEndEncrypted'")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN securityEpochId TEXT")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN acknowledgedSecurityEpochId TEXT")
+                // Account DMs/groups are permanently E2EE. Existing workspace topics were public.
+                db.execSQL("UPDATE chat_channels SET visibility = CASE WHEN accountConversationId IS NULL THEN 'Public' ELSE 'Private' END")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds
@@ -823,6 +834,10 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     createdAt INTEGER NOT NULL,
                     workspaceId INTEGER NOT NULL DEFAULT 1,
                     pinned INTEGER NOT NULL DEFAULT 0
+                    ,visibility TEXT NOT NULL DEFAULT 'Public'
+                    ,securityMode TEXT NOT NULL DEFAULT 'EndToEndEncrypted'
+                    ,securityEpochId TEXT
+                    ,acknowledgedSecurityEpochId TEXT
                 )
                 """.trimIndent(),
             )

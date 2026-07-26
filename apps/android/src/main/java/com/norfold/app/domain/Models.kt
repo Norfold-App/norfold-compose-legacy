@@ -295,6 +295,12 @@ enum class ChatChannelKind { Topic, Dm, Group }
 // nullable id — so the send/receive path is unambiguous (plan revision #1).
 enum class ChatScope { Account, Workspace }
 
+/** Authoritative workspace-channel visibility. Never infer this from roster size. */
+enum class ChatChannelVisibility { Public, Private }
+
+/** Content-security contract for one conversation/security epoch. */
+enum class ChatSecurityMode { EndToEndEncrypted, Managed }
+
 data class ChatChannel(
     val id: Long,
     /** Stable UUID shared by every device; local Room ids never cross the wire. */
@@ -317,6 +323,10 @@ data class ChatChannel(
     val description: String = "",
     val rules: String = "",
     val rulesReminderDays: Int = 7,
+    val visibility: ChatChannelVisibility = ChatChannelVisibility.Public,
+    val securityMode: ChatSecurityMode = ChatSecurityMode.EndToEndEncrypted,
+    val securityEpochId: String? = null,
+    val acknowledgedSecurityEpochId: String? = null,
 ) {
     /** Explicit transport scope, derived once from the discriminator. Route on this. */
     val scope: ChatScope

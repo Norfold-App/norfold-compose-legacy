@@ -107,6 +107,7 @@ import com.norfold.app.data.ChatDrafts
 import com.norfold.app.data.ChatReadMarkers
 import com.norfold.app.data.ChatConversationPrefs
 import com.norfold.app.cloud.DocumentPresenceState
+import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.cloud.toWorkspaceMember
 import com.norfold.app.ui.feedback.UiFeedback
 import com.norfold.app.ui.feedback.UiFeedbackAction
@@ -1520,6 +1521,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val settings = state.value.settings
         val remoteWorkspaceId = repository.remoteWorkspaceId(channel.workspaceId) ?: return
         if (!NorfoldSupabase.isSignedIn()) return
+        ChatBackend.registerWorkspaceChannel(
+            workspaceId = remoteWorkspaceId,
+            channelId = channel.syncId,
+            visibility = channel.visibility,
+        )
         val remote = NorfoldSupabase.upsertTeamChatChannel(
             remoteWorkspaceId = remoteWorkspaceId,
             deviceId = settings.settingsDeviceId,
