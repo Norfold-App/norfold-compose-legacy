@@ -96,6 +96,28 @@ object ChatBackend {
         @SerialName("changed_at") val changedAt: String? = null,
     )
 
+    @Serializable
+    data class RemoteWorkspaceChannelMember(
+        @SerialName("user_id") val userId: String,
+        val handle: String? = null,
+        @SerialName("display_name") val displayName: String = "",
+        @SerialName("avatar_path") val avatarPath: String? = null,
+        val role: String = "member",
+        @SerialName("joined_at") val joinedAt: String? = null,
+    )
+
+    @Serializable
+    data class GovernanceEvent(
+        @SerialName("event_id") val eventId: String,
+        @SerialName("event_type") val eventType: String,
+        @SerialName("actor_id") val actorId: String? = null,
+        @SerialName("actor_name") val actorName: String = "System",
+        @SerialName("target_id") val targetId: String? = null,
+        @SerialName("target_name") val targetName: String = "",
+        val detail: JsonObject = JsonObject(emptyMap()),
+        @SerialName("created_at") val createdAt: String,
+    )
+
     suspend fun registerWorkspaceChannel(
         workspaceId: String,
         channelId: String,
@@ -390,6 +412,96 @@ object ChatBackend {
                 put("extra_messages", extraMessages.coerceIn(0, 5))
                 if (allowUntilIso != null) put("allow_until", allowUntilIso)
                 put("allow_until_decided", untilDecided)
+            },
+        )
+    }
+
+    suspend fun workspaceChannelMembers(
+        workspaceId: String,
+        channelId: String,
+    ): List<RemoteWorkspaceChannelMember> = client.postgrest.rpc(
+        function = "workspace_channel_members",
+        parameters = buildJsonObject {
+            put("p_workspace", workspaceId)
+            put("p_channel", channelId)
+        },
+    ).decodeList()
+
+    suspend fun governanceHistory(
+        accountConversationId: String? = null,
+        workspaceId: String? = null,
+        channelId: String? = null,
+        limit: Int = 50,
+    ): List<GovernanceEvent> = client.postgrest.rpc(
+        function = "chat_governance_history",
+        parameters = buildJsonObject {
+            if (accountConversationId == null) put("p_account_conversation", JsonNull)
+            else put("p_account_conversation", accountConversationId)
+            if (workspaceId == null) put("p_workspace", JsonNull) else put("p_workspace", workspaceId)
+            if (channelId == null) put("p_channel", JsonNull) else put("p_channel", channelId)
+            put("p_limit", limit.coerceIn(1, 200))
+        },
+    ).decodeList()
+
+    suspend fun setWorkspaceChannelMemberRole(
+        workspaceId: String,
+        channelId: String,
+        memberId: String,
+        role: String,
+    ) {
+        require(role in setOf("admin", "member"))
+        client.postgrest.rpc(
+            function = "set_workspace_channel_member_role",
+            parameters = buildJsonObject {
+                put("p_workspace", workspaceId)
+                put("p_channel", channelId)
+                put("p_member", memberId)
+                put("p_role", role)
+            },
+        )
+    }
+
+    suspend fun addWorkspaceChannelMember(
+        workspaceId: String,
+        channelId: String,
+        memberId: String,
+    ) {
+        client.postgrest.rpc(
+            function = "add_workspace_channel_member",
+            parameters = buildJsonObject {
+                put("p_workspace", workspaceId)
+                put("p_channel", channelId)
+                put("p_member", memberId)
+            },
+        )
+    }
+
+    suspend fun transferWorkspaceChannelOwnership(
+        workspaceId: String,
+        channelId: String,
+        memberId: String,
+    ) {
+        client.postgrest.rpc(
+            function = "transfer_workspace_channel_ownership",
+            parameters = buildJsonObject {
+                put("p_workspace", workspaceId)
+                put("p_channel", channelId)
+                put("p_new_owner", memberId)
+            },
+        )
+    }
+
+    suspend fun removeWorkspaceChannelMember(
+        workspaceId: String,
+        channelId: String,
+        memberId: String,
+    ) {
+        client.postgrest.rpc(
+            function = "remove_workspace_channel_member",
+            parameters = buildJsonObject {
+                put("p_workspace", workspaceId)
+                put("p_channel", channelId)
+                put("p_member", memberId)
             },
         )
     }
