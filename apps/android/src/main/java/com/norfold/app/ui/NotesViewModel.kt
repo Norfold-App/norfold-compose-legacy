@@ -37,6 +37,7 @@ import com.norfold.app.data.NetworkMonitor
 import com.norfold.app.data.DocsRepository
 import com.norfold.app.data.SyncSecretStore
 import com.norfold.app.data.SecureChatOutboxEntity
+import com.norfold.app.data.SecureChatTombstoneEntity
 import com.norfold.app.data.SecureChatUserHiddenEntity
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.AppIconFamily
@@ -1637,6 +1638,24 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         ChatConversationPrefs.setNotificationLevel(app, chatConversationPreferenceKey(channel), level)
     }
 
+    fun setChatChannelDefaultLifespan(channel: ChatChannel, seconds: Long?) = viewModelScope.launch {
+        runCatching { repository.setChatChannelDefaultLifespan(channel.id, seconds) }
+            .onSuccess {
+                emitSuccess(
+                    if (seconds == null) "Disappearing messages turned off"
+                    else "New messages will disappear ${formatChatLifespan(seconds)}",
+                )
+            }
+            .onFailure { emitError("Couldn't change the message lifespan.") }
+    }
+
+    private fun formatChatLifespan(seconds: Long): String = when (seconds) {
+        86_400L -> "after 24 hours"
+        604_800L -> "after 7 days"
+        2_592_000L -> "after 30 days"
+        else -> "after $seconds seconds"
+    }
+
     fun isChatGroupOwner(channel: ChatChannel): Boolean =
         channel.accountConversationId?.let { conversationId ->
             _personalConversations.value.firstOrNull { it.conversationId == conversationId }
@@ -1951,8 +1970,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             while (kotlinx.coroutines.currentCoroutineContext().isActive && NorfoldSupabase.isSignedIn()) {
                 try {
                     val now = System.currentTimeMillis()
+                    repository.purgeExpiredChatMessages(now)
                     if (now >= nextLeaseAt) {
                         secureChatBackend.renewLease()
+                        syncSecureTombstones()
                         syncSecureHiddenState()
                         requestMissingSecureHistory()
                         serveSecureRecoveryRequests()
@@ -1978,6 +1999,17 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val pending = repository.pendingSecureChatOperations()
         for (operation in pending) {
             try {
+                if (operation.operation == "text" && operation.expiresAt?.let { it <= System.currentTimeMillis() } == true) {
+                    repository.recordSecureChatTombstone(
+                        messageSyncId = operation.id,
+                        conversationId = operation.conversationId,
+                        reason = "expired",
+                        destructiveAt = requireNotNull(operation.expiresAt),
+                    )
+                    repository.removeChatMessageBySyncId(operation.workspaceId, operation.id)
+                    repository.completeSecureChatOperation(operation.id)
+                    continue
+                }
                 if (operation.remoteWorkspaceId != null) {
                     drainWorkspaceChatOperation(operation)
                 } else if (operation.operation == "text") {
@@ -1987,6 +2019,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         body = operation.body,
                         createdAt = operation.createdAt,
                         replyPreview = operation.replyPreview,
+                        expiresAt = operation.expiresAt,
                     )
                     repository.localChatMessageIdBySyncId(operation.workspaceId, operation.id)?.let { localId ->
                         repository.bindAccountDirectMessage(localId, operation.id)
@@ -2044,6 +2077,18 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         repository.mergeSecureChatUserHidden(accountId, hidden)
     }
 
+    private suspend fun syncSecureTombstones() {
+        val rows = secureChatBackend.tombstones().map { remote ->
+            SecureChatTombstoneEntity(
+                messageSyncId = remote.objectId,
+                conversationId = remote.conversationId,
+                destructiveAt = parseIsoToEpochMillis(remote.destructiveAt) ?: System.currentTimeMillis(),
+                reason = remote.reason,
+            )
+        }
+        repository.mergeSecureChatTombstones(rows)
+    }
+
     private suspend fun serveSecureRecoveryRequests() {
         secureChatBackend.pendingRecoveryRequests().forEach { request ->
             val message = repository.chatMessageBySyncIdAnyWorkspace(request.objectId) ?: return@forEach
@@ -2099,6 +2144,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         body = operation.body,
                         createdAt = operation.createdAt,
                         replyPreview = operation.replyPreview,
+                        expiresAt = operation.expiresAt,
                     )
                     val epochId = requireNotNull(security.securityEpochId)
                     repository.setChatMessageSecurity(message.id, security.securityMode, epochId)
@@ -2124,6 +2170,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         security = security,
                         channelSyncId = operation.channelSyncId,
                         replyPreview = operation.replyPreview,
+                        expiresAt = operation.expiresAt,
                     )
                     repository.bindRemoteChatMessage(operation.workspaceId, message.id, remote)
                     repository.setChatMessageSecurity(
@@ -2191,6 +2238,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     editedAt = operation.editedAt,
                     reactionsJson = operation.reactionsJson,
                     pinned = operation.pinned,
+                    expiresAt = target.expiresAt,
                     baseVersion = repository.chatMessageRemoteBinding(operation.workspaceId, target.id)?.remoteVersion,
                 )
                 repository.bindRemoteChatMessage(operation.workspaceId, target.id, remote)
@@ -2287,6 +2335,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 isOwn = isOwn,
                 securityEpochId = decrypted.securityEpochId,
                 originPayloadJson = decrypted.originPayloadJson,
+                expiresAt = decrypted.payload.expiresAt,
             )
         } else {
             repository.importSecureWorkspaceMessage(
@@ -2302,6 +2351,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 isOwn = isOwn,
                 securityEpochId = decrypted.securityEpochId,
                 originPayloadJson = decrypted.originPayloadJson,
+                expiresAt = decrypted.payload.expiresAt,
             )
         }
         val viewed = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId
@@ -3241,6 +3291,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     body = message.body,
                     createdAt = message.createdAt,
                     replyPreview = message.replyPreview,
+                    expiresAt = message.expiresAt,
                 ),
             )
         }
@@ -3873,6 +3924,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val createdAt = System.currentTimeMillis()
         val channelId = targetChannelId ?: activeChatChannelId.value
         val activeChannel = channelId?.let { id -> state.value.chatChannels.firstOrNull { it.id == id } }
+        val expiresAt = activeChannel?.defaultLifespanSeconds?.let { seconds ->
+            createdAt + seconds * 1_000L
+        }
         val localId = repository.sendChat(
             username = settings.syncUserName.ifBlank { "you" },
             displayName = settings.syncPublicName.ifBlank { settings.syncUserName.ifBlank { "You" } },
@@ -3881,6 +3935,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             createdAt = createdAt,
             channelId = channelId,
             replyPreview = replyTo?.let { "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}" },
+            expiresAt = expiresAt,
         )
         activeChannel?.takeIf { it.kind == ChatChannelKind.Dm }
             ?.let { MutualChatContacts.markMutual(app, it.counterpartUsername) }
@@ -3903,6 +3958,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 replyPreview = replyTo?.let {
                     "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}"
                 },
+                expiresAt = expiresAt,
             )
             repository.enqueueSecureChatOperation(outboxOperation)
             if (!NorfoldSupabase.isSignedIn()) {
@@ -3918,6 +3974,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     replyPreview = replyTo?.let {
                         "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}"
                     },
+                    expiresAt = expiresAt,
                 )
             }.onSuccess { sent ->
                 repository.completeSecureChatOperation(syncId)
@@ -3951,6 +4008,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             body = body.trim(),
             createdAt = createdAt,
             replyPreview = replyTo?.let { "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}" },
+            expiresAt = expiresAt,
         )
         repository.enqueueSecureChatOperation(outboxOperation)
         if (!NorfoldSupabase.isSignedIn()) {

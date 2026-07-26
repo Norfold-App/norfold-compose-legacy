@@ -283,6 +283,8 @@ data class ChatMessageItem(
     val securityEpochId: String? = null,
     val originPayloadJson: String? = null,
     val securityEventId: String? = null,
+    /** Absolute wall-clock expiry for sender-authored disappearing content. */
+    val expiresAt: Long? = null,
 )
 
 /**
@@ -334,6 +336,8 @@ data class ChatChannel(
     val securityMode: ChatSecurityMode = ChatSecurityMode.EndToEndEncrypted,
     val securityEpochId: String? = null,
     val acknowledgedSecurityEpochId: String? = null,
+    /** Per-account/device default applied only to newly sent messages. */
+    val defaultLifespanSeconds: Long? = null,
 ) {
     /** Explicit transport scope, derived once from the discriminator. Route on this. */
     val scope: ChatScope

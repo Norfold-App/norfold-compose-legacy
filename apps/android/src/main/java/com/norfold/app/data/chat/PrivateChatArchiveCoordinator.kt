@@ -253,7 +253,7 @@ class PrivateChatArchiveCoordinator(
         rulesReminderDays = rulesReminderDays,
         securityMode = securityMode,
         securityEpochId = securityEpochId,
-        originPayloadJson = originPayloadJson,
+        defaultLifespanSeconds = defaultLifespanSeconds,
     )
 
     private fun ChatMessageEntity.toArchive(
@@ -285,6 +285,8 @@ class PrivateChatArchiveCoordinator(
         starred = starred,
         securityMode = securityMode,
         securityEpochId = securityEpochId,
+        originPayloadJson = originPayloadJson,
+        expiresAt = expiresAt,
     )
 
     private fun ArchivedChatConversation.toEntity(workspaceId: Long, accountId: String) = ChatChannelEntity(
@@ -304,6 +306,7 @@ class PrivateChatArchiveCoordinator(
         rulesReminderDays = rulesReminderDays,
         securityMode = securityMode,
         securityEpochId = securityEpochId,
+        defaultLifespanSeconds = defaultLifespanSeconds,
     )
 
     private fun ArchivedChatMessage.toEntity(workspaceId: Long, channelId: Long) = ChatMessageEntity(
@@ -327,5 +330,6 @@ class PrivateChatArchiveCoordinator(
         securityMode = securityMode,
         securityEpochId = securityEpochId,
         originPayloadJson = originPayloadJson,
+        expiresAt = expiresAt,
     )
 }

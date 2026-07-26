@@ -32,6 +32,7 @@ data class ArchivedChatConversation(
     val rulesReminderDays: Int = 7,
     val securityMode: String,
     val securityEpochId: String? = null,
+    val defaultLifespanSeconds: Long? = null,
 )
 
 @Serializable
@@ -57,6 +58,7 @@ data class ArchivedChatMessage(
     val securityMode: String? = null,
     val securityEpochId: String? = null,
     val originPayloadJson: String? = null,
+    val expiresAt: Long? = null,
 )
 
 @Serializable

@@ -259,6 +259,7 @@ object ChatBackend {
         editedAt: Long? = null,
         reactionsJson: String? = null,
         pinned: Boolean? = null,
+        expiresAt: Long? = null,
         baseVersion: Long? = null,
     ): RemoteWorkspaceObject {
         require(security.securityMode == ChatSecurityMode.Managed) {
@@ -289,6 +290,7 @@ object ChatBackend {
             if (editedAt != null) put("editedAt", editedAt)
             if (reactionsJson != null) put("reactionsJson", reactionsJson)
             if (pinned != null) put("pinned", pinned)
+            if (expiresAt != null) put("expiresAt", expiresAt)
         }
         return applyWorkspaceObject(
             remoteWorkspaceId = remoteWorkspaceId,

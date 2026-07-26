@@ -14,5 +14,6 @@ data class SecureChatPayloadV1(
     val editedAt: Long? = null,
     val reactionsJson: String? = null,
     val pinned: Boolean? = null,
+    val expiresAt: Long? = null,
     val originProof: MessageOriginProofV1? = null,
 )

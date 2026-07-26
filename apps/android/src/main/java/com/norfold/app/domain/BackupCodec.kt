@@ -220,6 +220,8 @@ object BackupCodec {
                     it.securityMode?.name.orEmpty(),
                     b64(it.securityEpochId.orEmpty()),
                     b64(it.securityEventId.orEmpty()),
+                    b64(it.originPayloadJson.orEmpty()),
+                    it.expiresAt ?: "",
                 ).joinToString("|"),
             )
         }
@@ -245,6 +247,7 @@ object BackupCodec {
                     it.securityMode.name,
                     b64(it.securityEpochId.orEmpty()),
                     b64(it.acknowledgedSecurityEpochId.orEmpty()),
+                    it.defaultLifespanSeconds ?: "",
                 ).joinToString("|"),
             )
         }
@@ -521,6 +524,8 @@ object BackupCodec {
                     },
                     securityEpochId = unb64(cells.getOrElse(21) { "" }).takeIf { it.isNotBlank() },
                     securityEventId = unb64(cells.getOrElse(22) { "" }).takeIf { it.isNotBlank() },
+                    originPayloadJson = unb64(cells.getOrElse(23) { "" }).takeIf { it.isNotBlank() },
+                    expiresAt = cells.getOrElse(24) { "" }.takeIf { it.isNotBlank() }?.toLongOrNull(),
                 )
                 "CHANNEL" -> {
                     val legacy = ChatChannelKind.entries.any { it.name == cells.getOrElse(2) { "" } }
@@ -552,6 +557,8 @@ object BackupCodec {
                         } ?: ChatSecurityMode.EndToEndEncrypted,
                         securityEpochId = unb64(cells.getOrElse(16 + offset) { "" }).takeIf { it.isNotBlank() },
                         acknowledgedSecurityEpochId = unb64(cells.getOrElse(17 + offset) { "" }).takeIf { it.isNotBlank() },
+                        defaultLifespanSeconds = cells.getOrElse(18 + offset) { "" }
+                            .takeIf { it.isNotBlank() }?.toLongOrNull(),
                     )
                 }
                 "OBJECT" -> workspaceObjects += WorkspaceObject(

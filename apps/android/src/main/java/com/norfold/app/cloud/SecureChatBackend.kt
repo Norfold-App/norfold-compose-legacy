@@ -117,6 +117,15 @@ class SecureChatBackend(context: Context) {
         @SerialName("created_at") val createdAt: String,
     )
 
+    @Serializable
+    data class RemoteTombstone(
+        @SerialName("object_id") val objectId: String,
+        @SerialName("security_epoch_id") val securityEpochId: String,
+        @SerialName("conversation_id") val conversationId: String,
+        @SerialName("destructive_at") val destructiveAt: String,
+        val reason: String,
+    )
+
     suspend fun registerCurrentDevice(
         friendlyName: String = Build.MODEL?.trim().orEmpty().ifBlank { "Android device" },
         // Every supported Android install has the encrypted local ArchiveProvider. Cloud
@@ -157,6 +166,7 @@ class SecureChatBackend(context: Context) {
         body: String,
         createdAt: Long,
         replyPreview: String? = null,
+        expiresAt: Long? = null,
     ): SentPayload = sendPayload(
         conversationId = conversationId,
         clientSyncId = clientSyncId,
@@ -164,6 +174,7 @@ class SecureChatBackend(context: Context) {
             body = body,
             createdAt = createdAt,
             replyPreview = replyPreview,
+            expiresAt = expiresAt,
         ),
     )
 
@@ -201,6 +212,7 @@ class SecureChatBackend(context: Context) {
         body: String,
         createdAt: Long,
         replyPreview: String? = null,
+        expiresAt: Long? = null,
     ): SentPayload = sendWorkspacePayload(
         workspaceId = workspaceId,
         channelId = channelId,
@@ -210,6 +222,7 @@ class SecureChatBackend(context: Context) {
             body = body,
             createdAt = createdAt,
             replyPreview = replyPreview,
+            expiresAt = expiresAt,
         ),
     )
 
@@ -290,6 +303,7 @@ class SecureChatBackend(context: Context) {
             createdAt = payload.createdAt,
             contentType = payload.type,
             targetMessageId = payload.targetMessageId,
+            lifespanJson = payload.expiresAt?.toString(),
         )
         val signedPayload = payload.copy(
             originProof = crypto.createOriginProof(payload.copy(originProof = null), metadata, sender),
@@ -339,6 +353,9 @@ class SecureChatBackend(context: Context) {
         require(payload.version == 1) { "Unsupported secure payload version." }
         if (remote.recoveryRequestId == null) {
             require(payload.createdAt == envelope.metadata.createdAt) { "Secure payload timestamp mismatch." }
+        }
+        require(payload.expiresAt?.toString() == envelope.metadata.lifespanJson) {
+            "Secure payload lifespan mismatch."
         }
         val originalSender = DevicePublicMaterial(
             deviceId = remote.originSenderDeviceId ?: remote.senderDeviceId,
@@ -437,6 +454,7 @@ class SecureChatBackend(context: Context) {
             createdAt = System.currentTimeMillis(),
             contentType = "recovery",
             targetMessageId = request.objectId,
+            lifespanJson = payload.expiresAt?.toString(),
         )
         val envelope = crypto.seal(
             plaintext = originPayloadJson.encodeToByteArray(),
@@ -486,6 +504,12 @@ class SecureChatBackend(context: Context) {
         client.postgrest.rpc(
             function = "recoverable_chat_objects",
             parameters = buildJsonObject { put("p_limit", limit.coerceIn(1, 500)) },
+        ).decodeList()
+
+    suspend fun tombstones(limit: Int = 500): List<RemoteTombstone> =
+        client.postgrest.rpc(
+            function = "chat_tombstones_for_me",
+            parameters = buildJsonObject { put("p_limit", limit.coerceIn(1, 2_000)) },
         ).decodeList()
 
     private suspend fun ensureAccountEpoch(conversationId: String): String =
