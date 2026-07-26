@@ -19,6 +19,7 @@ data class Note(
     val overlapMode: DocOverlapMode = DocOverlapMode.Reflow,
     val freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
     val canvasSpec: DocCanvasSpec = DocCanvasSpec(),
+    val workspaceId: Long = 1,
 ) {
     val bodyMarkdown: String get() = MarkdownBlockCodec.export(document)
 
@@ -69,6 +70,9 @@ data class Notebook(
     val parentId: Long?,
     val color: Long,
     val sortOrder: Int,
+    val workspaceId: Long = 1,
+    val scope: String = "notes",
+    val iconId: String = "app.folder",
 )
 
 data class Tag(
@@ -120,7 +124,7 @@ data class TaskItem(
     val taskBoardId: Long = 1,
     val taskColumnId: Long? = null,
     val sortOrder: Int = 0,
-    val colorArgb: Long? = null,
+    val colorArgb: Long? = null,    val workspaceId: Long = 1,
 )
 
 enum class TaskStatus { Todo, Doing, Done }
@@ -262,9 +266,83 @@ data class ChatMessageItem(
     val attachmentMimeType: String? = null,
     val attachmentUri: String? = null,
     val attachmentSizeBytes: Long? = null,
+    val workspaceId: Long = 1,
+    // NULL means the General channel — the shared, team-synced feed. Non-null scopes the message
+    // to a topic/dm/group channel, which stays local until channel sync ships.
+    val channelId: Long? = null,
+    // Receipt stage for own messages; null on incoming/system messages.
+    val receiptStatus: ChatReceiptStatus? = null,
+    val replyPreview: String? = null,
+    val editedAt: Long? = null,
+    val reactionsJson: String = "{}",
+    val pinned: Boolean = false,
+    // Private per-user bookmark; never leaves the device.
+    val starred: Boolean = false,
 )
 
-enum class WorkspaceObjectType { Note, Task, Goal, CalendarEvent, File, ChatMessage, DatabaseRow, Workspace, System }
+/**
+ * The 3 stages of a sent message (WhatsApp-style ticks): Sent = accepted by the
+ * server, Delivered = every recipient's device imported it, Viewed = every
+ * recipient opened the conversation. Forward-only.
+ */
+enum class ChatReceiptStatus { Sent, Delivered, Viewed }
+
+// Topic is the storage name for what the UI calls a Channel (Discord-style workspace channel).
+// The enum constant keeps its old name because it's persisted as a string in chat_channels.kind.
+enum class ChatChannelKind { Topic, Dm, Group }
+
+// Explicit transport scope for a conversation. Routing branches on this — never on a
+// nullable id — so the send/receive path is unambiguous (plan revision #1).
+enum class ChatScope { Account, Workspace }
+
+data class ChatChannel(
+    val id: Long,
+    /** Stable UUID shared by every device; local Room ids never cross the wire. */
+    val syncId: String,
+    val kind: ChatChannelKind,
+    val name: String,
+    // For a DM: the other member's username. Lets us reopen the same conversation instead of
+    // spawning duplicate channels for the same person.
+    val counterpartUsername: String = "",
+    val icon: String = SemanticActionId.AppTopics.stableId,
+    val createdAt: Long,
+    val workspaceId: Long = 1,
+    // Pinned conversations sort above Recent in the chat inbox.
+    val pinned: Boolean = false,
+    // Scope discriminator: null = workspace channel; non-null = account-level
+    // direct_conversations.id. Only the network send/receive path branches on this.
+    val accountConversationId: String? = null,
+    // Rich-group metadata (personal groups). Empty/default for topics + DMs.
+    val coverUri: String? = null,
+    val description: String = "",
+    val rules: String = "",
+    val rulesReminderDays: Int = 7,
+) {
+    /** Explicit transport scope, derived once from the discriminator. Route on this. */
+    val scope: ChatScope
+        get() = if (accountConversationId != null) ChatScope.Account else ChatScope.Workspace
+}
+
+/** The synthetic, always-present General channel. Backed by messages with channelId == null. */
+const val GeneralChannelId: Long = 0L
+
+/**
+ * A person invited to the workspace, sourced from the backend roster (workspace_memberships joined
+ * with profiles) rather than from who has posted. Lets People show everyone before they ever speak.
+ * [userId] is the remote profile UUID — the stable identity across devices. [avatarPath] is a
+ * storage path resolved to a signed URL for display; null falls back to initials.
+ */
+data class WorkspaceMember(
+    val userId: String,
+    val username: String,
+    val displayName: String,
+    val avatarPath: String? = null,
+    val role: String = "member",
+    val joinedAt: Long = 0L,
+    val workspaceId: Long = 1,
+)
+
+enum class WorkspaceObjectType { Note, Task, Goal, CalendarEvent, File, ChatChannel, ChatMessage, DatabaseRow, Workspace, System }
 
 data class WorkspaceObject(
     val id: Long,
@@ -278,7 +356,7 @@ data class WorkspaceObject(
     val pinned: Boolean,
     val archived: Boolean,
     val createdAt: Long,
-    val updatedAt: Long,
+    val updatedAt: Long,    val workspaceId: Long = 1,
 )
 
 enum class WorkspaceLinkType { Reference, Embed, Mention, Attachment, Related }
@@ -289,7 +367,7 @@ data class WorkspaceObjectLink(
     val toObjectId: Long,
     val linkType: WorkspaceLinkType,
     val label: String,
-    val createdAt: Long,
+    val createdAt: Long,    val workspaceId: Long = 1,
 )
 
 enum class WorkspaceActivityType { Created, Updated, Linked, Uploaded, Synced, Conflict, Commented, Completed }
@@ -301,7 +379,7 @@ data class WorkspaceActivity(
     val actor: String,
     val title: String,
     val detail: String,
-    val createdAt: Long,
+    val createdAt: Long,    val workspaceId: Long = 1,
 )
 
 enum class WorkspaceHistoryType { Created, Updated, Deleted, Restored, Moved, Linked, Attachment, Comment, Sync, Conflict }
@@ -315,6 +393,8 @@ data class WorkspaceObjectHistory(
     val beforeValue: String,
     val afterValue: String,
     val createdAt: Long,
+    val blockId: String? = null,
+    val workspaceId: Long = 1,
 )
 
 data class WorkspaceComment(
@@ -325,7 +405,7 @@ data class WorkspaceComment(
     val body: String,
     val resolved: Boolean,
     val createdAt: Long,
-    val updatedAt: Long,
+    val updatedAt: Long,    val workspaceId: Long = 1,
 )
 
 data class WorkspaceFileItem(
@@ -336,7 +416,7 @@ data class WorkspaceFileItem(
     val uri: String,
     val sizeBytes: Long,
     val createdAt: Long,
-    val updatedAt: Long,
+    val updatedAt: Long,    val workspaceId: Long = 1,
 )
 
 data class Workspace(
@@ -359,11 +439,41 @@ data class Workspace(
 
 enum class WorkspaceIconKind { Text, Emoji, Image, Gif }
 enum class ThemeMode { System, Light, Dark }
-enum class ThemeProfile { Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Gold, Graphite }
+enum class ThemeProfile { Norfold, Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Gold, Graphite }
 enum class EditorLineWidth { Narrow, Comfortable, Wide }
 enum class EditorFontFamily { Sans, Serif }
+enum class ControlLabelMode { Adaptive, IconsOnly, IconsAndText }
+enum class AppIconFamily {
+    MaterialSymbolsRounded,
+    MaterialSymbolsOutlined,
+    MaterialSymbolsSharp,
+    Lucide,
+    Tabler,
+    Feather,
+    Bootstrap,
+    Heroicons,
+    Radix,
+    FontAwesome,
+    Custom,
+}
+enum class EditorIconFamily {
+    UseApp,
+    MaterialSymbolsRounded,
+    MaterialSymbolsOutlined,
+    MaterialSymbolsSharp,
+    Lucide,
+    Tabler,
+    Feather,
+    Bootstrap,
+    Heroicons,
+    Radix,
+    FontAwesome,
+    Custom,
+}
 enum class NoteGestureAction { Actions, Pin, Star, Lock, Archive, Delete, None }
 enum class TaskGestureAction { Complete, Delete, None }
+/** Rendering strategy for note/markdown content. Auto picks by device capability. */
+enum class NoteRenderEngine { Auto, Native, WebView }
 enum class SyncProvider { None, GoogleDrive, OneDrive, LocalFolder }
 enum class SyncFolderAction { CreateChain, RestoreChain }
 
@@ -387,11 +497,16 @@ data class AppSettings(
     val syncFolderUri: String? = null,
     val syncChainId: String? = null,
     val syncDeviceName: String = "Android device",
+    val settingsDeviceId: String = "",
+    val settingsDeviceName: String = "Android device",
+    val settingsDeviceType: String = "Android",
+    val settingsScreenClass: String = "Compact",
+    val settingsSchemaVersion: Int = 1,
     val syncUserName: String = "",
     val syncPublicName: String = "",
     val lastSyncAt: Long? = null,
     val lastSyncHash: String? = null,
-    val lastSyncStatus: String = "Sync chain not configured",
+    val lastSyncStatus: String = "Sync not set up",
     val syncConflictCount: Int = 0,
     val profileBackgroundUri: String? = null,
     val profileImageUri: String? = null,
@@ -403,7 +518,12 @@ data class AppSettings(
     val adminsControlWorkspaceVisuals: Boolean = true,
     val allowMembersCreateNotes: Boolean = true,
     val allowMembersInvite: Boolean = false,
+    val fontScale: Float = 1f,
     val uiScale: Float = 1f,
+    val appLabelMode: ControlLabelMode = ControlLabelMode.Adaptive,
+    val appIconFamily: AppIconFamily = AppIconFamily.MaterialSymbolsRounded,
+    val editorToolbarScale: Float = 1f,
+    val editorIconFamily: EditorIconFamily = EditorIconFamily.UseApp,
     val editorLineWidth: EditorLineWidth = EditorLineWidth.Comfortable,
     val editorFontFamily: EditorFontFamily = EditorFontFamily.Sans,
     val showMarkdownSyntax: Boolean = true,
@@ -451,6 +571,7 @@ data class AppSettings(
     val taskKanbanEngine: String = "BoardPointer",
     val taskSwipeStartAction: TaskGestureAction = TaskGestureAction.Complete,
     val taskSwipeEndAction: TaskGestureAction = TaskGestureAction.Delete,
+    val noteRenderEngine: NoteRenderEngine = NoteRenderEngine.Auto,
     val onboardingComplete: Boolean = false,
     val workspacePurpose: String = "Personal",
     val calendarDefaultView: String = "Month",
@@ -478,6 +599,12 @@ data class SyncFolderRequest(
 )
 
 enum class HomeTab { AllNotes, Pinned, Tags }
+/**
+ * The chat-context navbar tier (shown while on the Chat inbox). Chats/People/Requests drive the
+ * inbox filter; You opens the profile viewer. Mirrors the 3-tier adaptive navbar decision.
+ */
+enum class ChatSection { Chats, People, Requests, You }
+
 enum class Destination {
     WorkspaceHub,
     Inbox,
@@ -491,14 +618,15 @@ enum class Destination {
     Templates,
     CommandPalette,
     NotesHome,
+    DocumentsHome,
     NoteEditor,
+    DocumentEditor,
     Notebooks,
     Tags,
     Search,
     Tasks,
     Chat,
     ConflictReview,
-    SyncMonitor,
     Vault,
     Settings,
     ImportExport,

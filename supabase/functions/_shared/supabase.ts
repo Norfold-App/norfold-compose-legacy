@@ -8,17 +8,22 @@ export function serviceClient(): SupabaseClient {
 }
 
 export function authenticatedClient(request: Request): SupabaseClient {
-  const authorization = request.headers.get("authorization");
+  const authorization = request.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) throw new Error("Authentication required");
   return createClient(requiredEnv("SUPABASE_URL"), requiredEnv("SUPABASE_ANON_KEY"), {
-    global: { headers: { authorization } },
+    global: { headers: { Authorization: authorization } },
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
 
 export async function requireUser(request: Request): Promise<User> {
-  const client = authenticatedClient(request);
-  const { data, error } = await client.auth.getUser();
+  const authorization = request.headers.get("Authorization");
+  if (!authorization?.startsWith("Bearer ")) throw new Error("Authentication required");
+  // Validate the caller's JWT explicitly; getUser() without an argument depends on the
+  // client's merged global headers, which is fragile across supabase-js versions.
+  const { data, error } = await authenticatedClient(request).auth.getUser(
+    authorization.slice("Bearer ".length),
+  );
   if (error || !data.user) throw new Error("Invalid authentication token");
   return data.user;
 }

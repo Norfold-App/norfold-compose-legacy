@@ -26,6 +26,12 @@ Deno.serve(async (request) => {
       last_seen_at: new Date().toISOString(),
     });
     if (deviceError) throw deviceError;
+    const { error: preferenceError } = await client.from("notification_preferences").upsert({
+      user_id: user.id,
+      push: Boolean(enabled),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id" });
+    if (preferenceError) throw preferenceError;
     const encrypted = await encryptSecret(String(token), requiredEnv("INTEGRATION_TOKEN_KEY"));
     const { error } = await client.from("push_tokens").upsert({
       token_hash: await hash(String(token)),

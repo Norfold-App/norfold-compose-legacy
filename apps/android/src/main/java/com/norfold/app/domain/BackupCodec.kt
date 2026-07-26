@@ -5,6 +5,7 @@ import java.util.Base64
 data class BackupSnapshot(
     val workspaces: List<Workspace> = emptyList(),
     val taskWorkspacePrefs: TaskWorkspacePrefs = TaskWorkspacePrefs(),
+    val deviceSettingsProfiles: List<DeviceSettingsProfile> = emptyList(),
     val notes: List<Note>,
     val notebooks: List<Notebook>,
     val tags: List<Tag>,
@@ -20,6 +21,7 @@ data class BackupSnapshot(
     val goals: List<GoalItem> = emptyList(),
     val calendarEvents: List<CalendarEventItem> = emptyList(),
     val chatMessages: List<ChatMessageItem> = emptyList(),
+    val chatChannels: List<ChatChannel> = emptyList(),
     val workspaceObjects: List<WorkspaceObject> = emptyList(),
     val workspaceObjectLinks: List<WorkspaceObjectLink> = emptyList(),
     val workspaceActivities: List<WorkspaceActivity> = emptyList(),
@@ -45,6 +47,30 @@ object BackupCodec {
                 b64(snapshot.taskWorkspacePrefs.kanbanEngine),
             ).joinToString("|"),
         )
+        snapshot.deviceSettingsProfiles.sortedByDescending { it.updatedAt }.forEach {
+            appendLine(
+                listOf(
+                    "DEVICE_SETTINGS",
+                    b64(it.deviceId),
+                    b64(it.deviceName),
+                    b64(it.deviceType),
+                    b64(it.screenClass),
+                    it.schemaVersion,
+                    it.updatedAt,
+                    it.fontScale,
+                    it.uiScale,
+                    it.appLabelMode.name,
+                    it.appIconFamily.name,
+                    b64(it.appFont),
+                    it.uiDensityCompact,
+                    it.editorToolbarScale,
+                    it.editorIconFamily.name,
+                    it.editorLineWidth.name,
+                    it.editorFontFamily.name,
+                    it.reduceMotion,
+                ).joinToString("|"),
+            )
+        }
         snapshot.workspaces.sortedBy { it.createdAt }.forEach {
             appendLine(
                 listOf(
@@ -57,11 +83,17 @@ object BackupCodec {
                     b64(it.backgroundUri.orEmpty()),
                     it.palette.name,
                     it.createdAt,
+                    it.permRename,
+                    it.permChangeIcon,
+                    it.permInviteMembers,
+                    it.permDeleteNotes,
+                    it.permEditNotes,
+                    it.permManageTasks,
                 ).joinToString("|"),
             )
         }
         snapshot.notebooks.sortedBy { it.sortOrder }.forEach {
-            appendLine(listOf("NOTEBOOK", it.id, b64(it.name), it.parentId ?: "", it.color, it.sortOrder).joinToString("|"))
+            appendLine(listOf("NOTEBOOK", it.id, b64(it.name), it.parentId ?: "", it.color, it.sortOrder, it.workspaceId, b64(it.scope), b64(it.iconId)).joinToString("|"))
         }
         snapshot.tags.sortedBy { it.name.lowercase() }.forEach {
             appendLine(listOf("TAG", it.id, b64(it.name), it.color, b64(it.scope)).joinToString("|"))
@@ -85,6 +117,7 @@ object BackupCodec {
                     b64(it.tags.joinToString(",") { tag -> tag.name }),
                     it.overlapMode.name,
                     b64(DocLayoutJson.encode(it.freeformLayout, it.canvasSpec)),
+                    it.workspaceId,
                 ).joinToString("|"),
             )
         }
@@ -125,6 +158,7 @@ object BackupCodec {
                     it.startAt ?: "",
                     it.allDay,
                     it.reminderMinutesBefore ?: "",
+                    it.workspaceId,
                 ).joinToString("|"),
             )
         }
@@ -175,26 +209,48 @@ object BackupCodec {
                     b64(it.attachmentMimeType.orEmpty()),
                     b64(it.attachmentUri.orEmpty()),
                     it.attachmentSizeBytes ?: "",
+                    it.workspaceId,
+                    it.channelId ?: "",
+                    b64(it.replyPreview.orEmpty()),
+                    it.editedAt ?: "",
+                    b64(it.reactionsJson),
+                    it.pinned,
+                ).joinToString("|"),
+            )
+        }
+        snapshot.chatChannels.sortedBy { it.id }.forEach {
+            appendLine(
+                listOf(
+                    "CHANNEL",
+                    it.id,
+                    it.syncId,
+                    it.kind.name,
+                    b64(it.name),
+                    b64(it.counterpartUsername),
+                    b64(it.icon),
+                    it.createdAt,
+                    it.workspaceId,
+                    it.pinned,
                 ).joinToString("|"),
             )
         }
         snapshot.workspaceObjects.sortedBy { it.id }.forEach {
-            appendLine(listOf("OBJECT", it.id, it.objectType.name, it.sourceId ?: "", b64(it.title), b64(it.summary), b64(it.tags), b64(it.icon), it.color, it.pinned, it.archived, it.createdAt, it.updatedAt).joinToString("|"))
+            appendLine(listOf("OBJECT", it.id, it.objectType.name, it.sourceId ?: "", b64(it.title), b64(it.summary), b64(it.tags), b64(it.icon), it.color, it.pinned, it.archived, it.createdAt, it.updatedAt, it.workspaceId).joinToString("|"))
         }
         snapshot.workspaceObjectLinks.sortedBy { it.id }.forEach {
-            appendLine(listOf("OBJECT_LINK", it.id, it.fromObjectId, it.toObjectId, it.linkType.name, b64(it.label), it.createdAt).joinToString("|"))
+            appendLine(listOf("OBJECT_LINK", it.id, it.fromObjectId, it.toObjectId, it.linkType.name, b64(it.label), it.createdAt, it.workspaceId).joinToString("|"))
         }
         snapshot.workspaceActivities.sortedBy { it.id }.forEach {
-            appendLine(listOf("ACTIVITY", it.id, it.objectId ?: "", it.activityType.name, b64(it.actor), b64(it.title), b64(it.detail), it.createdAt).joinToString("|"))
+            appendLine(listOf("ACTIVITY", it.id, it.objectId ?: "", it.activityType.name, b64(it.actor), b64(it.title), b64(it.detail), it.createdAt, it.workspaceId).joinToString("|"))
         }
         snapshot.workspaceObjectHistory.sortedBy { it.id }.forEach {
-            appendLine(listOf("HISTORY", it.id, it.objectId ?: "", it.historyType.name, b64(it.actor), b64(it.summary), b64(it.beforeValue), b64(it.afterValue), it.createdAt).joinToString("|"))
+            appendLine(listOf("HISTORY", it.id, it.objectId ?: "", it.historyType.name, b64(it.actor), b64(it.summary), b64(it.beforeValue), b64(it.afterValue), it.createdAt, it.workspaceId, b64(it.blockId.orEmpty())).joinToString("|"))
         }
         snapshot.workspaceComments.sortedBy { it.id }.forEach {
-            appendLine(listOf("COMMENT", it.id, it.objectId, b64(it.authorUsername), b64(it.authorDisplayName), b64(it.body), it.resolved, it.createdAt, it.updatedAt).joinToString("|"))
+            appendLine(listOf("COMMENT", it.id, it.objectId, b64(it.authorUsername), b64(it.authorDisplayName), b64(it.body), it.resolved, it.createdAt, it.updatedAt, it.workspaceId).joinToString("|"))
         }
         snapshot.workspaceFiles.sortedBy { it.id }.forEach {
-            appendLine(listOf("FILE", it.id, it.objectId ?: "", b64(it.displayName), b64(it.mimeType), b64(it.uri), it.sizeBytes, it.createdAt, it.updatedAt).joinToString("|"))
+            appendLine(listOf("FILE", it.id, it.objectId ?: "", b64(it.displayName), b64(it.mimeType), b64(it.uri), it.sizeBytes, it.createdAt, it.updatedAt, it.workspaceId).joinToString("|"))
         }
     }
 
@@ -217,12 +273,14 @@ object BackupCodec {
         val goals = mutableListOf<GoalItem>()
         val calendarEvents = mutableListOf<CalendarEventItem>()
         val chatMessages = mutableListOf<ChatMessageItem>()
+        val chatChannels = mutableListOf<ChatChannel>()
         val workspaceObjects = mutableListOf<WorkspaceObject>()
         val workspaceObjectLinks = mutableListOf<WorkspaceObjectLink>()
         val workspaceActivities = mutableListOf<WorkspaceActivity>()
         val workspaceObjectHistory = mutableListOf<WorkspaceObjectHistory>()
         val workspaceComments = mutableListOf<WorkspaceComment>()
         val workspaceFiles = mutableListOf<WorkspaceFileItem>()
+        val deviceSettingsProfiles = mutableListOf<DeviceSettingsProfile>()
         var taskWorkspacePrefs = TaskWorkspacePrefs()
         lines.drop(1).forEach { line ->
             val cells = line.split("|")
@@ -234,6 +292,25 @@ object BackupCodec {
                     compactLayout = cells.getOrElse(4) { "true" }.toBoolean(),
                     kanbanEngine = unb64(cells.getOrElse(5) { b64("BoardPointer") }),
                 )
+                "DEVICE_SETTINGS" -> deviceSettingsProfiles += DeviceSettingsProfile(
+                    deviceId = unb64(cells.getOrElse(1) { "" }),
+                    deviceName = unb64(cells.getOrElse(2) { "" }),
+                    deviceType = unb64(cells.getOrElse(3) { "" }),
+                    screenClass = unb64(cells.getOrElse(4) { "" }),
+                    schemaVersion = cells.getOrElse(5) { "1" }.toInt(),
+                    updatedAt = cells.getOrElse(6) { "0" }.toLong(),
+                    fontScale = cells.getOrElse(7) { "1" }.toFloat().coerceIn(0.5f, 2f),
+                    uiScale = cells.getOrElse(8) { "1" }.toFloat().coerceIn(0.5f, 2f),
+                    appLabelMode = ControlLabelMode.entries.firstOrNull { it.name == cells.getOrElse(9) { "" } } ?: ControlLabelMode.Adaptive,
+                    appIconFamily = AppIconFamily.entries.firstOrNull { it.name == cells.getOrElse(10) { "" } } ?: AppIconFamily.MaterialSymbolsRounded,
+                    appFont = unb64(cells.getOrElse(11) { "" }).ifBlank { "Inter" },
+                    uiDensityCompact = cells.getOrElse(12) { "false" }.toBoolean(),
+                    editorToolbarScale = cells.getOrElse(13) { "1" }.toFloat().coerceIn(0.5f, 2f),
+                    editorIconFamily = EditorIconFamily.entries.firstOrNull { it.name == cells.getOrElse(14) { "" } } ?: EditorIconFamily.UseApp,
+                    editorLineWidth = EditorLineWidth.entries.firstOrNull { it.name == cells.getOrElse(15) { "" } } ?: EditorLineWidth.Comfortable,
+                    editorFontFamily = EditorFontFamily.entries.firstOrNull { it.name == cells.getOrElse(16) { "" } } ?: EditorFontFamily.Sans,
+                    reduceMotion = cells.getOrElse(17) { "false" }.toBoolean(),
+                )
                 "WORKSPACE" -> workspaces += Workspace(
                     id = cells[1].toLong(),
                     name = unb64(cells[2]),
@@ -241,8 +318,14 @@ object BackupCodec {
                     iconKind = WorkspaceIconKind.entries.firstOrNull { it.name == cells[4] } ?: WorkspaceIconKind.Text,
                     iconUri = unb64(cells.getOrElse(5) { "" }).takeIf { it.isNotBlank() },
                     backgroundUri = unb64(cells.getOrElse(6) { "" }).takeIf { it.isNotBlank() },
-                    palette = ThemeProfile.entries.firstOrNull { it.name == cells.getOrElse(7) { ThemeProfile.Neon.name } } ?: ThemeProfile.Neon,
+                    palette = ThemeProfile.entries.firstOrNull { it.name == cells.getOrElse(7) { ThemeProfile.Norfold.name } } ?: ThemeProfile.Norfold,
                     createdAt = cells.getOrElse(8) { "0" }.toLong(),
+                    permRename = cells.getOrElse(9) { "false" }.toBoolean(),
+                    permChangeIcon = cells.getOrElse(10) { "false" }.toBoolean(),
+                    permInviteMembers = cells.getOrElse(11) { "false" }.toBoolean(),
+                    permDeleteNotes = cells.getOrElse(12) { "false" }.toBoolean(),
+                    permEditNotes = cells.getOrElse(13) { "true" }.toBoolean(),
+                    permManageTasks = cells.getOrElse(14) { "true" }.toBoolean(),
                 )
                 "NOTEBOOK" -> notebooks += Notebook(
                     id = cells[1].toLong(),
@@ -250,6 +333,9 @@ object BackupCodec {
                     parentId = cells[3].takeIf { it.isNotBlank() }?.toLong(),
                     color = cells[4].toLong(),
                     sortOrder = cells[5].toInt(),
+                    workspaceId = cells.getOrElse(6) { "1" }.toLong(),
+                    scope = unb64(cells.getOrElse(7) { "" }).ifBlank { "notes" },
+                    iconId = unb64(cells.getOrElse(8) { "" }).ifBlank { "app.folder" },
                 )
                 "TAG" -> tags += Tag(
                     id = cells[1].toLong(),
@@ -276,6 +362,7 @@ object BackupCodec {
                     overlapMode = docOverlapModeOf(cells.getOrNull(14)),
                     freeformLayout = DocLayoutJson.decode(unb64(cells.getOrElse(15) { "" })),
                     canvasSpec = DocLayoutJson.decodeCanvas(unb64(cells.getOrElse(15) { "" })),
+                    workspaceId = cells.getOrElse(16) { "1" }.toLong(),
                 )
                 "ATTACHMENT" -> attachments += Attachment(
                     id = cells[1].toLong(),
@@ -333,6 +420,7 @@ object BackupCodec {
                     startAt = cells.getOrElse(19) { "" }.takeIf { it.isNotBlank() }?.toLong(),
                     allDay = cells.getOrElse(20) { "true" }.toBoolean(),
                     reminderMinutesBefore = cells.getOrElse(21) { "" }.takeIf { it.isNotBlank() }?.toInt(),
+                    workspaceId = cells.getOrElse(22) { "1" }.toLong(),
                 )
                 "TASK_PROPERTY" -> taskPropertyDefinitions += TaskPropertyDefinition(
                     id = cells[1].toLong(),
@@ -404,7 +492,32 @@ object BackupCodec {
                     attachmentMimeType = unb64(cells.getOrElse(9) { "" }).takeIf { it.isNotBlank() },
                     attachmentUri = unb64(cells.getOrElse(10) { "" }).takeIf { it.isNotBlank() },
                     attachmentSizeBytes = cells.getOrElse(11) { "" }.takeIf { it.isNotBlank() }?.toLong(),
+                    workspaceId = cells.getOrElse(12) { "1" }.toLong(),
+                    channelId = cells.getOrElse(13) { "" }.takeIf { it.isNotBlank() }?.toLong(),
+                    replyPreview = unb64(cells.getOrElse(14) { "" }).takeIf { it.isNotBlank() },
+                    editedAt = cells.getOrElse(15) { "" }.takeIf { it.isNotBlank() }?.toLong(),
+                    reactionsJson = unb64(cells.getOrElse(16) { "" }).ifBlank { "{}" },
+                    pinned = cells.getOrElse(17) { "false" }.toBoolean(),
                 )
+                "CHANNEL" -> {
+                    val legacy = ChatChannelKind.entries.any { it.name == cells.getOrElse(2) { "" } }
+                    val offset = if (legacy) 0 else 1
+                    val id = cells[1].toLong()
+                    val workspaceId = cells.getOrElse(7 + offset) { "1" }.toLong()
+                    chatChannels += ChatChannel(
+                        id = id,
+                        syncId = if (legacy) {
+                            java.util.UUID.nameUUIDFromBytes("legacy-channel:$workspaceId:$id".toByteArray()).toString()
+                        } else cells[2],
+                        kind = ChatChannelKind.entries.firstOrNull { it.name == cells.getOrElse(2 + offset) { "" } } ?: ChatChannelKind.Topic,
+                        name = unb64(cells.getOrElse(3 + offset) { "" }),
+                        counterpartUsername = unb64(cells.getOrElse(4 + offset) { "" }),
+                        icon = unb64(cells.getOrElse(5 + offset) { "" }).ifBlank { "app.topics" },
+                        createdAt = cells.getOrElse(6 + offset) { "0" }.toLong(),
+                        workspaceId = workspaceId,
+                        pinned = cells.getOrElse(8 + offset) { "false" }.toBoolean(),
+                    )
+                }
                 "OBJECT" -> workspaceObjects += WorkspaceObject(
                     id = cells[1].toLong(),
                     objectType = WorkspaceObjectType.entries.firstOrNull { it.name == cells[2] } ?: WorkspaceObjectType.System,
@@ -418,6 +531,7 @@ object BackupCodec {
                     archived = cells[10].toBoolean(),
                     createdAt = cells[11].toLong(),
                     updatedAt = cells[12].toLong(),
+                    workspaceId = cells.getOrElse(13) { "1" }.toLong(),
                 )
                 "OBJECT_LINK" -> workspaceObjectLinks += WorkspaceObjectLink(
                     id = cells[1].toLong(),
@@ -426,6 +540,7 @@ object BackupCodec {
                     linkType = WorkspaceLinkType.entries.firstOrNull { it.name == cells[4] } ?: WorkspaceLinkType.Reference,
                     label = unb64(cells[5]),
                     createdAt = cells[6].toLong(),
+                    workspaceId = cells.getOrElse(7) { "1" }.toLong(),
                 )
                 "ACTIVITY" -> workspaceActivities += WorkspaceActivity(
                     id = cells[1].toLong(),
@@ -435,6 +550,7 @@ object BackupCodec {
                     title = unb64(cells[5]),
                     detail = unb64(cells[6]),
                     createdAt = cells[7].toLong(),
+                    workspaceId = cells.getOrElse(8) { "1" }.toLong(),
                 )
                 "HISTORY" -> workspaceObjectHistory += WorkspaceObjectHistory(
                     id = cells[1].toLong(),
@@ -445,6 +561,8 @@ object BackupCodec {
                     beforeValue = unb64(cells.getOrElse(6) { "" }),
                     afterValue = unb64(cells.getOrElse(7) { "" }),
                     createdAt = cells.getOrElse(8) { "0" }.toLong(),
+                    blockId = unb64(cells.getOrElse(10) { "" }).takeIf(String::isNotBlank),
+                    workspaceId = cells.getOrElse(9) { "1" }.toLong(),
                 )
                 "COMMENT" -> workspaceComments += WorkspaceComment(
                     id = cells[1].toLong(),
@@ -455,6 +573,7 @@ object BackupCodec {
                     resolved = cells.getOrElse(6) { "false" }.toBoolean(),
                     createdAt = cells.getOrElse(7) { "0" }.toLong(),
                     updatedAt = cells.getOrElse(8) { "0" }.toLong(),
+                    workspaceId = cells.getOrElse(9) { "1" }.toLong(),
                 )
                 "FILE" -> workspaceFiles += WorkspaceFileItem(
                     id = cells[1].toLong(),
@@ -465,12 +584,14 @@ object BackupCodec {
                     sizeBytes = cells[6].toLong(),
                     createdAt = cells[7].toLong(),
                     updatedAt = cells[8].toLong(),
+                    workspaceId = cells.getOrElse(9) { "1" }.toLong(),
                 )
             }
         }
         return BackupSnapshot(
             workspaces = workspaces,
             taskWorkspacePrefs = taskWorkspacePrefs,
+            deviceSettingsProfiles = deviceSettingsProfiles.filter { it.deviceId.isNotBlank() },
             notes = notes,
             notebooks = notebooks,
             tags = tags,
@@ -486,6 +607,7 @@ object BackupCodec {
             goals = goals,
             calendarEvents = calendarEvents,
             chatMessages = chatMessages,
+            chatChannels = chatChannels,
             workspaceObjects = workspaceObjects,
             workspaceObjectLinks = workspaceObjectLinks,
             workspaceActivities = workspaceActivities,

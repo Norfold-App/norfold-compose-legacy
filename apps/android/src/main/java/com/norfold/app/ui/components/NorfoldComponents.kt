@@ -10,12 +10,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -92,18 +92,6 @@ fun NorfoldSegmentedControl(options: List<String>, selected: String, onSelect: (
     }
 }
 
-@Composable
-fun NorfoldSearchField(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier,
-        singleLine = true,
-        placeholder = { Text(placeholder, fontSize = 12.sp) },
-        leadingIcon = { Icon(Icons.Outlined.Search, null) },
-        shape = RoundedCornerShape(10.dp),
-    )
-}
 
 @Composable
 fun NorfoldStatusPill(label: String, color: Color) {
@@ -115,4 +103,41 @@ fun NorfoldStatusPill(label: String, color: Color) {
         fontWeight = FontWeight.SemiBold,
         maxLines = 1,
     )
+}
+
+/**
+ * The one empty-state pattern (reference: chat's empty state): icon in a tinted rounded
+ * surface → Black title → capped-width detail → optional action content (button/chips).
+ */
+@Composable
+fun NorfoldEmptyState(
+    icon: ImageVector,
+    title: String,
+    detail: String,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 42.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(18.dp).size(34.dp),
+            )
+        }
+        Text(title, fontWeight = FontWeight.Black, fontSize = 20.sp, textAlign = TextAlign.Center)
+        Text(
+            detail,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 520.dp),
+        )
+        action?.invoke()
+    }
 }

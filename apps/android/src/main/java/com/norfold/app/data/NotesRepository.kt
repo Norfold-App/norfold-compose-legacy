@@ -1,18 +1,28 @@
 package com.norfold.app.data
 
+import android.os.Build
+import com.norfold.app.cloud.RemoteWorkspaceObject
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Attachment
 import com.norfold.app.domain.BackupSnapshot
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
+import com.norfold.app.domain.ChatChannel
+import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatMessageItem
+import com.norfold.app.domain.ChatReceiptStatus
+import com.norfold.app.domain.WorkspaceMember
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.DocLayerOrder
 import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocLayoutJson
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.docOverlapModeOf
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.domain.DeviceSettingsImportPreview
+import com.norfold.app.domain.DeviceSettingsProfile
+import com.norfold.app.domain.SettingsProfileCategory
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.EmbedMetadata
@@ -62,19 +72,61 @@ import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectHistory
 import com.norfold.app.domain.WorkspaceObjectLink
 import com.norfold.app.domain.WorkspaceObjectType
+import com.norfold.app.domain.findById
+import com.norfold.app.domain.toDeviceSettingsProfile
 import androidx.room.withTransaction
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.util.UUID
+import org.json.JSONArray
 import org.json.JSONObject
+
+data class ImportedSharedDocument(
+    val noteId: Long,
+    val title: String,
+    val document: BlockDocument,
+    val layoutMode: DocOverlapMode,
+    val freeformLayout: Map<String, FreeformPlacement>,
+    val canvasSpec: DocCanvasSpec,
+    val remoteVersion: Long,
+    val changed: Boolean,
+)
+
+private data class SharedDocumentPayload(
+    val title: String,
+    val document: BlockDocument,
+    val layoutMode: DocOverlapMode,
+    val freeformLayout: Map<String, FreeformPlacement>,
+    val canvasSpec: DocCanvasSpec,
+)
+
+private fun RemoteWorkspaceObject.decodeSharedDocument(): SharedDocumentPayload? = runCatching {
+    val body = content ?: return null
+    val documentJson = body["documentJson"]?.jsonPrimitive?.contentOrNull.orEmpty()
+    require(documentJson.isNotBlank() && documentJson.length <= 4 * 1024 * 1024) { "Invalid shared document payload" }
+    val layoutJson = body["layoutJson"]?.jsonPrimitive?.contentOrNull
+    SharedDocumentPayload(
+        title = body["title"]?.jsonPrimitive?.contentOrNull.orEmpty().trim().take(500).ifBlank { "Untitled document" },
+        document = BlockDocumentJson.decode(documentJson),
+        layoutMode = docOverlapModeOf(body["layoutMode"]?.jsonPrimitive?.contentOrNull),
+        freeformLayout = DocLayoutJson.decode(layoutJson),
+        canvasSpec = DocLayoutJson.decodeCanvas(layoutJson),
+    )
+}.getOrNull()
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DocsRepository(private val database: NorfoldDatabase) {
     private val dao = database.dao()
-    private val cloudSyncQueue = CloudSyncQueue(database)
+    private val workspaceObjectUpsertMutex = Mutex()
     // Everything except tags/settings is scoped to the active workspace.
     private val activeWorkspaceId: Flow<Long> =
         dao.observeSettings().map { it?.activeWorkspaceId ?: 1L }.distinctUntilChanged()
@@ -91,6 +143,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
     val taskPropertyValues: Flow<List<TaskPropertyValue>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeTaskPropertyValues(ws).map { rows -> rows.map { it.toDomain() } } }
     val taskChecklistItems: Flow<List<TaskChecklistItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeTaskChecklistItems(ws).map { rows -> rows.map { it.toDomain() } } }
     val chatMessages: Flow<List<ChatMessageItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeChatMessages(ws).map { rows -> rows.map { it.toDomain() } } }
+    val chatChannels: Flow<List<ChatChannel>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeChatChannels(ws).map { rows -> rows.map { it.toDomain() } } }
+    val workspaceMembers: Flow<List<WorkspaceMember>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceMembers(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceObjects: Flow<List<WorkspaceObject>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceObjects(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceObjectLinks: Flow<List<WorkspaceObjectLink>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceObjectLinks(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceActivities: Flow<List<WorkspaceActivity>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceActivities(ws).map { rows -> rows.map { it.toDomain() } } }
@@ -100,22 +154,86 @@ class DocsRepository(private val database: NorfoldDatabase) {
     val goals: Flow<List<GoalItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeGoals(ws).map { rows -> rows.map { it.toDomain() } } }
     val calendarEvents: Flow<List<CalendarEventItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeCalendarEvents(ws).map { rows -> rows.map { it.toDomain() } } }
     val settings: Flow<AppSettings> = dao.observeSettings().map { it?.toDomain() ?: defaultSettings }
+    val deviceSettingsProfiles: Flow<List<DeviceSettingsProfile>> =
+        dao.observeDeviceSettingsProfiles().map { rows -> rows.map { it.toDomain() } }
 
     private suspend fun activeWs(): Long = dao.settings()?.activeWorkspaceId ?: 1L
 
+    suspend fun activeWorkspaceIdValue(): Long = activeWs()
+
+    suspend fun settingsValue(): AppSettings = dao.settings()?.toDomain() ?: defaultSettings
+
+    private fun detectedDeviceName(): String {
+        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
+        val model = Build.MODEL.orEmpty().trim()
+        return listOf(manufacturer, model)
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .joinToString(" ")
+            .ifBlank { "Android device" }
+    }
+
+    private suspend fun ensureSettingsDeviceIdentity(existing: AppSettingsEntity? = null): AppSettingsEntity {
+        val stored = existing ?: dao.settings()
+        val current = stored ?: AppSettingsEntity()
+        val detectedName = detectedDeviceName()
+        val identified = current.copy(
+            settingsDeviceId = current.settingsDeviceId.ifBlank { UUID.randomUUID().toString() },
+            settingsDeviceName = current.settingsDeviceName
+                .takeUnless { it.isBlank() || it == "Android device" }
+                ?: detectedName,
+            settingsDeviceType = current.settingsDeviceType.ifBlank { "Android" },
+            settingsScreenClass = current.settingsScreenClass.ifBlank { "Compact" },
+            settingsSchemaVersion = maxOf(current.settingsSchemaVersion, 1),
+        )
+        if (identified != stored) dao.upsertSettings(identified)
+        dao.upsertDeviceSettingsProfile(identified.toDomain().toDeviceSettingsProfile().toEntity())
+        return identified
+    }
+
     suspend fun ensureSeedData() {
+        // The goal/calendar cloud outbox is parked: nothing enqueues into it anymore and no
+        // server endpoint drains it, so purge any rows accumulated by older builds. The
+        // sync_outbox/sync_tombstones tables stay in the schema for when real goal/event
+        // cloud sync exists.
+        dao.clearSyncOutbox()
+        dao.clearSyncTombstones()
         if (dao.allWorkspaces().isNotEmpty()) {
-            if (dao.settings() == null) dao.upsertSettings(AppSettingsEntity())
+            ensureSettingsDeviceIdentity()
+            setActiveWorkspace(activeWs())
             ensureDefaultTaskBoard(activeWs())
-            applyWorkspaceTemplate("Norfold Guide")
+            dao.allNotebooks()
+                .filter { it.name == "Norfold Guide" }
+                .map { it.workspaceId }
+                .distinct()
+                .forEach { repairGuideDocuments(it) }
             return
         }
-        val wsId = dao.insertWorkspace(WorkspaceEntity(name = "Personal", icon = "N", iconKind = WorkspaceIconKind.Text.name, palette = ThemeProfile.Neon.name, createdAt = System.currentTimeMillis()))
-        val existing = dao.settings()
-        dao.upsertSettings((existing ?: AppSettingsEntity()).copy(activeWorkspaceId = wsId, workspaceName = "Personal"))
+        val wsId = dao.insertWorkspace(WorkspaceEntity(name = "Personal", icon = "N", iconKind = WorkspaceIconKind.Text.name, palette = ThemeProfile.Norfold.name, createdAt = System.currentTimeMillis()))
+        val existing = ensureSettingsDeviceIdentity()
+        dao.upsertSettings(existing.copy(activeWorkspaceId = wsId, workspaceName = "Personal"))
         ensureDefaultTaskBoard(wsId)
-        applyWorkspaceTemplate("Norfold Guide")
+        // Seed nothing here: onboarding asks for a starting point and applies the chosen
+        // template via applyWorkspaceTemplate — "Start empty" must actually start empty.
         rebuildWorkspaceIndex()
+    }
+
+    suspend fun registerSettingsDevice(screenClass: String) {
+        val normalizedScreenClass = screenClass.takeIf { it in setOf("Compact", "Medium", "Expanded") } ?: "Compact"
+        val current = ensureSettingsDeviceIdentity()
+        val deviceType = when (normalizedScreenClass) {
+            "Expanded" -> "Desktop-class Android"
+            "Medium" -> "Android tablet"
+            else -> "Android phone"
+        }
+        if (current.settingsScreenClass != normalizedScreenClass || current.settingsDeviceType != deviceType) {
+            val updated = current.copy(
+                    settingsScreenClass = normalizedScreenClass,
+                    settingsDeviceType = deviceType,
+                )
+            dao.upsertSettings(updated)
+            dao.upsertDeviceSettingsProfile(updated.toDomain().toDeviceSettingsProfile().toEntity())
+        }
     }
 
     suspend fun applyWorkspaceTemplate(template: String) {
@@ -125,6 +243,13 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val workspaceHasTasks = dao.allTasks().any { it.workspaceId == workspaceId }
         when (template) {
             "Norfold Guide" -> {
+                configureTaskWorkflow(
+                    listOf(
+                        "Inbox" to TaskStatus.Todo,
+                        "In progress" to TaskStatus.Doing,
+                        "Complete" to TaskStatus.Done,
+                    ),
+                )
                 if (!workspaceHasNotes) {
                     val guide = dao.insertNotebook(NotebookEntity(name = "Norfold Guide", color = 0xFF6F36FF, sortOrder = 0, workspaceId = workspaceId))
                     seedGuideNotes(guide)
@@ -133,6 +258,13 @@ class DocsRepository(private val database: NorfoldDatabase) {
             }
             "Study planner" -> {
                 if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Upcoming" to TaskStatus.Todo,
+                        "Studying" to TaskStatus.Doing,
+                        "Submitted" to TaskStatus.Done,
+                    ),
+                )
                 val notebook = dao.insertNotebook(NotebookEntity(name = "Study", color = 0xFF42A5F5, sortOrder = 0, workspaceId = workspaceId))
                 createNote("Study dashboard", "# Study dashboard\n\nKeep lecture notes, readings, and revision plans together.", notebook, listOf("Study"), pinned = true)
                 addTask("Review lecture notes", "Summarize the key definitions", "@me", TaskStatus.Todo)
@@ -140,16 +272,117 @@ class DocsRepository(private val database: NorfoldDatabase) {
             }
             "Personal organizer" -> {
                 if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Next" to TaskStatus.Todo,
+                        "In progress" to TaskStatus.Doing,
+                        "Complete" to TaskStatus.Done,
+                    ),
+                )
                 val notebook = dao.insertNotebook(NotebookEntity(name = "Personal", color = 0xFF35A853, sortOrder = 0, workspaceId = workspaceId))
                 createNote("Daily doc", "# Daily doc\n\nWrite down what matters today.", notebook, listOf("Personal"), pinned = true)
                 addTask("Plan the week", "Choose the three most important outcomes", "@me", TaskStatus.Todo)
             }
             "Team workspace" -> {
                 if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Backlog" to TaskStatus.Todo,
+                        "Active" to TaskStatus.Doing,
+                        "Review" to null,
+                        "Complete" to TaskStatus.Done,
+                    ),
+                )
                 val notebook = dao.insertNotebook(NotebookEntity(name = "Team", color = 0xFF8B5CF6, sortOrder = 0, workspaceId = workspaceId))
                 createNote("Team brief", "# Team brief\n\nShared context, decisions, and next actions.", notebook, listOf("Team"), pinned = true)
                 addTask("Prepare team stand-up", "Collect updates and blockers", "@owner", TaskStatus.Todo)
                 sendChat("system", "Workspace", "Collaboration chat is ready for workspace members.", 0xFF7E57FF, system = true)
+            }
+            "Personal" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Next" to TaskStatus.Todo,
+                        "In progress" to TaskStatus.Doing,
+                        "Complete" to TaskStatus.Done,
+                    ),
+                )
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Personal", color = 0xFF35A853, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Home base", "# Home base\n\nCapture priorities, routines, and things you do not want to forget.", notebook, listOf("Personal"), pinned = true)
+                addTask("Plan the week", "Choose the three most important outcomes", "@me", TaskStatus.Todo)
+            }
+            "Student" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Upcoming" to TaskStatus.Todo,
+                        "Studying" to TaskStatus.Doing,
+                        "Submitted" to TaskStatus.Done,
+                    ),
+                )
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Courses", color = 0xFF42A5F5, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Semester dashboard", "# Semester dashboard\n\nTrack courses, readings, assignments, and revision notes.", notebook, listOf("Study"), pinned = true)
+                addTask("Review lecture notes", "Summarize the key definitions", "@me", TaskStatus.Todo)
+                addTask("Practice problems", "Complete the current problem set", "@me", TaskStatus.Doing)
+            }
+            "Research" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Sources to review" to TaskStatus.Todo,
+                        "Investigating" to TaskStatus.Doing,
+                        "Synthesized" to TaskStatus.Done,
+                    ),
+                )
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Research", color = 0xFF7E57FF, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Research brief", "# Research brief\n\n## Question\n\n## Sources\n\n## Evidence\n\n## Open questions", notebook, listOf("Research"), pinned = true)
+                addTask("Build literature queue", "Collect and rank the first source set", "@owner", TaskStatus.Todo)
+            }
+            "Software Team" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Backlog" to TaskStatus.Todo,
+                        "In development" to TaskStatus.Doing,
+                        "Review" to null,
+                        "Released" to TaskStatus.Done,
+                    ),
+                )
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Engineering", color = 0xFF8B5CF6, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Engineering brief", "# Engineering brief\n\n## Goal\n\n## Architecture\n\n## Decisions\n\n## Release checklist", notebook, listOf("Engineering"), pinned = true)
+                addTask("Prepare sprint", "Confirm scope, owners, dependencies, and acceptance checks", "@owner", TaskStatus.Todo)
+                sendChat("system", "Workspace", "Team chat is ready locally. Connect collaboration sync before inviting other accounts.", 0xFF7E57FF, system = true)
+            }
+            "Business" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                configureTaskWorkflow(
+                    listOf(
+                        "Opportunities" to TaskStatus.Todo,
+                        "In progress" to TaskStatus.Doing,
+                        "Review" to null,
+                        "Complete" to TaskStatus.Done,
+                    ),
+                )
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Operations", color = 0xFFFFA726, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Operating plan", "# Operating plan\n\n## Outcomes\n\n## Customers\n\n## Metrics\n\n## Risks", notebook, listOf("Business"), pinned = true)
+                addTask("Review weekly metrics", "Record changes, causes, and next actions", "@owner", TaskStatus.Todo)
+            }
+            "Second Brain" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Knowledge", color = 0xFF26A69A, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Knowledge map", "# Knowledge map\n\nLink projects, areas, resources, and archived ideas from here.", notebook, listOf("Knowledge"), pinned = true)
+                createNote("Capture queue", "# Capture queue\n\nProcess these notes into durable knowledge.", notebook, listOf("Inbox"))
+            }
+            "Journal" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Journal", color = 0xFFEC407A, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Daily reflection", "# Daily reflection\n\n## What happened?\n\n## What mattered?\n\n## What comes next?", notebook, listOf("Journal"), pinned = true)
+            }
+            "Knowledge Base" -> {
+                if (workspaceHasNotes || workspaceHasTasks) return
+                val notebook = dao.insertNotebook(NotebookEntity(name = "Knowledge Base", color = 0xFF5C6BC0, sortOrder = 0, workspaceId = workspaceId))
+                createNote("Knowledge base index", "# Knowledge base index\n\n## Start here\n\n## Policies\n\n## How-to guides\n\n## Decisions", notebook, listOf("Knowledge Base"), pinned = true)
+                addTask("Document the first workflow", "Turn one repeated process into a reusable guide", "@owner", TaskStatus.Todo)
             }
         }
         rebuildWorkspaceIndex()
@@ -175,11 +408,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 updateNote(playground, playground.title, playground.document.copy(blocks = repaired), dirtyIds)
             }
         }
-        if (guideNotes.none { it.note.title == "Long document performance demo" }) {
-            dao.allNotebooks().firstOrNull { it.workspaceId == workspaceId && it.name == "Norfold Guide" }?.let { guide ->
-                seedGuideStressNote(guide.id)
-            }
-        }
+        // Deliberately no re-seed of the "Long document performance demo" note here:
+        // deleting it must be permanent. Fresh installs still get it via seedGuideNotes.
     }
 
     /** In-depth, built-in reference notes that teach the app's features. Seeded once on first run. */
@@ -527,7 +757,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun createWorkspace(
         name: String,
         icon: String = "N",
-        palette: ThemeProfile = ThemeProfile.Neon,
+        palette: ThemeProfile = ThemeProfile.Norfold,
         iconKind: WorkspaceIconKind = WorkspaceIconKind.Text,
         iconUri: String? = null,
         backgroundUri: String? = null,
@@ -574,20 +804,453 @@ class DocsRepository(private val database: NorfoldDatabase) {
     ) = dao.updateWorkspacePermissions(id, permRename, permChangeIcon, permInviteMembers, permDeleteNotes, permEditNotes, permManageTasks)
 
     suspend fun setActiveWorkspace(id: Long) {
+        val workspace = dao.allWorkspaces().firstOrNull { it.id == id }
+            ?: throw IllegalArgumentException("Workspace $id does not exist")
         val current = dao.settings()?.toDomain() ?: defaultSettings
-        updateSettings(current.copy(activeWorkspaceId = id))
+        updateSettings(
+            current.copy(
+                activeWorkspaceId = workspace.id,
+                workspaceName = workspace.name,
+                workspaceIcon = workspace.icon,
+                workspaceIconKind = WorkspaceIconKind.entries.firstOrNull { it.name == workspace.iconKind }
+                    ?: WorkspaceIconKind.Text,
+                workspaceIconUri = workspace.iconUri,
+                workspaceBackgroundUri = workspace.backgroundUri,
+            ),
+        )
     }
 
+    /**
+     * Replaces the local roster for a workspace with the authoritative set fetched from the
+     * backend. Upserts each member (keyed by remote userId) and drops anyone no longer returned,
+     * so removed members disappear. An empty list clears the roster only when [authoritative] —
+     * a failed/offline fetch passes authoritative=false so a transient empty result can't wipe it.
+     */
+    suspend fun replaceWorkspaceMembers(
+        localWorkspaceId: Long,
+        members: List<WorkspaceMember>,
+        authoritative: Boolean = true,
+    ) = database.withTransaction {
+        if (members.isEmpty() && !authoritative) return@withTransaction
+        members.forEach { member ->
+            val existing = dao.workspaceMemberByUserId(localWorkspaceId, member.userId)
+            dao.insertWorkspaceMember(
+                WorkspaceMemberEntity(
+                    id = existing?.id ?: 0,
+                    workspaceId = localWorkspaceId,
+                    userId = member.userId,
+                    username = member.username,
+                    displayName = member.displayName,
+                    avatarPath = member.avatarPath,
+                    role = member.role,
+                    joinedAt = member.joinedAt,
+                ),
+            )
+        }
+        if (members.isEmpty()) dao.deleteWorkspaceMembersForWorkspace(localWorkspaceId)
+        else dao.deleteWorkspaceMembersNotIn(localWorkspaceId, members.map { it.userId })
+    }
+
+    suspend fun remoteWorkspaceId(): String? = remoteWorkspaceId(activeWs())
+
+    suspend fun remoteWorkspaceId(localWorkspaceId: Long): String? =
+        dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.Workspace.name, localWorkspaceId)?.remoteId
+
+    suspend fun ensureRemoteDocumentSyncId(localWorkspaceId: Long, noteId: Long): String {
+        val existing = dao.remoteBinding(localWorkspaceId, RemoteDocumentObjectType, noteId)
+        if (existing != null) return existing.syncId
+        val syncId = UUID.randomUUID().toString()
+        dao.insertRemoteBinding(
+            RemoteObjectBindingEntity(
+                workspaceId = localWorkspaceId,
+                objectType = RemoteDocumentObjectType,
+                localId = noteId,
+                syncId = syncId,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+        return syncId
+    }
+
+    suspend fun remoteDocumentBinding(localWorkspaceId: Long, noteId: Long): RemoteObjectBindingEntity? =
+        dao.remoteBinding(localWorkspaceId, RemoteDocumentObjectType, noteId)
+
+    suspend fun bindRemoteDocument(
+        localWorkspaceId: Long,
+        noteId: Long,
+        remote: RemoteWorkspaceObject,
+    ) {
+        val existing = dao.remoteBinding(localWorkspaceId, RemoteDocumentObjectType, noteId)
+        dao.insertRemoteBinding(
+            existing?.copy(
+                syncId = remote.clientSyncId,
+                remoteId = remote.id,
+                remoteVersion = remote.serverVersion,
+                contentHash = remote.contentHash,
+                updatedAt = System.currentTimeMillis(),
+            ) ?: RemoteObjectBindingEntity(
+                workspaceId = localWorkspaceId,
+                objectType = RemoteDocumentObjectType,
+                localId = noteId,
+                syncId = remote.clientSyncId,
+                remoteId = remote.id,
+                remoteVersion = remote.serverVersion,
+                contentHash = remote.contentHash,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    suspend fun importRemoteSharedDocument(
+        localWorkspaceId: Long,
+        remote: RemoteWorkspaceObject,
+    ): ImportedSharedDocument? {
+        val payload = remote.decodeSharedDocument() ?: return null
+        val existingBinding = dao.remoteBindingByRemoteId(localWorkspaceId, RemoteDocumentObjectType, remote.id)
+            ?: dao.remoteBindingBySyncId(localWorkspaceId, RemoteDocumentObjectType, remote.clientSyncId)
+        if (existingBinding != null && remote.serverVersion <= existingBinding.remoteVersion) {
+            val existing = dao.noteById(existingBinding.localId)?.toDomain() ?: return null
+            return ImportedSharedDocument(
+                noteId = existing.id,
+                title = existing.title,
+                document = existing.document,
+                layoutMode = existing.overlapMode,
+                freeformLayout = existing.freeformLayout,
+                canvasSpec = existing.canvasSpec,
+                remoteVersion = existingBinding.remoteVersion,
+                changed = false,
+            )
+        }
+
+        val localId = if (existingBinding == null) {
+            require(activeWs() == localWorkspaceId) { "Shared documents can only be imported into the active workspace." }
+            createNote(
+                title = payload.title,
+                body = MarkdownBlockCodec.export(payload.document),
+                layoutMode = payload.layoutMode,
+            ).also { noteId ->
+                persistDocument(
+                    owner = DocumentOwner.note(noteId),
+                    document = payload.document,
+                    dirtyBlockIds = payload.document.blocks.mapTo(linkedSetOf()) { it.id },
+                    layoutMode = payload.layoutMode,
+                    freeformLayout = payload.freeformLayout,
+                    canvasSpec = payload.canvasSpec,
+                )
+            }
+        } else {
+            database.withTransaction {
+                persistDocument(
+                    owner = DocumentOwner.note(existingBinding.localId),
+                    document = payload.document,
+                    dirtyBlockIds = payload.document.blocks.mapTo(linkedSetOf()) { it.id },
+                    layoutMode = payload.layoutMode,
+                    freeformLayout = payload.freeformLayout,
+                    canvasSpec = payload.canvasSpec,
+                )
+                dao.updateNoteContent(
+                    existingBinding.localId,
+                    payload.title,
+                    payload.document.plainText(),
+                    System.currentTimeMillis(),
+                )
+            }
+            existingBinding.localId
+        }
+        bindRemoteDocument(localWorkspaceId, localId, remote)
+        upsertWorkspaceObject(
+            WorkspaceObjectType.Note,
+            localId,
+            payload.title,
+            payload.document.plainText().take(160),
+            "shared",
+            "document",
+            0xFF9D6CFF,
+            false,
+        )
+        return ImportedSharedDocument(
+            noteId = localId,
+            title = payload.title,
+            document = payload.document,
+            layoutMode = payload.layoutMode,
+            freeformLayout = payload.freeformLayout,
+            canvasSpec = payload.canvasSpec,
+            remoteVersion = remote.serverVersion,
+            changed = true,
+        )
+    }
+
+    suspend fun bindRemoteWorkspace(localWorkspaceId: Long, remoteWorkspaceId: String) {
+        require(runCatching { UUID.fromString(remoteWorkspaceId) }.isSuccess) { "Remote workspace id must be a UUID." }
+        dao.insertRemoteBinding(
+            RemoteObjectBindingEntity(
+                workspaceId = localWorkspaceId,
+                objectType = WorkspaceObjectType.Workspace.name,
+                localId = localWorkspaceId,
+                syncId = remoteWorkspaceId,
+                remoteId = remoteWorkspaceId,
+                remoteVersion = 1,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** Local workspace already bound to [remoteWorkspaceId], regardless of which workspace is active. */
+    suspend fun localWorkspaceIdForRemote(remoteWorkspaceId: String): Long? =
+        dao.bindingByRemoteIdAnyWorkspace(WorkspaceObjectType.Workspace.name, remoteWorkspaceId)?.workspaceId
+
+    /**
+     * Creates the local workspace and its remote binding in one transaction, so a failed bind
+     * can't strand an unbound local workspace that a retry would then duplicate.
+     */
+    suspend fun createRemoteBoundWorkspace(name: String, icon: String, remoteWorkspaceId: String): Long =
+        database.withTransaction {
+            val id = createWorkspace(name, icon)
+            bindRemoteWorkspace(id, remoteWorkspaceId)
+            id
+        }
+
+    suspend fun bindRemoteChatMessage(
+        localWorkspaceId: Long,
+        localMessageId: Long,
+        remote: RemoteWorkspaceObject,
+    ) {
+        val existing = dao.remoteBinding(
+            localWorkspaceId,
+            WorkspaceObjectType.ChatMessage.name,
+            localMessageId,
+        )
+        dao.insertRemoteBinding(
+            existing?.copy(
+                syncId = remote.clientSyncId,
+                remoteId = remote.id,
+                remoteVersion = remote.serverVersion,
+                contentHash = remote.contentHash,
+                updatedAt = System.currentTimeMillis(),
+            ) ?: RemoteObjectBindingEntity(
+                workspaceId = localWorkspaceId,
+                objectType = WorkspaceObjectType.ChatMessage.name,
+                localId = localMessageId,
+                syncId = remote.clientSyncId,
+                remoteId = remote.id,
+                remoteVersion = remote.serverVersion,
+                contentHash = remote.contentHash,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+        val remoteUri = remote.content?.get("attachmentExternalUrl")?.jsonPrimitive?.contentOrNull
+            ?: remote.content?.get("attachmentStoragePath")?.jsonPrimitive?.contentOrNull?.let { "norfold-cloud://$it" }
+        if (remoteUri != null) dao.setChatMessageAttachmentUri(localMessageId, remoteUri)
+    }
+
+    suspend fun bindRemoteChatChannel(
+        localWorkspaceId: Long,
+        localChannelId: Long,
+        remote: RemoteWorkspaceObject,
+    ) {
+        val existing = dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.ChatChannel.name, localChannelId)
+        dao.insertRemoteBinding(
+            existing?.copy(
+                syncId = remote.clientSyncId,
+                remoteId = remote.id,
+                remoteVersion = remote.serverVersion,
+                contentHash = remote.contentHash,
+                updatedAt = System.currentTimeMillis(),
+            ) ?: RemoteObjectBindingEntity(
+                workspaceId = localWorkspaceId,
+                objectType = WorkspaceObjectType.ChatChannel.name,
+                localId = localChannelId,
+                syncId = remote.clientSyncId,
+                remoteId = remote.id,
+                remoteVersion = remote.serverVersion,
+                contentHash = remote.contentHash,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** Imports a shared channel and returns its local Room id. Tombstones remove the local copy. */
+    suspend fun importRemoteChatChannel(
+        localWorkspaceId: Long,
+        remote: RemoteWorkspaceObject,
+        currentAccountId: String?,
+    ): Long? = database.withTransaction {
+        val existing = dao.chatChannelBySyncId(localWorkspaceId, remote.clientSyncId)
+        if (remote.deletedAt != null) {
+            existing?.let {
+                dao.deleteChatMessagesForChannel(it.id)
+                dao.deleteChatChannel(it.id)
+            }
+            return@withTransaction existing?.id
+        }
+        val content = remote.content ?: return@withTransaction null
+        val kind = content["kind"]?.jsonPrimitive?.contentOrNull
+            ?.let { stored -> ChatChannelKind.entries.firstOrNull { it.name.equals(stored, ignoreCase = true) } }
+            ?: ChatChannelKind.Topic
+        val participantIds = content["participantUserIds"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
+        val participantUsernames = content["participantUsernames"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
+        val participantNames = content["participantDisplayNames"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
+        val counterpartIndex = participantIds.indexOfFirst { !it.equals(currentAccountId, ignoreCase = true) }
+        val counterpartUsername = if (kind == ChatChannelKind.Dm) participantUsernames.getOrNull(counterpartIndex).orEmpty() else ""
+        val storedName = content["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val displayName = if (kind == ChatChannelKind.Dm) {
+            participantNames.getOrNull(counterpartIndex).orEmpty()
+                .ifBlank { counterpartUsername }
+                .ifBlank { storedName }
+                .ifBlank { "Direct message" }
+        } else storedName.ifBlank { if (kind == ChatChannelKind.Group) "Group" else "Channel" }
+        val entity = ChatChannelEntity(
+            id = existing?.id ?: 0L,
+            syncId = remote.clientSyncId,
+            kind = kind.name,
+            name = displayName,
+            counterpartUsername = counterpartUsername,
+            icon = content["icon"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "app.topics" },
+            createdAt = content["createdAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
+            workspaceId = localWorkspaceId,
+            pinned = existing?.pinned ?: false,
+        )
+        val localId = dao.insertChatChannel(entity)
+        bindRemoteChatChannel(localWorkspaceId, localId, remote)
+        localId
+    }
+
+    /** Persists a stable client id before attempting delivery so a process restart can retry it. */
+    suspend fun markChatMessagePendingRemote(
+        localWorkspaceId: Long,
+        localMessageId: Long,
+        syncId: String,
+    ) {
+        val existing = dao.remoteBinding(
+            localWorkspaceId,
+            WorkspaceObjectType.ChatMessage.name,
+            localMessageId,
+        )
+        if (existing?.remoteId != null) return
+        dao.insertRemoteBinding(
+            existing?.copy(syncId = syncId, updatedAt = System.currentTimeMillis())
+                ?: RemoteObjectBindingEntity(
+                    workspaceId = localWorkspaceId,
+                    objectType = WorkspaceObjectType.ChatMessage.name,
+                    localId = localMessageId,
+                    syncId = syncId,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+        )
+    }
+
+    suspend fun pendingRemoteChatMessages(
+        localWorkspaceId: Long,
+        limit: Int,
+    ): List<Pair<ChatMessageItem, String>> =
+        dao.pendingRemoteBindings(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, limit)
+            .mapNotNull { binding ->
+                dao.chatMessageById(binding.localId)?.toDomain()?.let { it to binding.syncId }
+            }
+
+    suspend fun importRemoteChatMessage(localWorkspaceId: Long, remote: RemoteWorkspaceObject): Boolean =
+        database.withTransaction {
+            val content = remote.content ?: return@withTransaction false
+            val channelSyncId = content["channelSyncId"]?.jsonPrimitive?.contentOrNull
+            val localChannelId = channelSyncId?.let { dao.chatChannelBySyncId(localWorkspaceId, it)?.id }
+            if (channelSyncId != null && localChannelId == null) return@withTransaction false
+            val existingBinding =
+                dao.remoteBindingByRemoteId(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, remote.id)
+                    ?: dao.remoteBindingBySyncId(
+                        localWorkspaceId,
+                        WorkspaceObjectType.ChatMessage.name,
+                        remote.clientSyncId,
+                    )
+            if (existingBinding != null) {
+                val local = dao.chatMessageById(existingBinding.localId)
+                val changed = local != null && remote.serverVersion > existingBinding.remoteVersion
+                if (changed) {
+                    dao.insertChatMessage(
+                        local!!.copy(
+                            body = content["body"]?.jsonPrimitive?.contentOrNull ?: local.body,
+                            replyPreview = content["replyPreview"]?.jsonPrimitive?.contentOrNull,
+                            editedAt = content["editedAt"]?.jsonPrimitive?.longOrNull,
+                            reactionsJson = content["reactionsJson"]?.jsonPrimitive?.contentOrNull ?: local.reactionsJson,
+                            pinned = content["pinned"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: local.pinned,
+                            channelId = localChannelId,
+                        ),
+                    )
+                }
+                if (existingBinding.remoteId == null || changed) {
+                    dao.insertRemoteBinding(
+                        existingBinding.copy(
+                            remoteId = remote.id,
+                            remoteVersion = remote.serverVersion,
+                            contentHash = remote.contentHash,
+                            updatedAt = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+                return@withTransaction changed
+            }
+            val username = content["authorUsername"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { "member" }
+            val displayName = content["authorDisplayName"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { username }
+            val body = content["body"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val color = content["color"]?.jsonPrimitive?.longOrNull ?: 0xFF7E57FF
+            val createdAt = content["createdAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+            // A sender's local content:// uri is useless here; the storage path is kept under a
+            // norfold-cloud:// scheme so the UI knows to resolve a signed URL on demand.
+            val attachmentStoragePath = content["attachmentStoragePath"]?.jsonPrimitive?.contentOrNull
+            val attachmentExternalUrl = content["attachmentExternalUrl"]?.jsonPrimitive?.contentOrNull
+            val localId = dao.insertChatMessage(
+                ChatMessageEntity(
+                    authorUsername = username,
+                    authorDisplayName = displayName,
+                    body = body,
+                    color = color,
+                    createdAt = createdAt,
+                    attachmentName = content["attachmentName"]?.jsonPrimitive?.contentOrNull,
+                    attachmentMimeType = content["attachmentMimeType"]?.jsonPrimitive?.contentOrNull,
+                    attachmentSizeBytes = content["attachmentSizeBytes"]?.jsonPrimitive?.longOrNull,
+                    attachmentUri = attachmentExternalUrl ?: attachmentStoragePath?.let { "norfold-cloud://$it" },
+                    replyPreview = content["replyPreview"]?.jsonPrimitive?.contentOrNull,
+                    editedAt = content["editedAt"]?.jsonPrimitive?.longOrNull,
+                    reactionsJson = content["reactionsJson"]?.jsonPrimitive?.contentOrNull ?: "{}",
+                    pinned = content["pinned"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false,
+                    channelId = localChannelId,
+                    workspaceId = localWorkspaceId,
+                ),
+            )
+            dao.insertWorkspaceObject(
+                WorkspaceObjectEntity(
+                    objectType = WorkspaceObjectType.ChatMessage.name,
+                    sourceId = localId,
+                    title = displayName,
+                    summary = body.take(160),
+                    icon = "chat",
+                    color = color,
+                    createdAt = createdAt,
+                    updatedAt = createdAt,
+                    workspaceId = localWorkspaceId,
+                ),
+            )
+            bindRemoteChatMessage(localWorkspaceId, localId, remote)
+            true
+        }
+
     /** Deletes a workspace and all of its content. Refuses to delete the last remaining workspace. */
-    suspend fun deleteWorkspace(id: Long): Boolean {
-        if (dao.allWorkspaces().size <= 1) return false
+    suspend fun deleteWorkspace(id: Long): Boolean = database.withTransaction {
+        if (dao.allWorkspaces().size <= 1) return@withTransaction false
         dao.deleteNoteDocumentsForWorkspace(id)
         dao.deleteTaskDocumentsForWorkspace(id)
         dao.deleteCalendarEventDocumentsForWorkspace(id)
         dao.deleteNotesForWorkspace(id)
         dao.deleteNotebooksForWorkspace(id)
+        // Board hierarchy has no FK cascades; values/checklists resolve through the tasks
+        // subquery, so they must go before the tasks themselves.
+        dao.deleteTaskPropertyValuesForWorkspace(id)
+        dao.deleteTaskChecklistItemsForWorkspace(id)
+        dao.deleteTaskPropertyDefinitionsForWorkspace(id)
+        dao.deleteTaskColumnsForWorkspace(id)
+        dao.deleteTaskBoardsForWorkspace(id)
         dao.deleteTasksForWorkspace(id)
         dao.deleteChatForWorkspace(id)
+        dao.deleteChatChannelsForWorkspace(id)
         dao.deleteWorkspaceFilesForWorkspace(id)
         dao.deleteCalendarEventsForWorkspace(id)
         dao.deleteGoalsForWorkspace(id)
@@ -603,7 +1266,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         if (activeWs() == id) {
             dao.allWorkspaces().firstOrNull()?.let { setActiveWorkspace(it.id) }
         }
-        return true
+        true
     }
 
     suspend fun noteById(id: Long): Note? = dao.noteById(id)?.toDomain()
@@ -671,6 +1334,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         tagNames: List<String> = emptyList(),
         pinned: Boolean = false,
         starred: Boolean = false,
+        layoutMode: DocOverlapMode = DocOverlapMode.Reflow,
     ): Long {
         val now = System.currentTimeMillis()
         val document = MarkdownBlockCodec.import(body)
@@ -691,13 +1355,14 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     workspaceId = activeWs(),
                 ),
             )
-            persistDocument(DocumentOwner.note(noteId), document, document.blocks.mapTo(linkedSetOf()) { it.id }, null, null, null, now)
+            persistDocument(DocumentOwner.note(noteId), document, document.blocks.mapTo(linkedSetOf()) { it.id }, layoutMode, null, null, now)
             noteId
         }
         setTags(id, tagNames)
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled doc" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
-        recordActivity(WorkspaceActivityType.Created, "You", "Created doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = id)
-        recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created doc", afterValue = title.ifBlank { "Untitled doc" })
+        val typeLabel = if (layoutMode == DocOverlapMode.Reflow) "note" else "document"
+        recordActivity(WorkspaceActivityType.Created, "You", "Created $typeLabel", title.ifBlank { "Untitled $typeLabel" }, objectType = WorkspaceObjectType.Note, sourceId = id)
+        recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created $typeLabel", afterValue = title.ifBlank { "Untitled $typeLabel" })
         return id
     }
 
@@ -718,17 +1383,37 @@ class DocsRepository(private val database: NorfoldDatabase) {
             persisted.document
         }
         val markdown = MarkdownBlockCodec.export(normalized)
+        val actor = dao.settings()?.let { it.syncPublicName.ifBlank { it.syncUserName.ifBlank { "You" } } } ?: "You"
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, title.ifBlank { "Untitled doc" }, normalized.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned)
-        recordActivity(WorkspaceActivityType.Updated, "You", "Updated doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
+        recordActivity(WorkspaceActivityType.Updated, actor, "Updated doc", title.ifBlank { "Untitled doc" }, objectType = WorkspaceObjectType.Note, sourceId = note.id)
         if (note.title != title || note.document != normalized) {
             recordHistory(
                 WorkspaceHistoryType.Updated,
                 objectId,
-                "You",
+                actor,
                 "Updated doc",
                 beforeValue = note.bodyMarkdown.take(500),
                 afterValue = markdown.take(500),
             )
+            dirtyBlockIds.forEach { blockId ->
+                val beforeBlock = note.document.findById(blockId)
+                val afterBlock = normalized.findById(blockId)
+                if (beforeBlock != afterBlock) {
+                    recordHistory(
+                        WorkspaceHistoryType.Updated,
+                        objectId,
+                        actor,
+                        when {
+                            beforeBlock == null -> "Added block"
+                            afterBlock == null -> "Removed block"
+                            else -> "Edited block"
+                        },
+                        beforeValue = beforeBlock?.let(BlockDocumentJson::encodeBlock).orEmpty(),
+                        afterValue = afterBlock?.let(BlockDocumentJson::encodeBlock).orEmpty(),
+                        blockId = blockId,
+                    )
+                }
+            }
         }
     }
 
@@ -736,9 +1421,24 @@ class DocsRepository(private val database: NorfoldDatabase) {
         dao.updateNoteCover(note.id, coverUri?.takeIf { it.isNotBlank() }, coverMimeType?.takeIf { it.isNotBlank() }, System.currentTimeMillis())
     }
 
-    suspend fun addNotebook(name: String): Long {
-        val order = dao.allNotebooks().size
-        return dao.insertNotebook(NotebookEntity(name = name.ifBlank { "New notebook" }, color = 0xFF8B5CF6, sortOrder = order, workspaceId = activeWs()))
+    suspend fun addNotebook(name: String, scope: String = "notes", iconId: String = "app.folder"): Long {
+        val normalizedScope = scope.takeIf { it == "documents" } ?: "notes"
+        val workspaceId = activeWs()
+        val order = dao.allNotebooks().count { it.workspaceId == workspaceId && it.scope == normalizedScope }
+        return dao.insertNotebook(
+            NotebookEntity(
+                name = name.ifBlank { if (normalizedScope == "documents") "New document folder" else "New notes folder" },
+                color = 0xFF8B5CF6,
+                sortOrder = order,
+                workspaceId = workspaceId,
+                scope = normalizedScope,
+                iconId = iconId.ifBlank { "app.folder" },
+            ),
+        )
+    }
+
+    suspend fun updateNotebook(notebook: Notebook, name: String, iconId: String) {
+        dao.updateNotebook(notebook.id, name.trim().ifBlank { notebook.name }, notebook.scope, iconId.ifBlank { "app.folder" })
     }
 
     suspend fun addTag(name: String): Long = getOrCreateTag(name.trim().removePrefix("#"), scope = "notes").id
@@ -824,7 +1524,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
     ): Long {
         val now = System.currentTimeMillis()
         val boardId = ensureDefaultTaskBoard(activeWs())
-        val columnId = ensureTaskColumnForStatus(boardId, status)
+        val columnId = destinationColumnForNewTask(boardId, status)
         val order = dao.maxTaskSortOrder(boardId, columnId) + 1
         val initialDocument = MarkdownBlockCodec.import(description)
         val summary = initialDocument.plainText()
@@ -995,9 +1695,6 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val ws = activeWs()
         val now = System.currentTimeMillis()
         val boardId = dao.insertTaskBoard(TaskBoardEntity(name = name.trim().ifBlank { "New board" }, workspaceId = ws, createdAt = now, updatedAt = now))
-        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0L, 0)
-        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0L, 1)
-        createTaskColumn(boardId, "Done", TaskStatus.Done, 0L, 2)
         ensureDefaultTaskProperties(boardId)
         recordActivity(WorkspaceActivityType.Created, "You", "Created task board", name.trim().ifBlank { "New board" })
         return boardId
@@ -1060,22 +1757,21 @@ class DocsRepository(private val database: NorfoldDatabase) {
     private suspend fun ensureDefaultTaskBoard(workspaceId: Long): Long {
         val existing = dao.taskBoardsForWorkspace(workspaceId).firstOrNull()
         if (existing != null) {
-            ensureDefaultTaskColumns(existing.id)
             ensureDefaultTaskProperties(existing.id)
             return existing.id
         }
         val now = System.currentTimeMillis()
         val boardId = dao.insertTaskBoard(TaskBoardEntity(name = "Default board", workspaceId = workspaceId, createdAt = now, updatedAt = now))
-        ensureDefaultTaskColumns(boardId)
         ensureDefaultTaskProperties(boardId)
         return boardId
     }
 
-    private suspend fun ensureDefaultTaskColumns(boardId: Long) {
+    private suspend fun configureTaskWorkflow(columns: List<Pair<String, TaskStatus?>>) {
+        val boardId = ensureDefaultTaskBoard(activeWs())
         if (dao.taskColumnsForBoard(boardId).isNotEmpty()) return
-        createTaskColumn(boardId, "To do", TaskStatus.Todo, 0L, 0)
-        createTaskColumn(boardId, "Doing", TaskStatus.Doing, 0L, 1)
-        createTaskColumn(boardId, "Done", TaskStatus.Done, 0L, 2)
+        columns.forEachIndexed { index, (name, status) ->
+            createTaskColumn(boardId, name, status, 0L, index)
+        }
     }
 
     private suspend fun ensureDefaultTaskProperties(boardId: Long) {
@@ -1099,7 +1795,18 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     private suspend fun ensureTaskColumnForStatus(boardId: Long, status: TaskStatus): Long {
         dao.taskColumnForStatus(boardId, status.name)?.let { return it.id }
-        return createTaskColumn(boardId, status.name, status, 0L)
+        val name = when (status) {
+            TaskStatus.Todo -> "Next"
+            TaskStatus.Doing -> "In progress"
+            TaskStatus.Done -> "Complete"
+        }
+        return createTaskColumn(boardId, name, status, 0L)
+    }
+
+    private suspend fun destinationColumnForNewTask(boardId: Long, status: TaskStatus): Long {
+        dao.taskColumnForStatus(boardId, status.name)?.let { return it.id }
+        dao.taskColumnsForBoard(boardId).firstOrNull()?.let { return it.id }
+        return createTaskColumn(boardId, "Tasks", status, 0L)
     }
     suspend fun updateTaskMeta(task: TaskItem, priority: TaskPriority, dueAt: Long?, assignee: String) =
         dao.updateTaskMeta(task.id, priority.name, dueAt, assignee, System.currentTimeMillis())
@@ -1353,7 +2060,14 @@ class DocsRepository(private val database: NorfoldDatabase) {
         }
     }
 
+    suspend fun taskById(id: Long): TaskItem? = dao.taskById(id)?.toDomain()
+
     suspend fun deleteTask(task: TaskItem) = database.withTransaction {
+        dao.taskById(task.id)?.let { row ->
+            dao.workspaceObjectIdForSource(row.workspaceId, WorkspaceObjectType.Task.name, task.id)?.let { objectId ->
+                deleteWorkspaceObjectGraph(objectId)
+            }
+        }
         dao.deleteDocumentForOwner(DocumentOwnerType.Task.storageValue, task.id)
         dao.deleteTask(task.id)
     }
@@ -1397,6 +2111,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
         attachmentMimeType: String? = null,
         attachmentUri: String? = null,
         attachmentSizeBytes: Long? = null,
+        createdAt: Long = System.currentTimeMillis(),
+        channelId: Long? = null,
+        replyPreview: String? = null,
     ): Long {
         val id = dao.insertChatMessage(
             ChatMessageEntity(
@@ -1404,24 +2121,377 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 authorDisplayName = displayName.ifBlank { username.ifBlank { "You" } },
                 body = body,
                 color = color,
-                createdAt = System.currentTimeMillis(),
+                createdAt = createdAt,
                 system = system,
                 attachmentName = attachmentName,
                 attachmentMimeType = attachmentMimeType,
                 attachmentUri = attachmentUri,
                 attachmentSizeBytes = attachmentSizeBytes,
                 workspaceId = activeWs(),
+                channelId = channelId,
+                replyPreview = replyPreview,
             ),
         )
-        val chatObjectId = upsertWorkspaceObject(WorkspaceObjectType.ChatMessage, id, displayName.ifBlank { username.ifBlank { "Message" } }, body.take(160), "", "chat", color)
-        recordActivity(if (attachmentName != null) WorkspaceActivityType.Uploaded else WorkspaceActivityType.Commented, displayName.ifBlank { username.ifBlank { "You" } }, if (attachmentName != null) "Shared file in chat" else "Sent chat message", body.take(80).ifBlank { attachmentName.orEmpty() }, objectType = WorkspaceObjectType.ChatMessage, sourceId = id)
-        recordHistory(WorkspaceHistoryType.Comment, chatObjectId, displayName.ifBlank { username.ifBlank { "You" } }, "Sent chat message", afterValue = body.take(500).ifBlank { attachmentName.orEmpty() })
+        // Only the shared General feed feeds the workspace graph/activity. Topic/DM/group messages
+        // stay scoped to their channel so private side conversations don't surface as workspace objects.
+        if (channelId == null) {
+            val chatObjectId = upsertWorkspaceObject(WorkspaceObjectType.ChatMessage, id, displayName.ifBlank { username.ifBlank { "Message" } }, body.take(160), "", "chat", color)
+            recordActivity(if (attachmentName != null) WorkspaceActivityType.Uploaded else WorkspaceActivityType.Commented, displayName.ifBlank { username.ifBlank { "You" } }, if (attachmentName != null) "Shared file in chat" else "Sent chat message", body.take(80).ifBlank { attachmentName.orEmpty() }, objectType = WorkspaceObjectType.ChatMessage, sourceId = id)
+            recordHistory(WorkspaceHistoryType.Comment, chatObjectId, displayName.ifBlank { username.ifBlank { "You" } }, "Sent chat message", afterValue = body.take(500).ifBlank { attachmentName.orEmpty() })
+        }
         if (!attachmentUri.isNullOrBlank() && !attachmentName.isNullOrBlank()) {
             val objectId = upsertWorkspaceObject(WorkspaceObjectType.File, null, attachmentName, attachmentMimeType.orEmpty(), "", "file", 0xFF4AADFF)
             dao.insertWorkspaceFile(WorkspaceFileEntity(objectId = objectId, displayName = attachmentName, mimeType = attachmentMimeType.orEmpty(), uri = attachmentUri, sizeBytes = attachmentSizeBytes ?: 0, createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis(), workspaceId = activeWs()))
             recordHistory(WorkspaceHistoryType.Attachment, objectId, displayName.ifBlank { username.ifBlank { "You" } }, "Shared chat file", afterValue = "$attachmentName\n${attachmentMimeType.orEmpty()}\n$attachmentUri")
         }
         return id
+    }
+
+    /**
+     * Persists an inline notification reply in the workspace that originated the notification.
+     * Notification actions can run while another workspace is active, so they must not use
+     * [activeWs]. The pending remote binding lets reconciliation retry the reply after an offline
+     * or interrupted send without ever creating a second local bubble.
+     */
+    suspend fun queueNotificationChatReply(
+        workspaceId: Long,
+        channelId: Long?,
+        username: String,
+        displayName: String,
+        body: String,
+        color: Long,
+        createdAt: Long,
+        syncId: String,
+    ): Long {
+        val localId = dao.insertChatMessage(
+            ChatMessageEntity(
+                authorUsername = username.ifBlank { "you" },
+                authorDisplayName = displayName.ifBlank { username.ifBlank { "You" } },
+                body = body,
+                color = color,
+                createdAt = createdAt,
+                workspaceId = workspaceId,
+                channelId = channelId,
+            ),
+        )
+        markChatMessagePendingRemote(workspaceId, localId, syncId)
+        return localId
+    }
+
+    suspend fun editChatMessage(message: ChatMessageItem, body: String) {
+        val clean = body.trim()
+        require(clean.isNotBlank()) { "Message cannot be empty" }
+        dao.editChatMessage(message.id, clean, System.currentTimeMillis())
+    }
+
+    suspend fun setChatMessagePinned(messageId: Long, pinned: Boolean) = dao.setChatMessagePinned(messageId, pinned)
+
+    /** Private bookmark: local-only by design and excluded from every remote payload. */
+    suspend fun setChatMessageStarred(messageId: Long, starred: Boolean) =
+        dao.setChatMessageStarred(messageId, starred)
+
+    suspend fun toggleChatReaction(message: ChatMessageItem, emoji: String, username: String) {
+        val root = runCatching { JSONObject(message.reactionsJson) }.getOrElse { JSONObject() }
+        // One reaction per user: remove the user from every other emoji first.
+        root.keys().asSequence().toList().forEach { key ->
+            if (key != emoji) {
+                val arr = root.optJSONArray(key) ?: return@forEach
+                val kept = (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { u -> u.isNotBlank() && !u.equals(username, ignoreCase = true) } }
+                if (kept.isEmpty()) root.remove(key) else root.put(key, JSONArray(kept))
+            }
+        }
+        val current = root.optJSONArray(emoji) ?: JSONArray()
+        val users = (0 until current.length()).mapNotNull { current.optString(it).takeIf(String::isNotBlank) }.toMutableList()
+        if (!users.remove(username)) users += username
+        if (users.isEmpty()) root.remove(emoji) else root.put(emoji, JSONArray(users))
+        dao.setChatMessageReactions(message.id, root.toString())
+    }
+
+    /** Creates a topic or group channel. Returns the new channel's id. */
+    suspend fun createChatChannel(
+        kind: ChatChannelKind,
+        name: String,
+        icon: String,
+        syncId: String = UUID.randomUUID().toString(),
+        counterpartUsername: String = "",
+        createdAt: Long = System.currentTimeMillis(),
+    ): Long = dao.insertChatChannel(
+        ChatChannelEntity(
+            syncId = syncId,
+            kind = kind.name,
+            name = name.trim(),
+            counterpartUsername = counterpartUsername,
+            icon = icon,
+            createdAt = createdAt,
+            workspaceId = activeWs(),
+        ),
+    )
+
+    /**
+     * Finds the existing DM channel for a person, or creates one. Keeps a single conversation per
+     * counterpart instead of spawning a new channel every time the row is tapped.
+     */
+    suspend fun openOrCreateDmChannel(counterpartUsername: String, displayName: String, syncId: String): Long {
+        val ws = activeWs()
+        dao.chatChannelByCounterpart(ws, ChatChannelKind.Dm.name, counterpartUsername)?.let { return it.id }
+        dao.chatChannelBySyncId(ws, syncId)?.let { return it.id }
+        return dao.insertChatChannel(
+            ChatChannelEntity(
+                syncId = syncId,
+                kind = ChatChannelKind.Dm.name,
+                name = displayName.ifBlank { counterpartUsername },
+                counterpartUsername = counterpartUsername,
+                icon = "app.people",
+                createdAt = System.currentTimeMillis(),
+                workspaceId = ws,
+            ),
+        )
+    }
+
+    /** Pins or unpins a conversation in the chat inbox. */
+    suspend fun setChatChannelPinned(channelId: Long, pinned: Boolean) {
+        dao.setChatChannelPinned(channelId, pinned)
+    }
+
+    /**
+     * Finds (or creates) the local channel row that mirrors an account-level
+     * conversation. Keyed by [accountConversationId] so the same conversation
+     * reconciles across refreshes; the non-null id is what routes sends onto the
+     * account transport (ChatScope.Account) instead of the workspace transport.
+     */
+    suspend fun openOrCreateAccountChannel(
+        accountConversationId: String,
+        kind: ChatChannelKind,
+        name: String,
+        counterpartUsername: String = "",
+        icon: String = "app.people",
+        coverUri: String? = null,
+        description: String = "",
+        rules: String = "",
+        rulesReminderDays: Int = 7,
+        createdAt: Long = System.currentTimeMillis(),
+    ): Long {
+        val ws = activeWs()
+        dao.chatChannelByAccountConversation(accountConversationId)?.let { existing ->
+            // Keep the display name fresh (a peer may have set a profile name since first open).
+            dao.insertChatChannel(
+                existing.copy(
+                    name = name.trim().ifBlank { existing.name },
+                    icon = icon.ifBlank { existing.icon },
+                    coverUri = coverUri,
+                    description = description,
+                    rules = rules,
+                    rulesReminderDays = rulesReminderDays.coerceIn(1, 365),
+                ),
+            )
+            return existing.id
+        }
+        return dao.insertChatChannel(
+            ChatChannelEntity(
+                syncId = UUID.randomUUID().toString(),
+                kind = kind.name,
+                name = name.trim().ifBlank { counterpartUsername },
+                counterpartUsername = counterpartUsername,
+                icon = icon,
+                coverUri = coverUri,
+                description = description,
+                rules = rules,
+                rulesReminderDays = rulesReminderDays.coerceIn(1, 365),
+                createdAt = createdAt,
+                workspaceId = ws,
+                accountConversationId = accountConversationId,
+            ),
+        )
+    }
+
+    /** The local channel mirroring an account conversation, if one exists. */
+    suspend fun accountChannelId(accountConversationId: String): Long? =
+        dao.chatChannelByAccountConversation(accountConversationId)?.id
+
+    suspend fun updateChatChannelRichMetadata(
+        channelId: Long,
+        name: String,
+        icon: String,
+        coverUri: String?,
+        description: String,
+        rules: String,
+        rulesReminderDays: Int,
+    ) {
+        dao.updateChatChannelRichMetadata(
+            id = channelId,
+            name = name.trim(),
+            icon = icon.trim(),
+            coverUri = coverUri?.trim()?.ifBlank { null },
+            description = description.trim(),
+            rules = rules.trim(),
+            rulesReminderDays = rulesReminderDays.coerceIn(1, 365),
+        )
+    }
+
+    /**
+     * Imports one account-level (NorfoldSocial) direct message into the local
+     * chat_messages store. Dedupes on the remote client_sync_id via the same
+     * remote_object_bindings table the workspace path uses — client_sync_id is
+     * the one key present on BOTH our own optimistic send and the realtime echo,
+     * so it collapses the self-echo and any reconnect replay. Returns true when a
+     * new local row was inserted.
+     *
+     * The parent account channel must already exist locally (channel-first
+     * ordering, mirroring importRemoteChatMessage's guard) — callers resolve it
+     * through openOrCreateAccountChannel before draining messages.
+     */
+    suspend fun importAccountDirectMessage(
+        localChannelId: Long,
+        clientSyncId: String,
+        remoteMessageId: String,
+        senderUsername: String,
+        senderDisplayName: String,
+        body: String,
+        color: Long,
+        createdAt: Long,
+        isOwn: Boolean,
+    ): Boolean = database.withTransaction {
+        val ws = activeWs()
+        // Own messages already have a local row + binding (keyed by the same
+        // client_sync_id) from the optimistic send; reconnect replays already imported.
+        val existing = dao.remoteBindingBySyncId(ws, WorkspaceObjectType.ChatMessage.name, clientSyncId)
+        if (existing != null) return@withTransaction false
+        val localId = dao.insertChatMessage(
+            ChatMessageEntity(
+                authorUsername = senderUsername,
+                authorDisplayName = senderDisplayName.ifBlank { senderUsername },
+                body = body,
+                color = color,
+                createdAt = createdAt,
+                workspaceId = ws,
+                channelId = localChannelId,
+                // Incoming peer messages carry no receipt; our own echoes were already stamped Sent.
+                receiptStatus = if (isOwn) ChatReceiptStatus.Sent.name else null,
+            ),
+        )
+        dao.insertRemoteBinding(
+            RemoteObjectBindingEntity(
+                workspaceId = ws,
+                objectType = WorkspaceObjectType.ChatMessage.name,
+                localId = localId,
+                syncId = clientSyncId,
+                remoteId = remoteMessageId,
+                remoteVersion = 1,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+        true
+    }
+
+    /** Marks an optimistic account send as bound to its server row (dedupe on echo). */
+    suspend fun bindAccountDirectMessage(localMessageId: Long, clientSyncId: String) {
+        val ws = activeWs()
+        val existing = dao.remoteBinding(ws, WorkspaceObjectType.ChatMessage.name, localMessageId)
+        dao.insertRemoteBinding(
+            existing?.copy(
+                syncId = clientSyncId,
+                remoteId = clientSyncId,
+                remoteVersion = 1,
+                updatedAt = System.currentTimeMillis(),
+            ) ?: RemoteObjectBindingEntity(
+                workspaceId = ws,
+                objectType = WorkspaceObjectType.ChatMessage.name,
+                localId = localMessageId,
+                syncId = clientSyncId,
+                remoteId = clientSyncId,
+                remoteVersion = 1,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** Sets a single message's receipt stage (initial 'Sent' stamp on own sends). */
+    suspend fun setChatMessageReceiptStatus(messageId: Long, status: ChatReceiptStatus) {
+        dao.setChatMessageReceiptStatus(messageId, status.name)
+    }
+
+    /** Forward-only batch upgrade of receipt stages; replayed events are harmless. */
+    suspend fun upgradeChatMessageReceipts(messageIds: List<Long>, status: ChatReceiptStatus) {
+        if (messageIds.isEmpty()) return
+        dao.upgradeChatMessageReceipts(messageIds, status.name)
+    }
+
+    /** The remote sync id bound to a local chat message, if the message ever synced. */
+    suspend fun chatMessageSyncId(localWorkspaceId: Long, messageId: Long): String? =
+        dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, messageId)
+            ?.takeIf { it.remoteId != null }
+            ?.syncId
+
+    suspend fun chatMessageRemoteBinding(localWorkspaceId: Long, messageId: Long): RemoteObjectBindingEntity? =
+        dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, messageId)
+            ?.takeIf { it.remoteId != null }
+
+    suspend fun chatChannelRemoteBinding(localWorkspaceId: Long, channelId: Long): RemoteObjectBindingEntity? =
+        dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.ChatChannel.name, channelId)
+            ?.takeIf { it.remoteId != null }
+
+    suspend fun localChatChannelIdBySyncId(localWorkspaceId: Long, syncId: String): Long? =
+        dao.chatChannelBySyncId(localWorkspaceId, syncId)?.id
+
+    suspend fun chatChannelById(channelId: Long): ChatChannel? = dao.chatChannelById(channelId)?.toDomain()
+
+    suspend fun localChatMessageIdBySyncId(localWorkspaceId: Long, syncId: String): Long? =
+        dao.remoteBindingBySyncId(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, syncId)?.localId
+
+    /**
+     * Resolves local message ids for a set of remote sync ids — the bridge from a
+     * receipt-summary poll (keyed by sync id) back to local receipt columns.
+     */
+    suspend fun chatMessageIdsBySyncIds(localWorkspaceId: Long, syncIds: List<String>): Map<String, Long> =
+        syncIds.mapNotNull { syncId ->
+            dao.remoteBindingBySyncId(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, syncId)
+                ?.let { syncId to it.localId }
+        }.toMap()
+
+    /**
+     * Sync ids of own recently-sent messages that have a remote binding — the set the
+     * receipt poll asks the server about.
+     */
+    suspend fun recentOwnChatSyncIds(
+        localWorkspaceId: Long,
+        username: String,
+        limit: Int = 60,
+    ): List<Pair<String, Long>> =
+        dao.chatMessages(localWorkspaceId)
+            .filter { !it.system && it.authorUsername.equals(username, ignoreCase = true) && it.receiptStatus != ChatReceiptStatus.Viewed.name }
+            .sortedByDescending { it.createdAt }
+            .take(limit)
+            .mapNotNull { message ->
+                dao.remoteBinding(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, message.id)
+                    ?.takeIf { it.remoteId != null }
+                    ?.let { it.syncId to message.id }
+            }
+
+    /**
+     * "Delete for me": removes the local row only. The remote binding is kept on purpose —
+     * import dedup is binding-based, so keeping it stops the catch-up fetch from resurrecting
+     * the message on this device. Other devices are unaffected.
+     */
+    suspend fun deleteChatMessageForMe(messageId: Long) {
+        dao.deleteChatMessage(messageId)
+    }
+
+    /**
+     * Removes the local copy of a message that was unsent elsewhere (remote tombstone arrived).
+     * Binding stays for the same dedup reason; the server row is tombstoned and never re-fetched.
+     * Returns the removed local id, or null if the sync id was never imported here.
+     */
+    suspend fun removeChatMessageBySyncId(localWorkspaceId: Long, syncId: String): Long? {
+        val binding = dao.remoteBindingBySyncId(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, syncId)
+            ?: return null
+        dao.deleteChatMessage(binding.localId)
+        return binding.localId
+    }
+
+    /** Deletes a channel and every message scoped to it. General (null channel) is never deletable. */
+    suspend fun deleteChatChannel(channelId: Long) {
+        dao.deleteChatMessagesForChannel(channelId)
+        dao.deleteChatChannel(channelId)
     }
 
     suspend fun createGoal(
@@ -1454,7 +2524,6 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 updatedAt = now,
             )
         val id = dao.insertGoal(entity)
-        enqueueCloudUpsert(entity.copy(id = id).toDomain())
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Goal, id, title, description, status.name, "goal", 0xFF20B26B)
         recordActivity(WorkspaceActivityType.Created, owner.ifBlank { "You" }, "Created goal", title, objectId)
         return id
@@ -1465,12 +2534,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
         dao.updateGoal(goal.id, goal.title, goal.description, goal.owner, goal.target, goal.progress, goal.unit, goal.dueAt, status.name, System.currentTimeMillis())
         upsertWorkspaceObject(WorkspaceObjectType.Goal, goal.id, goal.title, goal.description, status.name, "goal", 0xFF20B26B, archived = status == GoalStatus.Achieved)
         recordActivity(WorkspaceActivityType.Updated, goal.owner.ifBlank { "You" }, "Updated goal", goal.title, objectType = WorkspaceObjectType.Goal, sourceId = goal.id)
-        enqueueCloudUpsert(goal.copy(status = status))
     }
 
     suspend fun deleteGoal(goal: GoalItem) {
-        enqueueCloudDelete(goal.workspaceId, "goal", goal.syncId)
-        dao.deleteGoal(goal.id)
+        database.withTransaction {
+            dao.workspaceObjectIdForSource(goal.workspaceId, WorkspaceObjectType.Goal.name, goal.id)?.let { objectId ->
+                deleteWorkspaceObjectGraph(objectId)
+            }
+            dao.deleteGoal(goal.id)
+        }
         recordActivity(WorkspaceActivityType.Updated, "You", "Deleted goal", goal.title)
     }
 
@@ -1515,7 +2587,6 @@ class DocsRepository(private val database: NorfoldDatabase) {
             )
             eventId
         }
-        enqueueCloudUpsert(entity.copy(id = id).toDomain())
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, id, title, summary, source.name, "calendar", color)
         recordActivity(WorkspaceActivityType.Created, "You", "Created calendar event", title, objectId)
         return id
@@ -1536,7 +2607,6 @@ class DocsRepository(private val database: NorfoldDatabase) {
             dao.updateCalendarEvent(event.id, event.title, summary, event.startAt, event.endAt, event.allDay, event.color, now)
         }
         upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, event.id, event.title, summary, event.source.name, "calendar", event.color)
-        enqueueCloudUpsert(event.copy(description = summary, updatedAt = now))
     }
 
     suspend fun ensureCalendarEventDocument(event: CalendarEventItem): OwnedDocument {
@@ -1571,48 +2641,17 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, event.id, normalizedTitle, summary, event.source.name, "calendar", event.color)
         recordActivity(WorkspaceActivityType.Updated, "You", "Updated event doc", normalizedTitle, objectType = WorkspaceObjectType.CalendarEvent, sourceId = event.id, objectId = objectId)
         recordHistory(WorkspaceHistoryType.Updated, objectId, "You", "Updated event doc", beforeValue = event.description.take(500), afterValue = summary.take(500))
-        enqueueCloudUpsert(event.copy(title = normalizedTitle, description = summary, updatedAt = now))
     }
 
     suspend fun deleteCalendarEvent(event: CalendarEventItem) {
-        enqueueCloudDelete(event.workspaceId, "calendar_event", event.syncId)
         database.withTransaction {
+            dao.workspaceObjectIdForSource(event.workspaceId, WorkspaceObjectType.CalendarEvent.name, event.id)?.let { objectId ->
+                deleteWorkspaceObjectGraph(objectId)
+            }
             dao.deleteDocumentForOwner(DocumentOwnerType.CalendarEvent.storageValue, event.id)
             dao.deleteCalendarEvent(event.id)
         }
         recordActivity(WorkspaceActivityType.Updated, "You", "Deleted calendar event", event.title)
-    }
-
-    private suspend fun enqueueCloudUpsert(goal: GoalItem) {
-        val payload = JSONObject()
-            .put("title", goal.title)
-            .put("description", goal.description)
-            .put("owner", goal.owner)
-            .put("target", goal.target)
-            .put("progress", goal.progress)
-            .put("unit", goal.unit)
-            .put("dueAt", goal.dueAt)
-            .put("status", goal.status.name)
-            .toString()
-        cloudSyncQueue.enqueue(goal.workspaceId, "goal", goal.syncId, CloudObjectOperation.Upsert, payload, null)
-    }
-
-    private suspend fun enqueueCloudUpsert(event: CalendarEventItem) {
-        val payload = JSONObject()
-            .put("title", event.title)
-            .put("description", event.description)
-            .put("startAt", event.startAt)
-            .put("endAt", event.endAt)
-            .put("allDay", event.allDay)
-            .put("color", event.color)
-            .put("source", event.source.name)
-            .put("externalId", event.externalId)
-            .toString()
-        cloudSyncQueue.enqueue(event.workspaceId, "calendar_event", event.syncId, CloudObjectOperation.Upsert, payload, null)
-    }
-
-    private suspend fun enqueueCloudDelete(workspaceId: Long, objectType: String, syncId: String) {
-        cloudSyncQueue.enqueue(workspaceId, objectType, syncId, CloudObjectOperation.Delete, "", null)
     }
 
     suspend fun setPinned(note: Note) = dao.setPinned(note.id, !note.pinned, System.currentTimeMillis())
@@ -1655,12 +2694,17 @@ class DocsRepository(private val database: NorfoldDatabase) {
     }
 
     suspend fun deleteNote(note: Note) = database.withTransaction {
+        dao.noteById(note.id)?.let { row ->
+            dao.workspaceObjectIdForSource(row.note.workspaceId, WorkspaceObjectType.Note.name, note.id)?.let { objectId ->
+                deleteWorkspaceObjectGraph(objectId)
+            }
+        }
         dao.deleteDocumentForOwner(DocumentOwnerType.Note.storageValue, note.id)
         dao.deleteNote(note.id)
     }
 
-    suspend fun updateSettings(settings: AppSettings) = dao.upsertSettings(
-        AppSettingsEntity(
+    suspend fun updateSettings(settings: AppSettings) {
+        val entity = AppSettingsEntity(
             themeMode = settings.themeMode.name,
             themeProfile = settings.themeProfile.name,
             accentColor = settings.accentColor,
@@ -1672,6 +2716,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
             syncFolderUri = settings.syncFolderUri,
             syncChainId = settings.syncChainId,
             syncDeviceName = settings.syncDeviceName,
+            settingsDeviceId = settings.settingsDeviceId,
+            settingsDeviceName = settings.settingsDeviceName,
+            settingsDeviceType = settings.settingsDeviceType,
+            settingsScreenClass = settings.settingsScreenClass,
+            settingsSchemaVersion = settings.settingsSchemaVersion,
             syncUserName = settings.syncUserName,
             syncPublicName = settings.syncPublicName,
             lastSyncAt = settings.lastSyncAt,
@@ -1688,7 +2737,12 @@ class DocsRepository(private val database: NorfoldDatabase) {
             adminsControlWorkspaceVisuals = settings.adminsControlWorkspaceVisuals,
             allowMembersCreateNotes = settings.allowMembersCreateNotes,
             allowMembersInvite = settings.allowMembersInvite,
+            fontScale = settings.fontScale,
             uiScale = settings.uiScale,
+            appLabelMode = settings.appLabelMode.name,
+            appIconFamily = settings.appIconFamily.name,
+            editorToolbarScale = settings.editorToolbarScale,
+            editorIconFamily = settings.editorIconFamily.name,
             editorLineWidth = settings.editorLineWidth.name,
             editorFontFamily = settings.editorFontFamily.name,
             showMarkdownSyntax = settings.showMarkdownSyntax,
@@ -1730,7 +2784,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
             taskKanbanEngine = settings.taskKanbanEngine,
             taskSwipeStartAction = settings.taskSwipeStartAction.name,
             taskSwipeEndAction = settings.taskSwipeEndAction.name,
-            noteRenderEngine = "Auto",
+            noteRenderEngine = settings.noteRenderEngine.name,
             onboardingComplete = settings.onboardingComplete,
             workspacePurpose = settings.workspacePurpose,
             calendarDefaultView = settings.calendarDefaultView,
@@ -1741,8 +2795,37 @@ class DocsRepository(private val database: NorfoldDatabase) {
             notificationEmail = settings.notificationEmail,
             notificationPush = settings.notificationPush,
             subscriptionTier = settings.subscriptionTier.name,
-        ),
-    )
+        )
+        dao.upsertSettings(entity)
+        if (settings.settingsDeviceId.isNotBlank()) {
+            dao.upsertDeviceSettingsProfile(settings.toDeviceSettingsProfile().toEntity())
+        }
+    }
+
+    suspend fun previewDeviceSettingsProfile(deviceId: String): DeviceSettingsImportPreview? {
+        val source = dao.deviceSettingsProfile(deviceId)?.toDomain() ?: return null
+        val current = dao.settings()?.toDomain() ?: defaultSettings
+        return DeviceSettingsImportPreview(source, current.settingsDeviceId, source.changesFrom(current))
+    }
+
+    suspend fun applyDeviceSettingsProfile(
+        deviceId: String,
+        categories: Set<SettingsProfileCategory>,
+    ): Boolean {
+        if (categories.isEmpty()) return false
+        val source = dao.deviceSettingsProfile(deviceId)?.toDomain() ?: return false
+        val current = dao.settings()?.toDomain() ?: defaultSettings
+        updateSettings(source.applyTo(current, categories))
+        return true
+    }
+
+    suspend fun resetDeviceSettings(categories: Set<SettingsProfileCategory>): Boolean {
+        if (categories.isEmpty()) return false
+        val current = dao.settings()?.toDomain() ?: return false
+        val defaults = defaultSettings.toDeviceSettingsProfile(updatedAt = 0L)
+        updateSettings(defaults.applyTo(current, categories))
+        return true
+    }
 
     suspend fun setVaultSecret(secret: CharArray) {
         val current = dao.settings()?.toDomain() ?: defaultSettings
@@ -1756,6 +2839,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     suspend fun snapshot(): BackupSnapshot = BackupSnapshot(
         workspaces = dao.allWorkspaces().map { it.toDomain() },
+        deviceSettingsProfiles = dao.allDeviceSettingsProfiles().map { it.toDomain() },
         taskWorkspacePrefs = (dao.settings()?.toDomain() ?: defaultSettings).let {
             TaskWorkspacePrefs(
                 viewMode = it.taskViewMode,
@@ -1782,6 +2866,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         goals = dao.allGoals().map { it.toDomain() },
         calendarEvents = dao.allCalendarEvents().map { it.toDomain() },
         chatMessages = dao.allChatMessages().map { it.toDomain() },
+        chatChannels = dao.allChatChannels().map { it.toDomain() },
         workspaceObjects = dao.allWorkspaceObjects().map { it.toDomain() },
         workspaceObjectLinks = dao.allWorkspaceObjectLinks().map { it.toDomain() },
         workspaceActivities = dao.allWorkspaceActivities().map { it.toDomain() },
@@ -1791,190 +2876,264 @@ class DocsRepository(private val database: NorfoldDatabase) {
     )
 
     suspend fun restore(snapshot: BackupSnapshot) {
-        dao.clearSyncOutbox()
-        dao.clearSyncTombstones()
-        dao.clearRemoteBindings()
-        dao.clearCalendarEvents()
-        dao.clearGoals()
-        dao.clearWorkspaceFiles()
-        dao.clearWorkspaceComments()
-        dao.clearWorkspaceObjectHistory()
-        dao.clearWorkspaceActivities()
-        dao.clearWorkspaceObjectLinks()
-        dao.clearWorkspaceObjects()
-        dao.clearAttachments()
-        dao.clearNoteEmbeds()
-        dao.clearChatMessages()
-        dao.clearTaskChecklistItems()
-        dao.clearTaskPropertyValues()
-        dao.clearTaskPropertyDefinitions()
-        dao.clearTasks()
-        dao.clearTaskColumns()
-        dao.clearTaskBoards()
-        dao.clearDocuments()
-        dao.clearNotes()
-        dao.clearTags()
-        dao.clearNotebooks()
-        snapshot.workspaces.forEach {
-            dao.insertWorkspace(
-                WorkspaceEntity(
-                    id = it.id,
-                    name = it.name,
-                    icon = it.icon,
-                    iconKind = it.iconKind.name,
-                    iconUri = it.iconUri,
-                    backgroundUri = it.backgroundUri,
-                    palette = it.palette.name,
-                    createdAt = it.createdAt,
-                ),
-            )
-        }
-        snapshot.notebooks.forEach { dao.insertNotebook(NotebookEntity(it.id, it.name, it.parentId, it.color, it.sortOrder)) }
-        snapshot.tags.forEach {
-            dao.insertTag(
-                TagEntity(
-                    id = it.id,
-                    name = it.name,
-                    color = it.color,
-                    scope = it.scope,
-                    normalizedName = normalizeTagName(it.name),
-                ),
-            )
-        }
-        snapshot.notes.forEach { note ->
-            dao.insertNote(
-                NoteEntity(
-                    id = note.id,
-                    title = note.title,
-                    searchText = note.document.plainText(),
-                    notebookId = note.notebookId,
-                    coverUri = note.coverUri,
-                    coverMimeType = note.coverMimeType,
-                    pinned = note.pinned,
-                    starred = note.starred,
-                    archived = note.archived,
-                    locked = note.locked,
-                    createdAt = note.createdAt,
+        database.withTransaction {
+            dao.clearSyncOutbox()
+            dao.clearSyncTombstones()
+            dao.clearRemoteBindings()
+            dao.clearCalendarEvents()
+            dao.clearGoals()
+            dao.clearWorkspaceFiles()
+            dao.clearWorkspaceComments()
+            dao.clearWorkspaceObjectHistory()
+            dao.clearWorkspaceActivities()
+            dao.clearWorkspaceObjectLinks()
+            dao.clearWorkspaceObjects()
+            dao.clearAttachments()
+            dao.clearNoteEmbeds()
+            dao.clearChatMessages()
+            dao.clearChatChannels()
+            dao.clearTaskChecklistItems()
+            dao.clearTaskPropertyValues()
+            dao.clearTaskPropertyDefinitions()
+            dao.clearTasks()
+            dao.clearTaskColumns()
+            dao.clearTaskBoards()
+            dao.clearDocuments()
+            dao.clearNotes()
+            dao.clearTags()
+            dao.clearNotebooks()
+            snapshot.workspaces.forEach {
+                dao.insertWorkspace(
+                    WorkspaceEntity(
+                        id = it.id,
+                        name = it.name,
+                        icon = it.icon,
+                        iconKind = it.iconKind.name,
+                        iconUri = it.iconUri,
+                        backgroundUri = it.backgroundUri,
+                        palette = it.palette.name,
+                        createdAt = it.createdAt,
+                        permRename = it.permRename,
+                        permChangeIcon = it.permChangeIcon,
+                        permInviteMembers = it.permInviteMembers,
+                        permDeleteNotes = it.permDeleteNotes,
+                        permEditNotes = it.permEditNotes,
+                        permManageTasks = it.permManageTasks,
+                    ),
+                )
+            }
+            snapshot.notebooks.forEach {
+                dao.insertNotebook(
+                    NotebookEntity(
+                        id = it.id,
+                        name = it.name,
+                        parentId = it.parentId,
+                        color = it.color,
+                        sortOrder = it.sortOrder,
+                        workspaceId = it.workspaceId,
+                        scope = it.scope,
+                        iconId = it.iconId,
+                    ),
+                )
+            }
+            snapshot.tags.forEach {
+                dao.insertTag(
+                    TagEntity(
+                        id = it.id,
+                        name = it.name,
+                        color = it.color,
+                        scope = it.scope,
+                        normalizedName = normalizeTagName(it.name),
+                    ),
+                )
+            }
+            snapshot.notes.forEach { note ->
+                dao.insertNote(
+                    NoteEntity(
+                        id = note.id,
+                        title = note.title,
+                        searchText = note.document.plainText(),
+                        notebookId = note.notebookId,
+                        coverUri = note.coverUri,
+                        coverMimeType = note.coverMimeType,
+                        pinned = note.pinned,
+                        starred = note.starred,
+                        archived = note.archived,
+                        locked = note.locked,
+                        createdAt = note.createdAt,
+                        updatedAt = note.updatedAt,
+                        workspaceId = note.workspaceId,
+                    ),
+                )
+                persistDocument(
+                    owner = DocumentOwner.note(note.id),
+                    document = note.document,
+                    dirtyBlockIds = note.document.blocks.mapTo(linkedSetOf()) { it.id },
+                    layoutMode = note.overlapMode,
+                    freeformLayout = note.freeformLayout,
+                    canvasSpec = note.canvasSpec,
                     updatedAt = note.updatedAt,
+                )
+                setTags(note.id, note.tags.map { it.name })
+            }
+            snapshot.attachments.forEach { dao.insertAttachment(AttachmentEntity(it.id, it.noteId, it.displayName, it.mimeType, it.uri, it.sizeBytes)) }
+            snapshot.embeds.forEach { dao.insertNoteEmbed(NoteEmbedEntity(it.id, it.noteId, it.type.name, it.title, it.target, it.preview, it.createdAt)) }
+            snapshot.taskBoards.forEach { dao.insertTaskBoard(TaskBoardEntity(it.id, it.name, it.workspaceId, it.createdAt, it.updatedAt)) }
+            snapshot.taskColumns.forEach { dao.insertTaskColumn(TaskColumnEntity(it.id, it.boardId, it.name, it.status?.name, it.color, it.sortOrder, it.createdAt, it.updatedAt)) }
+            if (snapshot.taskBoards.isEmpty()) {
+                val ws = snapshot.workspaces.firstOrNull()?.id ?: 1L
+                ensureDefaultTaskBoard(ws)
+            }
+            snapshot.taskPropertyDefinitions.forEach {
+                dao.insertTaskPropertyDefinition(
+                    TaskPropertyDefinitionEntity(
+                        id = it.id,
+                        boardId = it.boardId,
+                        name = it.name,
+                        type = it.type.name,
+                        sortOrder = it.sortOrder,
+                        hiddenWhenEmpty = it.hiddenWhenEmpty,
+                        optionsJson = it.optionsJson,
+                        createdAt = it.createdAt,
+                        updatedAt = it.updatedAt,
+                    ),
+                )
+            }
+            snapshot.taskBoards.forEach { ensureDefaultTaskProperties(it.id) }
+            snapshot.tasks.forEach {
+                dao.insertTask(
+                    TaskEntity(
+                        id = it.id,
+                        title = it.title,
+                        description = it.description,
+                        assignee = it.assignee,
+                        status = it.status.name,
+                        priority = it.priority.name,
+                        startAt = it.startAt,
+                        dueAt = it.dueAt,
+                        allDay = it.allDay,
+                        reminderMinutesBefore = it.reminderMinutesBefore,
+                        labels = it.labels,
+                        attachmentName = it.attachmentName,
+                        attachmentMimeType = it.attachmentMimeType,
+                        attachmentUri = it.attachmentUri,
+                        attachmentSizeBytes = it.attachmentSizeBytes,
+                        createdAt = it.createdAt,
+                        updatedAt = it.updatedAt,
+                        taskBoardId = it.taskBoardId,
+                        taskColumnId = it.taskColumnId,
+                        sortOrder = it.sortOrder,
+                        colorArgb = it.colorArgb,
+                        workspaceId = it.workspaceId,
+                    ),
+                )
+            }
+            snapshot.ownedDocuments.forEach { owned ->
+                persistDocument(
+                    owner = owned.owner,
+                    document = owned.document,
+                    dirtyBlockIds = owned.document.blocks.mapTo(linkedSetOf()) { it.id },
+                    layoutMode = owned.layoutMode,
+                    freeformLayout = owned.freeformLayout,
+                    canvasSpec = owned.canvasSpec,
+                    updatedAt = owned.updatedAt,
+                )
+            }
+            snapshot.taskPropertyValues.forEach {
+                dao.insertTaskPropertyValue(TaskPropertyValueEntity(it.id, it.taskId, it.propertyId, it.valueJson, it.updatedAt))
+            }
+            snapshot.taskChecklistItems.forEach {
+                dao.insertTaskChecklistItem(TaskChecklistItemEntity(it.id, it.taskId, it.propertyId, it.text, it.checked, it.sortOrder, it.createdAt, it.updatedAt))
+            }
+            snapshot.goals.forEach {
+                dao.insertGoal(GoalEntity(it.id, it.workspaceId, it.syncId, it.title, it.description, it.owner, it.target, it.progress, it.unit, it.dueAt, it.status.name, it.createdAt, it.updatedAt))
+            }
+            snapshot.calendarEvents.forEach {
+                dao.insertCalendarEvent(CalendarEventEntity(it.id, it.workspaceId, it.syncId, it.title, it.description, it.startAt, it.endAt, it.allDay, it.color, it.source.name, it.externalId, it.createdAt, it.updatedAt))
+            }
+            snapshot.chatChannels.forEach {
+                dao.insertChatChannel(ChatChannelEntity(it.id, it.syncId, it.kind.name, it.name, it.counterpartUsername, it.icon, it.createdAt, it.workspaceId, it.pinned))
+            }
+            snapshot.chatMessages.forEach {
+                dao.insertChatMessage(
+                    ChatMessageEntity(
+                        id = it.id,
+                        authorUsername = it.authorUsername,
+                        authorDisplayName = it.authorDisplayName,
+                        body = it.body,
+                        color = it.color,
+                        createdAt = it.createdAt,
+                        system = it.system,
+                        attachmentName = it.attachmentName,
+                        attachmentMimeType = it.attachmentMimeType,
+                        attachmentUri = it.attachmentUri,
+                        attachmentSizeBytes = it.attachmentSizeBytes,
+                        workspaceId = it.workspaceId,
+                        channelId = it.channelId,
+                        receiptStatus = it.receiptStatus?.name,
+                        replyPreview = it.replyPreview,
+                        editedAt = it.editedAt,
+                        reactionsJson = it.reactionsJson,
+                        pinned = it.pinned,
+                    ),
+                )
+            }
+            snapshot.workspaceObjects.forEach {
+                dao.insertWorkspaceObject(WorkspaceObjectEntity(it.id, it.objectType.name, it.sourceId, it.title, it.summary, it.tags, it.icon, it.color, it.pinned, it.archived, it.createdAt, it.updatedAt, it.workspaceId))
+            }
+            snapshot.workspaceObjectLinks.forEach {
+                dao.insertWorkspaceObjectLink(WorkspaceObjectLinkEntity(it.id, it.fromObjectId, it.toObjectId, it.linkType.name, it.label, it.createdAt, it.workspaceId))
+            }
+            snapshot.workspaceActivities.forEach {
+                dao.insertWorkspaceActivity(WorkspaceActivityEntity(it.id, it.objectId, it.activityType.name, it.actor, it.title, it.detail, it.createdAt, it.workspaceId))
+            }
+            snapshot.workspaceObjectHistory.forEach {
+                dao.insertWorkspaceObjectHistory(
+                    WorkspaceObjectHistoryEntity(
+                        id = it.id,
+                        objectId = it.objectId,
+                        historyType = it.historyType.name,
+                        actor = it.actor,
+                        summary = it.summary,
+                        beforeValue = it.beforeValue,
+                        afterValue = it.afterValue,
+                        createdAt = it.createdAt,
+                        blockId = it.blockId,
+                        workspaceId = it.workspaceId,
+                    ),
+                )
+            }
+            snapshot.workspaceComments.forEach {
+                dao.insertWorkspaceComment(WorkspaceCommentEntity(it.id, it.objectId, it.authorUsername, it.authorDisplayName, it.body, it.resolved, it.createdAt, it.updatedAt, it.workspaceId))
+            }
+            snapshot.workspaceFiles.forEach {
+                dao.insertWorkspaceFile(WorkspaceFileEntity(it.id, it.objectId, it.displayName, it.mimeType, it.uri, it.sizeBytes, it.createdAt, it.updatedAt, it.workspaceId))
+            }
+            snapshot.deviceSettingsProfiles.forEach { imported ->
+                val existing = dao.deviceSettingsProfile(imported.deviceId)?.toDomain()
+                if (existing == null || imported.updatedAt > existing.updatedAt) {
+                    dao.upsertDeviceSettingsProfile(imported.toEntity())
+                }
+            }
+            val currentSettings = dao.settings()?.toDomain() ?: defaultSettings
+            // The pre-restore active workspace may not exist in the snapshot; a dangling id
+            // would filter every scoped flow to empty until the user switches manually.
+            val workspacesAfterRestore = dao.allWorkspaces()
+            val resolvedActiveWorkspaceId = currentSettings.activeWorkspaceId
+                .takeIf { id -> workspacesAfterRestore.any { it.id == id } }
+                ?: workspacesAfterRestore.firstOrNull()?.id ?: 1L
+            updateSettings(
+                currentSettings.copy(
+                    activeWorkspaceId = resolvedActiveWorkspaceId,
+                    taskViewMode = snapshot.taskWorkspacePrefs.viewMode,
+                    taskSelectedBoardId = snapshot.taskWorkspacePrefs.selectedBoardId,
+                    taskSortMode = snapshot.taskWorkspacePrefs.sortMode,
+                    taskCompactLayout = snapshot.taskWorkspacePrefs.compactLayout,
+                    taskKanbanEngine = snapshot.taskWorkspacePrefs.kanbanEngine,
                 ),
             )
-            persistDocument(
-                owner = DocumentOwner.note(note.id),
-                document = note.document,
-                dirtyBlockIds = note.document.blocks.mapTo(linkedSetOf()) { it.id },
-                layoutMode = note.overlapMode,
-                freeformLayout = note.freeformLayout,
-                canvasSpec = note.canvasSpec,
-                updatedAt = note.updatedAt,
-            )
-            setTags(note.id, note.tags.map { it.name })
+            rebuildWorkspaceIndex()
         }
-        snapshot.attachments.forEach { dao.insertAttachment(AttachmentEntity(it.id, it.noteId, it.displayName, it.mimeType, it.uri, it.sizeBytes)) }
-        snapshot.embeds.forEach { dao.insertNoteEmbed(NoteEmbedEntity(it.id, it.noteId, it.type.name, it.title, it.target, it.preview, it.createdAt)) }
-        snapshot.taskBoards.forEach { dao.insertTaskBoard(TaskBoardEntity(it.id, it.name, it.workspaceId, it.createdAt, it.updatedAt)) }
-        snapshot.taskColumns.forEach { dao.insertTaskColumn(TaskColumnEntity(it.id, it.boardId, it.name, it.status?.name, it.color, it.sortOrder, it.createdAt, it.updatedAt)) }
-        if (snapshot.taskBoards.isEmpty()) {
-            val ws = snapshot.workspaces.firstOrNull()?.id ?: 1L
-            ensureDefaultTaskBoard(ws)
-        }
-        snapshot.taskPropertyDefinitions.forEach {
-            dao.insertTaskPropertyDefinition(
-                TaskPropertyDefinitionEntity(
-                    id = it.id,
-                    boardId = it.boardId,
-                    name = it.name,
-                    type = it.type.name,
-                    sortOrder = it.sortOrder,
-                    hiddenWhenEmpty = it.hiddenWhenEmpty,
-                    optionsJson = it.optionsJson,
-                    createdAt = it.createdAt,
-                    updatedAt = it.updatedAt,
-                ),
-            )
-        }
-        snapshot.taskBoards.forEach { ensureDefaultTaskProperties(it.id) }
-        snapshot.tasks.forEach {
-            dao.insertTask(
-                TaskEntity(
-                    id = it.id,
-                    title = it.title,
-                    description = it.description,
-                    assignee = it.assignee,
-                    status = it.status.name,
-                    priority = it.priority.name,
-                    startAt = it.startAt,
-                    dueAt = it.dueAt,
-                    allDay = it.allDay,
-                    reminderMinutesBefore = it.reminderMinutesBefore,
-                    labels = it.labels,
-                    attachmentName = it.attachmentName,
-                    attachmentMimeType = it.attachmentMimeType,
-                    attachmentUri = it.attachmentUri,
-                    attachmentSizeBytes = it.attachmentSizeBytes,
-                    createdAt = it.createdAt,
-                    updatedAt = it.updatedAt,
-                    taskBoardId = it.taskBoardId,
-                    taskColumnId = it.taskColumnId,
-                    sortOrder = it.sortOrder,
-                    colorArgb = it.colorArgb,
-                ),
-            )
-        }
-        snapshot.ownedDocuments.forEach { owned ->
-            persistDocument(
-                owner = owned.owner,
-                document = owned.document,
-                dirtyBlockIds = owned.document.blocks.mapTo(linkedSetOf()) { it.id },
-                layoutMode = owned.layoutMode,
-                freeformLayout = owned.freeformLayout,
-                canvasSpec = owned.canvasSpec,
-                updatedAt = owned.updatedAt,
-            )
-        }
-        snapshot.taskPropertyValues.forEach {
-            dao.insertTaskPropertyValue(TaskPropertyValueEntity(it.id, it.taskId, it.propertyId, it.valueJson, it.updatedAt))
-        }
-        snapshot.taskChecklistItems.forEach {
-            dao.insertTaskChecklistItem(TaskChecklistItemEntity(it.id, it.taskId, it.propertyId, it.text, it.checked, it.sortOrder, it.createdAt, it.updatedAt))
-        }
-        snapshot.goals.forEach {
-            dao.insertGoal(GoalEntity(it.id, it.workspaceId, it.syncId, it.title, it.description, it.owner, it.target, it.progress, it.unit, it.dueAt, it.status.name, it.createdAt, it.updatedAt))
-        }
-        snapshot.calendarEvents.forEach {
-            dao.insertCalendarEvent(CalendarEventEntity(it.id, it.workspaceId, it.syncId, it.title, it.description, it.startAt, it.endAt, it.allDay, it.color, it.source.name, it.externalId, it.createdAt, it.updatedAt))
-        }
-        snapshot.chatMessages.forEach {
-            dao.insertChatMessage(ChatMessageEntity(it.id, it.authorUsername, it.authorDisplayName, it.body, it.color, it.createdAt, it.system, it.attachmentName, it.attachmentMimeType, it.attachmentUri, it.attachmentSizeBytes))
-        }
-        snapshot.workspaceObjects.forEach {
-            dao.insertWorkspaceObject(WorkspaceObjectEntity(it.id, it.objectType.name, it.sourceId, it.title, it.summary, it.tags, it.icon, it.color, it.pinned, it.archived, it.createdAt, it.updatedAt))
-        }
-        snapshot.workspaceObjectLinks.forEach {
-            dao.insertWorkspaceObjectLink(WorkspaceObjectLinkEntity(it.id, it.fromObjectId, it.toObjectId, it.linkType.name, it.label, it.createdAt))
-        }
-        snapshot.workspaceActivities.forEach {
-            dao.insertWorkspaceActivity(WorkspaceActivityEntity(it.id, it.objectId, it.activityType.name, it.actor, it.title, it.detail, it.createdAt))
-        }
-        snapshot.workspaceObjectHistory.forEach {
-            dao.insertWorkspaceObjectHistory(WorkspaceObjectHistoryEntity(it.id, it.objectId, it.historyType.name, it.actor, it.summary, it.beforeValue, it.afterValue, it.createdAt))
-        }
-        snapshot.workspaceComments.forEach {
-            dao.insertWorkspaceComment(WorkspaceCommentEntity(it.id, it.objectId, it.authorUsername, it.authorDisplayName, it.body, it.resolved, it.createdAt, it.updatedAt))
-        }
-        snapshot.workspaceFiles.forEach {
-            dao.insertWorkspaceFile(WorkspaceFileEntity(it.id, it.objectId, it.displayName, it.mimeType, it.uri, it.sizeBytes, it.createdAt, it.updatedAt))
-        }
-        val currentSettings = dao.settings()?.toDomain() ?: defaultSettings
-        updateSettings(
-            currentSettings.copy(
-                taskViewMode = snapshot.taskWorkspacePrefs.viewMode,
-                taskSelectedBoardId = snapshot.taskWorkspacePrefs.selectedBoardId,
-                taskSortMode = snapshot.taskWorkspacePrefs.sortMode,
-                taskCompactLayout = snapshot.taskWorkspacePrefs.compactLayout,
-                taskKanbanEngine = snapshot.taskWorkspacePrefs.kanbanEngine,
-            ),
-        )
-        rebuildWorkspaceIndex()
     }
 
     suspend fun addWorkspaceFile(displayName: String, mimeType: String, uri: String, sizeBytes: Long): Long {
@@ -2013,30 +3172,93 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     suspend fun rebuildWorkspaceIndex() {
         val ws = activeWs()
+        val noteIds = hashSetOf<Long>()
+        val taskIds = hashSetOf<Long>()
+        val goalIds = hashSetOf<Long>()
+        val eventIds = hashSetOf<Long>()
+        val chatIds = hashSetOf<Long>()
         dao.allNotesSnapshot().filter { it.note.workspaceId == ws }.forEach { row ->
             val note = row.toDomain()
+            noteIds += note.id
             upsertWorkspaceObject(WorkspaceObjectType.Note, note.id, note.title, note.document.plainText().take(160), note.tags.joinToString(",") { it.name }, "note", 0xFF9D6CFF, note.pinned, note.archived)
         }
         dao.allTasks().filter { it.workspaceId == ws }.forEach {
+            taskIds += it.id
             upsertWorkspaceObject(WorkspaceObjectType.Task, it.id, it.title, it.description, it.labels, "task", 0xFF56CC98, archived = it.status == TaskStatus.Done.name)
         }
         dao.allGoals().filter { it.workspaceId == ws }.forEach {
+            goalIds += it.id
             upsertWorkspaceObject(WorkspaceObjectType.Goal, it.id, it.title, it.description, it.status, "goal", 0xFF20B26B, archived = it.status == GoalStatus.Achieved.name)
         }
         dao.allCalendarEvents().filter { it.workspaceId == ws }.forEach {
+            eventIds += it.id
             upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, it.id, it.title, it.description, it.source, "calendar", it.color)
         }
-        dao.allChatMessages().filter { it.workspaceId == ws }.forEach {
+        // Only General (null channel) is mirrored into the workspace graph; channel chatter stays local.
+        dao.allChatMessages().filter { it.workspaceId == ws && it.channelId == null }.forEach {
+            chatIds += it.id
             upsertWorkspaceObject(WorkspaceObjectType.ChatMessage, it.id, it.authorDisplayName, it.body.take(160), "", "chat", it.color)
         }
-        dao.allAttachments().forEach { attachment ->
-            val noteObjectId = objectIdFor(WorkspaceObjectType.Note, attachment.noteId)
-            val fileObjectId = upsertWorkspaceObject(WorkspaceObjectType.File, null, attachment.displayName, attachment.mimeType, "", "file", 0xFF4AADFF)
-            if (noteObjectId != null) {
+        // Clean up duplicated attachment file objects before backfilling: this loop used to mint a
+        // fresh File object + link per attachment on every rebuild (i.e. every app start), because
+        // null-sourceId upserts can never find their previous row. Candidates are File objects no
+        // workspace_files row references whose only inbound edge is a note Attachment link (or
+        // nothing at all); one survivor is kept per (note, label) so the backfill below stays
+        // idempotent. Chat/upload file objects are workspace_files-referenced and task file
+        // objects hang off Task links, so both are excluded by construction.
+        val objectsById = dao.workspaceObjectsSnapshot(ws).associateBy { it.id }
+        val referencedFileObjectIds = dao.workspaceFileObjectIds(ws).toHashSet()
+        val linksSnapshot = dao.workspaceObjectLinksSnapshot(ws)
+        val inboundLinks = linksSnapshot.groupBy { it.toObjectId }
+        val duplicateCandidates = objectsById.values.filter {
+            it.objectType == WorkspaceObjectType.File.name && it.sourceId == null && it.id !in referencedFileObjectIds
+        }
+        val (orphanFileObjects, linkedFileObjects) = duplicateCandidates.partition { inboundLinks[it.id].isNullOrEmpty() }
+        orphanFileObjects.forEach { deleteWorkspaceObjectGraph(it.id) }
+        linkedFileObjects
+            .mapNotNull { obj ->
+                val link = inboundLinks.getValue(obj.id).singleOrNull() ?: return@mapNotNull null
+                val fromNote = objectsById[link.fromObjectId]?.objectType == WorkspaceObjectType.Note.name
+                if (fromNote && link.linkType == WorkspaceLinkType.Attachment.name) Triple(link.fromObjectId, link.label, obj) else null
+            }
+            .groupBy { (fromObjectId, label, _) -> fromObjectId to label }
+            .forEach { (key, group) ->
+                val (fromObjectId, label) = key
+                val hasReferencedTwin = linksSnapshot.any {
+                    it.fromObjectId == fromObjectId && it.label == label &&
+                        it.linkType == WorkspaceLinkType.Attachment.name && it.toObjectId in referencedFileObjectIds
+                }
+                val survivorId = if (hasReferencedTwin) null else group.minOf { (_, _, obj) -> obj.id }
+                group.forEach { (_, _, obj) -> if (obj.id != survivorId) deleteWorkspaceObjectGraph(obj.id) }
+            }
+        // Backfill: adopt the already-linked file object when one exists; only attachments with no
+        // File object at all (legacy data, wiped index) get a new one. Scoped to this workspace's
+        // notes — the old unfiltered pass also indexed other workspaces' attachments in here.
+        dao.allAttachments().filter { it.noteId in noteIds }.forEach { attachment ->
+            val noteObjectId = objectIdFor(WorkspaceObjectType.Note, attachment.noteId) ?: return@forEach
+            val existingFileObjectId = dao.workspaceObjectLinkTarget(ws, noteObjectId, WorkspaceLinkType.Attachment.name, attachment.displayName)
+            if (existingFileObjectId == null) {
+                val fileObjectId = upsertWorkspaceObject(WorkspaceObjectType.File, null, attachment.displayName, attachment.mimeType, "", "file", 0xFF4AADFF)
                 insertObjectLinkIfMissing(noteObjectId, fileObjectId, WorkspaceLinkType.Attachment, attachment.displayName)
             }
         }
-        if (dao.allWorkspaceActivities().none { it.workspaceId == ws }) {
+        // Reconciliation: prune ghost objects whose source row no longer exists (deletes made
+        // before delete paths cleaned up workspace_objects left these behind permanently).
+        // Objects with a null sourceId are kept: embed/file placeholders are created that way.
+        val liveSourceIds = mapOf(
+            WorkspaceObjectType.Note.name to noteIds,
+            WorkspaceObjectType.Task.name to taskIds,
+            WorkspaceObjectType.Goal.name to goalIds,
+            WorkspaceObjectType.CalendarEvent.name to eventIds,
+            WorkspaceObjectType.ChatMessage.name to chatIds,
+        )
+        dao.workspaceObjectsSnapshot(ws)
+            .filter { obj ->
+                val live = liveSourceIds[obj.objectType] ?: return@filter false
+                obj.sourceId != null && obj.sourceId !in live
+            }
+            .forEach { ghost -> deleteWorkspaceObjectGraph(ghost.id) }
+        if (dao.countWorkspaceActivities(ws) == 0) {
             recordActivity(WorkspaceActivityType.Synced, "System", "Workspace index ready", "Objects, files, and activity are connected.")
             recordHistory(WorkspaceHistoryType.Sync, null, "System", "Workspace index ready")
         }
@@ -2052,10 +3274,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
         color: Long,
         pinned: Boolean = false,
         archived: Boolean = false,
-    ): Long {
+    ): Long = workspaceObjectUpsertMutex.withLock {
         val now = System.currentTimeMillis()
-        val existing = dao.allWorkspaceObjects().firstOrNull { it.workspaceId == activeWs() && it.objectType == type.name && it.sourceId == sourceId && sourceId != null }
-        return dao.insertWorkspaceObject(
+        val workspaceId = activeWs()
+        val existing = sourceId?.let { dao.workspaceObjectBySource(workspaceId, type.name, it) }
+        dao.insertWorkspaceObject(
             WorkspaceObjectEntity(
                 id = existing?.id ?: 0,
                 objectType = type.name,
@@ -2069,7 +3292,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 archived = archived,
                 createdAt = existing?.createdAt ?: now,
                 updatedAt = now,
-                workspaceId = activeWs(),
+                workspaceId = workspaceId,
             ),
         )
     }
@@ -2083,7 +3306,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
         objectType: WorkspaceObjectType? = null,
         sourceId: Long? = null,
     ) {
-        val resolvedObjectId = objectId ?: objectType?.let { t -> dao.allWorkspaceObjects().firstOrNull { it.workspaceId == activeWs() && it.objectType == t.name && it.sourceId == sourceId }?.id }
+        val resolvedObjectId = objectId ?: if (objectType != null && sourceId != null) {
+            dao.workspaceObjectIdForSource(activeWs(), objectType.name, sourceId)
+        } else {
+            null
+        }
         dao.insertWorkspaceActivity(
             WorkspaceActivityEntity(
                 objectId = resolvedObjectId,
@@ -2098,19 +3325,26 @@ class DocsRepository(private val database: NorfoldDatabase) {
     }
 
     private suspend fun objectIdFor(type: WorkspaceObjectType, sourceId: Long): Long? =
-        dao.allWorkspaceObjects().firstOrNull { it.workspaceId == activeWs() && it.objectType == type.name && it.sourceId == sourceId }?.id
+        dao.workspaceObjectIdForSource(activeWs(), type.name, sourceId)
+
+    /**
+     * Removes a workspace object plus everything that references it: links (either direction),
+     * activities, history, and comments. File rows keep their content but drop the dangling
+     * objectId so real uploads are never orphan-deleted alongside the object they were linked to.
+     */
+    private suspend fun deleteWorkspaceObjectGraph(objectId: Long) {
+        dao.deleteWorkspaceObjectLinksForObject(objectId)
+        dao.deleteWorkspaceActivitiesForObject(objectId)
+        dao.deleteWorkspaceObjectHistoryForObject(objectId)
+        dao.deleteWorkspaceCommentsForObject(objectId)
+        dao.detachWorkspaceFilesFromObject(objectId)
+        dao.deleteWorkspaceObjectById(objectId)
+    }
 
     private suspend fun insertObjectLinkIfMissing(fromObjectId: Long, toObjectId: Long, type: WorkspaceLinkType, label: String = ""): Long {
         if (fromObjectId == toObjectId) return 0
         val ws = activeWs()
-        val existing = dao.allWorkspaceObjectLinks().firstOrNull {
-            it.workspaceId == ws &&
-                it.fromObjectId == fromObjectId &&
-                it.toObjectId == toObjectId &&
-                it.linkType == type.name &&
-                it.label == label
-        }
-        if (existing != null) return existing.id
+        dao.workspaceObjectLinkId(ws, fromObjectId, toObjectId, type.name, label)?.let { return it }
         return dao.insertWorkspaceObjectLink(
             WorkspaceObjectLinkEntity(
                 fromObjectId = fromObjectId,
@@ -2130,6 +3364,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         summary: String,
         beforeValue: String = "",
         afterValue: String = "",
+        blockId: String? = null,
     ) {
         dao.insertWorkspaceObjectHistory(
             WorkspaceObjectHistoryEntity(
@@ -2140,6 +3375,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 beforeValue = beforeValue,
                 afterValue = afterValue,
                 createdAt = System.currentTimeMillis(),
+                blockId = blockId,
                 workspaceId = activeWs(),
             ),
         )
@@ -2170,6 +3406,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         name.trim().trimStart('#').replace(Regex("\\s+"), " ").lowercase()
 
     companion object {
+        const val RemoteDocumentObjectType = "SharedDocument"
         private val DefaultTaskProperties = listOf(
             "Name" to TaskPropertyType.Name,
             "Status" to TaskPropertyType.Status,
@@ -2211,8 +3448,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
         val defaultSettings = AppSettings(
             themeMode = ThemeMode.System,
-            themeProfile = ThemeProfile.Neon,
-            accentColor = 0xFF6F36FF,
+            themeProfile = ThemeProfile.Norfold,
+            accentColor = 0xFF3D7C45,
             activeWorkspaceId = 1,
             backupFolderUri = null,
             vaultLockEnabled = false,
@@ -2225,7 +3462,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
             syncPublicName = "",
             lastSyncAt = null,
             lastSyncHash = null,
-            lastSyncStatus = "Sync chain not configured",
+            lastSyncStatus = "Sync not set up",
             syncConflictCount = 0,
             profileBackgroundUri = null,
             profileImageUri = null,

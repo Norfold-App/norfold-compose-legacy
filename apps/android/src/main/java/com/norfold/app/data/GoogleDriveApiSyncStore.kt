@@ -2,7 +2,9 @@ package com.norfold.app.data
 
 import android.content.Context
 import com.norfold.app.domain.BackupCodec
+import com.norfold.app.domain.BackupCategoryCounts
 import com.norfold.app.domain.BackupSnapshot
+import com.norfold.app.domain.categoryCounts
 import com.norfold.app.domain.ParsedSyncConflictReport
 import com.norfold.app.domain.SyncConflictReport
 import com.norfold.app.domain.SyncProvider
@@ -17,10 +19,69 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.UUID
 
+data class GoogleDriveBackupManifest(
+    val deviceId: String,
+    val deviceName: String,
+    val chainId: String,
+    val snapshotFileName: String,
+    val snapshotHash: String,
+    val updatedAt: Long,
+    val encryptedSizeBytes: Long,
+    val appVersion: String,
+    val schemaVersion: Int,
+    val counts: BackupCategoryCounts,
+    val legacy: Boolean = false,
+)
+
 class GoogleDriveApiSyncStore(
     private val context: Context,
     private val authStore: GoogleDriveAuthStore,
 ) {
+    suspend fun discoverBackups(): List<GoogleDriveBackupManifest> = withContext(Dispatchers.IO) {
+        val accessToken = accessToken()
+        val registryFile = findFile(accessToken, RegistryFileName)
+        if (registryFile != null) {
+            return@withContext decodeRegistry(request(accessToken, "GET", "$DriveApi/files/${registryFile.id}?alt=media"))
+        }
+        val legacy = readRemoteSync(accessToken) ?: return@withContext emptyList()
+        listOf(
+            GoogleDriveBackupManifest(
+                deviceId = "legacy",
+                deviceName = legacy.deviceName.ifBlank { "Earlier Norfold device" },
+                chainId = legacy.chainId,
+                snapshotFileName = SyncFileName,
+                snapshotHash = legacy.snapshotHash,
+                updatedAt = legacy.updatedAt,
+                encryptedSizeBytes = legacy.snapshotPayload.length.toLong(),
+                appVersion = "Earlier Norfold build",
+                schemaVersion = 3,
+                counts = BackupCategoryCounts(0, 0, 0),
+                legacy = true,
+            ),
+        )
+    }
+
+    suspend fun writeDeviceBackup(
+        secret: CharArray,
+        chainId: String,
+        username: String,
+        publicName: String,
+        deviceId: String,
+        deviceName: String,
+        snapshot: BackupSnapshot,
+    ): SyncWriteResult = withContext(Dispatchers.IO) {
+        writeDeviceBackupInternal(accessToken(), secret, chainId, username, publicName, deviceId, deviceName, snapshot)
+    }
+
+    suspend fun restoreDeviceBackup(secret: CharArray, manifest: GoogleDriveBackupManifest): SyncRestoreResult = withContext(Dispatchers.IO) {
+        val accessToken = accessToken()
+        val file = findFile(accessToken, manifest.snapshotFileName)
+            ?: error("That Norfold backup is no longer available in Google Drive app data.")
+        val remote = decodeRemoteSync(request(accessToken, "GET", "$DriveApi/files/${file.id}?alt=media"), file.id)
+        val snapshot = BackupCodec.decrypt(remote.snapshotPayload, secret)
+        SyncRestoreResult(snapshot, SyncWriteResult(remote.chainId, snapshot.stableHash(), "Backup decrypted and ready to restore"))
+    }
+
     suspend fun createChain(
         secret: CharArray,
         username: String,
@@ -29,18 +90,17 @@ class GoogleDriveApiSyncStore(
         snapshot: BackupSnapshot,
     ): SyncWriteResult = withContext(Dispatchers.IO) {
         val chainId = UUID.randomUUID().toString()
-        val snapshotHash = snapshot.stableHash()
-        val document = syncDocument(
+        writeDeviceBackupInternal(
+            accessToken = accessToken(),
+            secret = secret,
             chainId = chainId,
             username = username,
             publicName = publicName,
+            deviceId = InstallationIdentityStore(context).installationId,
             deviceName = deviceName,
-            snapshotHash = snapshotHash,
-            snapshotPayload = BackupCodec.encrypt(snapshot, secret),
+            snapshot = snapshot,
             status = "Google Drive API sync chain created",
         )
-        uploadOrCreateJson(accessToken(), SyncFileName, document)
-        SyncWriteResult(chainId, snapshotHash, "Google Drive API sync chain created")
     }
 
     suspend fun restoreChain(secret: CharArray): SyncRestoreResult = withContext(Dispatchers.IO) {
@@ -119,15 +179,119 @@ class GoogleDriveApiSyncStore(
     private fun readRemoteSync(accessToken: String): RemoteSync? {
         val file = findFile(accessToken, SyncFileName) ?: return null
         val body = request(accessToken, "GET", "$DriveApi/files/${file.id}?alt=media")
+        return decodeRemoteSync(body, file.id)
+    }
+
+    private fun decodeRemoteSync(body: String, fileId: String): RemoteSync {
         val json = JSONObject(body)
         val format = json.optString("format")
         require(format == SyncFormat) { "Google Drive sync file is not a Norfold sync chain." }
         return RemoteSync(
-            fileId = file.id,
+            fileId = fileId,
             chainId = json.optString("chainId").ifBlank { UUID.randomUUID().toString() },
             snapshotHash = json.optString("snapshotHash"),
             snapshotPayload = json.getString("snapshotPayload"),
+            deviceName = json.optString("lastWriterDevice"),
+            updatedAt = json.optLong("updatedAt"),
         )
+    }
+
+    private fun writeDeviceBackupInternal(
+        accessToken: String,
+        secret: CharArray,
+        chainId: String,
+        username: String,
+        publicName: String,
+        deviceId: String,
+        deviceName: String,
+        snapshot: BackupSnapshot,
+        status: String = "Automatic backup completed",
+    ): SyncWriteResult {
+        require(runCatching { UUID.fromString(deviceId) }.isSuccess) { "Installation id must be a UUID." }
+        val snapshotHash = snapshot.stableHash()
+        val encrypted = BackupCodec.encrypt(snapshot, secret)
+        val body = syncDocument(chainId, username, publicName, deviceName, snapshotHash, encrypted, status)
+        val snapshotFileName = "norfold-backup-$deviceId.json"
+        uploadOrCreateJson(accessToken, snapshotFileName, body)
+        // Keep the canonical file for current clients and conflict review. It is intentionally
+        // overwritten by every successful backup, while the per-device file preserves device
+        // discovery and selective restore metadata.
+        uploadOrCreateJson(accessToken, SyncFileName, body)
+        val previous = readRegistry(accessToken).filterNot { it.deviceId == deviceId }
+        val manifest = GoogleDriveBackupManifest(
+            deviceId = deviceId,
+            deviceName = deviceName,
+            chainId = chainId,
+            snapshotFileName = snapshotFileName,
+            snapshotHash = snapshotHash,
+            updatedAt = System.currentTimeMillis(),
+            encryptedSizeBytes = encrypted.toByteArray(Charsets.UTF_8).size.toLong(),
+            appVersion = "${com.norfold.app.BuildConfig.VERSION_NAME} (${com.norfold.app.BuildConfig.VERSION_CODE})",
+            schemaVersion = 3,
+            counts = snapshot.categoryCounts(),
+        )
+        uploadOrCreateJson(accessToken, RegistryFileName, encodeRegistry((previous + manifest).sortedByDescending { it.updatedAt }))
+        return SyncWriteResult(chainId, snapshotHash, status)
+    }
+
+    private fun readRegistry(accessToken: String): List<GoogleDriveBackupManifest> {
+        val file = findFile(accessToken, RegistryFileName) ?: return emptyList()
+        return decodeRegistry(request(accessToken, "GET", "$DriveApi/files/${file.id}?alt=media"))
+    }
+
+    private fun encodeRegistry(manifests: List<GoogleDriveBackupManifest>): String = JSONObject()
+        .put("app", "Norfold")
+        .put("format", RegistryFormat)
+        .put("updatedAt", System.currentTimeMillis())
+        .put("backups", JSONArray().apply {
+            manifests.forEach { manifest ->
+                put(JSONObject()
+                    .put("deviceId", manifest.deviceId)
+                    .put("deviceName", manifest.deviceName)
+                    .put("chainId", manifest.chainId)
+                    .put("snapshotFileName", manifest.snapshotFileName)
+                    .put("snapshotHash", manifest.snapshotHash)
+                    .put("updatedAt", manifest.updatedAt)
+                    .put("encryptedSizeBytes", manifest.encryptedSizeBytes)
+                    .put("appVersion", manifest.appVersion)
+                    .put("schemaVersion", manifest.schemaVersion)
+                    .put("workspaceContentCount", manifest.counts.workspaceContent)
+                    .put("conversationAndFileCount", manifest.counts.conversationsAndFiles)
+                    .put("deviceSettingsCount", manifest.counts.deviceSettings))
+            }
+        })
+        .toString(2)
+
+    private fun decodeRegistry(payload: String): List<GoogleDriveBackupManifest> {
+        val json = JSONObject(payload)
+        require(json.optString("format") == RegistryFormat) { "Google Drive backup registry has an unsupported format." }
+        val backups = json.optJSONArray("backups") ?: return emptyList()
+        return buildList {
+            for (index in 0 until backups.length()) {
+                val row = backups.optJSONObject(index) ?: continue
+                val deviceId = row.optString("deviceId")
+                val fileName = row.optString("snapshotFileName")
+                if (deviceId.isBlank() || fileName.isBlank()) continue
+                add(
+                    GoogleDriveBackupManifest(
+                        deviceId = deviceId,
+                        deviceName = row.optString("deviceName").ifBlank { "Android device" },
+                        chainId = row.optString("chainId"),
+                        snapshotFileName = fileName,
+                        snapshotHash = row.optString("snapshotHash"),
+                        updatedAt = row.optLong("updatedAt"),
+                        encryptedSizeBytes = row.optLong("encryptedSizeBytes"),
+                        appVersion = row.optString("appVersion"),
+                        schemaVersion = row.optInt("schemaVersion", 3),
+                        counts = BackupCategoryCounts(
+                            workspaceContent = row.optInt("workspaceContentCount"),
+                            conversationsAndFiles = row.optInt("conversationAndFileCount"),
+                            deviceSettings = row.optInt("deviceSettingsCount"),
+                        ),
+                    ),
+                )
+            }
+        }.sortedByDescending { it.updatedAt }
     }
 
     private fun uploadOrCreateJson(accessToken: String, fileName: String, body: String): String {
@@ -230,14 +394,33 @@ class GoogleDriveApiSyncStore(
         return digest.joinToString("") { "%02x".format(it) }
     }
 
+    suspend fun wipeAllBackups(): Unit = withContext(Dispatchers.IO) {
+        val accessToken = accessToken()
+        val url = "$DriveApi/files?spaces=$AppDataFolderName&fields=files(id,name)&pageSize=100"
+        val files = JSONObject(request(accessToken, "GET", url)).optJSONArray("files") ?: return@withContext
+        for (i in 0 until files.length()) {
+            val id = files.optJSONObject(i)?.optString("id") ?: continue
+            request(accessToken, "DELETE", "$DriveApi/files/$id")
+        }
+    }
+
     private data class DriveFile(val id: String, val name: String)
-    private data class RemoteSync(val fileId: String, val chainId: String, val snapshotHash: String, val snapshotPayload: String)
+    private data class RemoteSync(
+        val fileId: String,
+        val chainId: String,
+        val snapshotHash: String,
+        val snapshotPayload: String,
+        val deviceName: String,
+        val updatedAt: Long,
+    )
 
     companion object {
         const val AppDataFolderUri = "google-drive://appDataFolder/norfold-sync.json"
         private const val SyncFileName = "norfold-sync.json"
+        private const val RegistryFileName = "norfold-backup-registry-v1.json"
         private const val ConflictFileName = "norfold-conflict.json"
         private const val SyncFormat = "norfold-google-drive-sync-v2"
+        private const val RegistryFormat = "norfold-google-drive-backup-registry-v1"
         private const val AppDataFolderName = "appDataFolder"
         private const val DriveApi = "https://www.googleapis.com/drive/v3"
         private const val DriveUpload = "https://www.googleapis.com/upload/drive/v3"

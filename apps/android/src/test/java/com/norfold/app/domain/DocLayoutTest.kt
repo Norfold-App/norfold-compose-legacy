@@ -70,7 +70,7 @@ class DocLayoutTest {
     @Test
     fun `versioned layout preserves bounded canvas and reads legacy maps`() {
         val layout = mapOf("a" to FreeformPlacement(x = 12f, y = 20f, z = 4))
-        val canvas = DocCanvasSpec.letter().copy(pageCount = 3)
+        val canvas = DocCanvasSpec.letter().copy(pageCount = 3).normalized()
         val encoded = DocLayoutJson.encode(layout, canvas)
         assertEquals(canvas, DocLayoutJson.decodeCanvas(encoded))
         assertEquals(0, DocLayoutJson.decode(encoded).getValue("a").z)
@@ -78,6 +78,24 @@ class DocLayoutTest {
         val legacy = """{"a":{"x":12.0,"y":20.0,"width":320.0,"height":160.0,"z":4}}"""
         assertEquals(12f, DocLayoutJson.decode(legacy).getValue("a").x)
         assertEquals(DocCanvasSpec(), DocLayoutJson.decodeCanvas(legacy))
+    }
+
+    @Test
+    fun `bounded pages gain stable identities and preserve them across page operations`() {
+        val legacy = DocCanvasSpec.letter().copy(pageCount = 3).normalized()
+        assertEquals(listOf("legacy-page-1", "legacy-page-2", "legacy-page-3"), legacy.pageIds)
+
+        val added = legacy.addPage()
+        assertEquals(4, added.pageCount)
+        assertEquals(legacy.pageIds, added.pageIds.take(3))
+        assertTrue(added.pageIds.last().startsWith("page-"))
+
+        val moved = added.movePage(3, 1)
+        assertEquals(added.pageIds.last(), moved.pageIds[1])
+        assertEquals(added.pageIds.toSet(), moved.pageIds.toSet())
+
+        val removed = moved.removePage(1)
+        assertEquals(legacy.pageIds, removed.pageIds)
     }
 
     @Test
@@ -149,7 +167,7 @@ class DocLayoutTest {
             updatedAt = 2L,
             overlapMode = DocOverlapMode.Overlap,
             freeformLayout = mapOf("blk" to FreeformPlacement(x = 5f, y = 6f, width = 200f, height = 100f, z = 0)),
-            canvasSpec = DocCanvasSpec.legal().copy(pageCount = 2),
+            canvasSpec = DocCanvasSpec.legal().copy(pageCount = 2).normalized(),
         )
         val snapshot = BackupSnapshot(
             notes = listOf(note),

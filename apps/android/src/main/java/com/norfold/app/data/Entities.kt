@@ -12,16 +12,23 @@ import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Attachment
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
+import com.norfold.app.domain.ChatChannel
+import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatMessageItem
+import com.norfold.app.domain.ChatReceiptStatus
 import com.norfold.app.domain.ContextualMenuColor
 import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.domain.ControlLabelMode
+import com.norfold.app.domain.DeviceSettingsProfile
 import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocLayoutJson
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.EditorFontFamily
+import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.EditorLineWidth
+import com.norfold.app.domain.AppIconFamily
 import com.norfold.app.domain.docOverlapModeOf
 import com.norfold.app.domain.Note
 import com.norfold.app.domain.NoteEmbedItem
@@ -37,6 +44,7 @@ import com.norfold.app.domain.SubscriptionTier
 import com.norfold.app.domain.Tag
 import com.norfold.app.domain.TaskChecklistItem
 import com.norfold.app.domain.TaskGestureAction
+import com.norfold.app.domain.NoteRenderEngine
 import com.norfold.app.domain.TaskItem
 import com.norfold.app.domain.TaskPriority
 import com.norfold.app.domain.TaskPropertyDefinition
@@ -66,7 +74,7 @@ data class WorkspaceEntity(
     val iconKind: String = WorkspaceIconKind.Text.name,
     val iconUri: String? = null,
     val backgroundUri: String? = null,
-    val palette: String = ThemeProfile.Neon.name,
+    val palette: String = ThemeProfile.Norfold.name,
     val createdAt: Long,
     val permRename: Boolean = false,
     val permChangeIcon: Boolean = false,
@@ -84,6 +92,8 @@ data class NotebookEntity(
     val color: Long,
     val sortOrder: Int,
     val workspaceId: Long = 1,
+    @ColumnInfo(defaultValue = "'notes'") val scope: String = "notes",
+    @ColumnInfo(defaultValue = "'app.folder'") val iconId: String = "app.folder",
 )
 
 @Entity(
@@ -312,7 +322,7 @@ data class TaskChecklistItemEntity(
     val updatedAt: Long,
 )
 
-@Entity(tableName = "chat_messages", indices = [Index("createdAt"), Index("workspaceId")])
+@Entity(tableName = "chat_messages", indices = [Index("createdAt"), Index("workspaceId"), Index("channelId")])
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val authorUsername: String,
@@ -326,9 +336,73 @@ data class ChatMessageEntity(
     val attachmentUri: String? = null,
     val attachmentSizeBytes: Long? = null,
     val workspaceId: Long = 1,
+    val channelId: Long? = null,
+    // 3-stage receipt for own messages: 'sent' | 'delivered' | 'viewed'; null for
+    // incoming/system messages (receipts only render on your own bubbles).
+    val receiptStatus: String? = null,
+    val replyPreview: String? = null,
+    val editedAt: Long? = null,
+    val reactionsJson: String = "{}",
+    val pinned: Boolean = false,
+    // Private per-user bookmark. Never synced to remote — kept out of every remote payload.
+    val starred: Boolean = false,
 )
 
-@Entity(tableName = "workspace_objects", indices = [Index("workspaceId"), Index("objectType"), Index("sourceId"), Index("updatedAt"), Index("pinned")])
+@Entity(
+    tableName = "chat_channels",
+    indices = [Index("workspaceId"), Index("kind"), Index(value = ["workspaceId", "syncId"], unique = true)],
+)
+data class ChatChannelEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val syncId: String,
+    val kind: String,
+    val name: String,
+    val counterpartUsername: String = "",
+    val icon: String = "app.topics",
+    val createdAt: Long,
+    val workspaceId: Long = 1,
+    // Pinned conversations sort above Recent in the chat inbox.
+    val pinned: Boolean = false,
+    // Scope discriminator: null = workspace channel (existing transport); non-null =
+    // account-level direct_conversations.id (account transport, follows the user).
+    val accountConversationId: String? = null,
+    // Rich-group visuals/metadata (personal groups). Empty/default for topics + DMs.
+    val coverUri: String? = null,
+    val description: String = "",
+    val rules: String = "",
+    val rulesReminderDays: Int = 7,
+)
+
+// The workspace roster: one row per invited member, keyed by remote profile UUID so the same
+// person reconciles across devices. Populated from the backend (memberships joined with profiles),
+// so People can list everyone before they post. userId is the remote identity; username is the
+// @handle used to bind chat messages and DMs.
+@Entity(
+    tableName = "workspace_members",
+    indices = [Index(value = ["workspaceId", "userId"], unique = true), Index("workspaceId"), Index("username")],
+)
+data class WorkspaceMemberEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val workspaceId: Long = 1,
+    val userId: String,
+    val username: String,
+    val displayName: String,
+    val avatarPath: String? = null,
+    val role: String = "member",
+    val joinedAt: Long = 0L,
+)
+
+@Entity(
+    tableName = "workspace_objects",
+    indices = [
+        Index("workspaceId"),
+        Index("objectType"),
+        Index("sourceId"),
+        Index("updatedAt"),
+        Index("pinned"),
+        Index(value = ["workspaceId", "objectType", "sourceId"], unique = true),
+    ],
+)
 data class WorkspaceObjectEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val objectType: String,
@@ -368,7 +442,7 @@ data class WorkspaceActivityEntity(
     val workspaceId: Long = 1,
 )
 
-@Entity(tableName = "workspace_object_history", indices = [Index("workspaceId"), Index("objectId"), Index("historyType"), Index("createdAt")])
+@Entity(tableName = "workspace_object_history", indices = [Index("workspaceId"), Index("objectId"), Index("blockId"), Index("historyType"), Index("createdAt")])
 data class WorkspaceObjectHistoryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val objectId: Long? = null,
@@ -378,6 +452,7 @@ data class WorkspaceObjectHistoryEntity(
     val beforeValue: String = "",
     val afterValue: String = "",
     val createdAt: Long,
+    val blockId: String? = null,
     val workspaceId: Long = 1,
 )
 
@@ -503,12 +578,33 @@ data class SyncTombstoneEntity(
     val acknowledgedAt: Long? = null,
 )
 
+@Entity(tableName = "device_settings_profiles", indices = [Index("updatedAt")])
+data class DeviceSettingsProfileEntity(
+    @PrimaryKey val deviceId: String,
+    val deviceName: String,
+    val deviceType: String,
+    val screenClass: String,
+    val schemaVersion: Int,
+    val updatedAt: Long,
+    val fontScale: Float,
+    val uiScale: Float,
+    val appLabelMode: String,
+    val appIconFamily: String,
+    val appFont: String,
+    val uiDensityCompact: Boolean,
+    val editorToolbarScale: Float,
+    val editorIconFamily: String,
+    val editorLineWidth: String,
+    val editorFontFamily: String,
+    val reduceMotion: Boolean,
+)
+
 @Entity(tableName = "settings")
 data class AppSettingsEntity(
     @PrimaryKey val id: Int = 1,
     val themeMode: String = ThemeMode.System.name,
-    val themeProfile: String = ThemeProfile.Neon.name,
-    val accentColor: Long = 0xFF6F36FF,
+    val themeProfile: String = ThemeProfile.Norfold.name,
+    val accentColor: Long = 0xFF3D7C45,
     val activeWorkspaceId: Long = 1,
     val backupFolderUri: String? = null,
     val vaultLockEnabled: Boolean = false,
@@ -517,11 +613,16 @@ data class AppSettingsEntity(
     val syncFolderUri: String? = null,
     val syncChainId: String? = null,
     val syncDeviceName: String = "Android device",
+    val settingsDeviceId: String = "",
+    val settingsDeviceName: String = "Android device",
+    val settingsDeviceType: String = "Android",
+    val settingsScreenClass: String = "Compact",
+    val settingsSchemaVersion: Int = 1,
     val syncUserName: String = "",
     val syncPublicName: String = "",
     val lastSyncAt: Long? = null,
     val lastSyncHash: String? = null,
-    val lastSyncStatus: String = "Sync chain not configured",
+    val lastSyncStatus: String = "Sync not set up",
     val syncConflictCount: Int = 0,
     val profileBackgroundUri: String? = null,
     val profileImageUri: String? = null,
@@ -533,7 +634,12 @@ data class AppSettingsEntity(
     val adminsControlWorkspaceVisuals: Boolean = true,
     val allowMembersCreateNotes: Boolean = true,
     val allowMembersInvite: Boolean = false,
+    val fontScale: Float = 1f,
     val uiScale: Float = 1f,
+    val appLabelMode: String = ControlLabelMode.Adaptive.name,
+    val appIconFamily: String = AppIconFamily.MaterialSymbolsRounded.name,
+    val editorToolbarScale: Float = 1f,
+    val editorIconFamily: String = EditorIconFamily.UseApp.name,
     val editorLineWidth: String = EditorLineWidth.Comfortable.name,
     val editorFontFamily: String = EditorFontFamily.Sans.name,
     val showMarkdownSyntax: Boolean = true,
@@ -596,7 +702,7 @@ fun WorkspaceEntity.toDomain() = com.norfold.app.domain.Workspace(
     iconKind = WorkspaceIconKind.entries.firstOrNull { it.name == iconKind } ?: WorkspaceIconKind.Text,
     iconUri = iconUri,
     backgroundUri = backgroundUri,
-    palette = ThemeProfile.entries.firstOrNull { it.name == palette } ?: ThemeProfile.Neon,
+    palette = ThemeProfile.entries.firstOrNull { it.name == palette } ?: ThemeProfile.Norfold,
     createdAt = createdAt,
     permRename = permRename,
     permChangeIcon = permChangeIcon,
@@ -605,7 +711,16 @@ fun WorkspaceEntity.toDomain() = com.norfold.app.domain.Workspace(
     permEditNotes = permEditNotes,
     permManageTasks = permManageTasks,
 )
-fun NotebookEntity.toDomain() = Notebook(id = id, name = name, parentId = parentId, color = color, sortOrder = sortOrder)
+fun NotebookEntity.toDomain() = Notebook(
+    id = id,
+    name = name,
+    parentId = parentId,
+    color = color,
+    sortOrder = sortOrder,
+    workspaceId = workspaceId,
+    scope = scope,
+    iconId = iconId,
+)
 fun TagEntity.toDomain() = Tag(id = id, name = name, color = color, scope = scope)
 fun AttachmentEntity.toDomain() = Attachment(id = id, noteId = noteId, displayName = displayName, mimeType = mimeType, uri = uri, sizeBytes = sizeBytes)
 fun NoteEmbedEntity.toDomain() = NoteEmbedItem(
@@ -656,6 +771,7 @@ fun TaskEntity.toDomain() = TaskItem(
     taskColumnId = taskColumnId,
     sortOrder = sortOrder,
     colorArgb = colorArgb,
+    workspaceId = workspaceId,
 )
 fun TaskPropertyDefinitionEntity.toDomain() = TaskPropertyDefinition(
     id = id,
@@ -697,6 +813,42 @@ fun ChatMessageEntity.toDomain() = ChatMessageItem(
     attachmentMimeType = attachmentMimeType,
     attachmentUri = attachmentUri,
     attachmentSizeBytes = attachmentSizeBytes,
+    workspaceId = workspaceId,
+    channelId = channelId,
+    receiptStatus = receiptStatus?.let { status ->
+        ChatReceiptStatus.entries.firstOrNull { it.name.equals(status, ignoreCase = true) }
+    },
+    replyPreview = replyPreview,
+    editedAt = editedAt,
+    reactionsJson = reactionsJson,
+    pinned = pinned,
+    starred = starred,
+)
+
+fun ChatChannelEntity.toDomain() = ChatChannel(
+    id = id,
+    syncId = syncId,
+    kind = ChatChannelKind.entries.firstOrNull { it.name == kind } ?: ChatChannelKind.Topic,
+    name = name,
+    counterpartUsername = counterpartUsername,
+    icon = icon,
+    createdAt = createdAt,
+    workspaceId = workspaceId,
+    pinned = pinned,
+    accountConversationId = accountConversationId,
+    coverUri = coverUri,
+    description = description,
+    rules = rules,
+    rulesReminderDays = rulesReminderDays,
+)
+fun WorkspaceMemberEntity.toDomain() = com.norfold.app.domain.WorkspaceMember(
+    userId = userId,
+    username = username,
+    displayName = displayName,
+    avatarPath = avatarPath,
+    role = role,
+    joinedAt = joinedAt,
+    workspaceId = workspaceId,
 )
 fun WorkspaceObjectEntity.toDomain() = WorkspaceObject(
     id = id,
@@ -711,6 +863,7 @@ fun WorkspaceObjectEntity.toDomain() = WorkspaceObject(
     archived = archived,
     createdAt = createdAt,
     updatedAt = updatedAt,
+    workspaceId = workspaceId,
 )
 fun WorkspaceObjectLinkEntity.toDomain() = WorkspaceObjectLink(
     id = id,
@@ -719,6 +872,7 @@ fun WorkspaceObjectLinkEntity.toDomain() = WorkspaceObjectLink(
     linkType = WorkspaceLinkType.entries.firstOrNull { it.name == linkType } ?: WorkspaceLinkType.Reference,
     label = label,
     createdAt = createdAt,
+    workspaceId = workspaceId,
 )
 fun WorkspaceActivityEntity.toDomain() = WorkspaceActivity(
     id = id,
@@ -728,6 +882,7 @@ fun WorkspaceActivityEntity.toDomain() = WorkspaceActivity(
     title = title,
     detail = detail,
     createdAt = createdAt,
+    workspaceId = workspaceId,
 )
 fun WorkspaceObjectHistoryEntity.toDomain() = WorkspaceObjectHistory(
     id = id,
@@ -738,6 +893,8 @@ fun WorkspaceObjectHistoryEntity.toDomain() = WorkspaceObjectHistory(
     beforeValue = beforeValue,
     afterValue = afterValue,
     createdAt = createdAt,
+    blockId = blockId,
+    workspaceId = workspaceId,
 )
 fun WorkspaceCommentEntity.toDomain() = WorkspaceComment(
     id = id,
@@ -748,6 +905,7 @@ fun WorkspaceCommentEntity.toDomain() = WorkspaceComment(
     resolved = resolved,
     createdAt = createdAt,
     updatedAt = updatedAt,
+    workspaceId = workspaceId,
 )
 fun WorkspaceFileEntity.toDomain() = WorkspaceFileItem(
     id = id,
@@ -758,6 +916,7 @@ fun WorkspaceFileEntity.toDomain() = WorkspaceFileItem(
     sizeBytes = sizeBytes,
     createdAt = createdAt,
     updatedAt = updatedAt,
+    workspaceId = workspaceId,
 )
 fun GoalEntity.toDomain() = GoalItem(
     id = id,
@@ -791,7 +950,7 @@ fun CalendarEventEntity.toDomain() = CalendarEventItem(
 )
 fun AppSettingsEntity.toDomain() = AppSettings(
     themeMode = ThemeMode.entries.firstOrNull { it.name == themeMode } ?: ThemeMode.System,
-    themeProfile = ThemeProfile.entries.firstOrNull { it.name == themeProfile } ?: ThemeProfile.Neon,
+    themeProfile = ThemeProfile.entries.firstOrNull { it.name == themeProfile } ?: ThemeProfile.Norfold,
     accentColor = accentColor,
     activeWorkspaceId = activeWorkspaceId,
     backupFolderUri = backupFolderUri,
@@ -801,6 +960,11 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     syncFolderUri = syncFolderUri,
     syncChainId = syncChainId,
     syncDeviceName = syncDeviceName,
+    settingsDeviceId = settingsDeviceId,
+    settingsDeviceName = settingsDeviceName,
+    settingsDeviceType = settingsDeviceType,
+    settingsScreenClass = settingsScreenClass,
+    settingsSchemaVersion = settingsSchemaVersion,
     syncUserName = syncUserName,
     syncPublicName = syncPublicName,
     lastSyncAt = lastSyncAt,
@@ -817,7 +981,12 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     adminsControlWorkspaceVisuals = adminsControlWorkspaceVisuals,
     allowMembersCreateNotes = allowMembersCreateNotes,
     allowMembersInvite = allowMembersInvite,
-    uiScale = uiScale.coerceIn(0.78f, 1.12f),
+    fontScale = fontScale.coerceIn(0.5f, 2f),
+    uiScale = uiScale.coerceIn(0.5f, 2f),
+    appLabelMode = ControlLabelMode.entries.firstOrNull { it.name == appLabelMode } ?: ControlLabelMode.Adaptive,
+    appIconFamily = AppIconFamily.entries.firstOrNull { it.name == appIconFamily } ?: AppIconFamily.MaterialSymbolsRounded,
+    editorToolbarScale = editorToolbarScale.coerceIn(0.5f, 2f),
+    editorIconFamily = EditorIconFamily.entries.firstOrNull { it.name == editorIconFamily } ?: EditorIconFamily.UseApp,
     editorLineWidth = EditorLineWidth.entries.firstOrNull { it.name == editorLineWidth } ?: EditorLineWidth.Comfortable,
     editorFontFamily = EditorFontFamily.entries.firstOrNull { it.name == editorFontFamily } ?: EditorFontFamily.Sans,
     showMarkdownSyntax = showMarkdownSyntax,
@@ -859,6 +1028,7 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     taskKanbanEngine = taskKanbanEngine,
     taskSwipeStartAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeStartAction } ?: TaskGestureAction.Complete,
     taskSwipeEndAction = TaskGestureAction.entries.firstOrNull { it.name == taskSwipeEndAction } ?: TaskGestureAction.Delete,
+    noteRenderEngine = NoteRenderEngine.entries.firstOrNull { it.name == noteRenderEngine } ?: NoteRenderEngine.Auto,
     onboardingComplete = onboardingComplete,
     workspacePurpose = workspacePurpose,
     calendarDefaultView = calendarDefaultView,
@@ -869,6 +1039,46 @@ fun AppSettingsEntity.toDomain() = AppSettings(
     notificationEmail = notificationEmail,
     notificationPush = notificationPush,
     subscriptionTier = SubscriptionTier.entries.firstOrNull { it.name == subscriptionTier } ?: SubscriptionTier.Free,
+)
+
+fun DeviceSettingsProfileEntity.toDomain() = DeviceSettingsProfile(
+    deviceId = deviceId,
+    deviceName = deviceName,
+    deviceType = deviceType,
+    screenClass = screenClass,
+    schemaVersion = schemaVersion,
+    updatedAt = updatedAt,
+    fontScale = fontScale.coerceIn(0.5f, 2f),
+    uiScale = uiScale.coerceIn(0.5f, 2f),
+    appLabelMode = ControlLabelMode.entries.firstOrNull { it.name == appLabelMode } ?: ControlLabelMode.Adaptive,
+    appIconFamily = AppIconFamily.entries.firstOrNull { it.name == appIconFamily } ?: AppIconFamily.MaterialSymbolsRounded,
+    appFont = appFont,
+    uiDensityCompact = uiDensityCompact,
+    editorToolbarScale = editorToolbarScale.coerceIn(0.5f, 2f),
+    editorIconFamily = EditorIconFamily.entries.firstOrNull { it.name == editorIconFamily } ?: EditorIconFamily.UseApp,
+    editorLineWidth = EditorLineWidth.entries.firstOrNull { it.name == editorLineWidth } ?: EditorLineWidth.Comfortable,
+    editorFontFamily = EditorFontFamily.entries.firstOrNull { it.name == editorFontFamily } ?: EditorFontFamily.Sans,
+    reduceMotion = reduceMotion,
+)
+
+fun DeviceSettingsProfile.toEntity() = DeviceSettingsProfileEntity(
+    deviceId = deviceId,
+    deviceName = deviceName,
+    deviceType = deviceType,
+    screenClass = screenClass,
+    schemaVersion = schemaVersion,
+    updatedAt = updatedAt,
+    fontScale = fontScale.coerceIn(0.5f, 2f),
+    uiScale = uiScale.coerceIn(0.5f, 2f),
+    appLabelMode = appLabelMode.name,
+    appIconFamily = appIconFamily.name,
+    appFont = appFont,
+    uiDensityCompact = uiDensityCompact,
+    editorToolbarScale = editorToolbarScale.coerceIn(0.5f, 2f),
+    editorIconFamily = editorIconFamily.name,
+    editorLineWidth = editorLineWidth.name,
+    editorFontFamily = editorFontFamily.name,
+    reduceMotion = reduceMotion,
 )
 
 fun DocumentWithBlocks.toDomain(): OwnedDocument {
@@ -910,6 +1120,7 @@ fun NoteEntity.toDomain(
     overlapMode = ownedDocument?.layoutMode ?: DocOverlapMode.Reflow,
     freeformLayout = ownedDocument?.freeformLayout.orEmpty(),
     canvasSpec = ownedDocument?.canvasSpec ?: DocCanvasSpec(),
+    workspaceId = workspaceId,
 )
 
 data class DocumentWithBlocks(

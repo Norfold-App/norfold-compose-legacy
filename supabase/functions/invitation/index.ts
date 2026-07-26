@@ -43,6 +43,14 @@ Deno.serve(async (request) => {
     }
     return json({ error: "Unsupported invitation action" }, 400);
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : "Invitation failed" }, 401);
+    const message = error instanceof Error ? error.message : "Invitation failed";
+    if (message === "Authentication required" || message === "Invalid authentication token") {
+      return json({ error: message }, 401);
+    }
+    // Deliberate user-facing denials return above with their own status; whatever lands here
+    // is an internal failure (database constraint text, driver errors) that must not reach
+    // the client verbatim.
+    console.error("invitation failed:", message);
+    return json({ error: "Invitation failed" }, 500);
   }
 });

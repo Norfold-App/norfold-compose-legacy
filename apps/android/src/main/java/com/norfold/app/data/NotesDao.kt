@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -51,6 +52,21 @@ interface NotesDao {
 
     @Query("DELETE FROM documents WHERE owner_type = 'calendar_event' AND owner_id IN (SELECT id FROM calendar_events WHERE workspaceId = :ws)")
     suspend fun deleteCalendarEventDocumentsForWorkspace(ws: Long)
+
+    @Query("DELETE FROM task_property_values WHERE taskId IN (SELECT id FROM tasks WHERE workspaceId = :ws)")
+    suspend fun deleteTaskPropertyValuesForWorkspace(ws: Long)
+
+    @Query("DELETE FROM task_checklist_items WHERE taskId IN (SELECT id FROM tasks WHERE workspaceId = :ws)")
+    suspend fun deleteTaskChecklistItemsForWorkspace(ws: Long)
+
+    @Query("DELETE FROM task_property_definitions WHERE boardId IN (SELECT id FROM task_boards WHERE workspaceId = :ws)")
+    suspend fun deleteTaskPropertyDefinitionsForWorkspace(ws: Long)
+
+    @Query("DELETE FROM task_columns WHERE boardId IN (SELECT id FROM task_boards WHERE workspaceId = :ws)")
+    suspend fun deleteTaskColumnsForWorkspace(ws: Long)
+
+    @Query("DELETE FROM task_boards WHERE workspaceId = :ws")
+    suspend fun deleteTaskBoardsForWorkspace(ws: Long)
 
     @Query("DELETE FROM notebooks WHERE workspaceId = :ws")
     suspend fun deleteNotebooksForWorkspace(ws: Long)
@@ -222,11 +238,17 @@ interface NotesDao {
     @Query("SELECT * FROM task_checklist_items WHERE id = :id LIMIT 1")
     suspend fun checklistItemById(id: Long): TaskChecklistItemEntity?
 
-    @Query("SELECT * FROM chat_messages WHERE workspaceId = :ws ORDER BY createdAt ASC")
+    @Query(
+        "SELECT * FROM chat_messages WHERE workspaceId = :ws OR channelId IN " +
+            "(SELECT id FROM chat_channels WHERE accountConversationId IS NOT NULL) ORDER BY createdAt ASC",
+    )
     fun observeChatMessages(ws: Long): Flow<List<ChatMessageEntity>>
 
     @Query("SELECT * FROM chat_messages ORDER BY createdAt ASC")
     suspend fun allChatMessages(): List<ChatMessageEntity>
+
+    @Query("SELECT * FROM chat_messages WHERE workspaceId = :ws ORDER BY createdAt ASC")
+    suspend fun chatMessages(ws: Long): List<ChatMessageEntity>
 
     @Query("SELECT * FROM workspace_objects WHERE workspaceId = :ws AND archived = 0 ORDER BY pinned DESC, updatedAt DESC")
     fun observeWorkspaceObjects(ws: Long): Flow<List<WorkspaceObjectEntity>>
@@ -285,6 +307,18 @@ interface NotesDao {
     @Query("SELECT * FROM remote_object_bindings WHERE workspaceId = :ws AND objectType = :objectType AND localId = :localId LIMIT 1")
     suspend fun remoteBinding(ws: Long, objectType: String, localId: Long): RemoteObjectBindingEntity?
 
+    @Query("SELECT * FROM remote_object_bindings WHERE workspaceId = :ws AND objectType = :objectType AND remoteId = :remoteId LIMIT 1")
+    suspend fun remoteBindingByRemoteId(ws: Long, objectType: String, remoteId: String): RemoteObjectBindingEntity?
+
+    @Query("SELECT * FROM remote_object_bindings WHERE workspaceId = :ws AND objectType = :objectType AND syncId = :syncId LIMIT 1")
+    suspend fun remoteBindingBySyncId(ws: Long, objectType: String, syncId: String): RemoteObjectBindingEntity?
+
+    @Query("SELECT * FROM remote_object_bindings WHERE workspaceId = :ws AND objectType = :objectType AND remoteId IS NULL ORDER BY updatedAt ASC LIMIT :limit")
+    suspend fun pendingRemoteBindings(ws: Long, objectType: String, limit: Int): List<RemoteObjectBindingEntity>
+
+    @Query("SELECT * FROM remote_object_bindings WHERE objectType = :objectType AND remoteId = :remoteId LIMIT 1")
+    suspend fun bindingByRemoteIdAnyWorkspace(objectType: String, remoteId: String): RemoteObjectBindingEntity?
+
     @Query("SELECT * FROM sync_tombstones WHERE workspaceId = :ws AND acknowledgedAt IS NULL ORDER BY deletedAt ASC")
     suspend fun pendingTombstones(ws: Long): List<SyncTombstoneEntity>
 
@@ -297,8 +331,23 @@ interface NotesDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSettings(settings: AppSettingsEntity)
 
+    @Query("SELECT * FROM device_settings_profiles ORDER BY updatedAt DESC")
+    fun observeDeviceSettingsProfiles(): Flow<List<DeviceSettingsProfileEntity>>
+
+    @Query("SELECT * FROM device_settings_profiles ORDER BY updatedAt DESC")
+    suspend fun allDeviceSettingsProfiles(): List<DeviceSettingsProfileEntity>
+
+    @Query("SELECT * FROM device_settings_profiles WHERE deviceId = :deviceId LIMIT 1")
+    suspend fun deviceSettingsProfile(deviceId: String): DeviceSettingsProfileEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDeviceSettingsProfile(profile: DeviceSettingsProfileEntity)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNotebook(entity: NotebookEntity): Long
+
+    @Query("UPDATE notebooks SET name = :name, scope = :scope, iconId = :iconId WHERE id = :id")
+    suspend fun updateNotebook(id: Long, name: String, scope: String, iconId: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTag(entity: TagEntity): Long
@@ -306,7 +355,10 @@ interface NotesDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(entity: NoteEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // REPLACE deletes the parent row before inserting it again, which activates the CASCADE on
+    // document_blocks and makes every edit rewrite every block. Upsert performs an UPDATE on the
+    // conflict path and preserves untouched child rows (and their sync timestamps).
+    @Upsert
     suspend fun upsertDocument(entity: DocumentEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -380,6 +432,112 @@ interface NotesDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChatMessage(entity: ChatMessageEntity): Long
 
+    @Query("SELECT * FROM chat_messages WHERE id = :id LIMIT 1")
+    suspend fun chatMessageById(id: Long): ChatMessageEntity?
+
+    @Query("SELECT * FROM chat_channels WHERE workspaceId = :ws OR accountConversationId IS NOT NULL ORDER BY createdAt ASC")
+    fun observeChatChannels(ws: Long): Flow<List<ChatChannelEntity>>
+
+    @Query("SELECT * FROM chat_channels ORDER BY createdAt ASC")
+    suspend fun allChatChannels(): List<ChatChannelEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertChatChannel(entity: ChatChannelEntity): Long
+
+    @Query("SELECT * FROM chat_channels WHERE workspaceId = :ws AND syncId = :syncId LIMIT 1")
+    suspend fun chatChannelBySyncId(ws: Long, syncId: String): ChatChannelEntity?
+
+    @Query("SELECT * FROM chat_channels WHERE id = :id LIMIT 1")
+    suspend fun chatChannelById(id: Long): ChatChannelEntity?
+
+    @Query("SELECT * FROM chat_channels WHERE workspaceId = :ws AND kind = :kind AND counterpartUsername = :counterpart LIMIT 1")
+    suspend fun chatChannelByCounterpart(ws: Long, kind: String, counterpart: String): ChatChannelEntity?
+
+    @Query("SELECT * FROM chat_channels WHERE accountConversationId = :accountConversationId LIMIT 1")
+    suspend fun chatChannelByAccountConversation(accountConversationId: String): ChatChannelEntity?
+
+    @Query("UPDATE chat_channels SET pinned = :pinned WHERE id = :id")
+    suspend fun setChatChannelPinned(id: Long, pinned: Boolean)
+
+    @Query("""
+        UPDATE chat_channels
+        SET name = :name, icon = :icon, coverUri = :coverUri,
+            description = :description, rules = :rules,
+            rulesReminderDays = :rulesReminderDays
+        WHERE id = :id
+    """)
+    suspend fun updateChatChannelRichMetadata(
+        id: Long,
+        name: String,
+        icon: String,
+        coverUri: String?,
+        description: String,
+        rules: String,
+        rulesReminderDays: Int,
+    )
+
+    @Query("UPDATE chat_messages SET receiptStatus = :status WHERE id = :id")
+    suspend fun setChatMessageReceiptStatus(id: Long, status: String)
+
+    @Query("UPDATE chat_messages SET body = :body, editedAt = :editedAt WHERE id = :id")
+    suspend fun editChatMessage(id: Long, body: String, editedAt: Long)
+
+    @Query("UPDATE chat_messages SET reactionsJson = :reactionsJson WHERE id = :id")
+    suspend fun setChatMessageReactions(id: Long, reactionsJson: String)
+
+    @Query("UPDATE chat_messages SET pinned = :pinned WHERE id = :id")
+    suspend fun setChatMessagePinned(id: Long, pinned: Boolean)
+
+    @Query("UPDATE chat_messages SET starred = :starred WHERE id = :id")
+    suspend fun setChatMessageStarred(id: Long, starred: Boolean)
+
+    @Query("UPDATE chat_messages SET attachmentUri = :uri WHERE id = :id")
+    suspend fun setChatMessageAttachmentUri(id: Long, uri: String)
+
+    // Forward-only batch upgrade: Sent -> Delivered -> Viewed, never backwards.
+    // The CASE ranking makes replayed receipt events harmless.
+    @Query(
+        """
+        UPDATE chat_messages SET receiptStatus = :status
+        WHERE id IN (:ids) AND (
+            receiptStatus IS NULL OR
+            CASE receiptStatus WHEN 'Sent' THEN 0 WHEN 'Delivered' THEN 1 ELSE 2 END <
+            CASE :status WHEN 'Sent' THEN 0 WHEN 'Delivered' THEN 1 ELSE 2 END
+        )
+        """,
+    )
+    suspend fun upgradeChatMessageReceipts(ids: List<Long>, status: String)
+
+    @Query("DELETE FROM chat_messages WHERE id = :id")
+    suspend fun deleteChatMessage(id: Long)
+
+    @Query("DELETE FROM chat_channels WHERE id = :id")
+    suspend fun deleteChatChannel(id: Long)
+
+    @Query("DELETE FROM chat_messages WHERE channelId = :channelId")
+    suspend fun deleteChatMessagesForChannel(channelId: Long)
+
+    @Query("DELETE FROM chat_channels WHERE workspaceId = :ws")
+    suspend fun deleteChatChannelsForWorkspace(ws: Long)
+
+    @Query("DELETE FROM chat_channels")
+    suspend fun clearChatChannels()
+
+    @Query("SELECT * FROM workspace_members WHERE workspaceId = :ws ORDER BY displayName COLLATE NOCASE ASC")
+    fun observeWorkspaceMembers(ws: Long): Flow<List<WorkspaceMemberEntity>>
+
+    @Query("SELECT * FROM workspace_members WHERE workspaceId = :ws AND userId = :userId LIMIT 1")
+    suspend fun workspaceMemberByUserId(ws: Long, userId: String): WorkspaceMemberEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertWorkspaceMember(entity: WorkspaceMemberEntity): Long
+
+    @Query("DELETE FROM workspace_members WHERE workspaceId = :ws AND userId NOT IN (:keepUserIds)")
+    suspend fun deleteWorkspaceMembersNotIn(ws: Long, keepUserIds: List<String>)
+
+    @Query("DELETE FROM workspace_members WHERE workspaceId = :ws")
+    suspend fun deleteWorkspaceMembersForWorkspace(ws: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWorkspaceObject(entity: WorkspaceObjectEntity): Long
 
@@ -400,6 +558,54 @@ interface NotesDao {
 
     @Query("DELETE FROM workspace_files WHERE id = :id")
     suspend fun deleteWorkspaceFile(id: Long)
+
+    @Query("SELECT id FROM workspace_objects WHERE workspaceId = :ws AND objectType = :objectType AND sourceId = :sourceId LIMIT 1")
+    suspend fun workspaceObjectIdForSource(ws: Long, objectType: String, sourceId: Long): Long?
+
+    @Query("SELECT * FROM workspace_objects WHERE workspaceId = :ws AND objectType = :objectType AND sourceId = :sourceId LIMIT 1")
+    suspend fun workspaceObjectBySource(ws: Long, objectType: String, sourceId: Long): WorkspaceObjectEntity?
+
+    @Query("SELECT * FROM workspace_objects WHERE workspaceId = :ws")
+    suspend fun workspaceObjectsSnapshot(ws: Long): List<WorkspaceObjectEntity>
+
+    @Query("SELECT COUNT(*) FROM workspace_activities WHERE workspaceId = :ws")
+    suspend fun countWorkspaceActivities(ws: Long): Int
+
+    @Query(
+        "SELECT id FROM workspace_object_links WHERE workspaceId = :ws AND fromObjectId = :fromObjectId " +
+            "AND toObjectId = :toObjectId AND linkType = :linkType AND label = :label LIMIT 1",
+    )
+    suspend fun workspaceObjectLinkId(ws: Long, fromObjectId: Long, toObjectId: Long, linkType: String, label: String): Long?
+
+    @Query(
+        "SELECT toObjectId FROM workspace_object_links WHERE workspaceId = :ws AND fromObjectId = :fromObjectId " +
+            "AND linkType = :linkType AND label = :label LIMIT 1",
+    )
+    suspend fun workspaceObjectLinkTarget(ws: Long, fromObjectId: Long, linkType: String, label: String): Long?
+
+    @Query("SELECT * FROM workspace_object_links WHERE workspaceId = :ws")
+    suspend fun workspaceObjectLinksSnapshot(ws: Long): List<WorkspaceObjectLinkEntity>
+
+    @Query("SELECT objectId FROM workspace_files WHERE workspaceId = :ws AND objectId IS NOT NULL")
+    suspend fun workspaceFileObjectIds(ws: Long): List<Long>
+
+    @Query("DELETE FROM workspace_objects WHERE id = :id")
+    suspend fun deleteWorkspaceObjectById(id: Long)
+
+    @Query("DELETE FROM workspace_object_links WHERE fromObjectId = :objectId OR toObjectId = :objectId")
+    suspend fun deleteWorkspaceObjectLinksForObject(objectId: Long)
+
+    @Query("DELETE FROM workspace_activities WHERE objectId = :objectId")
+    suspend fun deleteWorkspaceActivitiesForObject(objectId: Long)
+
+    @Query("DELETE FROM workspace_object_history WHERE objectId = :objectId")
+    suspend fun deleteWorkspaceObjectHistoryForObject(objectId: Long)
+
+    @Query("DELETE FROM workspace_comments WHERE objectId = :objectId")
+    suspend fun deleteWorkspaceCommentsForObject(objectId: Long)
+
+    @Query("UPDATE workspace_files SET objectId = NULL WHERE objectId = :objectId")
+    suspend fun detachWorkspaceFilesFromObject(objectId: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertGoal(entity: GoalEntity): Long

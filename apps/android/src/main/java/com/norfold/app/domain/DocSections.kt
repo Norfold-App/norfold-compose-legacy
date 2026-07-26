@@ -62,6 +62,7 @@ fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
     is ChartBlock -> copy(id = freshId())
     is MathBlock -> copy(id = freshId())
     is MermaidBlock -> copy(id = freshId())
+    is ShapeBlock -> copy(id = freshId())
 }
 
 private fun ListItem.withFreshIds(): ListItem =

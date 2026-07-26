@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -14,10 +17,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextStyle
@@ -28,16 +31,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.norfold.app.domain.AppSettings
-import com.norfold.app.domain.ContextualMenuColor
-import com.norfold.app.domain.ContextualMenuStyle
+import com.norfold.app.domain.AppIconFamily
+import com.norfold.app.domain.ControlLabelMode
+import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.ui.components.LocalPopupStyle
 import com.norfold.app.ui.components.PopupStyle
+import com.norfold.app.ui.fonts.NorfoldFontFamilies
 
 // Neutral surface/ink tokens shared by both schemes. These are intentionally hue-free so the
 // only brand color in the app is the user-selected [AppSettings.accentColor].
 private val LightInk = Color(0xFF171725)
 private val DarkInk = Color(0xFFF6F7FB)
+
+val LocalControlLabelMode = staticCompositionLocalOf { ControlLabelMode.Adaptive }
+val LocalAppIconFamily = staticCompositionLocalOf { AppIconFamily.MaterialSymbolsRounded }
+val LocalEditorIconFamily = staticCompositionLocalOf { EditorIconFamily.UseApp }
+val LocalEditorToolbarScale = staticCompositionLocalOf { 1f }
 
 private fun Color.mix(other: Color, t: Float): Color = lerp(this, other, t)
 
@@ -87,12 +97,7 @@ private fun darkScheme(accent: Color): androidx.compose.material3.ColorScheme {
     )
 }
 
-private fun appFontFamily(name: String): FontFamily = when (name.lowercase()) {
-    "serif" -> FontFamily.Serif
-    "mono", "monospace" -> FontFamily.Monospace
-    "system", "default" -> FontFamily.Default
-    else -> FontFamily.SansSerif
-}
+private fun appFontFamily(name: String): FontFamily = NorfoldFontFamilies.resolve(name)
 
 private fun norfoldTypography(family: FontFamily) = Typography(
     headlineLarge = TextStyle(fontFamily = family, fontWeight = FontWeight.Bold, fontSize = 28.sp),
@@ -112,8 +117,6 @@ private val NorfoldShapes = Shapes(
     extraLarge = RoundedCornerShape(16.dp),
 )
 
-val LocalContextualMenuStyle = staticCompositionLocalOf { ContextualMenuStyle.Pill }
-val LocalContextualMenuColor = staticCompositionLocalOf { ContextualMenuColor.FollowTheme }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -122,7 +125,11 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
-fun NorfoldTheme(settings: AppSettings, content: @Composable () -> Unit) {
+fun NorfoldTheme(
+    settings: AppSettings,
+    unscaledOverlay: @Composable BoxScope.() -> Unit = {},
+    content: @Composable () -> Unit,
+) {
     val accent = Color(settings.accentColor)
     val dark = when (settings.themeMode) {
         ThemeMode.System -> isSystemInDarkTheme()
@@ -139,25 +146,29 @@ fun NorfoldTheme(settings: AppSettings, content: @Composable () -> Unit) {
         }
     }
     val density = LocalDensity.current
-    val widthDp = LocalConfiguration.current.screenWidthDp
-    val minimumScale = if (widthDp >= 720) 0.98f else 0.90f
-    val scale = settings.uiScale.coerceIn(minimumScale, 1.12f)
-    val layoutScale = scale * if (settings.uiDensityCompact) 0.92f else 1f
+    val uiScale = settings.uiScale.coerceIn(0.5f, 2f)
+    val fontScale = settings.fontScale.coerceIn(0.5f, 2f)
+    val layoutScale = uiScale * if (settings.uiDensityCompact) 0.92f else 1f
     val typography = norfoldTypography(appFontFamily(settings.appFont))
-    CompositionLocalProvider(
-        LocalDensity provides Density(
-            density = density.density * layoutScale,
-            fontScale = density.fontScale * scale,
-        ),
-        LocalContextualMenuStyle provides settings.contextualMenuStyle,
-        LocalContextualMenuColor provides settings.contextualMenuColor,
-        LocalPopupStyle provides PopupStyle(),
+    MaterialTheme(
+        colorScheme = if (dark) darkScheme(accent) else lightScheme(accent),
+        typography = typography,
+        shapes = NorfoldShapes,
     ) {
-        MaterialTheme(
-            colorScheme = if (dark) darkScheme(accent) else lightScheme(accent),
-            typography = typography,
-            shapes = NorfoldShapes,
-            content = content,
-        )
+        Box(Modifier.fillMaxSize()) {
+            CompositionLocalProvider(
+                LocalDensity provides Density(
+                    density = density.density * layoutScale,
+                    fontScale = density.fontScale * fontScale,
+                ),
+                LocalPopupStyle provides PopupStyle(),
+                LocalControlLabelMode provides settings.appLabelMode,
+                LocalAppIconFamily provides settings.appIconFamily,
+                LocalEditorIconFamily provides settings.editorIconFamily,
+                LocalEditorToolbarScale provides settings.editorToolbarScale,
+                content = content,
+            )
+            unscaledOverlay()
+        }
     }
 }

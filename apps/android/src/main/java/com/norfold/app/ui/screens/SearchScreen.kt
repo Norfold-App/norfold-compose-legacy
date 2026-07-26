@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,11 +44,12 @@ import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
-import com.norfold.app.ui.components.EmptyNotes
+import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.SearchField
 import com.norfold.app.ui.components.pressScale
 
 internal data class SearchResult(
+    val stableKey: String,
     val title: String,
     val detail: String,
     val type: String,
@@ -61,16 +63,35 @@ fun SearchScreen(state: DocsUiState, viewModel: DocsViewModel) {
     val query = state.searchQuery.trim()
     val results = buildSearchResults(state, viewModel, query)
     Column(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("Search", fontWeight = FontWeight.Black, fontSize = 30.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        Text("Search", fontWeight = FontWeight.Black, fontSize = 28.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         SearchField(state.searchQuery, viewModel::search, Modifier.fillMaxWidth().padding(bottom = 2.dp))
         if (query.isBlank() && state.notes.isEmpty() && state.workspaceObjects.isEmpty()) {
-            EmptyNotes(viewModel::createNote)
+            NorfoldEmptyState(
+                icon = Icons.Outlined.Search,
+                title = "Nothing to search yet",
+                detail = "Create your first Doc and everything you add becomes searchable here.",
+                action = { Button(onClick = viewModel::createNote) { Text("Create note") } },
+            )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (query.isBlank()) {
                     item { SectionLabel("Recent workspace objects") }
                 }
-                items(results, key = { "${it.type}:${it.title}:${it.detail}" }) { result ->
+                if (results.isEmpty()) {
+                    item {
+                        NorfoldEmptyState(
+                            icon = Icons.Outlined.Search,
+                            title = if (query.isBlank()) "Nothing recent yet" else "No results for “$query”",
+                            detail = if (query.isBlank()) "Create a Doc, task, event, or file and it will appear here." else "Try a shorter term, check spelling, or clear the search.",
+                            action = if (query.isNotBlank()) {
+                                { Button(onClick = { viewModel.search("") }) { Text("Clear search") } }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
+                items(results, key = SearchResult::stableKey) { result ->
                     SearchResultRow(result, Modifier.animateItem())
                 }
             }
@@ -84,6 +105,7 @@ internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, qu
         .filter { matches(it.title, it.summary, it.tags, it.objectType.name) }
         .map { obj ->
             SearchResult(
+                stableKey = "object:${obj.id}",
                 title = obj.title,
                 detail = "${obj.objectType.searchLabel()} · ${obj.summary.ifBlank { obj.tags.ifBlank { "Workspace object" } }}",
                 type = obj.objectType.searchLabel(),
@@ -100,6 +122,7 @@ internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, qu
         .filter { matches(it.name, "tag") }
         .map {
             SearchResult(
+                stableKey = "tag:${it.id}",
                 title = "#${it.name}",
                 detail = "${state.notes.count { note -> note.tags.any { tag -> tag.name == it.name } }} docs",
                 type = "Tag",
@@ -112,6 +135,7 @@ internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, qu
         .filter { matches(it.displayName, it.mimeType, "file") }
         .map { file ->
             SearchResult(
+                stableKey = "file:${file.id}",
                 title = file.displayName,
                 detail = "File · ${file.mimeType.ifBlank { "attachment" }}",
                 type = "File",
@@ -125,6 +149,7 @@ internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, qu
         .take(12)
         .map { activity ->
             SearchResult(
+                stableKey = "activity:${activity.id}",
                 title = activity.title,
                 detail = "Activity · ${activity.detail.ifBlank { activity.actor }}",
                 type = "Activity",
@@ -144,6 +169,7 @@ internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, qu
     ).filter { matches(it.first, it.third, "settings") }
         .map {
             SearchResult(
+                stableKey = "settings:${it.first}",
                 title = it.first,
                 detail = it.third,
                 type = "Settings",
@@ -161,6 +187,7 @@ internal fun buildSearchResults(state: DocsUiState, viewModel: DocsViewModel, qu
     ).filter { matches(it.first, "command", "open", "go to") }
         .map {
             SearchResult(
+                stableKey = "command:${it.first}",
                 title = it.first,
                 detail = "Open ${it.first}",
                 type = "Command",
@@ -221,6 +248,7 @@ private fun iconFor(obj: WorkspaceObject): ImageVector = when (obj.objectType) {
     WorkspaceObjectType.CalendarEvent -> Icons.Outlined.Settings
     WorkspaceObjectType.File -> Icons.Outlined.Folder
     WorkspaceObjectType.ChatMessage -> Icons.Outlined.ChatBubbleOutline
+    WorkspaceObjectType.ChatChannel -> Icons.Outlined.ChatBubbleOutline
     WorkspaceObjectType.DatabaseRow -> Icons.Outlined.GridView
     WorkspaceObjectType.Workspace -> Icons.Outlined.Folder
     WorkspaceObjectType.System -> Icons.Outlined.Settings

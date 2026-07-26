@@ -2,12 +2,15 @@ package com.norfold.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,6 +21,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,25 +41,94 @@ import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.Tag
+import com.norfold.app.domain.Notebook
+import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.ui.components.NorfoldDialog
+import com.norfold.app.ui.components.SemanticAppIcon
 
 @Composable
 fun NotebookScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var name by remember { mutableStateOf("") }
+    var scope by remember { mutableStateOf("notes") }
+    var icon by remember { mutableStateOf(SemanticActionId.AppFolder) }
+    var editing by remember { mutableStateOf<Notebook?>(null) }
+    var editName by remember { mutableStateOf("") }
+    var editIcon by remember { mutableStateOf(SemanticActionId.AppFolder) }
+    editing?.let { folder ->
+        NorfoldDialog(
+            onDismissRequest = { editing = null },
+            title = { Text("Edit folder") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(editName, { editName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Folder name") })
+                    FolderIconPicker(editIcon) { editIcon = it }
+                }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.updateNotebook(folder, editName, editIcon.stableId)
+                    editing = null
+                }, enabled = editName.isNotBlank()) { Text("Save") }
+            },
+        )
+    }
     LazyColumn(Modifier.fillMaxSize().padding(top = 58.dp, start = 18.dp, end = 18.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Notebooks", fontWeight = FontWeight.Black, fontSize = 28.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text("Folders", fontWeight = FontWeight.Black, fontSize = 28.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(onClick = { scope = "notes" }, label = { Text(if (scope == "notes") "Notes ✓" else "Notes") })
+                AssistChip(onClick = { scope = "documents" }, label = { Text(if (scope == "documents") "Documents ✓" else "Documents") })
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(name, { name = it }, label = { Text("New notebook") }, modifier = Modifier.weight(1f))
-                Button(onClick = { viewModel.addNotebook(name); name = "" }) { Text("Add") }
+                OutlinedTextField(name, { name = it }, label = { Text(if (scope == "documents") "New document folder" else "New notes folder") }, modifier = Modifier.weight(1f))
+                Button(onClick = { viewModel.addNotebook(name, scope, icon.stableId); name = "" }, enabled = name.isNotBlank()) { Text("Add") }
+            }
+            FolderIconPicker(icon) { icon = it }
+        }
+        items(state.notebooks.filter { it.scope == scope }, key = { it.id }) { folder ->
+            Card(Modifier.fillMaxWidth().animateItem().clickable { viewModel.filterByNotebook(folder.id) }, shape = RoundedCornerShape(18.dp)) {
+                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val resolved = SemanticActionId.entries.firstOrNull { it.stableId == folder.iconId } ?: SemanticActionId.AppFolder
+                    SemanticAppIcon(resolved, null, Modifier.size(24.dp), Color(folder.color))
+                    androidx.compose.foundation.layout.Spacer(Modifier.width(10.dp))
+                    Text(folder.name, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                    TextButton(onClick = {
+                        editing = folder
+                        editName = folder.name
+                        editIcon = resolved
+                    }) { Text("Edit") }
+                }
             }
         }
-        items(state.notebooks, key = { it.id }) {
-            Card(Modifier.fillMaxWidth().animateItem().clickable { viewModel.filterByNotebook(it.id) }, shape = RoundedCornerShape(18.dp)) {
-                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Folder, null, tint = Color(it.color))
-                    androidx.compose.foundation.layout.Spacer(Modifier.width(10.dp))
-                    Text(it.name, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun FolderIconPicker(selected: SemanticActionId, onSelect: (SemanticActionId) -> Unit) {
+    val choices = listOf(
+        SemanticActionId.AppFolder,
+        SemanticActionId.AppNotes,
+        SemanticActionId.AppDocuments,
+        SemanticActionId.AppFavorites,
+        SemanticActionId.AppTags,
+        SemanticActionId.AppFiles,
+        SemanticActionId.AppTemplates,
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Icon", fontWeight = FontWeight.SemiBold)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            choices.forEach { choice ->
+                Card(
+                    Modifier.clickable { onSelect(choice) },
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    SemanticAppIcon(
+                        choice,
+                        choice.defaultLabel,
+                        Modifier.padding(12.dp).size(22.dp),
+                        if (choice == selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -81,7 +154,7 @@ fun TagsScreen(state: DocsUiState, viewModel: DocsViewModel) {
         NorfoldDialog(
             onDismissRequest = { deletingTag = null },
             title = { Text("Delete #${tag.name}?") },
-            text = { Text("This removes the tag from every Doc. The Docs themselves are not deleted.") },
+            text = { Text("This removes the tag from every note. The notes themselves are not deleted.") },
             dismissButton = { TextButton(onClick = { deletingTag = null }) { Text("Cancel") } },
             confirmButton = { Button(onClick = { viewModel.deleteTag(tag); deletingTag = null }) { Text("Delete") } },
         )

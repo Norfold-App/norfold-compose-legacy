@@ -7,13 +7,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +47,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +61,7 @@ import com.norfold.app.ui.DocsViewModel
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 @Composable
 fun ObjectDetailScreen(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier = Modifier) {
@@ -65,9 +74,19 @@ fun ObjectDetailScreen(state: DocsUiState, viewModel: DocsViewModel, modifier: M
     val comments = state.workspaceComments.filter { it.objectId == obj.id }
     val history = state.workspaceObjectHistory.filter { it.objectId == obj.id }
     var comment by remember(obj.id) { mutableStateOf("") }
+    var commentFocused by remember(obj.id) { mutableStateOf(false) }
+    val commentComposerBringIntoView = remember(obj.id) { BringIntoViewRequester() }
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+
+    LaunchedEffect(commentFocused, imeBottom) {
+        if (commentFocused && imeBottom > 0) {
+            delay(50)
+            commentComposerBringIntoView.bringIntoView()
+        }
+    }
 
     LazyColumn(
-        modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 12.dp),
+        modifier.fillMaxSize().imePadding().padding(horizontal = 18.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -109,20 +128,29 @@ fun ObjectDetailScreen(state: DocsUiState, viewModel: DocsViewModel, modifier: M
                             }
                         }
                     }
-                    OutlinedTextField(
-                        value = comment,
-                        onValueChange = { comment = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        label = { Text("Add comment") },
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.addWorkspaceComment(obj.id, comment)
-                            comment = ""
-                        },
-                        enabled = comment.isNotBlank(),
-                    ) { Text("Add comment") }
+                    Column(
+                        modifier = Modifier.bringIntoViewRequester(commentComposerBringIntoView),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = comment,
+                            onValueChange = { comment = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { focusState ->
+                                    commentFocused = focusState.isFocused
+                                },
+                            minLines = 2,
+                            label = { Text("Add comment") },
+                        )
+                        Button(
+                            onClick = {
+                                viewModel.addWorkspaceComment(obj.id, comment)
+                                comment = ""
+                            },
+                            enabled = comment.isNotBlank(),
+                        ) { Text("Add comment") }
+                    }
                 }
             }
         }
@@ -161,7 +189,7 @@ private fun EmptyObjectDetail(viewModel: DocsViewModel, modifier: Modifier) {
 
 @Composable
 private fun ObjectHero(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
-    Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f), tonalElevation = 2.dp) {
+    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f), tonalElevation = 2.dp) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box(
@@ -243,6 +271,7 @@ private fun SourcePreview(obj: WorkspaceObject, state: DocsUiState, viewModel: D
                     Text(message.body, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            WorkspaceObjectType.ChatChannel -> MutedText(obj.summary.ifBlank { "Synced workspace conversation." })
             WorkspaceObjectType.DatabaseRow, WorkspaceObjectType.Workspace, WorkspaceObjectType.System -> {
                 MutedText(obj.summary.ifBlank { "This object is represented by workspace metadata." })
             }
@@ -287,7 +316,7 @@ private fun ObjectMiniRow(title: String, detail: String, icon: ImageVector, colo
 
 @Composable
 private fun Pill(text: String) {
-    Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) {
+    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) {
         Text(text, Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -314,6 +343,7 @@ private fun iconFor(type: WorkspaceObjectType): ImageVector = when (type) {
     WorkspaceObjectType.CalendarEvent -> Icons.Outlined.History
     WorkspaceObjectType.File -> Icons.Outlined.Folder
     WorkspaceObjectType.ChatMessage -> Icons.Outlined.ChatBubbleOutline
+    WorkspaceObjectType.ChatChannel -> Icons.Outlined.ChatBubbleOutline
     WorkspaceObjectType.DatabaseRow -> Icons.Outlined.Tag
     WorkspaceObjectType.Workspace -> Icons.Outlined.Folder
     WorkspaceObjectType.System -> Icons.Outlined.History

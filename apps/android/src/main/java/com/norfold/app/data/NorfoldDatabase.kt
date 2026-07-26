@@ -26,6 +26,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TaskPropertyValueEntity::class,
         TaskChecklistItemEntity::class,
         ChatMessageEntity::class,
+        ChatChannelEntity::class,
+        WorkspaceMemberEntity::class,
         WorkspaceObjectEntity::class,
         WorkspaceObjectLinkEntity::class,
         WorkspaceActivityEntity::class,
@@ -37,9 +39,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RemoteObjectBindingEntity::class,
         SyncOutboxEntity::class,
         SyncTombstoneEntity::class,
+        DeviceSettingsProfileEntity::class,
         AppSettingsEntity::class,
     ],
-    version = 33,
+    version = 44,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -84,6 +87,17 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_30_31,
                     MIGRATION_31_32,
                     MIGRATION_32_33,
+                    MIGRATION_33_34,
+                    MIGRATION_34_35,
+                    MIGRATION_35_36,
+                    MIGRATION_36_37,
+                    MIGRATION_37_38,
+                    MIGRATION_38_39,
+                    MIGRATION_39_40,
+                    MIGRATION_40_41,
+                    MIGRATION_41_42,
+                    MIGRATION_42_43,
+                    MIGRATION_43_44,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -114,6 +128,28 @@ abstract class NorfoldDatabase : RoomDatabase() {
         private val MIGRATION_20_21 = schemaMigration(20, 21)
         private val MIGRATION_21_22 = schemaMigration(21, 22)
         private val MIGRATION_22_23 = schemaMigration(22, 23)
+        private val MIGRATION_41_42 = schemaMigration(41, 42)
+        internal val MIGRATION_42_43 = object : Migration(42, 43) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN syncId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE chat_channels SET syncId = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))) WHERE syncId = ''")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_chat_channels_workspaceId_syncId ON chat_channels(workspaceId, syncId)")
+            }
+        }
+        // Chat overhaul (hybrid account/workspace scope) foundation:
+        //   chat_channels gains a scope discriminator (accountConversationId) plus
+        //   rich-group metadata; chat_messages gains a private starred bookmark.
+        // All additive with safe defaults — no data loss on existing rows.
+        internal val MIGRATION_43_44 = object : Migration(43, 44) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN accountConversationId TEXT")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN coverUri TEXT")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN rules TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN rulesReminderDays INTEGER NOT NULL DEFAULT 7")
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         // Removes the Projects feature: drops the projects table and rebuilds
         // goals/calendar_events without their projectId column so the on-disk
         // schema matches the entities (Room validates columns strictly).
@@ -194,13 +230,6 @@ abstract class NorfoldDatabase : RoomDatabase() {
 
         internal val MIGRATION_25_26 = object : Migration(25, 26) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                val legacyNotes = buildList {
-                    db.query("SELECT id, bodyMarkdown FROM notes").use { cursor ->
-                        val idIndex = cursor.getColumnIndexOrThrow("id")
-                        val bodyIndex = cursor.getColumnIndexOrThrow("bodyMarkdown")
-                        while (cursor.moveToNext()) add(cursor.getLong(idIndex) to cursor.getString(bodyIndex).orEmpty())
-                    }
-                }
                 db.execSQL("ALTER TABLE notes RENAME COLUMN bodyMarkdown TO searchText")
                 db.execSQL(
                     """
@@ -217,15 +246,30 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_note_blocks_noteId ON note_blocks(noteId)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_note_blocks_noteId_position ON note_blocks(noteId, position)")
                 val now = System.currentTimeMillis()
-                legacyNotes.forEach { (noteId, markdown) ->
-                    val document = com.norfold.app.domain.MarkdownBlockCodec.import(markdown)
-                    db.execSQL("UPDATE notes SET searchText = ? WHERE id = ?", arrayOf<Any?>(document.plainText(), noteId))
-                    document.blocks.forEachIndexed { position, block ->
-                        db.execSQL(
-                            "INSERT INTO note_blocks(id, noteId, position, payloadJson, updatedAt) VALUES(?, ?, ?, ?, ?)",
-                            arrayOf<Any?>(block.id, noteId, position, com.norfold.app.domain.BlockDocumentJson.encodeBlock(block), now),
-                        )
+                // After the rename, searchText still holds the legacy markdown. Convert a page of
+                // notes at a time (keyed by id) so huge legacy databases never hold every body in
+                // memory at once during the one-shot migration.
+                var lastId = Long.MIN_VALUE
+                while (true) {
+                    val page = buildList {
+                        db.query("SELECT id, searchText FROM notes WHERE id > ? ORDER BY id LIMIT 200", arrayOf<Any?>(lastId)).use { cursor ->
+                            val idIndex = cursor.getColumnIndexOrThrow("id")
+                            val bodyIndex = cursor.getColumnIndexOrThrow("searchText")
+                            while (cursor.moveToNext()) add(cursor.getLong(idIndex) to cursor.getString(bodyIndex).orEmpty())
+                        }
                     }
+                    if (page.isEmpty()) break
+                    page.forEach { (noteId, markdown) ->
+                        val document = com.norfold.app.domain.MarkdownBlockCodec.import(markdown)
+                        db.execSQL("UPDATE notes SET searchText = ? WHERE id = ?", arrayOf<Any?>(document.plainText(), noteId))
+                        document.blocks.forEachIndexed { position, block ->
+                            db.execSQL(
+                                "INSERT INTO note_blocks(id, noteId, position, payloadJson, updatedAt) VALUES(?, ?, ?, ?, ?)",
+                                arrayOf<Any?>(block.id, noteId, position, com.norfold.app.domain.BlockDocumentJson.encodeBlock(block), now),
+                            )
+                        }
+                    }
+                    lastId = page.last().first
                 }
             }
         }
@@ -274,23 +318,26 @@ abstract class NorfoldDatabase : RoomDatabase() {
             }
         }
 
+        // These columns are also pre-added by ensureCurrentSchema on pre-24 upgrade
+        // paths, so a plain ALTER would hit "duplicate column name" and abort the
+        // whole migration chain.
         internal val MIGRATION_28_29 = object : Migration(28, 29) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE notes ADD COLUMN overlapMode TEXT NOT NULL DEFAULT 'reflow'")
-                db.execSQL("ALTER TABLE notes ADD COLUMN freeformLayoutJson TEXT")
+                db.addColumnIfMissing("notes", "overlapMode", "TEXT NOT NULL DEFAULT 'reflow'")
+                db.addColumnIfMissing("notes", "freeformLayoutJson", "TEXT")
             }
         }
 
         internal val MIGRATION_29_30 = object : Migration(29, 30) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeStartAction TEXT NOT NULL DEFAULT 'Complete'")
-                db.execSQL("ALTER TABLE settings ADD COLUMN taskSwipeEndAction TEXT NOT NULL DEFAULT 'Delete'")
+                db.addColumnIfMissing("settings", "taskSwipeStartAction", "TEXT NOT NULL DEFAULT 'Complete'")
+                db.addColumnIfMissing("settings", "taskSwipeEndAction", "TEXT NOT NULL DEFAULT 'Delete'")
             }
         }
 
         internal val MIGRATION_30_31 = object : Migration(30, 31) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE settings ADD COLUMN noteRenderEngine TEXT NOT NULL DEFAULT 'Auto'")
+                db.addColumnIfMissing("settings", "noteRenderEngine", "TEXT NOT NULL DEFAULT 'Auto'")
             }
         }
 
@@ -392,6 +439,167 @@ abstract class NorfoldDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_33_34 = object : Migration(33, 34) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN fontScale REAL NOT NULL DEFAULT 1.0")
+                db.execSQL("ALTER TABLE settings ADD COLUMN appLabelMode TEXT NOT NULL DEFAULT 'Adaptive'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN appIconFamily TEXT NOT NULL DEFAULT 'MaterialSymbolsRounded'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN editorToolbarScale REAL NOT NULL DEFAULT 1.0")
+                db.execSQL("ALTER TABLE settings ADD COLUMN editorIconFamily TEXT NOT NULL DEFAULT 'UseApp'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN settingsDeviceId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE settings ADD COLUMN settingsDeviceName TEXT NOT NULL DEFAULT 'Android device'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN settingsDeviceType TEXT NOT NULL DEFAULT 'Android'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN settingsScreenClass TEXT NOT NULL DEFAULT 'Compact'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN settingsSchemaVersion INTEGER NOT NULL DEFAULT 1")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS device_settings_profiles (
+                        deviceId TEXT NOT NULL PRIMARY KEY,
+                        deviceName TEXT NOT NULL,
+                        deviceType TEXT NOT NULL,
+                        screenClass TEXT NOT NULL,
+                        schemaVersion INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        fontScale REAL NOT NULL,
+                        uiScale REAL NOT NULL,
+                        appLabelMode TEXT NOT NULL,
+                        appIconFamily TEXT NOT NULL,
+                        appFont TEXT NOT NULL,
+                        uiDensityCompact INTEGER NOT NULL,
+                        editorToolbarScale REAL NOT NULL,
+                        editorIconFamily TEXT NOT NULL,
+                        editorLineWidth TEXT NOT NULL,
+                        editorFontFamily TEXT NOT NULL,
+                        reduceMotion INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_device_settings_profiles_updatedAt ON device_settings_profiles(updatedAt)")
+            }
+        }
+
+        internal val MIGRATION_34_35 = object : Migration(34, 35) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TEMP TABLE workspace_object_dedupe AS
+                    SELECT loser.id AS oldId,
+                           (
+                               SELECT keeper.id
+                               FROM workspace_objects keeper
+                               WHERE keeper.workspaceId = loser.workspaceId
+                                 AND keeper.objectType = loser.objectType
+                                 AND keeper.sourceId = loser.sourceId
+                               ORDER BY keeper.updatedAt DESC, keeper.id DESC
+                               LIMIT 1
+                           ) AS keepId
+                    FROM workspace_objects loser
+                    WHERE loser.sourceId IS NOT NULL
+                      AND loser.id != (
+                          SELECT keeper.id
+                          FROM workspace_objects keeper
+                          WHERE keeper.workspaceId = loser.workspaceId
+                            AND keeper.objectType = loser.objectType
+                            AND keeper.sourceId = loser.sourceId
+                          ORDER BY keeper.updatedAt DESC, keeper.id DESC
+                          LIMIT 1
+                      )
+                    """.trimIndent(),
+                )
+                listOf(
+                    "workspace_activities" to "objectId",
+                    "workspace_object_history" to "objectId",
+                    "workspace_comments" to "objectId",
+                    "workspace_files" to "objectId",
+                    "workspace_object_links" to "fromObjectId",
+                    "workspace_object_links" to "toObjectId",
+                ).forEach { (table, column) ->
+                    db.execSQL(
+                        "UPDATE $table SET $column = (SELECT keepId FROM workspace_object_dedupe WHERE oldId = $table.$column) " +
+                            "WHERE $column IN (SELECT oldId FROM workspace_object_dedupe)",
+                    )
+                }
+                db.execSQL("DELETE FROM workspace_objects WHERE id IN (SELECT oldId FROM workspace_object_dedupe)")
+                db.execSQL("DROP TABLE workspace_object_dedupe")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_workspace_objects_workspaceId_objectType_sourceId " +
+                        "ON workspace_objects(workspaceId, objectType, sourceId)",
+                )
+            }
+        }
+
+        internal val MIGRATION_35_36 = object : Migration(35, 36) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workspace_object_history ADD COLUMN blockId TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_object_history_blockId ON workspace_object_history(blockId)")
+            }
+        }
+
+        internal val MIGRATION_36_37 = object : Migration(36, 37) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN scope TEXT NOT NULL DEFAULT 'notes'")
+                db.execSQL("ALTER TABLE notebooks ADD COLUMN iconId TEXT NOT NULL DEFAULT 'app.folder'")
+            }
+        }
+
+        internal val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN channelId INTEGER")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_channelId ON chat_messages(channelId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS chat_channels (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        kind TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        counterpartUsername TEXT NOT NULL DEFAULT '',
+                        icon TEXT NOT NULL DEFAULT 'app.topics',
+                        createdAt INTEGER NOT NULL,
+                        workspaceId INTEGER NOT NULL DEFAULT 1
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_workspaceId ON chat_channels(workspaceId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_chat_channels_kind ON chat_channels(kind)")
+            }
+        }
+
+        internal val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS workspace_members (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        workspaceId INTEGER NOT NULL DEFAULT 1,
+                        userId TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        displayName TEXT NOT NULL,
+                        avatarPath TEXT,
+                        role TEXT NOT NULL DEFAULT 'member',
+                        joinedAt INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_workspace_members_workspaceId_userId ON workspace_members(workspaceId, userId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_members_workspaceId ON workspace_members(workspaceId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_members_username ON workspace_members(username)")
+            }
+        }
+
+        internal val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_channels ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        internal val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 3-stage receipts for own messages: 'sent' | 'delivered' | 'viewed'.
+                // NULL for incoming/system messages — receipts only render on your own bubbles.
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN receiptStatus TEXT")
+            }
+        }
+
         private fun schemaMigration(from: Int, to: Int) = object : Migration(from, to) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.ensureCurrentSchema()
@@ -408,7 +616,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     iconKind TEXT NOT NULL DEFAULT 'Text',
                     iconUri TEXT,
                     backgroundUri TEXT,
-                    palette TEXT NOT NULL DEFAULT 'Neon',
+                    palette TEXT NOT NULL DEFAULT 'Norfold',
                     createdAt INTEGER NOT NULL
                 )
                 """.trimIndent(),
@@ -421,7 +629,9 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     parentId INTEGER,
                     color INTEGER NOT NULL,
                     sortOrder INTEGER NOT NULL,
-                    workspaceId INTEGER NOT NULL DEFAULT 1
+                    workspaceId INTEGER NOT NULL DEFAULT 1,
+                    scope TEXT NOT NULL DEFAULT 'notes',
+                    iconId TEXT NOT NULL DEFAULT 'app.folder'
                 )
                 """.trimIndent(),
             )
@@ -596,7 +806,37 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     attachmentMimeType TEXT,
                     attachmentUri TEXT,
                     attachmentSizeBytes INTEGER,
-                    workspaceId INTEGER NOT NULL DEFAULT 1
+                    workspaceId INTEGER NOT NULL DEFAULT 1,
+                    channelId INTEGER,
+                    receiptStatus TEXT
+                )
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS chat_channels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    kind TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    counterpartUsername TEXT NOT NULL DEFAULT '',
+                    icon TEXT NOT NULL DEFAULT 'app.topics',
+                    createdAt INTEGER NOT NULL,
+                    workspaceId INTEGER NOT NULL DEFAULT 1,
+                    pinned INTEGER NOT NULL DEFAULT 0
+                )
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS workspace_members (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    workspaceId INTEGER NOT NULL DEFAULT 1,
+                    userId TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    displayName TEXT NOT NULL,
+                    avatarPath TEXT,
+                    role TEXT NOT NULL DEFAULT 'member',
+                    joinedAt INTEGER NOT NULL DEFAULT 0
                 )
                 """.trimIndent(),
             )
@@ -657,6 +897,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     beforeValue TEXT NOT NULL DEFAULT '',
                     afterValue TEXT NOT NULL DEFAULT '',
                     createdAt INTEGER NOT NULL,
+                    blockId TEXT,
                     workspaceId INTEGER NOT NULL DEFAULT 1
                 )
                 """.trimIndent(),
@@ -782,8 +1023,8 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 CREATE TABLE IF NOT EXISTS settings (
                     id INTEGER NOT NULL,
                     themeMode TEXT NOT NULL DEFAULT 'System',
-                    themeProfile TEXT NOT NULL DEFAULT 'Graphite',
-                    accentColor INTEGER NOT NULL DEFAULT 4281546570,
+                    themeProfile TEXT NOT NULL DEFAULT 'Norfold',
+                    accentColor INTEGER NOT NULL DEFAULT 4282219589,
                     activeWorkspaceId INTEGER NOT NULL DEFAULT 1,
                     backupFolderUri TEXT,
                     vaultLockEnabled INTEGER NOT NULL DEFAULT 0,
@@ -827,8 +1068,10 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("workspaces", "iconKind", "TEXT NOT NULL DEFAULT 'Text'")
             addColumnIfMissing("workspaces", "iconUri", "TEXT")
             addColumnIfMissing("workspaces", "backgroundUri", "TEXT")
-            addColumnIfMissing("workspaces", "palette", "TEXT NOT NULL DEFAULT 'Neon'")
+            addColumnIfMissing("workspaces", "palette", "TEXT NOT NULL DEFAULT 'Norfold'")
             addColumnIfMissing("notebooks", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
+            addColumnIfMissing("notebooks", "scope", "TEXT NOT NULL DEFAULT 'notes'")
+            addColumnIfMissing("notebooks", "iconId", "TEXT NOT NULL DEFAULT 'app.folder'")
             addColumnIfMissing("notes", "coverUri", "TEXT")
             addColumnIfMissing("notes", "coverMimeType", "TEXT")
             addColumnIfMissing("notes", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
@@ -855,7 +1098,22 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("chat_messages", "attachmentUri", "TEXT")
             addColumnIfMissing("chat_messages", "attachmentSizeBytes", "INTEGER")
             addColumnIfMissing("chat_messages", "workspaceId", "INTEGER NOT NULL DEFAULT 1")
-            addColumnIfMissing("settings", "themeProfile", "TEXT NOT NULL DEFAULT 'Neon'")
+            addColumnIfMissing("chat_messages", "channelId", "INTEGER")
+            addColumnIfMissing("chat_messages", "receiptStatus", "TEXT")
+            addColumnIfMissing("chat_messages", "replyPreview", "TEXT")
+            addColumnIfMissing("chat_messages", "editedAt", "INTEGER")
+            addColumnIfMissing("chat_messages", "reactionsJson", "TEXT NOT NULL DEFAULT '{}'")
+            addColumnIfMissing("chat_messages", "pinned", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing("chat_messages", "starred", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing("chat_channels", "pinned", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing("chat_channels", "accountConversationId", "TEXT")
+            addColumnIfMissing("chat_channels", "coverUri", "TEXT")
+            addColumnIfMissing("chat_channels", "description", "TEXT NOT NULL DEFAULT ''")
+            addColumnIfMissing("chat_channels", "rules", "TEXT NOT NULL DEFAULT ''")
+            addColumnIfMissing("chat_channels", "rulesReminderDays", "INTEGER NOT NULL DEFAULT 7")
+            addColumnIfMissing("chat_channels", "syncId", "TEXT NOT NULL DEFAULT ''")
+            execSQL("UPDATE chat_channels SET syncId = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))) WHERE syncId = ''")
+            addColumnIfMissing("settings", "themeProfile", "TEXT NOT NULL DEFAULT 'Norfold'")
             addColumnIfMissing("settings", "activeWorkspaceId", "INTEGER NOT NULL DEFAULT 1")
             addColumnIfMissing("settings", "syncProvider", "TEXT NOT NULL DEFAULT 'None'")
             addColumnIfMissing("settings", "syncFolderUri", "TEXT")
@@ -907,10 +1165,12 @@ abstract class NorfoldDatabase : RoomDatabase() {
             addColumnIfMissing("settings", "subscriptionTier", "TEXT NOT NULL DEFAULT 'Free'")
 
             val now = System.currentTimeMillis()
-            execSQL("INSERT OR IGNORE INTO task_boards (id, name, workspaceId, createdAt, updatedAt) VALUES (1, 'Default board', 1, $now, $now)")
-            execSQL("INSERT OR IGNORE INTO task_columns (id, boardId, name, status, color, sortOrder, createdAt, updatedAt) VALUES (1, 1, 'To do', 'Todo', 10320895, 0, $now, $now)")
-            execSQL("INSERT OR IGNORE INTO task_columns (id, boardId, name, status, color, sortOrder, createdAt, updatedAt) VALUES (2, 1, 'Doing', 'Doing', 5229822, 1, $now, $now)")
-            execSQL("INSERT OR IGNORE INTO task_columns (id, boardId, name, status, color, sortOrder, createdAt, updatedAt) VALUES (3, 1, 'Done', 'Done', 5688472, 2, $now, $now)")
+            // Compatibility rows are created only when an upgraded database actually has
+            // legacy tasks to place. A genuinely empty workspace must remain empty.
+            execSQL("INSERT OR IGNORE INTO task_boards (id, name, workspaceId, createdAt, updatedAt) SELECT 1, 'Imported tasks', 1, $now, $now WHERE EXISTS (SELECT 1 FROM tasks)")
+            execSQL("INSERT OR IGNORE INTO task_columns (id, boardId, name, status, color, sortOrder, createdAt, updatedAt) SELECT 1, 1, 'Next', 'Todo', 10320895, 0, $now, $now WHERE EXISTS (SELECT 1 FROM tasks)")
+            execSQL("INSERT OR IGNORE INTO task_columns (id, boardId, name, status, color, sortOrder, createdAt, updatedAt) SELECT 2, 1, 'In progress', 'Doing', 5229822, 1, $now, $now WHERE EXISTS (SELECT 1 FROM tasks WHERE status = 'Doing')")
+            execSQL("INSERT OR IGNORE INTO task_columns (id, boardId, name, status, color, sortOrder, createdAt, updatedAt) SELECT 3, 1, 'Complete', 'Done', 5688472, 2, $now, $now WHERE EXISTS (SELECT 1 FROM tasks WHERE status = 'Done')")
             execSQL("UPDATE tasks SET taskBoardId = 1 WHERE taskBoardId IS NULL OR taskBoardId = 0")
             execSQL("UPDATE tasks SET taskColumnId = CASE status WHEN 'Doing' THEN 2 WHEN 'Done' THEN 3 ELSE 1 END WHERE taskColumnId IS NULL")
             listOf(
@@ -966,6 +1226,10 @@ abstract class NorfoldDatabase : RoomDatabase() {
             execSQL("CREATE INDEX IF NOT EXISTS index_task_checklist_items_sortOrder ON task_checklist_items(sortOrder)")
             execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_createdAt ON chat_messages(createdAt)")
             execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_workspaceId ON chat_messages(workspaceId)")
+            execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_chat_channels_workspaceId_syncId ON chat_channels(workspaceId, syncId)")
+            execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_workspace_members_workspaceId_userId ON workspace_members(workspaceId, userId)")
+            execSQL("CREATE INDEX IF NOT EXISTS index_workspace_members_workspaceId ON workspace_members(workspaceId)")
+            execSQL("CREATE INDEX IF NOT EXISTS index_workspace_members_username ON workspace_members(username)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_workspaceId ON workspace_objects(workspaceId)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_objectType ON workspace_objects(objectType)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_objects_sourceId ON workspace_objects(sourceId)")
@@ -981,6 +1245,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_activities_activityType ON workspace_activities(activityType)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_object_history_workspaceId ON workspace_object_history(workspaceId)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_object_history_objectId ON workspace_object_history(objectId)")
+            execSQL("CREATE INDEX IF NOT EXISTS index_workspace_object_history_blockId ON workspace_object_history(blockId)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_object_history_historyType ON workspace_object_history(historyType)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_object_history_createdAt ON workspace_object_history(createdAt)")
             execSQL("CREATE INDEX IF NOT EXISTS index_workspace_comments_workspaceId ON workspace_comments(workspaceId)")

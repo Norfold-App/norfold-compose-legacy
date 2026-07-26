@@ -6,6 +6,44 @@ import org.junit.Test
 
 class BackupCodecTest {
     @Test
+    fun chatChannelBackupPreservesStableCloudIdentity() {
+        val channel = ChatChannel(
+            id = 44,
+            syncId = "b672efad-182f-4a75-9ec8-4a4c077397ad",
+            kind = ChatChannelKind.Dm,
+            name = "A teammate",
+            counterpartUsername = "teammate",
+            icon = "app.people",
+            createdAt = 1234,
+            workspaceId = 8,
+            pinned = true,
+        )
+
+        val restored = BackupCodec.decode(BackupCodec.encode(BackupSnapshot(
+            notes = emptyList(),
+            notebooks = emptyList(),
+            tags = emptyList(),
+            attachments = emptyList(),
+            chatChannels = listOf(channel),
+        )))
+            .chatChannels.single()
+
+        assertEquals(channel, restored)
+    }
+
+    @Test
+    fun legacyChatChannelBackupGetsDeterministicStableIdentity() {
+        val legacy = "${BackupCodec.Header}\nCHANNEL|44|Topic|TGVnYWN5||YXBwLnRvcGljcw==|1234|8|false\n"
+
+        val first = BackupCodec.decode(legacy).chatChannels.single()
+        val second = BackupCodec.decode(legacy).chatChannels.single()
+
+        assertEquals("Legacy", first.name)
+        assertEquals(ChatChannelKind.Topic, first.kind)
+        assertEquals(first.syncId, second.syncId)
+    }
+
+    @Test
     fun backupRoundTripsNotesNotebooksTagsAndAttachments() {
         val snapshot = BackupSnapshot(
             taskWorkspacePrefs = TaskWorkspacePrefs(
@@ -15,7 +53,17 @@ class BackupCodecTest {
                 compactLayout = false,
                 kanbanEngine = "BoardPointer",
             ),
-            notebooks = listOf(Notebook(1, "Work", null, 0xFF8B5CF6, 0)),
+            notebooks = listOf(
+                Notebook(
+                    id = 1,
+                    name = "Work",
+                    parentId = null,
+                    color = 0xFF8B5CF6,
+                    sortOrder = 0,
+                    scope = "documents",
+                    iconId = SemanticActionId.AppDocuments.stableId,
+                ),
+            ),
             tags = listOf(
                 Tag(1, "sync", 0xFF8B5CF6),
                 Tag(2, "Planning", 0xFF8B5CF6, scope = "board:3"),
@@ -112,6 +160,8 @@ class BackupCodecTest {
 
         assertEquals("Project", restored.notes.single().title)
         assertEquals("Work", restored.notebooks.single().name)
+        assertEquals("documents", restored.notebooks.single().scope)
+        assertEquals(SemanticActionId.AppDocuments.stableId, restored.notebooks.single().iconId)
         assertEquals("sync", restored.tags.first { it.scope == "notes" }.name)
         assertEquals("Planning", restored.tags.first { it.scope == "board:3" }.name)
         assertEquals("image.png", restored.attachments.single().displayName)
@@ -233,6 +283,17 @@ class BackupCodecTest {
         val legacy = current.replaceFirst(BackupCodec.Header, "NOTESNYNC-BACKUP-V1")
 
         assertThrows(IllegalArgumentException::class.java) { BackupCodec.decode(legacy) }
+    }
+
+    @Test
+    fun notebookRowsFromBeforeScopedFoldersUseSafeDefaults() {
+        val restored = BackupCodec.decode(
+            "${BackupCodec.Header}\nNOTEBOOK|1|V29yaw==||1|0|1\n",
+        ).notebooks.single()
+
+        assertEquals("Work", restored.name)
+        assertEquals("notes", restored.scope)
+        assertEquals(SemanticActionId.AppFolder.stableId, restored.iconId)
     }
 
     @Test
