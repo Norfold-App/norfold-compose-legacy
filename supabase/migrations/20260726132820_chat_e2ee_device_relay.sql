@@ -381,6 +381,69 @@ $$;
 revoke all on function public.ensure_account_security_epoch(uuid, text) from public, anon;
 grant execute on function public.ensure_account_security_epoch(uuid, text) to authenticated;
 
+create or replace function private.rotate_account_security_epoch_on_membership()
+returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_conversation uuid := coalesce(new.conversation_id, old.conversation_id);
+  v_previous public.chat_security_epochs%rowtype;
+  v_next uuid;
+  v_actor uuid;
+begin
+  if not exists (
+    select 1 from public.direct_conversations c
+    where c.id = v_conversation and c.kind = 'group'
+  ) then
+    if tg_op = 'DELETE' then return old; else return new; end if;
+  end if;
+
+  select * into v_previous
+  from public.chat_security_epochs e
+  where e.account_conversation_id = v_conversation and e.ended_at is null
+  for update;
+  if v_previous.id is null then
+    if tg_op = 'DELETE' then return old; else return new; end if;
+  end if;
+
+  v_actor := coalesce(
+    auth.uid(),
+    (select m.user_id from public.direct_conversation_members m
+     where m.conversation_id = v_conversation and m.role = 'owner' limit 1),
+    old.user_id,
+    new.user_id
+  );
+  update public.chat_security_epochs set ended_at = now()
+  where id = v_previous.id;
+  insert into public.chat_security_epochs (
+    scope, account_conversation_id, epoch_number, mode, protocol, started_by
+  ) values (
+    'account', v_conversation, v_previous.epoch_number + 1,
+    v_previous.mode, v_previous.protocol, v_actor
+  ) returning id into v_next;
+
+  insert into public.chat_security_events (
+    account_id, event_type, detail
+  )
+  select m.user_id, 'security_epoch_started', jsonb_build_object(
+    'conversationId', v_conversation,
+    'previousEpochId', v_previous.id,
+    'securityEpochId', v_next,
+    'reason', case when tg_op = 'INSERT' then 'member_added' else 'member_removed' end
+  )
+  from public.direct_conversation_members m
+  where m.conversation_id = v_conversation;
+  if tg_op = 'DELETE' then return old; else return new; end if;
+end;
+$$;
+
+revoke all on function private.rotate_account_security_epoch_on_membership()
+  from public, anon, authenticated;
+drop trigger if exists direct_members_rotate_security_epoch
+  on public.direct_conversation_members;
+create trigger direct_members_rotate_security_epoch
+after insert or delete on public.direct_conversation_members
+for each row execute function private.rotate_account_security_epoch_on_membership();
+
 create or replace function public.account_conversation_device_credentials(
   p_conversation uuid
 ) returns table (
@@ -584,6 +647,27 @@ begin
   where c.revoked_at is null
     and private.can_access_security_epoch(p_security_epoch, c.user_id)
   on conflict do nothing;
+
+  if p_envelope #>> '{metadata,contentType}' = 'delete_everyone' then
+    insert into public.chat_object_tombstones (
+      object_id, security_epoch_id, reason, created_by, destructive_at
+    )
+    select original.client_sync_id, p_security_epoch, 'delete_everyone', auth.uid(), now()
+    from public.chat_e2ee_relay_messages original
+    where original.security_epoch_id = p_security_epoch
+      and original.sender_id = auth.uid()
+      and original.client_sync_id::text = p_envelope #>> '{metadata,targetMessageId}'
+      and original.created_at >= now() - interval '1 hour'
+    on conflict (object_id) do nothing;
+    if not found then
+      raise exception using errcode = '42501', message = 'unsend_not_allowed';
+    end if;
+    update public.chat_e2ee_relay_messages original
+    set envelope = null, state = 'revoked', purged_at = now()
+    where original.security_epoch_id = p_security_epoch
+      and original.sender_id = auth.uid()
+      and original.client_sync_id::text = p_envelope #>> '{metadata,targetMessageId}';
+  end if;
 
   return v_relay;
 end;

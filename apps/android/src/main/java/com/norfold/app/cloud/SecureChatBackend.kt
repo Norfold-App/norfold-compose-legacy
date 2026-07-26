@@ -108,6 +108,46 @@ class SecureChatBackend(context: Context) {
         body: String,
         createdAt: Long,
         replyPreview: String? = null,
+    ): String = sendPayload(
+        conversationId = conversationId,
+        clientSyncId = clientSyncId,
+        payload = SecureChatPayloadV1(
+            body = body,
+            createdAt = createdAt,
+            replyPreview = replyPreview,
+        ),
+    )
+
+    suspend fun sendMutation(
+        conversationId: String,
+        targetMessageId: String,
+        type: String,
+        body: String = "",
+        editedAt: Long? = null,
+        reactionsJson: String? = null,
+        pinned: Boolean? = null,
+    ): String {
+        require(type in setOf("edit", "reactions", "pin", "delete_everyone"))
+        val createdAt = System.currentTimeMillis()
+        return sendPayload(
+            conversationId = conversationId,
+            clientSyncId = java.util.UUID.randomUUID().toString(),
+            payload = SecureChatPayloadV1(
+                type = type,
+                body = body,
+                createdAt = createdAt,
+                targetMessageId = targetMessageId,
+                editedAt = editedAt,
+                reactionsJson = reactionsJson,
+                pinned = pinned,
+            ),
+        )
+    }
+
+    private suspend fun sendPayload(
+        conversationId: String,
+        clientSyncId: String,
+        payload: SecureChatPayloadV1,
     ): String {
         val accountId = NorfoldSupabase.currentAccountId()
             ?: error("Sign in before sending a secure message.")
@@ -123,15 +163,11 @@ class SecureChatBackend(context: Context) {
             senderDeviceId = sender.public.deviceId,
             senderDeviceGeneration = sender.public.generation,
             securityEpochId = epochId,
-            createdAt = createdAt,
+            createdAt = payload.createdAt,
+            contentType = payload.type,
+            targetMessageId = payload.targetMessageId,
         )
-        val plaintext = json.encodeToString(
-            SecureChatPayloadV1(
-                body = body,
-                createdAt = createdAt,
-                replyPreview = replyPreview,
-            ),
-        ).encodeToByteArray()
+        val plaintext = json.encodeToString(payload).encodeToByteArray()
         val envelope = crypto.seal(plaintext, metadata, sender, recipients)
         return client.postgrest.rpc(
             function = "send_e2ee_relay_message",

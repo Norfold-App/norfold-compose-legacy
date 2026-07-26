@@ -10,4 +10,8 @@ data class SecureChatPayloadV1(
     val body: String,
     val createdAt: Long,
     val replyPreview: String? = null,
+    val targetMessageId: String? = null,
+    val editedAt: Long? = null,
+    val reactionsJson: String? = null,
+    val pinned: Boolean? = null,
 )

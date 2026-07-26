@@ -2488,6 +2488,30 @@ class DocsRepository(private val database: NorfoldDatabase) {
         return binding.localId
     }
 
+    suspend fun applySecureChatMutation(
+        localWorkspaceId: Long,
+        targetSyncId: String,
+        type: String,
+        body: String,
+        editedAt: Long?,
+        reactionsJson: String?,
+        pinned: Boolean?,
+    ): Boolean {
+        val localId = dao.remoteBindingBySyncId(
+            localWorkspaceId,
+            WorkspaceObjectType.ChatMessage.name,
+            targetSyncId,
+        )?.localId ?: return false
+        when (type) {
+            "edit" -> dao.editChatMessage(localId, body, editedAt ?: System.currentTimeMillis())
+            "reactions" -> dao.setChatMessageReactions(localId, reactionsJson ?: "{}")
+            "pin" -> dao.setChatMessagePinned(localId, pinned == true)
+            "delete_everyone" -> dao.deleteChatMessage(localId)
+            else -> return false
+        }
+        return true
+    }
+
     /** Deletes a channel and every message scoped to it. General (null channel) is never deletable. */
     suspend fun deleteChatChannel(channelId: Long) {
         dao.deleteChatMessagesForChannel(channelId)

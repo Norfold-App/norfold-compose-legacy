@@ -1706,6 +1706,24 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 ?.let { localChannelId = materializeAccountConversation(it) }
         }
         val resolvedChannelId = localChannelId ?: return
+        if (decrypted.payload.type != "text") {
+            val target = decrypted.payload.targetMessageId ?: return
+            val applied = repository.applySecureChatMutation(
+                localWorkspaceId = repository.activeWorkspaceIdValue(),
+                targetSyncId = target,
+                type = decrypted.payload.type,
+                body = decrypted.payload.body,
+                editedAt = decrypted.payload.editedAt,
+                reactionsJson = decrypted.payload.reactionsJson,
+                pinned = decrypted.payload.pinned,
+            )
+            if (!applied && decrypted.payload.type != "delete_everyone") return
+            secureChatBackend.acknowledge(
+                decrypted.relayId,
+                read = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId,
+            )
+            return
+        }
         val myId = NorfoldSupabase.currentAccountId()
         val isOwn = myId != null && decrypted.senderId == myId
         val identity = resolveAccountSender(decrypted.senderId, isOwn)
@@ -2261,7 +2279,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             secureChatBackend.registerCurrentDevice()
             secureChatBackend.renewLease()
-        }.onSuccess { startSecureRelayObserver() }
+        }.onSuccess {
+            startSecureRelayObserver()
+            retryPendingTeamChatSends()
+        }
             .onFailure { Log.w("NorfoldSecureChat", "Secure device registration deferred", it) }
         val current = repository.settingsValue()
         if (!current.autoBackup) repository.updateSettings(current.copy(autoBackup = true))
@@ -2602,14 +2623,32 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun retryPendingTeamChatSends() {
         if (!NorfoldSupabase.isSignedIn()) return
         val localWorkspaceId = repository.activeWorkspaceIdValue()
-        val remoteWorkspaceId = repository.remoteWorkspaceId(localWorkspaceId) ?: return
+        val remoteWorkspaceId = repository.remoteWorkspaceId(localWorkspaceId)
         val settings = state.value.settings
         val batch = repository.pendingRemoteChatMessages(localWorkspaceId, MaxTeamChatRetryBatch)
-        batch.forEach { pending ->
+        for (pending in batch) {
             val (message, syncId) = pending
+            val channel = message.channelId?.let { repository.chatChannelById(it) }
+            if (channel?.scope == ChatScope.Account) {
+                val conversationId = channel.accountConversationId ?: continue
+                val delivered = runCatching {
+                    secureChatBackend.sendText(
+                        conversationId = conversationId,
+                        clientSyncId = syncId,
+                        body = message.body,
+                        createdAt = message.createdAt,
+                        replyPreview = message.replyPreview,
+                    )
+                }.isSuccess
+                if (!delivered) return
+                repository.bindAccountDirectMessage(message.id, syncId)
+                repository.setChatMessageReceiptStatus(message.id, ChatReceiptStatus.Sent)
+                continue
+            }
+            val workspaceTarget = remoteWorkspaceId ?: continue
             val remote = runCatching {
                 NorfoldSupabase.sendTeamChatMessage(
-                    remoteWorkspaceId = remoteWorkspaceId,
+                    remoteWorkspaceId = workspaceTarget,
                     deviceId = settings.settingsDeviceId,
                     username = message.authorUsername,
                     displayName = message.authorDisplayName,
@@ -3363,7 +3402,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         if (clean.isBlank()) return@launch
         val edited = message.copy(body = clean, editedAt = System.currentTimeMillis())
         repository.editChatMessage(message, clean)
-        syncChatMutation(edited)
+        syncChatMutation(edited, "edit")
     }
 
     fun toggleChatReaction(message: ChatMessageItem, emoji: String) = viewModelScope.launch {
@@ -3374,12 +3413,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val users = (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank).toMutableList()
         if (!users.remove(username)) users += username
         if (users.isEmpty()) root.remove(emoji) else root.put(emoji, JSONArray(users))
-        syncChatMutation(message.copy(reactionsJson = root.toString()))
+        syncChatMutation(message.copy(reactionsJson = root.toString()), "reactions")
     }
 
     fun setChatMessagePinned(message: ChatMessageItem, pinned: Boolean) = viewModelScope.launch {
         repository.setChatMessagePinned(message.id, pinned)
-        syncChatMutation(message.copy(pinned = pinned))
+        syncChatMutation(message.copy(pinned = pinned), "pin")
     }
 
     fun setChatMessageStarred(message: ChatMessageItem, starred: Boolean) = viewModelScope.launch {
@@ -3387,11 +3426,27 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         emitInfo(if (starred) "Saved to Starred." else "Removed from Starred.")
     }
 
-    private suspend fun syncChatMutation(message: ChatMessageItem) {
+    private suspend fun syncChatMutation(message: ChatMessageItem, mutationType: String) {
         if (!NorfoldSupabase.isSignedIn()) return
         val settings = state.value.settings
-        val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return
         val binding = repository.chatMessageRemoteBinding(settings.activeWorkspaceId, message.id) ?: return
+        val channel = message.channelId?.let { repository.chatChannelById(it) }
+        if (channel?.scope == ChatScope.Account) {
+            val conversationId = channel.accountConversationId ?: return
+            runCatching {
+                secureChatBackend.sendMutation(
+                    conversationId = conversationId,
+                    targetMessageId = binding.syncId,
+                    type = mutationType,
+                    body = message.body,
+                    editedAt = message.editedAt,
+                    reactionsJson = message.reactionsJson,
+                    pinned = message.pinned,
+                )
+            }.onFailure { emitError("Saved here, but the encrypted update will retry after reconnection.") }
+            return
+        }
+        val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return
         runCatching {
             NorfoldSupabase.sendTeamChatMessage(
                 remoteWorkspaceId = remoteWorkspaceId,
@@ -3451,6 +3506,21 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val syncId = repository.chatMessageSyncId(settings.activeWorkspaceId, message.id)
         repository.deleteChatMessageForMe(message.id)
         if (syncId == null || !NorfoldSupabase.isSignedIn()) return@launch
+        val channel = message.channelId?.let { repository.chatChannelById(it) }
+        if (channel?.scope == ChatScope.Account) {
+            val conversationId = channel.accountConversationId ?: return@launch
+            runCatching {
+                secureChatBackend.sendMutation(
+                    conversationId = conversationId,
+                    targetMessageId = syncId,
+                    type = "delete_everyone",
+                )
+            }.onFailure {
+                if (it is CancellationException) throw it
+                emitError("Removed here, but the encrypted unsend couldn't reach other devices yet.")
+            }
+            return@launch
+        }
         val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return@launch
         runCatching {
             NorfoldSupabase.deleteTeamChatMessage(remoteWorkspaceId, syncId, settings.settingsDeviceId)
