@@ -141,6 +141,8 @@ dependencies {
     implementation("io.ktor:ktor-client-okhttp:3.5.1")
     implementation("org.jetbrains:markdown:0.7.7")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    // Apache-2.0. Vetted AEAD/HPKE primitives behind Norfold's replaceable CryptoEngine.
+    implementation("com.google.crypto.tink:tink:1.23.0")
     implementation(platform("com.google.firebase:firebase-bom:34.16.0"))
     implementation("com.google.firebase:firebase-messaging")
     ksp("androidx.room:room-compiler:2.8.4")
