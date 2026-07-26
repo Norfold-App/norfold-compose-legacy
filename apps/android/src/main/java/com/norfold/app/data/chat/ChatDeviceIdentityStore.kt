@@ -85,7 +85,7 @@ private data class StoredDeviceIdentity(
 )
 
 /** Small Android Keystore envelope. AES/GCM is provided by the platform. */
-private class AndroidKeystoreProtector(private val alias: String) {
+internal class AndroidKeystoreProtector(private val alias: String) {
     private val keyStore: KeyStore
         get() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
