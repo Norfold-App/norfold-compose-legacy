@@ -75,7 +75,10 @@ class SecureChatBackend(context: Context) {
 
     suspend fun registerCurrentDevice(
         friendlyName: String = Build.MODEL?.trim().orEmpty().ifBlank { "Android device" },
-        archiveCapable: Boolean = false,
+        // Every supported Android install has the encrypted local ArchiveProvider. Cloud
+        // availability is separate; this flag only says the device can serve authorized
+        // encrypted recovery while active.
+        archiveCapable: Boolean = true,
     ): DevicePublicMaterial {
         val identity = identityStore.getOrCreate()
         client.postgrest.rpc(

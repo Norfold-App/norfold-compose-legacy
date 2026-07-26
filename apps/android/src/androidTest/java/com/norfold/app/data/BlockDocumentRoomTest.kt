@@ -21,6 +21,8 @@ import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.TableBlock
+import com.norfold.app.domain.ChatChannelKind
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -264,6 +266,59 @@ class BlockDocumentRoomTest {
 
         assertTrue(dao.allNotesSnapshot().any { it.note.title == "Rich blocks playground" })
         assertEquals(listOf("Keep this task"), dao.allTasks().map { it.title })
+    }
+
+    @Test
+    fun accountChatIsIsolatedAndExcludedFromWorkspaceSnapshots() = runBlocking {
+        dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
+        dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
+        val repository = DocsRepository(database)
+
+        repository.setActiveChatAccount("account-a")
+        val accountAChannel = repository.openOrCreateAccountChannel(
+            accountConversationId = "conversation-a",
+            kind = ChatChannelKind.Dm,
+            name = "A private",
+        )
+        dao.insertChatMessage(
+            ChatMessageEntity(
+                authorUsername = "a",
+                authorDisplayName = "A",
+                body = "account-a-secret",
+                color = 1,
+                createdAt = 2,
+                workspaceId = 1,
+                channelId = accountAChannel,
+            ),
+        )
+
+        repository.setActiveChatAccount("account-b")
+        val accountBChannel = repository.openOrCreateAccountChannel(
+            accountConversationId = "conversation-b",
+            kind = ChatChannelKind.Dm,
+            name = "B private",
+        )
+        dao.insertChatMessage(
+            ChatMessageEntity(
+                authorUsername = "b",
+                authorDisplayName = "B",
+                body = "account-b-secret",
+                color = 2,
+                createdAt = 3,
+                workspaceId = 1,
+                channelId = accountBChannel,
+            ),
+        )
+
+        assertEquals(listOf("B private"), repository.chatChannels.first().map { it.name })
+        assertEquals(listOf("account-b-secret"), repository.chatMessages.first().map { it.body })
+        repository.setActiveChatAccount(null)
+        assertTrue(repository.chatChannels.first().isEmpty())
+        assertTrue(repository.chatMessages.first().isEmpty())
+
+        val workspaceSnapshot = repository.snapshot()
+        assertTrue(workspaceSnapshot.chatChannels.isEmpty())
+        assertTrue(workspaceSnapshot.chatMessages.isEmpty())
     }
 
     private fun note(id: Long, searchText: String) = NoteEntity(

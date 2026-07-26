@@ -172,4 +172,39 @@ class BlockDocumentMigrationTest {
             }
         }
     }
+
+    @Test
+    fun accountChatRowsGainFailClosedOwnerBoundaryFromVersion47() {
+        val name = "account-chat-owner-migration-test"
+        helper.createDatabase(name, 47).apply {
+            execSQL(
+                """
+                INSERT INTO chat_channels(
+                    id, syncId, kind, name, counterpartUsername, icon, createdAt, workspaceId,
+                    pinned, accountConversationId, coverUri, description, rules, rulesReminderDays,
+                    visibility, securityMode, securityEpochId, acknowledgedSecurityEpochId
+                ) VALUES(
+                    91, 'legacy-private', 'Dm', 'Legacy private', 'peer', 'app.people', 1, 1,
+                    0, 'conversation-legacy', NULL, '', '', 7,
+                    'Private', 'EndToEndEncrypted', NULL, NULL
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 48, true, NorfoldDatabase.MIGRATION_47_48).use { db ->
+            db.query("SELECT accountOwnerId FROM chat_channels WHERE id = 91").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertTrue(cursor.isNull(0))
+            }
+            db.query(
+                "SELECT COUNT(*) FROM chat_channels WHERE accountOwnerId = ?",
+                arrayOf("new-account"),
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
 }

@@ -80,6 +80,8 @@ import com.norfold.app.domain.toDeviceSettingsProfile
 import androidx.room.withTransaction
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -137,6 +139,7 @@ private fun RemoteWorkspaceObject.decodeSharedDocument(): SharedDocumentPayload?
 class DocsRepository(private val database: NorfoldDatabase) {
     private val dao = database.dao()
     private val workspaceObjectUpsertMutex = Mutex()
+    private val activeChatAccountId = MutableStateFlow<String?>(null)
     // Everything except tags/settings is scoped to the active workspace.
     private val activeWorkspaceId: Flow<Long> =
         dao.observeSettings().map { it?.activeWorkspaceId ?: 1L }.distinctUntilChanged()
@@ -152,8 +155,16 @@ class DocsRepository(private val database: NorfoldDatabase) {
     val taskPropertyDefinitions: Flow<List<TaskPropertyDefinition>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeTaskPropertyDefinitions(ws).map { rows -> rows.map { it.toDomain() } } }
     val taskPropertyValues: Flow<List<TaskPropertyValue>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeTaskPropertyValues(ws).map { rows -> rows.map { it.toDomain() } } }
     val taskChecklistItems: Flow<List<TaskChecklistItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeTaskChecklistItems(ws).map { rows -> rows.map { it.toDomain() } } }
-    val chatMessages: Flow<List<ChatMessageItem>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeChatMessages(ws).map { rows -> rows.map { it.toDomain() } } }
-    val chatChannels: Flow<List<ChatChannel>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeChatChannels(ws).map { rows -> rows.map { it.toDomain() } } }
+    val chatMessages: Flow<List<ChatMessageItem>> = combine(activeWorkspaceId, activeChatAccountId) { ws, accountId ->
+        ws to accountId
+    }.flatMapLatest { (ws, accountId) ->
+        dao.observeChatMessages(ws, accountId).map { rows -> rows.map { it.toDomain() } }
+    }
+    val chatChannels: Flow<List<ChatChannel>> = combine(activeWorkspaceId, activeChatAccountId) { ws, accountId ->
+        ws to accountId
+    }.flatMapLatest { (ws, accountId) ->
+        dao.observeChatChannels(ws, accountId).map { rows -> rows.map { it.toDomain() } }
+    }
     val workspaceMembers: Flow<List<WorkspaceMember>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceMembers(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceObjects: Flow<List<WorkspaceObject>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceObjects(ws).map { rows -> rows.map { it.toDomain() } } }
     val workspaceObjectLinks: Flow<List<WorkspaceObjectLink>> = activeWorkspaceId.flatMapLatest { ws -> dao.observeWorkspaceObjectLinks(ws).map { rows -> rows.map { it.toDomain() } } }
@@ -170,6 +181,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
     private suspend fun activeWs(): Long = dao.settings()?.activeWorkspaceId ?: 1L
 
     suspend fun activeWorkspaceIdValue(): Long = activeWs()
+
+    fun setActiveChatAccount(accountId: String?) {
+        activeChatAccountId.value = accountId?.trim()?.takeIf(String::isNotEmpty)
+    }
 
     suspend fun settingsValue(): AppSettings = dao.settings()?.toDomain() ?: defaultSettings
 
@@ -2304,7 +2319,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
         createdAt: Long = System.currentTimeMillis(),
     ): Long {
         val ws = activeWs()
-        dao.chatChannelByAccountConversation(accountConversationId)?.let { existing ->
+        val accountId = requireNotNull(activeChatAccountId.value) {
+            "A signed-in account is required for a private conversation."
+        }
+        dao.chatChannelByAccountConversation(accountId, accountConversationId)?.let { existing ->
             // Keep the display name fresh (a peer may have set a profile name since first open).
             dao.insertChatChannel(
                 existing.copy(
@@ -2332,13 +2350,16 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 createdAt = createdAt,
                 workspaceId = ws,
                 accountConversationId = accountConversationId,
+                accountOwnerId = accountId,
             ),
         )
     }
 
     /** The local channel mirroring an account conversation, if one exists. */
     suspend fun accountChannelId(accountConversationId: String): Long? =
-        dao.chatChannelByAccountConversation(accountConversationId)?.id
+        activeChatAccountId.value?.let { accountId ->
+            dao.chatChannelByAccountConversation(accountId, accountConversationId)?.id
+        }
 
     suspend fun updateChatChannelSecurity(
         channelId: Long,
@@ -2411,7 +2432,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val ws = activeWs()
         // Own messages already have a local row + binding (keyed by the same
         // client_sync_id) from the optimistic send; reconnect replays already imported.
-        val existing = dao.remoteBindingBySyncId(ws, WorkspaceObjectType.ChatMessage.name, clientSyncId)
+        val existing = dao.bindingBySyncIdAnyWorkspace(WorkspaceObjectType.ChatMessage.name, clientSyncId)
         if (existing != null) return@withTransaction false
         val localId = dao.insertChatMessage(
             ChatMessageEntity(
@@ -3120,8 +3141,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
             .mapNotNull { document -> dao.documentByOwner(document.ownerType, document.ownerId)?.toDomain() },
         goals = dao.allGoals().map { it.toDomain() },
         calendarEvents = dao.allCalendarEvents().map { it.toDomain() },
-        chatMessages = dao.allChatMessages().map { it.toDomain() },
-        chatChannels = dao.allChatChannels().map { it.toDomain() },
+        // Account DMs/groups live exclusively in the separately encrypted private Chat archive.
+        // Putting them in a workspace snapshot crosses account and workspace privacy domains.
+        chatMessages = dao.allWorkspaceChatMessages().map { it.toDomain() },
+        chatChannels = dao.allWorkspaceChatChannels().map { it.toDomain() },
         workspaceObjects = dao.allWorkspaceObjects().map { it.toDomain() },
         workspaceObjectLinks = dao.allWorkspaceObjectLinks().map { it.toDomain() },
         workspaceActivities = dao.allWorkspaceActivities().map { it.toDomain() },
@@ -3306,7 +3329,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
             snapshot.calendarEvents.forEach {
                 dao.insertCalendarEvent(CalendarEventEntity(it.id, it.workspaceId, it.syncId, it.title, it.description, it.startAt, it.endAt, it.allDay, it.color, it.source.name, it.externalId, it.createdAt, it.updatedAt))
             }
-            snapshot.chatChannels.forEach {
+            val workspaceChannels = snapshot.chatChannels.filter { it.accountConversationId == null }
+            val workspaceChannelIds = workspaceChannels.mapTo(hashSetOf()) { it.id }
+            workspaceChannels.forEach {
                 dao.insertChatChannel(
                     ChatChannelEntity(
                         id = it.id,
@@ -3330,7 +3355,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     ),
                 )
             }
-            snapshot.chatMessages.forEach {
+            snapshot.chatMessages
+                .filter { it.channelId == null || it.channelId in workspaceChannelIds }
+                .forEach {
                 dao.insertChatMessage(
                     ChatMessageEntity(
                         id = it.id,

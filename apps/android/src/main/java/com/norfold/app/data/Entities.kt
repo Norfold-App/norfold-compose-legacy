@@ -365,7 +365,13 @@ data class ChatMessageEntity(
 
 @Entity(
     tableName = "chat_channels",
-    indices = [Index("workspaceId"), Index("kind"), Index(value = ["workspaceId", "syncId"], unique = true)],
+    indices = [
+        Index("workspaceId"),
+        Index("kind"),
+        Index("accountOwnerId"),
+        Index(value = ["workspaceId", "syncId"], unique = true),
+        Index(value = ["accountOwnerId", "accountConversationId"], unique = true),
+    ],
 )
 data class ChatChannelEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -381,6 +387,9 @@ data class ChatChannelEntity(
     // Scope discriminator: null = workspace channel (existing transport); non-null =
     // account-level direct_conversations.id (account transport, follows the user).
     val accountConversationId: String? = null,
+    // Owning cloud account for account-level conversations. Null for workspace channels and
+    // deliberately unclassified legacy rows. Private rows must never cross account sessions.
+    val accountOwnerId: String? = null,
     // Rich-group visuals/metadata (personal groups). Empty/default for topics + DMs.
     val coverUri: String? = null,
     val description: String = "",
@@ -861,6 +870,7 @@ fun ChatChannelEntity.toDomain() = ChatChannel(
     workspaceId = workspaceId,
     pinned = pinned,
     accountConversationId = accountConversationId,
+    accountOwnerId = accountOwnerId,
     coverUri = coverUri,
     description = description,
     rules = rules,

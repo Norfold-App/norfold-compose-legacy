@@ -19,4 +19,8 @@ interface ArchiveCryptoEngine {
     val formatId: String
     fun seal(archiveId: String, plaintext: ByteArray, createdAt: Long): String
     fun open(archiveId: String, envelope: String): ByteArray
+    fun getOrCreateRecoveryMaterial(archiveId: String): String =
+        error("Portable archive recovery is unavailable.")
+    fun openWithRecovery(archiveId: String, envelope: String, recoveryMaterial: String): ByteArray =
+        error("Portable archive recovery is unavailable.")
 }
