@@ -2,6 +2,7 @@ package com.norfold.app.cloud
 
 import com.norfold.app.domain.ChatChannelVisibility
 import com.norfold.app.domain.ChatSecurityMode
+import com.norfold.app.domain.chat.SecureChatAttachmentV1
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.realtime.PostgresAction
@@ -302,6 +303,7 @@ object ChatBackend {
         attachmentSizeBytes: Long? = null,
         attachmentStoragePath: String? = null,
         attachmentExternalUrl: String? = null,
+        secureAttachment: SecureChatAttachmentV1? = null,
         editedAt: Long? = null,
         reactionsJson: String? = null,
         pinned: Boolean? = null,
@@ -333,6 +335,7 @@ object ChatBackend {
             if (attachmentSizeBytes != null) put("attachmentSizeBytes", attachmentSizeBytes)
             if (attachmentStoragePath != null) put("attachmentStoragePath", attachmentStoragePath)
             if (attachmentExternalUrl != null) put("attachmentExternalUrl", attachmentExternalUrl)
+            if (secureAttachment != null) put("secureAttachment", secureAttachment.toJson())
             if (editedAt != null) put("editedAt", editedAt)
             if (reactionsJson != null) put("reactionsJson", reactionsJson)
             if (pinned != null) put("pinned", pinned)
@@ -396,6 +399,22 @@ object ChatBackend {
     private fun ChatSecurityMode.wireValue(): String = when (this) {
         ChatSecurityMode.EndToEndEncrypted -> "e2ee"
         ChatSecurityMode.Managed -> "managed"
+    }
+
+    private fun SecureChatAttachmentV1.toJson(): JsonObject = buildJsonObject {
+        put("version", version)
+        put("mediaId", mediaId)
+        put("storagePath", storagePath)
+        put("messageId", messageId)
+        put("securityEpochId", securityEpochId)
+        put("displayName", displayName)
+        put("mimeType", mimeType)
+        put("plaintextSize", plaintextSize)
+        put("ciphertextSize", ciphertextSize)
+        put("key", key)
+        put("nonce", nonce)
+        put("ciphertextSha256", ciphertextSha256)
+        put("plaintextSha256", plaintextSha256)
     }
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")

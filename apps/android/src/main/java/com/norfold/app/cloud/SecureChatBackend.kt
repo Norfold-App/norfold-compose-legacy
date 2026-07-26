@@ -7,6 +7,7 @@ import com.norfold.app.domain.chat.DevicePublicMaterial
 import com.norfold.app.domain.chat.E2eeMessageMetadata
 import com.norfold.app.domain.chat.NorfoldE2eeEnvelopeV1
 import com.norfold.app.domain.chat.SecureChatPayloadV1
+import com.norfold.app.domain.chat.SecureChatAttachmentV1
 import com.norfold.app.domain.chat.TinkCryptoEngine
 import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.serialization.SerialName
@@ -178,6 +179,30 @@ class SecureChatBackend(context: Context) {
         ),
     )
 
+    suspend fun prepareAccountSecurityEpoch(conversationId: String): String =
+        ensureAccountEpoch(conversationId)
+
+    suspend fun sendAccountMedia(
+        conversationId: String,
+        securityEpochId: String,
+        clientSyncId: String,
+        body: String,
+        createdAt: Long,
+        attachment: SecureChatAttachmentV1,
+        expiresAt: Long? = null,
+    ): SentPayload = sendPayloadForEpoch(
+        conversationId = conversationId,
+        epochId = securityEpochId,
+        clientSyncId = clientSyncId,
+        payload = SecureChatPayloadV1(
+            type = "media",
+            body = body,
+            createdAt = createdAt,
+            expiresAt = expiresAt,
+            attachment = attachment,
+        ),
+    )
+
     suspend fun sendMutation(
         conversationId: String,
         clientSyncId: String,
@@ -225,6 +250,34 @@ class SecureChatBackend(context: Context) {
             expiresAt = expiresAt,
         ),
     )
+
+    suspend fun sendWorkspaceMedia(
+        workspaceId: String,
+        channelId: String?,
+        securityEpochId: String,
+        clientSyncId: String,
+        body: String,
+        createdAt: Long,
+        attachment: SecureChatAttachmentV1,
+        expiresAt: Long? = null,
+    ): SentPayload {
+        val security = ChatBackend.ensureWorkspaceSecurityEpoch(workspaceId, channelId)
+        require(security.securityMode == com.norfold.app.domain.ChatSecurityMode.EndToEndEncrypted)
+        require(security.securityEpochId == securityEpochId) { "Workspace security epoch changed during upload." }
+        require(security.acknowledged) { "Acknowledge this workspace's security disclosure before sending." }
+        return sendPayloadForEpoch(
+            conversationId = channelId ?: workspaceId,
+            epochId = securityEpochId,
+            clientSyncId = clientSyncId,
+            payload = SecureChatPayloadV1(
+                type = "media",
+                body = body,
+                createdAt = createdAt,
+                expiresAt = expiresAt,
+                attachment = attachment,
+            ),
+        )
+    }
 
     suspend fun sendWorkspaceMutation(
         workspaceId: String,
