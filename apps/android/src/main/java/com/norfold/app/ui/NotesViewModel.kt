@@ -108,6 +108,7 @@ import com.norfold.app.data.ChatReadMarkers
 import com.norfold.app.data.ChatConversationPrefs
 import com.norfold.app.cloud.DocumentPresenceState
 import com.norfold.app.cloud.ChatBackend
+import com.norfold.app.cloud.SecureChatBackend
 import com.norfold.app.cloud.toWorkspaceMember
 import com.norfold.app.ui.feedback.UiFeedback
 import com.norfold.app.ui.feedback.UiFeedbackAction
@@ -425,6 +426,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val installationIdentity = InstallationIdentityStore(application)
     private val syncSecretStore = SyncSecretStore(application)
     private val pushRegistrationClient = PushRegistrationClient(application)
+    private val secureChatBackend = SecureChatBackend(application)
     private val backupStore = BackupFolderStore(application)
     private val diagnosticsStore = DiagnosticsStore(application)
     private val networkMonitor = NetworkMonitor(application)
@@ -515,6 +517,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     // Cancelled and replaced whenever a different account conversation is opened.
     private var accountConversationObserver: Job? = null
     private var accountConversationObserverId: String? = null
+    // Account-wide encrypted relay drain. It is independent of the currently open
+    // conversation so messages persist locally even while the user is elsewhere.
+    private var secureRelayObserver: Job? = null
     // Which chat-context navbar tab is active on the inbox (Chats/People/Requests/You).
     private val _chatSection = MutableStateFlow(com.norfold.app.domain.ChatSection.Chats)
     val chatSection: StateFlow<com.norfold.app.domain.ChatSection> = _chatSection.asStateFlow()
@@ -1662,6 +1667,64 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun startSecureRelayObserver() {
+        if (secureRelayObserver?.isActive == true) return
+        secureRelayObserver = viewModelScope.launch {
+            var retryDelayMs = 2_000L
+            var nextLeaseAt = 0L
+            while (kotlinx.coroutines.currentCoroutineContext().isActive && NorfoldSupabase.isSignedIn()) {
+                try {
+                    val now = System.currentTimeMillis()
+                    if (now >= nextLeaseAt) {
+                        secureChatBackend.renewLease()
+                        nextLeaseAt = now + 60_000L
+                    }
+                    val pending = secureChatBackend.pending()
+                    pending.forEach { remote -> importSecureAccountMessage(remote) }
+                    retryDelayMs = 2_000L
+                    delay(if (pending.isEmpty()) 4_000L else 250L)
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (failure: Throwable) {
+                    Log.w("NorfoldSecureChat", "Encrypted relay drain will retry", failure)
+                    delay(retryDelayMs)
+                    retryDelayMs = (retryDelayMs * 2).coerceAtMost(30_000L)
+                }
+            }
+        }
+    }
+
+    private suspend fun importSecureAccountMessage(
+        remote: SecureChatBackend.PendingRelay,
+    ) {
+        val decrypted = secureChatBackend.decrypt(remote)
+        var localChannelId = repository.accountChannelId(decrypted.conversationId)
+        if (localChannelId == null) {
+            val conversations = NorfoldSocial.myDirectConversations()
+            _personalConversations.value = conversations
+            conversations.firstOrNull { it.conversationId == decrypted.conversationId }
+                ?.let { localChannelId = materializeAccountConversation(it) }
+        }
+        val resolvedChannelId = localChannelId ?: return
+        val myId = NorfoldSupabase.currentAccountId()
+        val isOwn = myId != null && decrypted.senderId == myId
+        val identity = resolveAccountSender(decrypted.senderId, isOwn)
+        repository.importAccountDirectMessage(
+            localChannelId = resolvedChannelId,
+            clientSyncId = decrypted.clientSyncId,
+            remoteMessageId = decrypted.relayId,
+            senderUsername = identity.first,
+            senderDisplayName = identity.second,
+            body = decrypted.payload.body,
+            color = state.value.settings.accentColor,
+            createdAt = decrypted.payload.createdAt,
+            isOwn = isOwn,
+        )
+        val viewed = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId
+        secureChatBackend.acknowledge(decrypted.relayId, read = viewed)
+        _teamCollaborationStatus.value = "Direct · encrypted"
+    }
+
     /** Best-effort (username, displayName) for an account sender UUID. */
     private fun resolveAccountSender(senderId: String, isOwn: Boolean): Pair<String, String> {
         if (isOwn) {
@@ -2166,6 +2229,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             .onSuccess {
                 // Mutual-contact state is per-account; the next sign-in starts fresh.
                 MutualChatContacts.clear(app)
+                secureRelayObserver?.cancel()
+                secureRelayObserver = null
                 installationIdentity.bindAccount(null)
                 NorfoldWorkScheduler.cancelAccountWork(app)
                 _cloudAuthProvider.value = CloudAuthProvider.None
@@ -2193,6 +2258,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         installationIdentity.bindAccount(accountId)
         runCatching { pushRegistrationClient.registerCurrentToken() }
             .onFailure { Log.w("NorfoldPush", "Post-login token registration deferred", it) }
+        runCatching {
+            secureChatBackend.registerCurrentDevice()
+            secureChatBackend.renewLease()
+        }.onSuccess { startSecureRelayObserver() }
+            .onFailure { Log.w("NorfoldSecureChat", "Secure device registration deferred", it) }
         val current = repository.settingsValue()
         if (!current.autoBackup) repository.updateSettings(current.copy(autoBackup = true))
         _accountCoordinatorState.value = AccountCoordinatorState.DiscoveringBackupsAndMemberships
@@ -3210,16 +3280,19 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             runCatching {
-                NorfoldSocial.sendDirectMessage(
+                secureChatBackend.sendText(
                     conversationId = conversationId,
+                    clientSyncId = syncId,
                     body = body.trim(),
                     createdAt = createdAt,
-                    syncId = syncId,
+                    replyPreview = replyTo?.let {
+                        "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}"
+                    },
                 )
-            }.onSuccess { remoteSyncId ->
-                repository.bindAccountDirectMessage(localId, remoteSyncId)
+            }.onSuccess {
+                repository.bindAccountDirectMessage(localId, syncId)
                 repository.setChatMessageReceiptStatus(localId, ChatReceiptStatus.Sent)
-                _teamCollaborationStatus.value = "Direct · connected"
+                _teamCollaborationStatus.value = "Direct · encrypted"
             }.onFailure {
                 _teamCollaborationStatus.value = if (networkOnline.value) "Saved locally · direct sync failed" else "Offline · message saved locally"
                 emitError("Message saved locally, but direct sync couldn't finish. It'll retry.")
