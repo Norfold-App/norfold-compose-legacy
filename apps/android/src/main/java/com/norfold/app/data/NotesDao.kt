@@ -549,6 +549,9 @@ interface NotesDao {
     @Query("UPDATE chat_messages SET attachmentUri = :uri WHERE id = :id")
     suspend fun setChatMessageAttachmentUri(id: Long, uri: String)
 
+    @Query("UPDATE chat_messages SET originPayloadJson = :originPayloadJson WHERE id = :id")
+    suspend fun setChatMessageOriginPayload(id: Long, originPayloadJson: String)
+
     // Forward-only batch upgrade: Sent -> Delivered -> Viewed, never backwards.
     // The CASE ranking makes replayed receipt events harmless.
     @Query(
@@ -898,6 +901,18 @@ interface NotesDao {
 
     @Query("SELECT * FROM secure_chat_tombstones ORDER BY destructiveAt ASC")
     suspend fun secureChatTombstones(): List<SecureChatTombstoneEntity>
+
+    @Upsert
+    suspend fun upsertSecureChatUserHidden(entity: SecureChatUserHiddenEntity)
+
+    @Query("SELECT * FROM secure_chat_user_hidden WHERE accountOwnerId = :accountOwnerId AND messageSyncId = :messageSyncId LIMIT 1")
+    suspend fun secureChatUserHidden(accountOwnerId: String, messageSyncId: String): SecureChatUserHiddenEntity?
+
+    @Query("SELECT * FROM secure_chat_user_hidden WHERE accountOwnerId = :accountOwnerId ORDER BY hiddenAt ASC")
+    suspend fun secureChatUserHidden(accountOwnerId: String): List<SecureChatUserHiddenEntity>
+
+    @Query("DELETE FROM secure_chat_user_hidden WHERE accountOwnerId = :accountOwnerId AND messageSyncId = :messageSyncId")
+    suspend fun deleteSecureChatUserHidden(accountOwnerId: String, messageSyncId: String)
 
     @Upsert
     suspend fun upsertPrivateChatArchiveManifest(entity: PrivateChatArchiveManifestEntity)

@@ -281,6 +281,7 @@ data class ChatMessageItem(
     // Null means legacy/unclassified history. Never relabel old content after a mode change.
     val securityMode: ChatSecurityMode? = null,
     val securityEpochId: String? = null,
+    val originPayloadJson: String? = null,
     val securityEventId: String? = null,
 )
 

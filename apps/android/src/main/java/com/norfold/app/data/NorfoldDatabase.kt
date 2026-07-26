@@ -44,9 +44,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SecureChatOutboxEntity::class,
         SecureChatRelayCheckpointEntity::class,
         SecureChatTombstoneEntity::class,
+        SecureChatUserHiddenEntity::class,
         PrivateChatArchiveManifestEntity::class,
     ],
-    version = 48,
+    version = 49,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -106,6 +107,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_45_46,
                     MIGRATION_46_47,
                     MIGRATION_47_48,
+                    MIGRATION_48_49,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -247,6 +249,26 @@ abstract class NorfoldDatabase : RoomDatabase() {
                         "index_chat_channels_accountOwnerId_accountConversationId " +
                         "ON chat_channels(accountOwnerId, accountConversationId)",
                 )
+            }
+        }
+        internal val MIGRATION_48_49 = object : Migration(48, 49) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN originPayloadJson TEXT")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS secure_chat_user_hidden (
+                        accountOwnerId TEXT NOT NULL,
+                        messageSyncId TEXT NOT NULL,
+                        conversationId TEXT NOT NULL,
+                        securityEpochId TEXT NOT NULL,
+                        hiddenAt INTEGER NOT NULL,
+                        reason TEXT NOT NULL,
+                        PRIMARY KEY(accountOwnerId, messageSyncId)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_user_hidden_conversationId ON secure_chat_user_hidden(conversationId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_secure_chat_user_hidden_hiddenAt ON secure_chat_user_hidden(hiddenAt)")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds

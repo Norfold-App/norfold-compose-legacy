@@ -106,6 +106,11 @@ data class ImportedSharedDocument(
     val changed: Boolean,
 )
 
+data class DeletedChatMessageSnapshot(
+    val message: ChatMessageEntity,
+    val binding: RemoteObjectBindingEntity?,
+)
+
 private data class SharedDocumentPayload(
     val title: String,
     val document: BlockDocument,
@@ -2386,6 +2391,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
         dao.setChatMessageSecurity(messageId, mode.name, securityEpochId)
     }
 
+    suspend fun setChatMessageOriginPayload(messageId: Long, originPayloadJson: String) {
+        dao.setChatMessageOriginPayload(messageId, originPayloadJson)
+    }
+
     suspend fun updateChatChannelRichMetadata(
         channelId: Long,
         name: String,
@@ -2428,6 +2437,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
         color: Long,
         createdAt: Long,
         isOwn: Boolean,
+        securityEpochId: String? = null,
+        originPayloadJson: String? = null,
     ): Boolean = database.withTransaction {
         val ws = activeWs()
         // Own messages already have a local row + binding (keyed by the same
@@ -2445,6 +2456,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 channelId = localChannelId,
                 // Incoming peer messages carry no receipt; our own echoes were already stamped Sent.
                 receiptStatus = if (isOwn) ChatReceiptStatus.Sent.name else null,
+                securityMode = securityEpochId?.let { ChatSecurityMode.EndToEndEncrypted.name },
+                securityEpochId = securityEpochId,
+                originPayloadJson = originPayloadJson,
             ),
         )
         dao.insertRemoteBinding(
@@ -2474,6 +2488,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         createdAt: Long,
         isOwn: Boolean,
         securityEpochId: String,
+        originPayloadJson: String? = null,
     ): Boolean = database.withTransaction {
         val existing = dao.remoteBindingBySyncId(
             localWorkspaceId,
@@ -2493,6 +2508,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 receiptStatus = if (isOwn) ChatReceiptStatus.Sent.name else null,
                 securityMode = ChatSecurityMode.EndToEndEncrypted.name,
                 securityEpochId = securityEpochId,
+                originPayloadJson = originPayloadJson,
             ),
         )
         dao.insertRemoteBinding(
@@ -2634,6 +2650,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun localChatMessageIdBySyncId(localWorkspaceId: Long, syncId: String): Long? =
         dao.remoteBindingBySyncId(localWorkspaceId, WorkspaceObjectType.ChatMessage.name, syncId)?.localId
 
+    suspend fun chatMessageBySyncIdAnyWorkspace(syncId: String): ChatMessageItem? =
+        dao.bindingBySyncIdAnyWorkspace(WorkspaceObjectType.ChatMessage.name, syncId)
+            ?.let { dao.chatMessageById(it.localId) }
+            ?.toDomain()
+
     /**
      * Resolves local message ids for a set of remote sync ids — the bridge from a
      * receipt-summary poll (keyed by sync id) back to local receipt columns.
@@ -2668,8 +2689,44 @@ class DocsRepository(private val database: NorfoldDatabase) {
      * import dedup is binding-based, so keeping it stops the catch-up fetch from resurrecting
      * the message on this device. Other devices are unaffected.
      */
-    suspend fun deleteChatMessageForMe(messageId: Long) {
-        dao.deleteChatMessage(messageId)
+    suspend fun deleteChatMessageForMe(messageId: Long): DeletedChatMessageSnapshot? =
+        database.withTransaction {
+            val message = dao.chatMessageById(messageId) ?: return@withTransaction null
+            val binding = dao.remoteBinding(
+                message.workspaceId,
+                WorkspaceObjectType.ChatMessage.name,
+                messageId,
+            )
+            dao.deleteChatMessage(messageId)
+            DeletedChatMessageSnapshot(message, binding)
+        }
+
+    suspend fun restoreChatMessageForUndo(snapshot: DeletedChatMessageSnapshot) {
+        dao.insertChatMessage(snapshot.message)
+        snapshot.binding?.let(dao::insertRemoteBinding)
+    }
+
+    suspend fun recordSecureChatUserHidden(entity: SecureChatUserHiddenEntity) {
+        dao.upsertSecureChatUserHidden(entity)
+    }
+
+    suspend fun removeSecureChatUserHidden(accountOwnerId: String, messageSyncId: String) {
+        dao.deleteSecureChatUserHidden(accountOwnerId, messageSyncId)
+    }
+
+    suspend fun hasSecureChatUserHidden(accountOwnerId: String, messageSyncId: String): Boolean =
+        dao.secureChatUserHidden(accountOwnerId, messageSyncId) != null
+
+    suspend fun mergeSecureChatUserHidden(
+        accountOwnerId: String,
+        rows: List<SecureChatUserHiddenEntity>,
+    ) = database.withTransaction {
+        rows.forEach { row ->
+            if (row.accountOwnerId != accountOwnerId) return@forEach
+            dao.upsertSecureChatUserHidden(row)
+            dao.bindingBySyncIdAnyWorkspace(WorkspaceObjectType.ChatMessage.name, row.messageSyncId)
+                ?.let { dao.deleteChatMessage(it.localId) }
+        }
     }
 
     /**
