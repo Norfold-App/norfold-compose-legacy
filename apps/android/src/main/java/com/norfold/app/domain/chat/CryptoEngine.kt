@@ -43,6 +43,18 @@ interface CryptoEngine {
         recipient: DeviceCryptoMaterial,
         sender: DevicePublicMaterial,
     ): ByteArray
+
+    fun createOriginProof(
+        payload: SecureChatPayloadV1,
+        metadata: E2eeMessageMetadata,
+        sender: DeviceCryptoMaterial,
+    ): MessageOriginProofV1
+
+    fun verifyOriginProof(
+        payload: SecureChatPayloadV1,
+        proof: MessageOriginProofV1,
+        originalSender: DevicePublicMaterial,
+    )
 }
 
 @Serializable
@@ -100,6 +112,29 @@ data class NorfoldE2eeEnvelopeV1(
     val metadata: E2eeMessageMetadata,
     val ciphertext: String,
     val recipientKeys: List<RecipientWrappedKey>,
+    val signature: String,
+)
+
+@Serializable
+data class MessageOriginStatementV1(
+    val version: Int = 1,
+    val messageId: String,
+    val conversationId: String,
+    val securityEpochId: String,
+    val senderAccountId: String,
+    val senderDeviceId: String,
+    val senderDeviceGeneration: Int,
+    val contentDigest: String,
+)
+
+/**
+ * Sender-authenticated proof carried inside the encrypted payload. A recovery holder may
+ * re-encrypt the payload for a replacement device, but cannot change its author, target,
+ * timestamp, or content without invalidating this signature.
+ */
+@Serializable
+data class MessageOriginProofV1(
+    val statement: MessageOriginStatementV1,
     val signature: String,
 )
 
@@ -223,11 +258,74 @@ class TinkCryptoEngine : CryptoEngine {
             .decrypt(Base64.getDecoder().decode(envelope.ciphertext), associatedData)
     }
 
+    override fun createOriginProof(
+        payload: SecureChatPayloadV1,
+        metadata: E2eeMessageMetadata,
+        sender: DeviceCryptoMaterial,
+    ): MessageOriginProofV1 {
+        require(payload.originProof == null) { "Origin proof must be created from an unsigned payload." }
+        require(metadata.messageId.isNotBlank() && metadata.securityEpochId.isNotBlank())
+        require(metadata.senderDeviceId == sender.public.deviceId)
+        require(metadata.senderDeviceGeneration == sender.public.generation)
+        val statement = originStatement(payload, metadata)
+        val signer = parseSecret(sender.signingPrivateKeyset)
+            .getPrimitive(config, PublicKeySign::class.java)
+        return MessageOriginProofV1(
+            statement = statement,
+            signature = b64(signer.sign(originSigningBytes(statement))),
+        )
+    }
+
+    override fun verifyOriginProof(
+        payload: SecureChatPayloadV1,
+        proof: MessageOriginProofV1,
+        originalSender: DevicePublicMaterial,
+    ) {
+        require(proof.statement.version == 1) { "Unsupported origin proof version." }
+        require(proof.statement.senderDeviceId == originalSender.deviceId)
+        require(proof.statement.senderDeviceGeneration == originalSender.generation)
+        val expectedDigest = b64(
+            MessageDigest.getInstance("SHA-256").digest(
+                json.encodeToString(payload.copy(originProof = null))
+                    .toByteArray(StandardCharsets.UTF_8),
+            ),
+        )
+        require(proof.statement.contentDigest == expectedDigest) {
+            "Secure message origin content mismatch."
+        }
+        val verifier = TinkJsonProtoKeysetFormat
+            .parseKeysetWithoutSecret(originalSender.signingPublicKeyset)
+            .getPrimitive(config, PublicKeyVerify::class.java)
+        verifier.verify(
+            Base64.getDecoder().decode(proof.signature),
+            originSigningBytes(proof.statement),
+        )
+    }
+
     private fun associatedData(metadata: E2eeMessageMetadata): ByteArray =
         json.encodeToString(metadata).toByteArray(StandardCharsets.UTF_8)
 
     private fun signingBytes(envelope: NorfoldE2eeEnvelopeV1): ByteArray =
         json.encodeToString(envelope).toByteArray(StandardCharsets.UTF_8)
+
+    private fun originStatement(
+        payload: SecureChatPayloadV1,
+        metadata: E2eeMessageMetadata,
+    ): MessageOriginStatementV1 = MessageOriginStatementV1(
+        messageId = metadata.messageId,
+        conversationId = metadata.conversationId,
+        securityEpochId = metadata.securityEpochId,
+        senderAccountId = metadata.senderAccountId,
+        senderDeviceId = metadata.senderDeviceId,
+        senderDeviceGeneration = metadata.senderDeviceGeneration,
+        contentDigest = b64(
+            MessageDigest.getInstance("SHA-256")
+                .digest(json.encodeToString(payload.copy(originProof = null)).toByteArray(StandardCharsets.UTF_8)),
+        ),
+    )
+
+    private fun originSigningBytes(statement: MessageOriginStatementV1): ByteArray =
+        json.encodeToString(statement).toByteArray(StandardCharsets.UTF_8)
 
     private fun serializeSecret(handle: KeysetHandle): String =
         TinkJsonProtoKeysetFormat.serializeKeyset(handle, InsecureSecretKeyAccess.get())

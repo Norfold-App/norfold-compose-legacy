@@ -13,6 +13,7 @@ data class PrivateChatArchiveSnapshot(
     val conversations: List<ArchivedChatConversation>,
     val messages: List<ArchivedChatMessage>,
     val tombstones: List<ArchivedChatTombstone>,
+    val hiddenMessages: List<ArchivedChatHidden> = emptyList(),
 )
 
 @Serializable
@@ -55,6 +56,16 @@ data class ArchivedChatMessage(
     val starred: Boolean = false,
     val securityMode: String? = null,
     val securityEpochId: String? = null,
+    val originPayloadJson: String? = null,
+)
+
+@Serializable
+data class ArchivedChatHidden(
+    val messageSyncId: String,
+    val conversationId: String,
+    val securityEpochId: String,
+    val hiddenAt: Long,
+    val reason: String,
 )
 
 @Serializable

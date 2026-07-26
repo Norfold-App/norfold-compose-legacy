@@ -19,6 +19,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
+import java.util.UUID
 
 /**
  * Supabase control/relay adapter for opaque account-chat payloads. The backend
@@ -29,6 +30,12 @@ class SecureChatBackend(context: Context) {
     private val crypto = TinkCryptoEngine()
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
     private val client get() = NorfoldSupabase.client
+
+    data class SentPayload(
+        val relayId: String,
+        val securityEpochId: String,
+        val originPayloadJson: String,
+    )
 
     fun currentDevicePublic(): DevicePublicMaterial = identityStore.publicIdentity()
 
@@ -59,6 +66,13 @@ class SecureChatBackend(context: Context) {
         @SerialName("sender_crypto_generation") val senderCryptoGeneration: Int,
         @SerialName("sender_hpke_public_keyset") val senderHpkePublicKeyset: String,
         @SerialName("sender_signing_public_keyset") val senderSigningPublicKeyset: String,
+        @SerialName("origin_client_sync_id") val originClientSyncId: String? = null,
+        @SerialName("origin_sender_id") val originSenderId: String? = null,
+        @SerialName("origin_sender_device_id") val originSenderDeviceId: String? = null,
+        @SerialName("origin_sender_crypto_generation") val originSenderCryptoGeneration: Int? = null,
+        @SerialName("origin_sender_hpke_public_keyset") val originSenderHpkePublicKeyset: String? = null,
+        @SerialName("origin_sender_signing_public_keyset") val originSenderSigningPublicKeyset: String? = null,
+        @SerialName("recovery_request_id") val recoveryRequestId: String? = null,
         val envelope: JsonObject,
         @SerialName("created_at") val createdAt: String,
     )
@@ -71,6 +85,36 @@ class SecureChatBackend(context: Context) {
         val securityEpochId: String,
         val payload: SecureChatPayloadV1,
         val envelopeCreatedAt: Long,
+        val originPayloadJson: String?,
+    )
+
+    @Serializable
+    data class PendingRecoveryRequest(
+        @SerialName("request_id") val requestId: String,
+        @SerialName("object_id") val objectId: String,
+        @SerialName("security_epoch_id") val securityEpochId: String,
+        @SerialName("requester_id") val requesterId: String,
+        @SerialName("requester_device_id") val requesterDeviceId: String,
+        @SerialName("requester_crypto_generation") val requesterCryptoGeneration: Int,
+        @SerialName("requester_hpke_public_keyset") val requesterHpkePublicKeyset: String,
+        @SerialName("created_at") val createdAt: String,
+        @SerialName("expires_at") val expiresAt: String,
+    )
+
+    @Serializable
+    data class HiddenObject(
+        @SerialName("object_id") val objectId: String,
+        @SerialName("security_epoch_id") val securityEpochId: String,
+        @SerialName("conversation_id") val conversationId: String,
+        @SerialName("hidden_at") val hiddenAt: String,
+        val reason: String,
+    )
+
+    @Serializable
+    data class RecoverableObject(
+        @SerialName("object_id") val objectId: String,
+        @SerialName("security_epoch_id") val securityEpochId: String,
+        @SerialName("created_at") val createdAt: String,
     )
 
     suspend fun registerCurrentDevice(
@@ -113,7 +157,7 @@ class SecureChatBackend(context: Context) {
         body: String,
         createdAt: Long,
         replyPreview: String? = null,
-    ): String = sendPayload(
+    ): SentPayload = sendPayload(
         conversationId = conversationId,
         clientSyncId = clientSyncId,
         payload = SecureChatPayloadV1(
@@ -147,7 +191,7 @@ class SecureChatBackend(context: Context) {
                 reactionsJson = reactionsJson,
                 pinned = pinned,
             ),
-        )
+        ).relayId
     }
 
     suspend fun sendWorkspaceText(
@@ -157,7 +201,7 @@ class SecureChatBackend(context: Context) {
         body: String,
         createdAt: Long,
         replyPreview: String? = null,
-    ): String = sendWorkspacePayload(
+    ): SentPayload = sendWorkspacePayload(
         workspaceId = workspaceId,
         channelId = channelId,
         clientSyncId = clientSyncId,
@@ -192,13 +236,13 @@ class SecureChatBackend(context: Context) {
             reactionsJson = reactionsJson,
             pinned = pinned,
         ),
-    )
+    ).relayId
 
     private suspend fun sendPayload(
         conversationId: String,
         clientSyncId: String,
         payload: SecureChatPayloadV1,
-    ): String {
+    ): SentPayload {
         val epochId = ensureAccountEpoch(conversationId)
         return sendPayloadForEpoch(conversationId, epochId, clientSyncId, payload)
     }
@@ -208,7 +252,7 @@ class SecureChatBackend(context: Context) {
         channelId: String?,
         clientSyncId: String,
         payload: SecureChatPayloadV1,
-    ): String {
+    ): SentPayload {
         registerCurrentDevice()
         renewLease()
         val security = ChatBackend.ensureWorkspaceSecurityEpoch(workspaceId, channelId)
@@ -229,7 +273,7 @@ class SecureChatBackend(context: Context) {
         epochId: String,
         clientSyncId: String,
         payload: SecureChatPayloadV1,
-    ): String {
+    ): SentPayload {
         val accountId = NorfoldSupabase.currentAccountId()
             ?: error("Sign in before sending a secure message.")
         val sender = identityStore.getOrCreate()
@@ -247,9 +291,12 @@ class SecureChatBackend(context: Context) {
             contentType = payload.type,
             targetMessageId = payload.targetMessageId,
         )
-        val plaintext = json.encodeToString(payload).encodeToByteArray()
+        val signedPayload = payload.copy(
+            originProof = crypto.createOriginProof(payload.copy(originProof = null), metadata, sender),
+        )
+        val plaintext = json.encodeToString(signedPayload).encodeToByteArray()
         val envelope = crypto.seal(plaintext, metadata, sender, recipients)
-        return client.postgrest.rpc(
+        val relayId = client.postgrest.rpc(
             function = "send_e2ee_relay_message",
             parameters = buildJsonObject {
                 put("p_client_sync_id", clientSyncId)
@@ -259,6 +306,11 @@ class SecureChatBackend(context: Context) {
                 put("p_envelope", json.encodeToJsonElement(envelope))
             },
         ).data.trim('"')
+        return SentPayload(
+            relayId = relayId,
+            securityEpochId = epochId,
+            originPayloadJson = json.encodeToString(signedPayload),
+        )
     }
 
     suspend fun pending(limit: Int = 250): List<PendingRelay> {
@@ -285,15 +337,42 @@ class SecureChatBackend(context: Context) {
         val plaintext = crypto.open(envelope, recipient, sender).decodeToString()
         val payload = json.decodeFromString<SecureChatPayloadV1>(plaintext)
         require(payload.version == 1) { "Unsupported secure payload version." }
-        require(payload.createdAt == envelope.metadata.createdAt) { "Secure payload timestamp mismatch." }
+        if (remote.recoveryRequestId == null) {
+            require(payload.createdAt == envelope.metadata.createdAt) { "Secure payload timestamp mismatch." }
+        }
+        val originalSender = DevicePublicMaterial(
+            deviceId = remote.originSenderDeviceId ?: remote.senderDeviceId,
+            generation = remote.originSenderCryptoGeneration ?: remote.senderCryptoGeneration,
+            hpkePublicKeyset = remote.originSenderHpkePublicKeyset ?: remote.senderHpkePublicKeyset,
+            signingPublicKeyset = remote.originSenderSigningPublicKeyset ?: remote.senderSigningPublicKeyset,
+        )
+        val originMessageId = remote.originClientSyncId ?: remote.clientSyncId
+        val originSenderId = remote.originSenderId ?: remote.senderId
+        val proof = payload.originProof
+        if (proof == null) {
+            require(remote.recoveryRequestId == null) { "Recovered content has no original-author proof." }
+        } else {
+            require(proof.statement.messageId == originMessageId) { "Recovered message identity mismatch." }
+            require(proof.statement.conversationId == envelope.metadata.conversationId) {
+                "Recovered conversation identity mismatch."
+            }
+            require(proof.statement.securityEpochId == remote.securityEpochId) {
+                "Recovered security epoch mismatch."
+            }
+            require(proof.statement.senderAccountId == originSenderId) {
+                "Recovered sender identity mismatch."
+            }
+            crypto.verifyOriginProof(payload, proof, originalSender)
+        }
         return DecryptedRelay(
             relayId = remote.relayId,
-            clientSyncId = remote.clientSyncId,
-            senderId = remote.senderId,
+            clientSyncId = originMessageId,
+            senderId = originSenderId,
             conversationId = envelope.metadata.conversationId,
             securityEpochId = remote.securityEpochId,
             payload = payload,
             envelopeCreatedAt = envelope.metadata.createdAt,
+            originPayloadJson = payload.originProof?.let { json.encodeToString(payload) },
         )
     }
 
@@ -309,6 +388,105 @@ class SecureChatBackend(context: Context) {
             },
         )
     }
+
+    suspend fun requestRecovery(objectId: String, securityEpochId: String): String {
+        val device = identityStore.getOrCreate().public
+        return client.postgrest.rpc(
+            function = "request_encrypted_recovery",
+            parameters = buildJsonObject {
+                put("p_object", objectId)
+                put("p_security_epoch", securityEpochId)
+                put("p_requester_device", device.deviceId)
+            },
+        ).data.trim('"')
+    }
+
+    suspend fun pendingRecoveryRequests(limit: Int = 100): List<PendingRecoveryRequest> {
+        val device = identityStore.getOrCreate().public
+        return client.postgrest.rpc(
+            function = "pending_encrypted_recovery_requests",
+            parameters = buildJsonObject {
+                put("p_device", device.deviceId)
+                put("p_limit", limit.coerceIn(1, 250))
+            },
+        ).decodeList()
+    }
+
+    suspend fun fulfillRecovery(
+        request: PendingRecoveryRequest,
+        conversationId: String,
+        originPayloadJson: String,
+    ): String {
+        val payload = json.decodeFromString<SecureChatPayloadV1>(originPayloadJson)
+        val proof = requireNotNull(payload.originProof) { "Archived message has no original-author proof." }
+        require(proof.statement.messageId == request.objectId)
+        require(proof.statement.securityEpochId == request.securityEpochId)
+        require(proof.statement.conversationId == conversationId)
+        val sender = identityStore.getOrCreate()
+        registerCurrentDevice()
+        renewLease()
+        val recoverySyncId = UUID.randomUUID().toString()
+        val metadata = E2eeMessageMetadata(
+            conversationId = conversationId,
+            messageId = recoverySyncId,
+            senderAccountId = NorfoldSupabase.currentAccountId()
+                ?: error("Sign in before fulfilling secure recovery."),
+            senderDeviceId = sender.public.deviceId,
+            senderDeviceGeneration = sender.public.generation,
+            securityEpochId = request.securityEpochId,
+            createdAt = System.currentTimeMillis(),
+            contentType = "recovery",
+            targetMessageId = request.objectId,
+        )
+        val envelope = crypto.seal(
+            plaintext = originPayloadJson.encodeToByteArray(),
+            metadata = metadata,
+            sender = sender,
+            recipients = securityEpochCredentials(request.securityEpochId).map { it.publicMaterial() },
+        )
+        return client.postgrest.rpc(
+            function = "fulfill_encrypted_recovery",
+            parameters = buildJsonObject {
+                put("p_request", request.requestId)
+                put("p_sender_device", sender.public.deviceId)
+                put("p_client_sync_id", recoverySyncId)
+                put("p_envelope", json.encodeToJsonElement(envelope))
+            },
+        ).data.trim('"')
+    }
+
+    suspend fun hideForCurrentUser(
+        objectId: String,
+        securityEpochId: String,
+        hiddenAt: Long = System.currentTimeMillis(),
+    ) {
+        client.postgrest.rpc(
+            function = "hide_chat_object_for_me",
+            parameters = buildJsonObject {
+                put("p_object", objectId)
+                put("p_security_epoch", securityEpochId)
+                put("p_hidden_at_millis", hiddenAt)
+            },
+        )
+    }
+
+    suspend fun unhideForCurrentUser(objectId: String) {
+        client.postgrest.rpc(
+            function = "unhide_chat_object_for_me",
+            parameters = buildJsonObject { put("p_object", objectId) },
+        )
+    }
+
+    suspend fun hiddenForCurrentUser(): List<HiddenObject> = client.postgrest.rpc(
+        function = "hidden_chat_objects_for_me",
+        parameters = buildJsonObject { },
+    ).decodeList()
+
+    suspend fun recoverableObjects(limit: Int = 250): List<RecoverableObject> =
+        client.postgrest.rpc(
+            function = "recoverable_chat_objects",
+            parameters = buildJsonObject { put("p_limit", limit.coerceIn(1, 500)) },
+        ).decodeList()
 
     private suspend fun ensureAccountEpoch(conversationId: String): String =
         client.postgrest.rpc(

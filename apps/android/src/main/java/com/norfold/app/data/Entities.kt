@@ -359,6 +359,9 @@ data class ChatMessageEntity(
     // Null is legacy/unclassified history; security semantics are immutable per message.
     val securityMode: String? = null,
     val securityEpochId: String? = null,
+    // Detached sender proof retained locally so another authorized device can re-encrypt the
+    // exact original payload during recovery without being mistaken for its author.
+    val originPayloadJson: String? = null,
     // Stable server event id keeps durable security dividers idempotent across refresh/restore.
     val securityEventId: String? = null,
 )
@@ -856,6 +859,7 @@ fun ChatMessageEntity.toDomain() = ChatMessageItem(
         ChatSecurityMode.entries.firstOrNull { it.name.equals(stored, ignoreCase = true) }
     },
     securityEpochId = securityEpochId,
+    originPayloadJson = originPayloadJson,
     securityEventId = securityEventId,
 )
 

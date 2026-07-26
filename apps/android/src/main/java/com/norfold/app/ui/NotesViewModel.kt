@@ -37,6 +37,7 @@ import com.norfold.app.data.NetworkMonitor
 import com.norfold.app.data.DocsRepository
 import com.norfold.app.data.SyncSecretStore
 import com.norfold.app.data.SecureChatOutboxEntity
+import com.norfold.app.data.SecureChatUserHiddenEntity
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.AppIconFamily
 import com.norfold.app.domain.BackupCodec
@@ -1952,6 +1953,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     val now = System.currentTimeMillis()
                     if (now >= nextLeaseAt) {
                         secureChatBackend.renewLease()
+                        syncSecureHiddenState()
+                        requestMissingSecureHistory()
+                        serveSecureRecoveryRequests()
                         nextLeaseAt = now + 60_000L
                     }
                     drainSecureChatOutbox()
@@ -1977,7 +1981,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 if (operation.remoteWorkspaceId != null) {
                     drainWorkspaceChatOperation(operation)
                 } else if (operation.operation == "text") {
-                    secureChatBackend.sendText(
+                    val sent = secureChatBackend.sendText(
                         conversationId = operation.conversationId,
                         clientSyncId = operation.id,
                         body = operation.body,
@@ -1987,6 +1991,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     repository.localChatMessageIdBySyncId(operation.workspaceId, operation.id)?.let { localId ->
                         repository.bindAccountDirectMessage(localId, operation.id)
                         repository.setChatMessageReceiptStatus(localId, ChatReceiptStatus.Sent)
+                        repository.setChatMessageSecurity(
+                            localId,
+                            ChatSecurityMode.EndToEndEncrypted,
+                            sent.securityEpochId,
+                        )
+                        repository.setChatMessageOriginPayload(localId, sent.originPayloadJson)
                     }
                 } else {
                     val target = operation.targetMessageSyncId
@@ -2019,6 +2029,52 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun syncSecureHiddenState() {
+        val accountId = NorfoldSupabase.currentAccountId() ?: return
+        val hidden = secureChatBackend.hiddenForCurrentUser().map { remote ->
+            SecureChatUserHiddenEntity(
+                accountOwnerId = accountId,
+                messageSyncId = remote.objectId,
+                conversationId = remote.conversationId,
+                securityEpochId = remote.securityEpochId,
+                hiddenAt = parseIsoToEpochMillis(remote.hiddenAt) ?: System.currentTimeMillis(),
+                reason = remote.reason,
+            )
+        }
+        repository.mergeSecureChatUserHidden(accountId, hidden)
+    }
+
+    private suspend fun serveSecureRecoveryRequests() {
+        secureChatBackend.pendingRecoveryRequests().forEach { request ->
+            val message = repository.chatMessageBySyncIdAnyWorkspace(request.objectId) ?: return@forEach
+            val originPayload = message.originPayloadJson ?: return@forEach
+            val channel = message.channelId?.let { repository.chatChannelById(it) }
+            val conversationId = when (channel?.scope) {
+                ChatScope.Account -> channel.accountConversationId
+                ChatScope.Workspace -> channel.syncId
+                null -> repository.remoteWorkspaceId(message.workspaceId)
+            } ?: return@forEach
+            runCatching {
+                secureChatBackend.fulfillRecovery(request, conversationId, originPayload)
+            }.onFailure { failure ->
+                Log.w("NorfoldSecureChat", "Encrypted recovery fulfilment will retry", failure)
+            }
+        }
+    }
+
+    private suspend fun requestMissingSecureHistory() {
+        val accountId = NorfoldSupabase.currentAccountId() ?: return
+        secureChatBackend.recoverableObjects().forEach { remote ->
+            if (repository.chatMessageBySyncIdAnyWorkspace(remote.objectId) != null) return@forEach
+            if (repository.hasSecureChatTombstone(remote.objectId)) return@forEach
+            if (repository.hasSecureChatUserHidden(accountId, remote.objectId)) return@forEach
+            runCatching { secureChatBackend.requestRecovery(remote.objectId, remote.securityEpochId) }
+                .onFailure { failure ->
+                    Log.w("NorfoldSecureChat", "Encrypted recovery request will retry", failure)
+                }
+        }
+    }
+
     private suspend fun drainWorkspaceChatOperation(operation: SecureChatOutboxEntity) {
         val remoteWorkspaceId = requireNotNull(operation.remoteWorkspaceId)
         val security = ChatBackend.ensureWorkspaceSecurityEpoch(
@@ -2036,7 +2092,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             val message = requireNotNull(localMessage) { "Local workspace message is missing." }
             when (security.securityMode) {
                 ChatSecurityMode.EndToEndEncrypted -> {
-                    val relayId = secureChatBackend.sendWorkspaceText(
+                    val sent = secureChatBackend.sendWorkspaceText(
                         workspaceId = remoteWorkspaceId,
                         channelId = operation.channelSyncId,
                         clientSyncId = operation.id,
@@ -2050,8 +2106,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         localWorkspaceId = operation.workspaceId,
                         localMessageId = message.id,
                         clientSyncId = operation.id,
-                        relayId = relayId,
+                        relayId = sent.relayId,
                     )
+                    repository.setChatMessageOriginPayload(message.id, sent.originPayloadJson)
                 }
                 ChatSecurityMode.Managed -> {
                     val remote = ChatBackend.sendManagedWorkspaceMessage(
@@ -2171,8 +2228,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             localWorkspaceId ?: return
         }
+        val accountId = NorfoldSupabase.currentAccountId()
         if (decrypted.payload.type != "text") {
             val target = decrypted.payload.targetMessageId ?: return
+            if (accountId != null && repository.hasSecureChatUserHidden(accountId, target)) {
+                secureChatBackend.acknowledge(decrypted.relayId, read = false)
+                recordSecureRelayCheckpoint(remote)
+                return
+            }
             val applied = repository.applySecureChatMutation(
                 localWorkspaceId = resolvedWorkspaceId,
                 targetSyncId = target,
@@ -2203,7 +2266,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             recordSecureRelayCheckpoint(remote)
             return
         }
-        val myId = NorfoldSupabase.currentAccountId()
+        if (accountId != null && repository.hasSecureChatUserHidden(accountId, decrypted.clientSyncId)) {
+            secureChatBackend.acknowledge(decrypted.relayId, read = false)
+            recordSecureRelayCheckpoint(remote)
+            return
+        }
+        val myId = accountId
         val isOwn = myId != null && decrypted.senderId == myId
         val identity = resolveAccountSender(decrypted.senderId, isOwn)
         if (isAccount) {
@@ -2217,6 +2285,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 color = state.value.settings.accentColor,
                 createdAt = decrypted.payload.createdAt,
                 isOwn = isOwn,
+                securityEpochId = decrypted.securityEpochId,
+                originPayloadJson = decrypted.originPayloadJson,
             )
         } else {
             repository.importSecureWorkspaceMessage(
@@ -2231,6 +2301,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 createdAt = decrypted.payload.createdAt,
                 isOwn = isOwn,
                 securityEpochId = decrypted.securityEpochId,
+                originPayloadJson = decrypted.originPayloadJson,
             )
         }
         val viewed = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId
@@ -3848,10 +3919,16 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         "${it.authorDisplayName}: ${it.body.ifBlank { it.attachmentName.orEmpty() }.take(120)}"
                     },
                 )
-            }.onSuccess {
+            }.onSuccess { sent ->
                 repository.completeSecureChatOperation(syncId)
                 repository.bindAccountDirectMessage(localId, syncId)
                 repository.setChatMessageReceiptStatus(localId, ChatReceiptStatus.Sent)
+                repository.setChatMessageSecurity(
+                    localId,
+                    ChatSecurityMode.EndToEndEncrypted,
+                    sent.securityEpochId,
+                )
+                repository.setChatMessageOriginPayload(localId, sent.originPayloadJson)
                 _teamCollaborationStatus.value = "Direct · encrypted"
             }.onFailure {
                 repository.failSecureChatOperation(outboxOperation, it)
@@ -4018,7 +4095,46 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
      * catch-up fetch can't resurrect the message here; nothing changes for other members.
      */
     fun deleteChatMessageForMe(messageId: Long) = viewModelScope.launch {
-        repository.deleteChatMessageForMe(messageId)
+        val message = repository.chatMessageById(messageId) ?: return@launch
+        val binding = repository.chatMessageRemoteBinding(message.workspaceId, messageId)
+        val syncId = binding?.syncId
+        val epochId = message.securityEpochId
+        val accountId = NorfoldSupabase.currentAccountId()
+        val channel = message.channelId?.let { repository.chatChannelById(it) }
+        val conversationId = when (channel?.scope) {
+            ChatScope.Account -> channel.accountConversationId
+            ChatScope.Workspace -> channel.syncId
+            null -> repository.remoteWorkspaceId(message.workspaceId)
+        }
+        val snapshot = repository.deleteChatMessageForMe(messageId) ?: return@launch
+        val hiddenAt = System.currentTimeMillis()
+        if (accountId != null && syncId != null && epochId != null && conversationId != null) {
+            repository.recordSecureChatUserHidden(
+                SecureChatUserHiddenEntity(
+                    accountOwnerId = accountId,
+                    messageSyncId = syncId,
+                    conversationId = conversationId,
+                    securityEpochId = epochId,
+                    hiddenAt = hiddenAt,
+                ),
+            )
+            runCatching { secureChatBackend.hideForCurrentUser(syncId, epochId, hiddenAt) }
+                .onFailure { Log.w("NorfoldSecureChat", "Private deletion will retry through archive sync", it) }
+        }
+        val undo = registerFeedbackResolution(
+            fallbackDelayMs = 5_000L,
+            onAction = {
+                repository.restoreChatMessageForUndo(snapshot)
+                if (accountId != null && syncId != null) {
+                    repository.removeSecureChatUserHidden(accountId, syncId)
+                    if (NorfoldSupabase.isSignedIn()) {
+                        runCatching { secureChatBackend.unhideForCurrentUser(syncId) }
+                    }
+                }
+                emitSuccess("Message restored")
+            },
+        )
+        emitSuccess("Message deleted", "Undo", undo)
     }
 
     /** Whether the unsend action should be offered for this message right now. */

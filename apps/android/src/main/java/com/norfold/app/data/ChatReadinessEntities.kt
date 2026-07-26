@@ -54,6 +54,20 @@ data class SecureChatTombstoneEntity(
 )
 
 @Entity(
+    tableName = "secure_chat_user_hidden",
+    primaryKeys = ["accountOwnerId", "messageSyncId"],
+    indices = [Index("conversationId"), Index("hiddenAt")],
+)
+data class SecureChatUserHiddenEntity(
+    val accountOwnerId: String,
+    val messageSyncId: String,
+    val conversationId: String,
+    val securityEpochId: String,
+    val hiddenAt: Long,
+    val reason: String = "delete_for_me",
+)
+
+@Entity(
     tableName = "private_chat_archive_manifests",
     primaryKeys = ["archiveId", "providerId"],
     indices = [Index("updatedAt")],

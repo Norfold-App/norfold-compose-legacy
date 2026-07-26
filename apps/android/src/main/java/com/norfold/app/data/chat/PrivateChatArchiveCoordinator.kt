@@ -7,12 +7,14 @@ import com.norfold.app.data.NorfoldDatabase
 import com.norfold.app.data.PrivateChatArchiveManifestEntity
 import com.norfold.app.data.RemoteObjectBindingEntity
 import com.norfold.app.data.SecureChatTombstoneEntity
+import com.norfold.app.data.SecureChatUserHiddenEntity
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.chat.ArchiveCryptoEngine
 import com.norfold.app.domain.chat.ArchiveObject
 import com.norfold.app.domain.chat.ArchiveProvider
 import com.norfold.app.domain.chat.ArchivedChatConversation
 import com.norfold.app.domain.chat.ArchivedChatMessage
+import com.norfold.app.domain.chat.ArchivedChatHidden
 import com.norfold.app.domain.chat.ArchivedChatTombstone
 import com.norfold.app.domain.chat.PrivateChatArchiveCodec
 import com.norfold.app.domain.chat.PrivateChatArchiveSnapshot
@@ -31,6 +33,7 @@ data class PrivateChatArchiveRestoreResult(
     val conversationsAdded: Int,
     val messagesAdded: Int,
     val tombstonesAdded: Int,
+    val hiddenMessagesAdded: Int = 0,
 )
 
 /**
@@ -131,6 +134,8 @@ class PrivateChatArchiveCoordinator(
             val messages = dao.allChatMessages().filter { it.channelId in channelById }
             val conversationIds = channels.mapNotNull { it.accountConversationId }.toSet()
             val tombstones = dao.secureChatTombstones().filter { it.conversationId in conversationIds }
+            val hiddenMessages = dao.secureChatUserHidden(accountId)
+                .filter { it.conversationId in conversationIds }
             PrivateChatArchiveSnapshot(
                 accountId = accountId,
                 generatedAt = generatedAt,
@@ -146,6 +151,15 @@ class PrivateChatArchiveCoordinator(
                 tombstones = tombstones.map {
                     ArchivedChatTombstone(it.messageSyncId, it.conversationId, it.destructiveAt, it.reason)
                 },
+                hiddenMessages = hiddenMessages.map {
+                    ArchivedChatHidden(
+                        it.messageSyncId,
+                        it.conversationId,
+                        it.securityEpochId,
+                        it.hiddenAt,
+                        it.reason,
+                    )
+                },
             )
         }
 
@@ -157,6 +171,7 @@ class PrivateChatArchiveCoordinator(
         var channelsAdded = 0
         var messagesAdded = 0
         var tombstonesAdded = 0
+        var hiddenMessagesAdded = 0
         snapshot.tombstones.forEach { tombstone ->
             if (dao.secureChatTombstone(tombstone.messageSyncId) == null) tombstonesAdded += 1
             dao.upsertSecureChatTombstone(
@@ -165,6 +180,21 @@ class PrivateChatArchiveCoordinator(
                     tombstone.conversationId,
                     tombstone.destructiveAt,
                     tombstone.reason,
+                ),
+            )
+        }
+        snapshot.hiddenMessages.forEach { hidden ->
+            if (dao.secureChatUserHidden(snapshot.accountId, hidden.messageSyncId) == null) {
+                hiddenMessagesAdded += 1
+            }
+            dao.upsertSecureChatUserHidden(
+                SecureChatUserHiddenEntity(
+                    snapshot.accountId,
+                    hidden.messageSyncId,
+                    hidden.conversationId,
+                    hidden.securityEpochId,
+                    hidden.hiddenAt,
+                    hidden.reason,
                 ),
             )
         }
@@ -178,6 +208,7 @@ class PrivateChatArchiveCoordinator(
         }
         snapshot.messages.forEach { archived ->
             if (dao.secureChatTombstone(archived.clientSyncId) != null) return@forEach
+            if (dao.secureChatUserHidden(snapshot.accountId, archived.clientSyncId) != null) return@forEach
             if (dao.bindingBySyncIdAnyWorkspace(WorkspaceObjectType.ChatMessage.name, archived.clientSyncId) != null) {
                 return@forEach
             }
@@ -196,7 +227,7 @@ class PrivateChatArchiveCoordinator(
             )
             messagesAdded += 1
         }
-        PrivateChatArchiveRestoreResult(providerId, channelsAdded, messagesAdded, tombstonesAdded)
+        PrivateChatArchiveRestoreResult(providerId, channelsAdded, messagesAdded, tombstonesAdded, hiddenMessagesAdded)
     }
 
     private fun providers(): List<ArchiveProvider> = listOfNotNull(localProvider, cloudProvider)
@@ -222,6 +253,7 @@ class PrivateChatArchiveCoordinator(
         rulesReminderDays = rulesReminderDays,
         securityMode = securityMode,
         securityEpochId = securityEpochId,
+        originPayloadJson = originPayloadJson,
     )
 
     private fun ChatMessageEntity.toArchive(
@@ -294,5 +326,6 @@ class PrivateChatArchiveCoordinator(
         starred = starred,
         securityMode = securityMode,
         securityEpochId = securityEpochId,
+        originPayloadJson = originPayloadJson,
     )
 }
