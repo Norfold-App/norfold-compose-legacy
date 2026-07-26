@@ -82,6 +82,7 @@ data class E2eeMessageMetadata(
     val securityEpochId: String,
     val createdAt: Long,
     val contentType: String = "message",
+    val targetMessageId: String? = null,
     val lifespanJson: String? = null,
 )
 
