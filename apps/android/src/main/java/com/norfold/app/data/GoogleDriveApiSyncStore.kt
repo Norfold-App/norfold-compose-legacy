@@ -37,6 +37,43 @@ class GoogleDriveApiSyncStore(
     private val context: Context,
     private val authStore: GoogleDriveAuthStore,
 ) {
+    data class OpaqueAppDataFile(val name: String, val body: String)
+
+    suspend fun putPrivateChatArchiveFile(fileName: String, encryptedBody: String): Unit =
+        withContext(Dispatchers.IO) {
+            require(fileName.startsWith(ChatArchivePrefix) && fileName.endsWith(".json"))
+            uploadOrCreateJson(accessToken(), fileName, encryptedBody)
+        }
+
+    suspend fun readPrivateChatArchiveFile(fileName: String): String? = withContext(Dispatchers.IO) {
+        require(fileName.startsWith(ChatArchivePrefix) && fileName.endsWith(".json"))
+        val accessToken = accessToken()
+        val file = findFile(accessToken, fileName) ?: return@withContext null
+        request(accessToken, "GET", "$DriveApi/files/${file.id}?alt=media")
+    }
+
+    suspend fun listPrivateChatArchiveFiles(): List<OpaqueAppDataFile> = withContext(Dispatchers.IO) {
+        val accessToken = accessToken()
+        val query = URLEncoder.encode("name contains '$ChatArchivePrefix' and trashed = false", "UTF-8")
+        val url = "$DriveApi/files?spaces=$AppDataFolderName&q=$query&fields=files(id,name)&pageSize=1000"
+        val rows = JSONObject(request(accessToken, "GET", url)).optJSONArray("files") ?: return@withContext emptyList()
+        buildList {
+            for (index in 0 until rows.length()) {
+                val row = rows.optJSONObject(index) ?: continue
+                val name = row.optString("name")
+                if (!name.startsWith(ChatArchivePrefix) || !name.endsWith(".json")) continue
+                val body = request(accessToken, "GET", "$DriveApi/files/${row.getString("id")}?alt=media")
+                add(OpaqueAppDataFile(name, body))
+            }
+        }
+    }
+
+    suspend fun deletePrivateChatArchiveFile(fileName: String): Unit = withContext(Dispatchers.IO) {
+        require(fileName.startsWith(ChatArchivePrefix) && fileName.endsWith(".json"))
+        val accessToken = accessToken()
+        findFile(accessToken, fileName)?.let { request(accessToken, "DELETE", "$DriveApi/files/${it.id}") }
+    }
+
     suspend fun discoverBackups(): List<GoogleDriveBackupManifest> = withContext(Dispatchers.IO) {
         val accessToken = accessToken()
         val registryFile = findFile(accessToken, RegistryFileName)
@@ -421,6 +458,7 @@ class GoogleDriveApiSyncStore(
         private const val ConflictFileName = "norfold-conflict.json"
         private const val SyncFormat = "norfold-google-drive-sync-v2"
         private const val RegistryFormat = "norfold-google-drive-backup-registry-v1"
+        private const val ChatArchivePrefix = "norfold-chat-archive-v1-"
         private const val AppDataFolderName = "appDataFolder"
         private const val DriveApi = "https://www.googleapis.com/drive/v3"
         private const val DriveUpload = "https://www.googleapis.com/upload/drive/v3"
