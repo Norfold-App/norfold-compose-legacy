@@ -109,6 +109,8 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Business
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.GifBox
 import androidx.compose.material.icons.outlined.Tag
@@ -207,6 +209,7 @@ import com.norfold.app.ui.VoiceRecordingState
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.SemanticColors
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.SecureRelayConnection
 import com.norfold.app.ui.PrivateChatArchiveUiState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -285,6 +288,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     val workspaceSecurity by viewModel.workspaceChatSecurity.collectAsState()
     val serviceCapabilities by viewModel.chatServiceCapabilities.collectAsState()
     val privateArchive by viewModel.privateChatArchiveState.collectAsState()
+    val secureRelayConnection by viewModel.secureRelayConnection.collectAsState()
     val recordingState by viewModel.voiceRecordingState.collectAsState()
     val chatUploads by viewModel.chatUploads.collectAsState()
     val chatAudio by viewModel.chatAudio.collectAsState()
@@ -526,6 +530,56 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                             fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+        // Encrypted-delivery health (Phase 13/15): surface only when the single-owner
+        // relay subscription is not healthy, so account conversations show when
+        // catch-up is reconnecting or offline rather than looking silently stalled.
+        if (activeChannel?.scope == ChatScope.Account) {
+            val relayNotice: Pair<String, Boolean>? = when (secureRelayConnection) {
+                SecureRelayConnection.Reconnecting -> "Reconnecting to encrypted delivery…" to false
+                SecureRelayConnection.Connecting -> "Connecting to encrypted delivery…" to false
+                SecureRelayConnection.Offline -> "Offline · messages send when you reconnect" to true
+                SecureRelayConnection.Live, SecureRelayConnection.Idle -> null
+            }
+            relayNotice?.let { (label, isError) ->
+                Surface(
+                    color = if (isError) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.tertiaryContainer
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        Icon(
+                            if (isError) Icons.Outlined.CloudOff else Icons.Outlined.Sync,
+                            contentDescription = null,
+                            tint = if (isError) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.onTertiaryContainer
+                            },
+                        )
+                        Text(
+                            label,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isError) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.onTertiaryContainer
+                            },
                         )
                     }
                 }

@@ -127,6 +127,7 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
     var archiveRestoreProvider by remember { mutableStateOf<String?>(null) }
     var archiveRecoveryMaterial by remember { mutableStateOf("") }
     val requests by viewModel.contactRequests.collectAsState()
+    val requestBusyIds by viewModel.contactRequestBusyIds.collectAsState()
     val requestPreferences by viewModel.messageRequestPreferences.collectAsState()
     val serviceCapabilities by viewModel.chatServiceCapabilities.collectAsState()
     val personalConversations by viewModel.personalConversations.collectAsState()
@@ -322,6 +323,7 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
     if (chatSection == com.norfold.app.domain.ChatSection.Requests) {
         ContactRequestsHome(
             requests = requests,
+            busyIds = requestBusyIds,
             preferences = requestPreferences,
             onOpen = viewModel::openContactRequest,
             onAccept = { viewModel.respondToContactRequest(it, accept = true) },
@@ -532,6 +534,7 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
 @Composable
 private fun ContactRequestsHome(
     requests: List<NorfoldSocial.RemoteContactRequest>,
+    busyIds: Set<String>,
     preferences: ChatBackend.MessageRequestPreferences,
     onOpen: (NorfoldSocial.RemoteContactRequest) -> Unit,
     onAccept: (NorfoldSocial.RemoteContactRequest) -> Unit,
@@ -626,9 +629,30 @@ private fun ContactRequestsHome(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Button(onClick = { onAccept(request) }, modifier = Modifier.weight(1f)) { Text("Accept") }
-                                FilledTonalButton(onClick = { onDecline(request) }, modifier = Modifier.weight(1f)) { Text("Decline") }
-                                TextButton(onClick = { onBlock(request) }) { Text("Block", color = MaterialTheme.colorScheme.error) }
+                                val busy = request.requestId in busyIds
+                                Button(
+                                    onClick = { onAccept(request) },
+                                    enabled = !busy,
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    if (busy) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                        )
+                                    } else {
+                                        Text("Accept")
+                                    }
+                                }
+                                FilledTonalButton(
+                                    onClick = { onDecline(request) },
+                                    enabled = !busy,
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Decline") }
+                                TextButton(onClick = { onBlock(request) }, enabled = !busy) {
+                                    Text("Block", color = MaterialTheme.colorScheme.error)
+                                }
                             }
                         }
                     }
