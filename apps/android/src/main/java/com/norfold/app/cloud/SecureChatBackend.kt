@@ -10,6 +10,14 @@ import com.norfold.app.domain.chat.SecureChatPayloadV1
 import com.norfold.app.domain.chat.SecureChatAttachmentV1
 import com.norfold.app.domain.chat.TinkCryptoEngine
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.filter.FilterOperator
+import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.postgresChangeFlow
+import io.github.jan.supabase.realtime.realtime
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -380,16 +388,59 @@ class SecureChatBackend(context: Context) {
         )
     }
 
-    suspend fun pending(limit: Int = 250): List<PendingRelay> {
+    /**
+     * Pending relay envelopes for the current device, ordered oldest-first.
+     *
+     * [after] is a durable cursor (ISO created_at from the last persisted
+     * checkpoint). The server filter is `created_at >= after` (inclusive), so
+     * the boundary row may repeat across calls; importers dedupe by relay id and
+     * client sync id, which keeps replay idempotent. Callers paginate by feeding
+     * the newest returned created_at back as [after] until fewer than [limit]
+     * rows return, giving bounded catch-up over an arbitrarily large backlog.
+     */
+    suspend fun pending(after: String? = null, limit: Int = 250): List<PendingRelay> {
         val identity = identityStore.getOrCreate().public
         return client.postgrest.rpc(
             function = "pending_e2ee_relay_messages",
             parameters = buildJsonObject {
                 put("p_device", identity.deviceId)
                 put("p_crypto_generation", identity.generation)
+                if (after != null) put("p_after", after)
                 put("p_limit", limit.coerceIn(1, 500))
             },
         ).decodeList()
+    }
+
+    /**
+     * Single-owner realtime signal that this device has undelivered relay rows.
+     * Emits once immediately (so a subscriber reconciles on connect, closing the
+     * subscribe-before-catch-up race), then again on every insert into this
+     * device's recipient rows. The payload is deliberately empty — subscribers
+     * react by draining via [pending] with their durable cursor; the realtime
+     * row itself carries only routing metadata and is never trusted as content.
+     */
+    fun relayArrivals(): Flow<Unit> = channelFlow {
+        val identity = identityStore.getOrCreate().public
+        val realtime = client.realtime
+        val channel = realtime.channel("e2ee-relay:${identity.deviceId}:${identity.generation}") { }
+        val changes = channel.postgresChangeFlow<PostgresAction>(schema = "public") {
+            table = "chat_e2ee_relay_recipients"
+            filter("recipient_device_id", FilterOperator.EQ, identity.deviceId)
+        }
+        val collector = launch {
+            changes.collect { action ->
+                if (action is PostgresAction.Insert) send(Unit)
+            }
+        }
+        try {
+            channel.subscribe(blockUntilSubscribed = true)
+            // Reconcile-on-connect: drain anything that landed before we subscribed.
+            send(Unit)
+            collector.join()
+        } finally {
+            collector.cancel()
+            realtime.removeChannel(channel)
+        }
     }
 
     fun decrypt(remote: PendingRelay): DecryptedRelay {

@@ -151,6 +151,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -437,6 +438,13 @@ sealed interface AccountCoordinatorState {
 
 enum class CloudAuthProvider { None, Google, Email }
 
+/**
+ * Explicit connection posture for the encrypted account relay, distinct from
+ * document sync. Drives the chat sync bar so a dropped realtime channel or a
+ * failing drain is visible rather than silently degrading to slow polling.
+ */
+enum class SecureRelayConnection { Idle, Connecting, Live, Reconnecting, Offline }
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
@@ -560,6 +568,17 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     // Account-wide encrypted relay drain. It is independent of the currently open
     // conversation so messages persist locally even while the user is elsewhere.
     private var secureRelayObserver: Job? = null
+    // Single-owner realtime subscription on this device's relay recipient rows.
+    // Kicks an immediate drain on connect and on each new envelope, so delivery
+    // does not wait for the poll interval or the user opening a conversation.
+    private var secureRelaySubscription: Job? = null
+    // Serialises drains so the poll loop and the realtime signal never overlap.
+    private val secureRelayDrainMutex = kotlinx.coroutines.sync.Mutex()
+    // Coalesces realtime arrival pings into the drain loop without unbounded queueing.
+    private val secureRelayWake = MutableStateFlow(0L)
+    // Explicit reconnect posture for the encrypted relay, surfaced to the sync bar.
+    private val _secureRelayConnection = MutableStateFlow(SecureRelayConnection.Idle)
+    val secureRelayConnection: StateFlow<SecureRelayConnection> = _secureRelayConnection.asStateFlow()
     // Which chat-context navbar tab is active on the inbox (Chats/People/Requests/You).
     private val _chatSection = MutableStateFlow(com.norfold.app.domain.ChatSection.Chats)
     val chatSection: StateFlow<com.norfold.app.domain.ChatSection> = _chatSection.asStateFlow()
@@ -2154,10 +2173,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startSecureRelayObserver() {
+        startSecureRelaySubscription()
         if (secureRelayObserver?.isActive == true) return
         secureRelayObserver = viewModelScope.launch {
             var retryDelayMs = 2_000L
             var nextLeaseAt = 0L
+            var lastWake = secureRelayWake.value
             while (kotlinx.coroutines.currentCoroutineContext().isActive && NorfoldSupabase.isSignedIn()) {
                 try {
                     val now = System.currentTimeMillis()
@@ -2171,23 +2192,97 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         nextLeaseAt = now + 60_000L
                     }
                     drainSecureChatOutbox()
-                    val pending = secureChatBackend.pending()
-                    pending.forEach { remote -> importSecureMessage(remote) }
+                    val imported = drainSecureRelay()
                     retryDelayMs = 2_000L
-                    delay(
-                        if (pending.isEmpty()) {
-                            chatServiceCapabilities.value.backgroundRefreshSeconds * 1_000L
-                        } else 250L
-                    )
+                    // Realtime arrivals wake this loop immediately; the timed wait is
+                    // only a safety net (missed events, offline recovery, lease renewal).
+                    val idleMs = chatServiceCapabilities.value.backgroundRefreshSeconds * 1_000L
+                    val waitMs = if (imported > 0) 250L else idleMs
+                    lastWake = awaitSecureRelayWake(lastWake, waitMs)
                 } catch (cancellation: CancellationException) {
                     throw cancellation
                 } catch (failure: Throwable) {
                     Log.w("NorfoldSecureChat", "Encrypted relay drain will retry", failure)
+                    _secureRelayConnection.value = SecureRelayConnection.Reconnecting
                     delay(retryDelayMs)
                     retryDelayMs = (retryDelayMs * 2).coerceAtMost(30_000L)
                 }
             }
         }
+    }
+
+    /**
+     * Suspends until either the realtime arrival signal fires (cursor advanced
+     * past [lastSeen]) or [waitMs] elapses, then returns the latest wake serial.
+     * This keeps the drain loop responsive to pushed envelopes without a tight
+     * poll, while the timed fallback still covers missed events and lease upkeep.
+     */
+    private suspend fun awaitSecureRelayWake(lastSeen: Long, waitMs: Long): Long {
+        kotlinx.coroutines.withTimeoutOrNull(waitMs) {
+            secureRelayWake.first { it != lastSeen }
+        }
+        return secureRelayWake.value
+    }
+
+    /**
+     * Single-owner realtime subscription on this device's relay recipient rows.
+     * Pings the drain loop on connect (closing the subscribe-before-catch-up
+     * race) and on every new envelope. Reconnects with backoff; the poll-loop
+     * fallback keeps delivery working even while this channel is down.
+     */
+    private fun startSecureRelaySubscription() {
+        if (secureRelaySubscription?.isActive == true) return
+        secureRelaySubscription = viewModelScope.launch {
+            var backoffMs = 2_000L
+            while (kotlinx.coroutines.currentCoroutineContext().isActive && NorfoldSupabase.isSignedIn()) {
+                _secureRelayConnection.value = SecureRelayConnection.Connecting
+                try {
+                    secureChatBackend.relayArrivals().collect {
+                        _secureRelayConnection.value = SecureRelayConnection.Live
+                        backoffMs = 2_000L
+                        secureRelayWake.value = System.nanoTime()
+                    }
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (failure: Throwable) {
+                    Log.w("NorfoldSecureChat", "Encrypted relay subscription dropped; reconnecting", failure)
+                    _secureRelayConnection.value = SecureRelayConnection.Reconnecting
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
+                }
+            }
+        }
+    }
+
+    /**
+     * Drains all currently deliverable relay envelopes for this device, resuming
+     * from the durable checkpoint cursor and paginating in bounded pages so an
+     * arbitrarily large backlog is fully recovered without unbounded memory.
+     * Import is idempotent (dedup by relay/sync id), so the inclusive-cursor
+     * boundary row repeating across pages is harmless. Returns the count
+     * imported. Serialised so the poll loop and realtime signal never overlap.
+     */
+    private suspend fun drainSecureRelay(): Int = secureRelayDrainMutex.withLock {
+        val device = secureChatBackend.currentDevicePublic()
+        var cursor = repository.secureRelayCheckpoint(device.deviceId, device.generation)?.lastRelayCreatedAt
+        val pageSize = 250
+        var total = 0
+        var guard = 0
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+            val page = secureChatBackend.pending(after = cursor, limit = pageSize)
+            if (page.isEmpty()) break
+            page.forEach { remote -> importSecureMessage(remote) }
+            total += page.size
+            val newest = page.last().createdAt
+            // Stop when the page did not fill (backlog drained) or the cursor
+            // cannot advance (all remaining rows share the boundary timestamp).
+            if (page.size < pageSize || newest == cursor) break
+            cursor = newest
+            // Hard safety bound against a pathological non-advancing server page.
+            if (++guard >= 64) break
+        }
+        _secureRelayConnection.value = SecureRelayConnection.Live
+        total
     }
 
     private suspend fun drainSecureChatOutbox() {
@@ -3097,6 +3192,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 privateChatArchiveDiscoveryComplete = false
                 secureRelayObserver?.cancel()
                 secureRelayObserver = null
+                secureRelaySubscription?.cancel()
+                secureRelaySubscription = null
+                _secureRelayConnection.value = SecureRelayConnection.Idle
                 _socialContacts.value = emptyList()
                 _contactRequests.value = emptyList()
                 _blockedAccountIds.value = emptySet()
@@ -6567,6 +6665,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     fun onAppResumed() {
         resumeScalePreviewCountdown()
         refreshPhoneVerification()
+        // Restore encrypted-chat delivery after backgrounding: the realtime
+        // channel may have been torn down, so re-establish the single owner and
+        // kick an immediate cursor-based reconcile rather than waiting for the
+        // next poll tick or the user opening a conversation.
+        if (NorfoldSupabase.isSignedIn()) {
+            startSecureRelayObserver()
+            secureRelayWake.value = System.nanoTime()
+        }
     }
 
     /**
