@@ -19,6 +19,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.data.BackupFolderStore
 import com.norfold.app.data.BiometricVaultKeyStore
+import com.norfold.app.data.ChatForegroundState
 import com.norfold.app.data.CloudFolderSyncStore
 import com.norfold.app.data.DiagnosticsState
 import com.norfold.app.data.DiagnosticsStore
@@ -1175,6 +1176,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     fun handleNotificationIntent(intent: Intent) {
         when (intent.getStringExtra("norfold.destination")) {
             "Chat" -> {
+                val scope = intent.getStringExtra("norfold.scope")
+                val conversationId = intent.getStringExtra("norfold.conversationId").orEmpty().takeIf { it.isNotBlank() }
+                if (scope == "account" && conversationId != null) {
+                    openAccountConversationFromNotification(conversationId)
+                    return
+                }
                 val channelSyncId = intent.getStringExtra("norfold.channelId").orEmpty().takeIf { it.isNotBlank() }
                 selectChatChannel(null)
                 val messageSyncId = intent.getStringExtra("norfold.messageId")
@@ -1188,6 +1195,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
+            "Requests" -> {
+                go(Destination.Chat)
+                selectChatSection(com.norfold.app.domain.ChatSection.Requests)
+            }
             "Tasks" -> go(Destination.Tasks)
             "ObjectDetail" -> {
                 val localObjectId = intent.getStringExtra("norfold.objectId")?.toLongOrNull()
@@ -1197,6 +1208,28 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             "Files" -> go(Destination.Files)
             "Activity" -> go(Destination.Activity)
             else -> if (intent.hasExtra("norfold.destination")) go(Destination.WorkspaceHub)
+        }
+    }
+
+    /**
+     * Open an account (E2EE) conversation from a routing-only push. The payload
+     * carries only the conversation id (spec §148), so we resolve it to a local
+     * channel — materializing from the server if this device hasn't mirrored it
+     * yet — then open it. Falls back to the chat inbox if resolution fails.
+     */
+    private fun openAccountConversationFromNotification(conversationId: String) {
+        go(Destination.Chat)
+        viewModelScope.launch {
+            val localChannelId = repository.accountChannelId(conversationId)
+                ?: runCatching { NorfoldSocial.myDirectConversations() }
+                    .getOrNull()
+                    ?.firstOrNull { it.conversationId == conversationId }
+                    ?.let { materializeAccountConversation(it) }
+            if (localChannelId != null) {
+                selectChatChannel(localChannelId)
+            } else {
+                openChatInbox()
+            }
         }
     }
 
@@ -1227,9 +1260,37 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         chatConversationOpen.value = true
         markChatConversationRead(channelId)
         observeActiveAccountConversation(channelId)
+        updateChatForegroundState(channelId, visible = true)
         refreshWorkspaceChatSecurity(channelId)
         closeSidebar()
         if (state.value.destination != Destination.Chat) go(Destination.Chat)
+    }
+
+    /**
+     * Mirror the on-screen conversation into [ChatForegroundState] so an incoming
+     * push for that exact conversation is suppressed as a redundant system
+     * notification (spec §149). Routing identifiers only — never content.
+     */
+    private fun updateChatForegroundState(channelId: Long?, visible: Boolean) {
+        if (!visible || channelId == null) {
+            ChatForegroundState.clear()
+            return
+        }
+        viewModelScope.launch {
+            val channel = repository.chatChannelById(channelId)
+            if (channel == null) {
+                ChatForegroundState.clear()
+                return@launch
+            }
+            if (channel.scope == ChatScope.Account) {
+                ChatForegroundState.activeAccountConversationId = channel.accountConversationId
+                ChatForegroundState.activeWorkspaceChannelSyncId = null
+            } else {
+                ChatForegroundState.activeAccountConversationId = null
+                ChatForegroundState.activeWorkspaceChannelSyncId = channel.syncId
+            }
+            ChatForegroundState.conversationVisible = true
+        }
     }
 
     fun refreshWorkspaceChatSecurity(channelId: Long? = activeChatChannelId.value) {
@@ -1430,6 +1491,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         if (chatConversationOpen.value) markChatConversationRead(activeChatChannelId.value)
         chatConversationOpen.value = false
         chatTyping.value = null
+        ChatForegroundState.clear()
         if (state.value.destination != Destination.Chat) go(Destination.Chat)
     }
 
@@ -1438,6 +1500,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         markChatConversationRead(activeChatChannelId.value)
         chatConversationOpen.value = false
         chatTyping.value = null
+        ChatForegroundState.clear()
     }
 
     /**
@@ -1454,6 +1517,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             markChatConversationRead(activeChatChannelId.value)
             chatConversationOpen.value = false
             chatTyping.value = null
+            ChatForegroundState.clear()
         }
         if (state.value.destination != Destination.Chat) go(Destination.Chat)
     }
@@ -1505,6 +1569,14 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     fun setChatForeground(foreground: Boolean) {
         chatAvailability.value =
             if (foreground) NorfoldPresence.Availability.Online else NorfoldPresence.Availability.Away
+        // Backgrounding hides the conversation: a push that lands now must surface
+        // as a system notification (spec §149). Re-entering a conversation restores
+        // the flag via updateChatForegroundState.
+        if (!foreground) {
+            ChatForegroundState.conversationVisible = false
+        } else if (chatConversationOpen.value) {
+            updateChatForegroundState(activeChatChannelId.value, visible = true)
+        }
     }
 
     /** Publishes a short-lived typing hint scoped to the currently open shared conversation. */

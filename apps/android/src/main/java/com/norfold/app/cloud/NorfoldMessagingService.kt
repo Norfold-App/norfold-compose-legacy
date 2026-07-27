@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.norfold.app.data.NorfoldWorkScheduler
+import com.norfold.app.data.ChatForegroundState
 
 class NorfoldMessagingService : FirebaseMessagingService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -32,12 +33,33 @@ class NorfoldMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val title = message.notification?.title ?: message.data["title"] ?: "Norfold"
         val body = message.notification?.body ?: message.data["body"] ?: return
-        showNotification(title, body, message.data)
+        // Always reconcile so encrypted catch-up runs even when we suppress the
+        // visible notification below.
         NorfoldWorkScheduler.enqueueReconciliation(this)
+        // Foreground dedup (spec §149): if the user is already looking at the
+        // exact conversation this push targets, skip the redundant system
+        // notification — the in-app stream already shows the message.
+        if (isRedundantForForeground(message.data)) return
+        showNotification(title, body, message.data)
     }
 
     override fun onDeletedMessages() {
         NorfoldWorkScheduler.enqueueReconciliation(this, replace = true)
+    }
+
+    /**
+     * True when this push targets the exact conversation the user is already
+     * viewing, so the visible system notification would duplicate what the
+     * in-app stream is already showing (spec §149). Only chat kinds qualify;
+     * everything else always surfaces. Routing metadata only — never content.
+     */
+    private fun isRedundantForForeground(data: Map<String, String>): Boolean {
+        val kind = data["kind"] ?: return false
+        if (!kind.startsWith("chat")) return false
+        return when (data["scope"]) {
+            "account" -> ChatForegroundState.isAccountConversationActive(data["conversationId"])
+            else -> ChatForegroundState.isWorkspaceChannelActive(data["channelId"])
+        }
     }
 
     private fun showNotification(title: String, body: String, data: Map<String, String>) {
@@ -61,7 +83,10 @@ class NorfoldMessagingService : FirebaseMessagingService() {
                 .putExtra("norfold.workspaceId", data["workspaceId"])
                 .putExtra("norfold.objectId", data["objectId"])
                 .putExtra("norfold.channelId", data["channelId"])
-                .putExtra("norfold.messageId", data["messageId"]),
+                .putExtra("norfold.messageId", data["messageId"])
+                .putExtra("norfold.conversationId", data["conversationId"])
+                .putExtra("norfold.scope", data["scope"])
+                .putExtra("norfold.requestId", data["requestId"]),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = NotificationCompat.Builder(this, channelId)
