@@ -2749,7 +2749,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     suspend fun restoreChatMessageForUndo(snapshot: DeletedChatMessageSnapshot) {
         dao.insertChatMessage(snapshot.message)
-        snapshot.binding?.let(dao::insertRemoteBinding)
+        snapshot.binding?.let { dao.insertRemoteBinding(it) }
     }
 
     suspend fun recordSecureChatUserHidden(entity: SecureChatUserHiddenEntity) {
