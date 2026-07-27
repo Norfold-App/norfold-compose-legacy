@@ -292,6 +292,14 @@ where not exists (
     and e.channel_id = c.channel_id and e.ended_at is null
 );
 
+-- This backfill mutates existing workspace_objects rows as a maintenance
+-- operation, not on behalf of an authenticated caller, so the per-row
+-- enforce_channel_privacy() trigger (which requires auth.uid()) must be
+-- suspended for the two backfill statements only. It is re-enabled
+-- immediately afterward, still inside this migration transaction, so the
+-- privacy guard is never absent for real traffic.
+alter table public.workspace_objects disable trigger workspace_object_channel_privacy;
+
 update public.workspace_objects o
 set content = o.content || jsonb_build_object(
   'securityMode', 'managed',
@@ -323,6 +331,8 @@ where o.workspace_id = c.workspace_id
   and o.client_sync_id = c.channel_id
   and o.object_type = 'chat_channel'
   and o.deleted_at is null;
+
+alter table public.workspace_objects enable trigger workspace_object_channel_privacy;
 
 create or replace function private.initialize_workspace_chat_security()
 returns trigger
