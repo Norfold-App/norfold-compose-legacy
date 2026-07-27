@@ -2100,6 +2100,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val _contactRequests = MutableStateFlow<List<NorfoldSocial.RemoteContactRequest>>(emptyList())
     val contactRequests: StateFlow<List<NorfoldSocial.RemoteContactRequest>> = _contactRequests.asStateFlow()
 
+    // Request ids with an accept/decline/block in flight, so the UI can disable
+    // their action row and avoid a double-fire on a second tap.
+    private val _contactRequestBusyIds = MutableStateFlow<Set<String>>(emptySet())
+    val contactRequestBusyIds: StateFlow<Set<String>> = _contactRequestBusyIds.asStateFlow()
+
     private val _messageRequestPreferences = MutableStateFlow(ChatBackend.MessageRequestPreferences())
     val messageRequestPreferences: StateFlow<ChatBackend.MessageRequestPreferences> =
         _messageRequestPreferences.asStateFlow()
@@ -2828,7 +2833,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 it.username.equals(username, ignoreCase = true)
             }?.userId
 
-    fun respondToContactRequest(request: NorfoldSocial.RemoteContactRequest, accept: Boolean) =
+    fun respondToContactRequest(request: NorfoldSocial.RemoteContactRequest, accept: Boolean) {
+        // Ignore re-taps while a response for this request is already in flight.
+        if (request.requestId in _contactRequestBusyIds.value) return
+        _contactRequestBusyIds.value = _contactRequestBusyIds.value + request.requestId
         viewModelScope.launch {
             runCatching { NorfoldSocial.respondContactRequest(request.requestId, accept) }
                 .onSuccess {
@@ -2837,7 +2845,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     refreshSocialGraph()
                 }
                 .onFailure { emitError("Couldn't update that request. Try again.") }
+            _contactRequestBusyIds.value = _contactRequestBusyIds.value - request.requestId
         }
+    }
 
     fun openContactRequest(request: NorfoldSocial.RemoteContactRequest) = viewModelScope.launch {
         val channelId = repository.accountChannelId(request.conversationId)
@@ -2854,20 +2864,25 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         selectChatChannel(channelId)
     }
 
-    fun blockContactRequest(request: NorfoldSocial.RemoteContactRequest) = viewModelScope.launch {
-        runCatching { NorfoldSocial.blockUser(request.senderId) }
-            .onSuccess {
-                _blockedAccountIds.value = _blockedAccountIds.value + request.senderId
-                _contactRequests.value = _contactRequests.value.filterNot { it.requestId == request.requestId }
-                repository.accountChannelId(request.conversationId)?.let { channelId ->
-                    repository.chatChannelById(channelId)?.let { channel ->
-                        ChatConversationPrefs.setMuted(app, chatConversationPreferenceKey(channel), true)
+    fun blockContactRequest(request: NorfoldSocial.RemoteContactRequest) {
+        if (request.requestId in _contactRequestBusyIds.value) return
+        _contactRequestBusyIds.value = _contactRequestBusyIds.value + request.requestId
+        viewModelScope.launch {
+            runCatching { NorfoldSocial.blockUser(request.senderId) }
+                .onSuccess {
+                    _blockedAccountIds.value = _blockedAccountIds.value + request.senderId
+                    _contactRequests.value = _contactRequests.value.filterNot { it.requestId == request.requestId }
+                    repository.accountChannelId(request.conversationId)?.let { channelId ->
+                        repository.chatChannelById(channelId)?.let { channel ->
+                            ChatConversationPrefs.setMuted(app, chatConversationPreferenceKey(channel), true)
+                        }
                     }
+                    emitInfo("Blocked. This request was hidden.")
+                    refreshSocialGraph()
                 }
-                emitInfo("Blocked. This request was hidden.")
-                refreshSocialGraph()
-            }
-            .onFailure { emitError("Couldn't block right now. Try again.") }
+                .onFailure { emitError("Couldn't block right now. Try again.") }
+            _contactRequestBusyIds.value = _contactRequestBusyIds.value - request.requestId
+        }
     }
 
     fun createFriendInvite() = viewModelScope.launch {
