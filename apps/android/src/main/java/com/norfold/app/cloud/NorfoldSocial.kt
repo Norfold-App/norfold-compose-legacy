@@ -84,6 +84,14 @@ object NorfoldSocial {
         @SerialName("blocked_id") val blockedId: String,
     )
 
+    /** Per-conversation notification setting, synced across a user's devices. */
+    @Serializable
+    data class RemoteConversationNotificationPref(
+        @SerialName("conversation_id") val conversationId: String,
+        val level: String = "all",
+        @SerialName("muted_until") val mutedUntil: String? = null,
+    )
+
     @Serializable
     data class RemoteGroupMember(
         @SerialName("user_id") val userId: String,
@@ -213,6 +221,36 @@ object NorfoldSocial {
         ExternalServiceConfig.requireSupabase()
         if (!NorfoldSupabase.isSignedIn()) return emptyList()
         return client.postgrest.rpc("my_direct_conversations").decodeList()
+    }
+
+    /**
+     * Set the per-conversation notification level ('all' | 'mentions' | 'off')
+     * and optional transient mute. Synced across the user's devices; the server
+     * applies it before enqueuing any account-chat push (see migration
+     * 20260727090000_account_chat_push).
+     */
+    suspend fun setConversationNotificationPref(
+        conversationId: String,
+        level: String,
+        mutedUntil: String? = null,
+    ) {
+        requireAccount()
+        client.postgrest.rpc(
+            function = "set_conversation_notification_pref",
+            parameters = buildJsonObject {
+                put("p_conversation", conversationId)
+                put("p_level", level)
+                if (mutedUntil != null) put("p_muted_until", mutedUntil)
+            },
+        )
+    }
+
+    /** Reads the caller's per-conversation notification settings across devices. */
+    suspend fun conversationNotificationPrefs(): List<RemoteConversationNotificationPref> {
+        val account = requireAccount()
+        return client.postgrest["conversation_notification_prefs"].select {
+            filter { eq("user_id", account) }
+        }.decodeList()
     }
 
     /** Opens (or returns) the 1:1 conversation with a peer account. */
