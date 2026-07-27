@@ -2853,6 +2853,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
         )
     }
 
+    /** Durable relay cursor for this device generation, or null before first delivery. */
+    suspend fun secureRelayCheckpoint(deviceId: String, generation: Int): SecureChatRelayCheckpointEntity? =
+        dao.secureChatRelayCheckpoint(deviceId, generation)
+
     suspend fun recordSecureChatTombstone(
         messageSyncId: String,
         conversationId: String,
