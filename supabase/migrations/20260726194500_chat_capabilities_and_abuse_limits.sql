@@ -529,7 +529,7 @@ begin
     where e.account_conversation_id = v_epoch.account_conversation_id
       and m.state <> 'deleted'
       and (m.content_expires_at is null or m.content_expires_at > now());
-    if v_used + new.ciphertext_bytes > case when v_kind = 'dm' then v_cap.dm_outstanding_relay_bytes else v_cap.group_outstanding_relay_bytes end then
+    if v_used + new.ciphertext_bytes > (case when v_kind = 'dm' then v_cap.dm_outstanding_relay_bytes else v_cap.group_outstanding_relay_bytes end) then
       raise exception using errcode = '54000', message = 'chat_conversation_outstanding_bytes_limit';
     end if;
   else
