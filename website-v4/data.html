@@ -1,0 +1,120 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold data and recovery — message lifecycle, relay, archive, deletion, and recovery boundaries."/>
+<title>Data &amp; Recovery — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
+</head>
+<body>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html">Development</a>
+      <a href="support.html">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
+    </div>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Data &amp; Recovery</span>
+    <h1>Messages move.<br/>Ownership stays clear.</h1>
+    <p>A secure messaging system is more than an encryption label. Norfold separates the live cryptographic session, temporary relay, local history, private archive, and destructive-state rules.</p>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Lifecycle</span><h2>From creation to deletion.</h2></div>
+    <p>Each stage of a message's life is a distinct system with distinct rules. They are not the same thing.</p>
+  </div>
+  <div class="story">
+    <div class="story-sticky">
+      <span class="eyebrow"><i></i> Five stages</span>
+      <h2>Create.<br/>Relay.<br/>Keep.<br/>Archive.<br/>Remove.</h2>
+      <p>Understanding which stage you are in determines what is possible — and what is not.</p>
+    </div>
+    <div class="story-list">
+      <article class="story-step">
+        <span class="num">01 / CREATE</span>
+        <h3>Your device creates the content.</h3>
+        <p>Private message content is encrypted on an authorized device before normal E2EE relay. Local-first UI does not wait for a round-trip merely to display what you just sent. The plaintext never leaves your device unencrypted.</p>
+      </article>
+      <article class="story-step">
+        <span class="num">02 / RELAY</span>
+        <h3>The server moves what it does not need to understand.</h3>
+        <p>Temporary ciphertext delivery, membership routing, push events, and operational metadata. The relay is not a permanent readable private message archive. Relay data is purged according to policy after delivery.</p>
+      </article>
+      <article class="story-step">
+        <span class="num">03 / KEEP</span>
+        <h3>Your devices hold long-term history.</h3>
+        <p>The authoritative copy of your message history lives on your authorized devices. This is the primary long-term store — not the relay, not the server.</p>
+      </article>
+      <article class="story-step">
+        <span class="num">04 / ARCHIVE</span>
+        <h3>Optional encrypted backup to your chosen provider.</h3>
+        <p>Google Drive is the first supported archive provider. Your archive data is encrypted before upload. The archive provider is a replaceable implementation — a future self-hosted option should not require redesigning the privacy model.</p>
+      </article>
+      <article class="story-step">
+        <span class="num">05 / REMOVE</span>
+        <h3>Deletion and lifespan stop ordinary resurrection.</h3>
+        <p>Delete-for-everyone and explicitly destructive lifespans block normal relay, recovery-relay, and routine archive restoration paths after destruction. They do not rewrite content another participant has independently received and stored on their own device.</p>
+      </article>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Recovery</span><h2>What recovery can and cannot do.</h2></div>
+    <p>Recovery is bounded by what was preserved. It cannot manufacture history that was never archived or was explicitly destroyed.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Restore from archive</h4><p>If you have an encrypted archive on your provider, authorized devices can restore from it.</p></div><span class="badge green">SUPPORTED</span></div>
+    <div class="status-row"><div><h4>Recover after device loss</h4><p>Account continuity survives device loss. New cryptographic identity, same account. History requires archive access.</p></div><span class="badge green">SUPPORTED</span></div>
+    <div class="status-row"><div><h4>Recover relay-purged messages</h4><p>Once relay data is purged, it cannot be recovered from the server. Archive is the only path.</p></div><span class="badge">NOT POSSIBLE</span></div>
+    <div class="status-row"><div><h4>Recover explicitly deleted content</h4><p>Content deleted with destructive intent is not recoverable through normal paths by design.</p></div><span class="badge">NOT POSSIBLE</span></div>
+    <div class="status-row"><div><h4>Recover without any archive</h4><p>If no archive exists and relay data is purged, the history is gone. Norfold cannot manufacture it.</p></div><span class="badge">NOT POSSIBLE</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal" style="padding-bottom:100px">
+  <div class="callout warn">
+    <strong>Pre-release caveat</strong>
+    <p>Recovery paths are implemented and under validation. Behavior may change before public release. Do not rely on recovery guarantees during the pre-release period.</p>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
+</body>
+</html>

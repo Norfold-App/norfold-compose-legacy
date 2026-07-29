@@ -9,6 +9,7 @@ dist/
 *.tsbuildinfo
 apps/web/node_modules/
 apps/web/dist/
+infra/collaboration/cloudflare/node_modules/
 
 # Android/Gradle
 .gradle/
@@ -23,6 +24,8 @@ service-account*.json
 supabase/.env
 supabase/.env.*
 supabase/.temp/
+# Local, secret-bearing setup scripts (never committed).
+scripts/local/
 apps/android/build/
 apps/android/.gradle/
 

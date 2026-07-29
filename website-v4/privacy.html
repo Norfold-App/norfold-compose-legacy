@@ -1,0 +1,129 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold privacy summary — what data is collected, what Norfold can and cannot see, and how your data is handled."/>
+<title>Privacy — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
+</head>
+<body>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html" class="active">Privacy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html">Development</a>
+      <a href="support.html">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
+    </div>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Privacy</span>
+    <h1>What Norfold can see.<br/>What it should not.</h1>
+    <p>A plain-language summary of how your data is handled — not a legal document designed to obscure. Pre-release caveats apply throughout.</p>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">What Norfold can see</span><h2>Operational data.</h2></div>
+    <p>Running a service requires some operational visibility. This is what Norfold has access to by design.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Account identity</h4><p>Username, email address, and account creation metadata.</p></div><span class="badge">OPERATIONAL</span></div>
+    <div class="status-row"><div><h4>Workspace membership</h4><p>Which workspaces and groups you belong to, and your role within them.</p></div><span class="badge">OPERATIONAL</span></div>
+    <div class="status-row"><div><h4>Routing metadata</h4><p>Message delivery signals, push event routing, and membership coordination. Not message content.</p></div><span class="badge">OPERATIONAL</span></div>
+    <div class="status-row"><div><h4>Managed workspace content</h4><p>In Managed-mode workspaces, content is not end-to-end encrypted and may be accessible to workspace operators.</p></div><span class="badge amber">MODE-DEPENDENT</span></div>
+    <div class="status-row"><div><h4>Abuse reports</h4><p>Evidence submitted explicitly by a reporter. Not collected silently from private conversations.</p></div><span class="badge">CONSENT-ONLY</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">What Norfold should not see</span><h2>Private content.</h2></div>
+    <p>These are architectural goals. Pre-release validation is ongoing — these are design intentions, not certified guarantees.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>E2EE message content</h4><p>Personal DM and personal group message content is encrypted before leaving your device. The server should not be able to read it.</p></div><span class="badge green">BY DESIGN</span></div>
+    <div class="status-row"><div><h4>Private archive contents</h4><p>Your long-term message history lives in your chosen archive provider (e.g. Google Drive), not on Norfold's servers.</p></div><span class="badge green">BY DESIGN</span></div>
+    <div class="status-row"><div><h4>Local-only workspace data</h4><p>Data you have not explicitly synced or shared stays on your device.</p></div><span class="badge green">BY DESIGN</span></div>
+    <div class="status-row"><div><h4>Your cryptographic keys</h4><p>Private keys are generated and stored on your devices. Norfold does not hold them.</p></div><span class="badge green">BY DESIGN</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Providers</span><h2>Third-party infrastructure.</h2></div>
+    <p>Norfold uses third-party providers for hosting, storage, and delivery. Provider independence is an architectural goal — the design should not trap the product in a single provider.</p>
+  </div>
+  <div class="editorial">
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">⬡</div>
+      <h3>Hosting and database</h3>
+      <p>Backend infrastructure runs on cloud providers. Operational data is subject to those providers' terms and applicable law.</p>
+      <div class="ei-status"><a class="button ghost" href="infrastructure.html" style="font-size:11px;min-height:32px;padding:0 10px">View infrastructure →</a></div>
+    </div>
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">◫</div>
+      <h3>Archive provider</h3>
+      <p>Google Drive is the first supported archive provider. Your archive data is subject to Google's terms. A self-hosted option is planned.</p>
+      <div class="ei-status"><span class="badge green">IMPLEMENTED</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Deletion</span><h2>What deletion actually means.</h2></div>
+    <p>Deletion in a distributed system is not a single button. Different domains have different rules.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Delete from my view</h4><p>Removes content from your local view. Does not affect another participant's independent copy.</p></div><span class="badge green">YOU CONTROL</span></div>
+    <div class="status-row"><div><h4>Delete for everyone</h4><p>Requests removal from relay and blocks ordinary recovery paths. Cannot rewrite content already extracted on another device.</p></div><span class="badge amber">PARTIAL CONTROL</span></div>
+    <div class="status-row"><div><h4>Account deletion</h4><p>Removes your account and associated server-side data. Does not delete content another participant legitimately possesses.</p></div><span class="badge">SCOPED</span></div>
+    <div class="status-row"><div><h4>Another person's copy</h4><p>You do not control content another participant has independently received and stored.</p></div><span class="badge">NOT YOUR CONTROL</span></div>
+  </div>
+  <div style="margin-top:10px">
+    <a class="button ghost" href="account-deletion.html">Account deletion details →</a>
+  </div>
+</div>
+
+<div class="wrap section reveal" style="padding-bottom:100px">
+  <div class="callout warn">
+    <strong>Pre-release caveat</strong>
+    <p>This summary describes design intentions. Norfold is pre-release software. Privacy properties are being validated and may not yet be fully implemented or certified. Do not rely on this summary as a legal guarantee.</p>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
+</body>
+</html>

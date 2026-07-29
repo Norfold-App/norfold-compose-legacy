@@ -34,6 +34,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="norfold" android:host="integrations" android:path="/calendar" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="norfold" android:host="verify" android:path="/telegram" />
+            </intent-filter>
         </activity>
         <provider
             android:name="androidx.core.content.FileProvider"

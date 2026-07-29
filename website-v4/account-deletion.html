@@ -1,0 +1,126 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold account deletion — what happens when you delete your account, grace options, and what others' independent copies mean."/>
+<title>Account Deletion — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
+</head>
+<body>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html">Development</a>
+      <a href="support.html">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
+    </div>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Account Deletion</span>
+    <h1>What deletion actually means.</h1>
+    <p>Account deletion removes your account and associated server-side data. It does not delete content another participant legitimately possesses on their own device.</p>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">What happens</span><h2>When you delete your account.</h2></div>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Account identity removed</h4><p>Your username, profile, and account metadata are removed from Norfold's servers.</p></div><span class="badge green">HAPPENS</span></div>
+    <div class="status-row"><div><h4>Server-side data removed</h4><p>Data associated with your account on Norfold's infrastructure is deleted according to the deletion policy.</p></div><span class="badge green">HAPPENS</span></div>
+    <div class="status-row"><div><h4>Relay data purged</h4><p>Any remaining relay data associated with your account is cleared.</p></div><span class="badge green">HAPPENS</span></div>
+    <div class="status-row"><div><h4>Workspace membership ended</h4><p>You are removed from workspaces and groups you belonged to.</p></div><span class="badge green">HAPPENS</span></div>
+    <div class="status-row"><div><h4>Another person's independent copy</h4><p>Content another participant has independently received and stored on their device is not affected by your account deletion.</p></div><span class="badge">NOT AFFECTED</span></div>
+    <div class="status-row"><div><h4>Your local device data</h4><p>Data on your own devices is not automatically wiped by account deletion. You manage your own devices.</p></div><span class="badge">NOT AUTOMATIC</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Grace period</span><h2>Before deletion is final.</h2></div>
+    <p>Account deletion includes a grace period during which you can cancel the deletion if you change your mind.</p>
+  </div>
+  <div class="editorial">
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">◎</div>
+      <h3>Grace window</h3>
+      <p>After initiating deletion, a grace period allows you to cancel before the deletion becomes permanent. Signing back in does not automatically cancel a pending deletion.</p>
+      <div class="ei-status"><span class="badge green">IMPLEMENTED</span></div>
+    </div>
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">◫</div>
+      <h3>Archive choice</h3>
+      <p>Before deletion completes, you can choose what happens to your encrypted archive. Your archive provider holds your data independently of your Norfold account.</p>
+      <div class="ei-status"><span class="badge green">IMPLEMENTED</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Ownership</span><h2>Ownership requirements.</h2></div>
+    <p>Some deletion paths require ownership transfer before the account can be deleted.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Workspace ownership</h4><p>If you are the sole owner of a workspace, you must transfer ownership or delete the workspace before deleting your account.</p></div><span class="badge amber">REQUIRED FIRST</span></div>
+    <div class="status-row"><div><h4>Group ownership</h4><p>Personal groups you own may need to be transferred or dissolved before account deletion.</p></div><span class="badge amber">REQUIRED FIRST</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Independent copies</span><h2>What you cannot delete remotely.</h2></div>
+    <p>Deleting your account is not a magical remote wipe of content another participant legitimately possesses.</p>
+  </div>
+  <div class="editorial">
+    <div class="editorial-item wide" data-tilt="">
+      <div class="ei-icon">⊘</div>
+      <h3>Two independent sides</h3>
+      <p>In a conversation between two people, each participant has their own independent copy of the exchange. Your account deletion removes your side from Norfold's servers. It does not reach into another person's device or archive and delete their independent copy. This is a fundamental property of distributed systems — not a policy choice that can be overridden.</p>
+      <div class="ei-status"><span class="badge">BY DESIGN</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal" style="padding-bottom:100px">
+  <div class="callout warn">
+    <strong>Pre-release caveat</strong>
+    <p>Account deletion procedures are implemented and under validation. Some steps described here may not yet be fully operational during the pre-release period.</p>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
+</body>
+</html>

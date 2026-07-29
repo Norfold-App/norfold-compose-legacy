@@ -1,0 +1,205 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold development status — what is implemented, what is validating, what is planned, and what pre-release means."/>
+<title>Development — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
+</head>
+<body>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html" class="active">Development</a>
+      <a href="support.html">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
+    </div>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Development</span>
+    <h1>What is actually built.</h1>
+    <p>No fake progress percentages. No fabricated roadmap dates. Explicit state labels only. A feature appearing in Norfold does not automatically mean every edge case has been certified for public use.</p>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Status vocabulary</span><h2>What the labels mean.</h2></div>
+    <p>Each feature area carries one of these statuses. They reflect the actual state — not aspirational claims.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row">
+      <div><h4>Implemented</h4><p>Code exists and has been built. Does not mean certified, validated, or production-ready.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Validating</h4><p>Implemented and under active validation. Behavior may still change. Not yet release-certified.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>In progress</h4><p>Active development. Partial or unstable. Do not rely on current behavior.</p></div>
+      <span class="badge amber">IN PROGRESS</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Planned</h4><p>Intended for a future phase. No committed date. May change in scope or approach.</p></div>
+      <span class="badge">PLANNED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Not announced</h4><p>No public commitment exists. Do not treat as a promise.</p></div>
+      <span class="badge">NOT ANNOUNCED</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Core surfaces</span><h2>Product areas.</h2></div>
+  </div>
+  <div class="status-list">
+    <div class="status-row">
+      <div><h4>Notes</h4><p>Implemented. Ongoing refinement. Stable for testing.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Tasks</h4><p>Implemented. Multiple views, properties, checklists. Stable for testing.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Document editor</h4><p>Major architectural redesign in progress. Current capabilities are partial. Not stable.</p></div>
+      <span class="badge amber">IN PROGRESS</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Calendar</h4><p>Implemented. Basic event management. Ongoing refinement.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Files</h4><p>Implemented. Local storage. Encrypted sync planned.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Shared workspaces</h4><p>Foundation implemented. Collaboration features planned.</p></div>
+      <span class="badge">PLANNED</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Chat</span><h2>Encrypted messaging.</h2></div>
+    <p>Stage 1 backend deployed. Validation ongoing. Not yet release-certified.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row">
+      <div><h4>Chat backend — Stage 1</h4><p>Backend deployed to production. Relay, push, security modes, and abuse limits implemented.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>E2EE personal messaging</h4><p>Designed and implemented. Adversarial and multi-device validation ongoing.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Workspace chat</h4><p>Implemented. Security mode follows workspace owner selection.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Push notifications</h4><p>Account-chat push pipeline implemented. Routing-only payload. Validation ongoing.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Chat UI redesign</h4><p>Premium redesign in progress. UI-only phase. Backend is separate.</p></div>
+      <span class="badge amber">IN PROGRESS</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Security and privacy</span><h2>Trust infrastructure.</h2></div>
+  </div>
+  <div class="status-list">
+    <div class="status-row">
+      <div><h4>Security mode disclosure</h4><p>E2EE vs Managed mode selection and disclosure implemented.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Device identity and recovery</h4><p>Account continuity across cryptographic identity changes implemented.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Encrypted relay</h4><p>Temporary relay with purge policy implemented. Validation ongoing.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Private archive (Google Drive)</h4><p>First archive provider implemented. Self-hosted provider planned.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Abuse reporting</h4><p>Reporter-initiated evidence packaging implemented.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Disappearing messages</h4><p>Lifespan enforcement implemented. Validation ongoing.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Current limits</span><h2>Beta capacity limits.</h2></div>
+    <p>The beta runs on limited infrastructure. These limits protect the service while real behavior is being proven. They are not promises about final plans.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Workspace members</h4><p>Maximum per workspace during beta.</p></div><span class="badge">4</span></div>
+    <div class="status-row"><div><h4>Personal group members</h4><p>Maximum per personal group during beta.</p></div><span class="badge">8</span></div>
+    <div class="status-row"><div><h4>Authorized devices</h4><p>Per account during beta.</p></div><span class="badge">5</span></div>
+    <div class="status-row"><div><h4>Concurrent chat devices</h4><p>Per account during beta.</p></div><span class="badge">3</span></div>
+    <div class="status-row"><div><h4>Single file upload</h4><p>Maximum file size during beta.</p></div><span class="badge">25 MB</span></div>
+    <div class="status-row"><div><h4>Files per 24h</h4><p>Per user during beta.</p></div><span class="badge">5</span></div>
+    <div class="status-row"><div><h4>Upload per 24h</h4><p>Per user during beta.</p></div><span class="badge">50 MB</span></div>
+    <div class="status-row"><div><h4>DM relay outstanding</h4><p>Encrypted data in relay at one time.</p></div><span class="badge">50 MB</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal" style="padding-bottom:100px">
+  <div class="alert-panel">
+    <span class="badge gold">PRE-RELEASE</span>
+    <h2>Beta means "we are proving it," not "we already proved it."</h2>
+    <p>Features may be incomplete, unavailable, behave differently across releases, fail on some devices, or simply not meet your expectations yet. Security, recovery, moderation, reliability and support workflows continue to be validated before public release.</p>
+    <p class="fine">A feature appearing in Norfold does not automatically mean every edge case has been certified for public use. The public trust information must be reconciled with the actual shipped implementation as the product evolves. No public release date has been announced.</p>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
+</body>
+</html>

@@ -35,3 +35,9 @@ verify_jwt = false
 
 [functions.play-rtdn]
 verify_jwt = false
+
+# Telegram calls this without a Supabase JWT; the function authenticates the
+# caller itself via the X-Telegram-Bot-Api-Secret-Token header.
+# telegram-verification-start intentionally keeps verify_jwt on (default).
+[functions.telegram-auth-webhook]
+verify_jwt = false

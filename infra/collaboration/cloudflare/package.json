@@ -1,0 +1,21 @@
+{
+  "name": "norfold-collab-edge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler types && tsc --noEmit",
+    "types": "wrangler types",
+    "cf:whoami": "wrangler whoami",
+    "smoke": "node scripts/ws-smoke.mjs"
+  },
+  "dependencies": {
+    "jose": "^6.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "wrangler": "^4.0.0"
+  }
+}
