@@ -474,6 +474,173 @@ class FlowHostRuntimeTest {
         assertTrue(runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(null, 0)) is CommandResult.Failure)
     }
 
+    /** Cancel is what the gesture layer calls on a same-position drop or a cancelled gesture. */
+    @Test
+    fun drag_cancelLeavesTheDocumentAndHistoryUntouched() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta", "gamma"))
+        val before = runtime.controller.document()
+
+        runtime.beginDrag("p0")
+        runtime.cancelDrag()
+
+        assertEquals(before, runtime.controller.document())
+        assertEquals(0, runtime.controller.undoDepth())
+    }
+
+    /** After a cancel the transient drag source is gone, so a later completeDrag cannot resurrect it. */
+    @Test
+    fun drag_cancelClearsTheDragSource() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.beginDrag("p0")
+        runtime.cancelDrag()
+
+        assertTrue(runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(null, 2)) is CommandResult.Failure)
+    }
+
+    /** A committed drag is one undo unit, so one undo restores the pre-drag order exactly. */
+    @Test
+    fun drag_undoRestoresThePreDragOrder() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta", "gamma"))
+        val before = runtime.controller.document().blocks.map { it.plainText() }
+
+        runtime.beginDrag("p0")
+        runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(null, 3))
+        runtime.undo()
+
+        assertEquals(before, runtime.controller.document().blocks.map { it.plainText() })
+        assertEquals(0, runtime.controller.undoDepth())
+    }
+
+    /**
+     * The gesture layer computes an index from a pixel offset, so an over-range value is reachable. The tree
+     * clamps it, which means the drop lands last instead of dropping the block or corrupting the document.
+     */
+    @Test
+    fun drag_overRangeDropClampsToTheEndWithoutLosingBlocks() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+
+        runtime.beginDrag("p0")
+        val result = runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(null, 99))
+
+        assertTrue(result is CommandResult.Success)
+        assertEquals(listOf("beta", "alpha"), runtime.controller.document().blocks.map { it.plainText() })
+        assertEquals(1, runtime.controller.undoDepth())
+    }
+
+    /**
+     * `moveInto` interprets the index against the list *before* the block is removed, so a one-row downward
+     * drag needs index = target + 1. Dropping the naive target index is a silent no-op — the block appears to
+     * snap back. These two tests pin the indices the gesture layer must actually send.
+     */
+    @Test
+    fun drag_downOneRowUsesThePreRemovalIndex() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta", "gamma"))
+        runtime.beginDrag("p0")
+        runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(null, 2))
+
+        assertEquals(listOf("beta", "alpha", "gamma"), runtime.controller.document().blocks.map { it.plainText() })
+    }
+
+    @Test
+    fun drag_upOneRowUsesTheTargetIndexDirectly() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta", "gamma"))
+        runtime.beginDrag("p2")
+        runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(null, 1))
+
+        assertEquals(listOf("alpha", "gamma", "beta"), runtime.controller.document().blocks.map { it.plainText() })
+    }
+
+    /** The naive downward index is the bug the gesture layer must not send: it moves nothing. */
+    @Test
+    fun drag_naiveDownwardIndexIsANoOp() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta", "gamma"))
+        runtime.beginDrag("p0")
+        runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(null, 1))
+
+        assertEquals(listOf("alpha", "beta", "gamma"), runtime.controller.document().blocks.map { it.plainText() })
+    }
+
+    // ── Auto-save contract (what the host's revision-triggered save relies on) ────────────────────────
+
+    /**
+     * `revision` is the signal the host debounces on, so every edit must advance it. Note it also advances for
+     * non-content changes — which is precisely why the host debounces on idle and re-checks `dirtyBlockIds()`
+     * instead of saving on a revision count.
+     */
+    @Test
+    fun autoSave_revisionAdvancesOnEveryEdit() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        val start = runtime.revision
+
+        runtime.setCaret("p0", 0)
+        runtime.editText("p0", "alpha", "alphax")
+        val afterTyping = runtime.revision
+        assertTrue(afterTyping > start)
+
+        runtime.invoke(FlowIds.MOVE_DOWN, CommandSurface.DOCK)
+        assertTrue(runtime.revision > afterTyping)
+    }
+
+    /** A save marks the document clean without rewriting content or collapsing undo history. */
+    @Test
+    fun autoSave_markSavedClearsDirtyIdsAndKeepsContentAndHistory() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.setCaret("p0", 5)
+        runtime.editText("p0", "alpha", "alphax")
+
+        assertTrue(runtime.controller.dirtyBlockIds().isNotEmpty())
+        val saved = runtime.controller.document()
+        val depth = runtime.controller.undoDepth()
+
+        runtime.controller.markSaved()
+
+        assertTrue(runtime.controller.dirtyBlockIds().isEmpty())
+        assertEquals(saved, runtime.controller.document())
+        assertEquals(depth, runtime.controller.undoDepth())
+    }
+
+    /** Undo is still available after a save, so an auto-save never strands the user with committed content. */
+    @Test
+    fun autoSave_undoStillWorksAfterASave() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        val before = runtime.controller.document().blocks.map { it.plainText() }
+
+        runtime.setCaret("p0", 5)
+        runtime.editText("p0", "alpha", "alphax")
+        runtime.controller.markSaved()
+        runtime.undo()
+
+        assertEquals(before, runtime.controller.document().blocks.map { it.plainText() })
+        assertTrue(runtime.controller.dirtyBlockIds().isNotEmpty())
+    }
+
+    /** An in-progress drag is transient: a save mid-gesture must not persist the drag source. */
+    @Test
+    fun autoSave_doesNotPersistInProgressDragState() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.beginDrag("p0")
+        runtime.controller.markSaved()
+        runtime.cancelDrag()
+
+        assertNull(runtime.memory.get<String>(MemoryScope.TRANSIENT, FlowMemoryKeys.DRAG_SOURCE))
+    }
+
+    /**
+     * The reason the host debounces instead of counting revisions: opening a surface advances `revision` while
+     * leaving the document clean, so a `% N` trigger would fire saves with nothing to write.
+     */
+    @Test
+    fun autoSave_revisionAdvancesOnNonContentChangesWithoutDirtyingTheDocument() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.controller.markSaved()
+        val before = runtime.revision
+
+        runtime.openInsertPalette("p0")
+
+        assertTrue(runtime.revision > before)
+        assertTrue(runtime.controller.dirtyBlockIds().isEmpty())
+    }
+
     // ── Text editing through the canonical history (deliverable 9) ───────────────────────────────────
 
     /** Continuous typing in one block collapses to one undo unit; leaving the block opens a new one. */

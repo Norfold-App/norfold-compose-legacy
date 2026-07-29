@@ -6,7 +6,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import com.norfold.app.domain.DocumentOwnerType
@@ -22,6 +24,8 @@ import com.norfold.app.ui.editor.flow.FlowHostScreen
 import com.norfold.app.ui.editor.flow.rememberFlowHostPresenter
 import com.norfold.app.ui.screens.EditorSurface
 import com.norfold.app.ui.screens.StructuredBlockEditorHost
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
 
 /**
  * Process-local editor flags. Every flag defaults **off**, so this resolves to the legacy host until an
@@ -76,7 +80,13 @@ fun FlowNoteEditorScreen(
  *
  * The controller derives dirty/deleted block ids by diffing against the last-saved document, which is exactly
  * the shape the repository writes (one Room row per top-level block), so saving needs no bookkeeping here.
+ *
+ * Process recreation: committed content is already durable in Room, the title survives via `rememberSaveable`,
+ * and the idle auto-save below bounds how much uncommitted work a process death can take. Transient state
+ * (open surfaces, selection, caret, in-progress drag) is deliberately *not* restored — reviving a drag source
+ * or a caret pointing at a block id that a remote merge has since removed is how you corrupt canonical content.
  */
+@OptIn(FlowPreview::class)
 @Composable
 private fun FlowHostRoute(
     state: DocsUiState,
@@ -95,7 +105,9 @@ private fun FlowHostRoute(
         DocumentOwnerType.CalendarEvent ->
             state.calendarEvents.firstOrNull { it.id == owner.id }?.title ?: "Untitled event"
     }
-    var title by remember(owner.documentId) { mutableStateOf(storedTitle) }
+
+    // rememberSaveable ensures title survives process recreation
+    var title by rememberSaveable(owner.documentId) { mutableStateOf(storedTitle) }
 
     val runtime = remember(owner.documentId) {
         FlowHostRuntime(
@@ -114,6 +126,21 @@ private fun FlowHostRoute(
         if (runtime.controller.mergeRemote(active.document)) presenter.refresh()
     }
 
+    // Auto-save bounds how much uncommitted work a process death can take. Debounced on an idle gap rather
+    // than counting revisions: `revision` also advances for selection/surface changes, so a counter would
+    // both skip dirty moments and fire on clean ones. Saving only when dirty keeps this a no-op while idle.
+    LaunchedEffect(owner.documentId) {
+        snapshotFlow { presenter.state.revision }
+            .debounce(AUTO_SAVE_IDLE_MS)
+            .collect {
+                val dirtyIds = runtime.controller.dirtyBlockIds()
+                if (dirtyIds.isNotEmpty()) {
+                    viewModel.updateActiveDocument(owner, title, runtime.controller.document(), dirtyIds)
+                    runtime.controller.markSaved()
+                }
+            }
+    }
+
     FlowHostScreen(
         presenter = presenter,
         title = title,
@@ -126,3 +153,6 @@ private fun FlowHostRoute(
         modifier = modifier,
     )
 }
+
+/** Idle gap after the last edit before an auto-save fires, bounding what a process death can take. */
+private const val AUTO_SAVE_IDLE_MS = 1_500L
