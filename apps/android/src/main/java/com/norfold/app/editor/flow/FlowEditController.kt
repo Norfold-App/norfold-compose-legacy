@@ -53,6 +53,10 @@ class FlowEditController(
     private var coalesceGeneration: Int = 0
     private var transactionCounter: Long = 0L
 
+    // Composite-transaction bookkeeping (see `transaction`).
+    private var batchDepth: Int = 0
+    private var batchBefore: BlockDocument? = null
+
     /** The live, authoritative document. */
     fun document(): BlockDocument = workspace.documentOf(target)
 
@@ -83,6 +87,12 @@ class FlowEditController(
         val session = BlockEditorSession(before)
         val cursor = mutation(session)
         val after = session.document
+        if (batchDepth > 0) {
+            // Inside a composite: apply to the live document now, but let the enclosing `transaction`
+            // record the single transaction covering the whole composite.
+            if (after != before) workspace.setDocument(target, after)
+            return cursor
+        }
         val ops = FlowDocumentDiff.diff(target, before, after)
         if (ops.isEmpty()) {
             // A no-op edit must not disturb the coalescing run or the history.
@@ -98,6 +108,53 @@ class FlowEditController(
             ),
         )
         return cursor
+    }
+
+    /**
+     * Runs [body] as one **composite transaction**: every [mutate] inside it applies to the live document
+     * immediately, but only a single [EditTransaction] labelled [label] is recorded, covering the whole
+     * composite. One user-facing action is therefore always one undo step even when it is assembled from
+     * several vocabulary operations (§4.14) — the slash resolver, which removes the typed `/query` *and*
+     * runs the chosen command, is the motivating case.
+     *
+     * Nesting is supported (only the outermost call records). If [body] throws, the document is restored to
+     * its pre-composite state so a half-applied composite is never observable, matching the History Engine's
+     * own all-or-nothing guarantee.
+     */
+    fun <T> transaction(label: String, body: () -> T): T {
+        if (batchDepth == 0) batchBefore = document()
+        batchDepth++
+        val result = try {
+            body()
+        } catch (t: Throwable) {
+            batchDepth--
+            if (batchDepth == 0) {
+                batchBefore?.let { workspace.setDocument(target, it) }
+                batchBefore = null
+            }
+            throw t
+        }
+        batchDepth--
+        if (batchDepth == 0) {
+            val before = batchBefore ?: document()
+            batchBefore = null
+            val ops = FlowDocumentDiff.diff(target, before, document())
+            if (ops.isNotEmpty()) {
+                // The body already advanced the live document so each step could see the previous one's
+                // result. Rewind to the pre-composite state so the History Engine applies the composite's
+                // operations exactly once — committing on top of the advanced document would replay them.
+                workspace.setDocument(target, before)
+                history.commit(
+                    EditTransaction(
+                        id = "flow-${transactionCounter++}",
+                        label = label,
+                        operations = ops,
+                        coalescingKey = resolveCoalescingKey(null),
+                    ),
+                )
+            }
+        }
+        return result
     }
 
     /**
