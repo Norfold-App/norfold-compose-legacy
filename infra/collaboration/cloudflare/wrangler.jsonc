@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "norfold-collab-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-27",
+  "durable_objects": {"bindings": [{"name": "COLLAB_ROOM", "class_name": "CollabRoom"}]},
+  "exports": {"CollabRoom": {"type": "durable-object", "storage": "sqlite"}},
+  "vars": {"SUPABASE_URL": "https://libvhznygsoppyfhucpt.supabase.co", "BENCHMARK_ONLY": "true"},
+  "secrets": {"required": ["BENCHMARK_SHARED_SECRET"]}
+}

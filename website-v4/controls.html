@@ -1,0 +1,106 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold privacy controls — what you control, what others control, and what Norfold can enforce."/>
+<title>Privacy Controls — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
+</head>
+<body>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html" class="active">Privacy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html">Development</a>
+      <a href="support.html">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
+    </div>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Privacy Controls</span>
+    <h1>"Delete" should never be<br/>one ambiguous button.</h1>
+    <p>Your own view, the sender's live message, another participant's independent history, a group, a workspace, and an account are different domains. Norfold treats them differently.</p>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Your side</span><h2>What you control.</h2></div>
+    <p>These actions affect your own view, your own devices, and your own relationship to content. They do not automatically affect another participant's independent copy.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Delete from my view</h4><p>Remove a message from your normal view. The other participant's copy is unaffected.</p></div><span class="badge green">YOU CONTROL</span></div>
+    <div class="status-row"><div><h4>Private stars and pins</h4><p>Mark conversations or messages for your own reference. Not visible to others.</p></div><span class="badge green">YOU CONTROL</span></div>
+    <div class="status-row"><div><h4>Message request policy</h4><p>Control who can initiate contact with you. Strangers surface as requests, not direct messages.</p></div><span class="badge green">YOU CONTROL</span></div>
+    <div class="status-row"><div><h4>Block</h4><p>Prevent a user from contacting you. Existing content in shared spaces is handled separately.</p></div><span class="badge green">YOU CONTROL</span></div>
+    <div class="status-row"><div><h4>Conversation notification preferences</h4><p>Set per-conversation notification level: all messages, mentions only, or off.</p></div><span class="badge green">YOU CONTROL</span></div>
+    <div class="status-row"><div><h4>Archive retention</h4><p>Manage your encrypted archive within your chosen provider's capabilities.</p></div><span class="badge green">YOU CONTROL</span></div>
+    <div class="status-row"><div><h4>Authorized devices</h4><p>Review and revoke device authorizations on your account.</p></div><span class="badge green">YOU CONTROL</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Shared actions</span><h2>Actions that affect both sides.</h2></div>
+    <p>These actions request changes that affect more than your own view. They may be blocked, refused, or only partially enforceable depending on the other participant's state.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Delete for everyone</h4><p>Requests removal from relay and blocks ordinary recovery paths. Cannot rewrite content already extracted on another device.</p></div><span class="badge amber">PARTIAL CONTROL</span></div>
+    <div class="status-row"><div><h4>Disappearing message lifespan</h4><p>Set a lifespan on messages. After expiry, relay and recovery paths are blocked. Independent device copies are not remotely wiped.</p></div><span class="badge amber">PARTIAL CONTROL</span></div>
+    <div class="status-row"><div><h4>Whole DM deletion</h4><p>Request deletion of an entire direct message thread. Requires both participants' agreement for full shared destruction.</p></div><span class="badge amber">PARTIAL CONTROL</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Independent copies</span><h2>What you do not control.</h2></div>
+    <p>Deleting your account is not a magical remote wipe of content another participant legitimately possesses.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Another person's private archive</h4><p>Content they have archived on their own provider is outside your control.</p></div><span class="badge">NOT YOUR CONTROL</span></div>
+    <div class="status-row"><div><h4>Plaintext already extracted on their device</h4><p>Once decrypted and stored locally on another device, you cannot remotely delete it.</p></div><span class="badge">NOT YOUR CONTROL</span></div>
+    <div class="status-row"><div><h4>A shared DM copy when they refuse shared destruction</h4><p>Full shared deletion requires both parties. If the other participant does not agree, their copy remains.</p></div><span class="badge">NOT YOUR CONTROL</span></div>
+    <div class="status-row"><div><h4>Submitted report evidence after consent</h4><p>Once you have explicitly submitted a report, the evidence package is in the moderation system.</p></div><span class="badge">NOT YOUR CONTROL</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal" style="padding-bottom:100px">
+  <div class="callout warn">
+    <strong>Pre-release caveat</strong>
+    <p>Privacy controls are implemented and under validation. Some controls described here may not yet be fully operational. Behavior may change before public release.</p>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
+</body>
+</html>

@@ -139,6 +139,12 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:storage-kt")
     implementation("io.github.jan-tennert.supabase:functions-kt")
     implementation("io.ktor:ktor-client-okhttp:3.5.1")
+    // Collaboration transport: explicit OkHttp for the Cloudflare Durable Object WebSocket adapter
+    // (ktor-client-okhttp already pulls OkHttp transitively; pinned here for the WebSocket API).
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Collaboration transport: native Ably Pub/Sub Android SDK. Auth is via short-lived scoped
+    // tokens only (authCallback) — never an embedded API key.
+    implementation("io.ably:ably-android:1.2.50")
     implementation("org.jetbrains:markdown:0.7.7")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     // Apache-2.0. Vetted AEAD/HPKE primitives behind Norfold's replaceable CryptoEngine.

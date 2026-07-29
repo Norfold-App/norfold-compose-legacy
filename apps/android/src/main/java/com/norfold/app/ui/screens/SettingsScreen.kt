@@ -63,6 +63,7 @@ import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Phone
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
@@ -362,6 +363,11 @@ private fun ProfileSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val username = state.settings.syncUserName.ifBlank { "owner" }
     val publicName = state.settings.syncPublicName
     val deviceName = state.settings.syncDeviceName
+    val accountEmail by viewModel.cloudAccountEmail.collectAsState()
+    val verifiedPhone by viewModel.verifiedPhone.collectAsState()
+    val phoneVerificationInProgress by viewModel.phoneVerificationInProgress.collectAsState()
+    // Ask Supabase for the current status on entry — the deep-link return never implies verified.
+    LaunchedEffect(Unit) { viewModel.refreshPhoneVerification() }
     // null = no dialog; otherwise which field is being edited
     var editing by remember { mutableStateOf<String?>(null) }
     val profileImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -392,6 +398,30 @@ private fun ProfileSettings(state: DocsUiState, viewModel: DocsViewModel) {
             SettingsRow("Public name", subtitle = publicName.ifBlank { "Shown to other members" }, icon = Icons.Outlined.Person, trailing = { EditPencil() }, onClick = { editing = "public" })
             RowDivider()
             SettingsRow("Device name", subtitle = deviceName.ifBlank { "Shown in sessions and sync" }, icon = Icons.Outlined.PhoneAndroid, trailing = { EditPencil() }, onClick = { editing = "device" })
+        }
+        SettingsGroup(header = "Phone verification") {
+            val phone = verifiedPhone
+            if (phone != null) {
+                SettingsRow(
+                    "Phone number",
+                    subtitle = maskPhoneNumber(phone),
+                    icon = Icons.Outlined.Phone,
+                    trailing = { RowValue("Verified", accent = true) },
+                )
+            } else {
+                val canVerify = accountEmail != null && !phoneVerificationInProgress
+                SettingsRow(
+                    "Verify with Telegram",
+                    subtitle = when {
+                        accountEmail == null -> "Sign in first"
+                        phoneVerificationInProgress -> "Opening Telegram…"
+                        else -> "Confirm your number via @Norfold_auth_bot"
+                    },
+                    icon = Icons.Outlined.Phone,
+                    trailing = { RowChevron() },
+                    onClick = if (canVerify) ({ viewModel.startTelegramVerification() }) else null,
+                )
+            }
         }
         SettingsGroup(header = "Profile customization") {
             SettingsRow("Profile picture", subtitle = "Pick from device", icon = Icons.Outlined.Person, trailing = { EditPencil() }, onClick = { profileImagePicker.launch(arrayOf("image/*")) })
@@ -424,6 +454,16 @@ private fun ProfileSettings(state: DocsUiState, viewModel: DocsViewModel) {
 @Composable
 private fun EditPencil() {
     Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+}
+
+/** Show only the last 4 digits of a verified E.164 number: +1••••••1234. */
+private fun maskPhoneNumber(e164: String): String {
+    val digits = e164.filter { it.isDigit() }
+    if (digits.length <= 4) return e164
+    val last4 = digits.takeLast(4)
+    val hiddenCount = digits.length - 4
+    val prefix = if (e164.startsWith("+")) "+" else ""
+    return prefix + "•".repeat(hiddenCount) + last4
 }
 
 @Composable

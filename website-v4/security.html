@@ -1,0 +1,172 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold security model — E2EE personal chat, workspace security modes, device identity, encrypted relay, and support boundaries."/>
+<title>Security — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
+</head>
+<body>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="security.html" class="active">Security</a>
+      <a href="development.html">Development</a>
+      <a href="support.html">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
+    </div>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Security</span>
+    <h1>Security you can inspect,<br/>not a vibe.</h1>
+    <p>Rather than one giant "secure" label, Norfold separates personal encryption, workspace governance, temporary delivery, private archives, deletion, and support boundaries.</p>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Security modes</span><h2>Two modes. Zero silent downgrades.</h2></div>
+    <p>Personal DMs and groups are designed around end-to-end encryption. Workspaces may use E2EE or Managed mode — and members should see which mode they are in.</p>
+  </div>
+  <div class="mode-grid">
+    <div class="mode-card personal" data-tilt="">
+      <span class="badge green">PERSONAL CHAT</span>
+      <h3>Always E2EE</h3>
+      <p>DMs and personal groups are designed around end-to-end encryption. The server moves what it does not need to understand. No silent downgrade to a weaker mode.</p>
+      <span class="mode-tag">END-TO-END ENCRYPTED</span>
+    </div>
+    <div class="mode-card" data-tilt="">
+      <span class="badge">WORKSPACE</span>
+      <h3>Owner-selected. Disclosed.</h3>
+      <p>Workspace owners choose E2EE or Managed mode. Members should be able to see which mode they are in before participating. The choice is explicit, not hidden.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="mode-tag">E2EE</span>
+        <span class="mode-tag managed">MANAGED</span>
+      </div>
+    </div>
+  </div>
+  <div class="no-downgrade" style="margin-top:10px">
+    <div class="nd-mark">⊘</div>
+    <span>No silent downgrade. The security mode you see is the mode you are in.</span>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Device identity</span><h2>Your account survives a lost cryptographic identity.</h2></div>
+    <p>Same username, profile, contacts, groups, workspaces, roles, and ownership. New cryptographic identity, new security code, and a quiet security-change event — no reinvite chain.</p>
+  </div>
+  <div class="editorial">
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">@</div>
+      <h3>Account continuity</h3>
+      <p>Losing a device or resetting cryptographic identity does not destroy your account. Social graph, workspace membership, and ownership survive the change.</p>
+      <div class="ei-status"><span class="badge green">IMPLEMENTED</span></div>
+    </div>
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">◈</div>
+      <h3>Security-change event</h3>
+      <p>When cryptographic identity changes, a visible security-change event is recorded. Contacts can verify the change rather than silently trusting a new key.</p>
+      <div class="ei-status"><span class="badge amber">VALIDATING</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Relay</span><h2>Relay, not permanent private history.</h2></div>
+    <p>For E2EE chat, Norfold's backend is designed to move encrypted content, coordinate delivery, then purge temporary relay data according to policy.</p>
+  </div>
+  <div class="local-scene">
+    <div class="local-col">
+      <h4>What the relay does</h4>
+      <div class="lc-step"><div class="lc-num">1</div><div><b>Move ciphertext</b>Temporary delivery of encrypted envelopes to authorized recipients.</div></div>
+      <div class="lc-step"><div class="lc-num">2</div><div><b>Coordinate membership</b>Routing metadata, push events, and operational signals.</div></div>
+      <div class="lc-step"><div class="lc-num">3</div><div><b>Purge after delivery</b>Relay data cleared according to policy — not kept as a permanent archive.</div></div>
+    </div>
+    <div class="local-bridge">
+      <div class="lb-dot"></div>
+      <div class="lb-line"></div>
+      <div class="lb-dot"></div>
+    </div>
+    <div class="local-col">
+      <h4>What the relay does not do</h4>
+      <div class="lc-step"><div class="lc-num">✕</div><div><b>Read message content</b>E2EE envelopes are opaque to the server.</div></div>
+      <div class="lc-step"><div class="lc-num">✕</div><div><b>Keep a permanent archive</b>Long-term history lives on your devices and your chosen archive provider.</div></div>
+      <div class="lc-step"><div class="lc-num">✕</div><div><b>Manufacture lost history</b>If relay data is purged and your archive is gone, it cannot be reconstructed.</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Support</span><h2>No support backdoor.</h2></div>
+    <p>If every trusted device, archive, and recovery method is gone, Norfold cannot manufacture the missing private history. Support cannot silently bypass E2EE.</p>
+  </div>
+  <div class="editorial">
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">✓</div>
+      <h3>Support can</h3>
+      <p>Explain supported recovery paths. Help with account procedures. Help with ownership. Process explicit reports.</p>
+      <div class="ei-status"><span class="badge green">DEFINED</span></div>
+    </div>
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">⊘</div>
+      <h3>Support cannot</h3>
+      <p>Manufacture lost encrypted history. Silently bypass E2EE. Request your master key as normal procedure. Secretly browse private chats.</p>
+      <div class="ei-status"><span class="badge">BY DESIGN</span></div>
+    </div>
+  </div>
+  <div style="margin-top:10px">
+    <a class="button ghost" href="support.html">Read full support boundaries →</a>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Reporting</span><h2>Reporting by consent.</h2></div>
+    <p>E2EE evidence is packaged locally only when the reporter deliberately submits it. Reports are not silently collected from private conversations.</p>
+  </div>
+  <div class="editorial">
+    <div class="editorial-item wide" data-tilt="">
+      <div class="ei-icon">⚑</div>
+      <h3>Reporter-initiated only</h3>
+      <p>When a user chooses to report content, the evidence package is assembled on their device and submitted explicitly. The server does not have standing access to E2EE message content for moderation purposes.</p>
+      <div class="ei-status"><span class="badge green">IMPLEMENTED</span></div>
+    </div>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
+</body>
+</html>

@@ -23,6 +23,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         docsViewModel = ViewModelProvider(this)[DocsViewModel::class.java]
         handleAuthDeepLink(intent)
+        docsViewModel.handleTelegramReturn(intent)
         docsViewModel.handleNotificationIntent(intent)
         setContent { NorfoldRoot(docsViewModel) }
     }
@@ -56,7 +57,10 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleAuthDeepLink(intent)
-        if (::docsViewModel.isInitialized) docsViewModel.handleNotificationIntent(intent)
+        if (::docsViewModel.isInitialized) {
+            docsViewModel.handleTelegramReturn(intent)
+            docsViewModel.handleNotificationIntent(intent)
+        }
     }
 
     private fun handleAuthDeepLink(intent: Intent) {

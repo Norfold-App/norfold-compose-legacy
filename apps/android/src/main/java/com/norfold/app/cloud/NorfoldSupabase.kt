@@ -124,6 +124,12 @@ data class TeamInvitation(
     val expiresAt: String,
 )
 
+data class TelegramVerificationStart(
+    val verificationId: String,
+    val telegramUrl: String,
+    val expiresAt: String,
+)
+
 @Serializable
 data class DocumentPresenceState(
     val userId: String,
@@ -785,8 +791,56 @@ object NorfoldSupabase {
             .filter { it.removedAt == null && it.profile != null }
     }
 
-    private fun sha256(value: String): String = sha256Bytes(value.toByteArray(Charsets.UTF_8))
+    /**
+     * Telegram phone verification. Starts a server-side session and returns the t.me deep link
+     * the app opens. The bot token and webhook secret live only in Supabase function secrets —
+     * never on the device. The raw start token is generated server-side and never persisted.
+     */
+    suspend fun startTelegramVerification(): TelegramVerificationStart {
+        ExternalServiceConfig.requireSupabase()
+        require(isSignedIn()) { "Sign in before verifying your phone." }
+        val response = client.functions.invoke(
+            function = "telegram-verification-start",
+            body = buildJsonObject { },
+        )
+        val payload = responseJson.parseToJsonElement(response.bodyAsText()).jsonObject
+        val url = payload["telegramUrl"]?.jsonPrimitive?.contentOrNull
+            ?: error(payload["error"]?.jsonPrimitive?.contentOrNull ?: "Could not start Telegram verification.")
+        return TelegramVerificationStart(
+            verificationId = payload["verificationId"]?.jsonPrimitive?.contentOrNull
+                ?: error("Verification response is missing its id."),
+            telegramUrl = url,
+            expiresAt = payload["expiresAt"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+        )
+    }
 
+    /**
+     * The current verification session status ("PENDING" | "STARTED" | "VERIFIED" | "EXPIRED" |
+     * "CANCELLED"), read straight from the row the caller owns (RLS: self-read only). The app
+     * NEVER treats the return deep link as proof — it always re-reads this before showing verified.
+     */
+    suspend fun telegramVerificationStatus(verificationId: String): String? {
+        ExternalServiceConfig.requireSupabase()
+        if (!isSignedIn()) return null
+        return client.postgrest["telegram_verification_sessions"]
+            .select(Columns.raw("status")) { filter { eq("id", verificationId) } }
+            .decodeList<JsonObject>()
+            .firstOrNull()
+            ?.get("status")?.jsonPrimitive?.contentOrNull
+    }
+
+    /** The caller's verified phone in E.164, or null if none is verified yet. */
+    suspend fun verifiedPhoneE164(): String? {
+        ExternalServiceConfig.requireSupabase()
+        val userId = clientOrNull?.auth?.currentUserOrNull()?.id ?: return null
+        return client.postgrest["account_phone_identities"]
+            .select(Columns.raw("phone_e164")) { filter { eq("user_id", userId) } }
+            .decodeList<JsonObject>()
+            .firstOrNull()
+            ?.get("phone_e164")?.jsonPrimitive?.contentOrNull
+    }
+
+    private fun sha256(value: String): String = sha256Bytes(value.toByteArray(Charsets.UTF_8))
     private fun sha256Bytes(value: ByteArray): String = MessageDigest.getInstance("SHA-256")
         .digest(value)
         .joinToString("") { byte -> "%02x".format(byte) }
