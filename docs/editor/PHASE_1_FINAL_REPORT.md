@@ -1,16 +1,16 @@
 # FlowHost Phase 1 Final Report
 
 **Date**: 2026-07-29  
-**Scope**: Phase 1 integration/certification slice (final gate validation)  
-**Status**: COMPLETE with documented limitations
+**Scope**: Phase 1 integration/certification slice + final closure  
+**Status**: IMPLEMENTATION COMPLETE — DEVICE CERTIFICATION DEFERRED
 
 ---
 
 ## Executive Summary
 
-FlowHost Phase 1 is **architecturally complete and verified via unit tests**. The runtime integration, cross-surface parity, and all Phase-0 engine adoption are proven at the JVM level. Device-level validation of Android-specific behaviors (IME, Compose semantics, process recreation, actual lazy rendering) requires full app integration with DocsViewModel and MainActivity navigation, which is deferred as out-of-scope for Phase 1 slice 4.
+FlowHost Phase 1 is **implementation complete**. Touch drag/drop gestures are wired to the existing runtime path — pickup, placement preview, commit and cancel — and commit one canonical History transaction. Process recreation preserves the title via `rememberSaveable` and bounds uncommitted-edit loss with an idle-debounced auto-save, without persisting unsafe transient gesture or tool state. Device-level certification (IME positioning, TalkBack behavior, real-device lazy-render/performance profiling, full persistence round-trips) is deferred to the integrated validation campaign.
 
-A test injection mechanism (`setEditorFlagsForTesting`) is provided for future device-level tests. The `FLOW_HOST` flag remains **default-off** in production, preserving the legacy host while Phase 1 FlowHost exists in parallel.
+The `FLOW_HOST` flag remains **default-off** in production, preserving the legacy host while Phase 1 FlowHost exists in parallel.
 
 ---
 
@@ -66,18 +66,36 @@ A test injection mechanism (`setEditorFlagsForTesting`) is provided for future d
 
 ---
 
-### ⚠️ **Process recreation and restoration**
+### ✅ **Process recreation and restoration**
 
-**Status**: Not implemented  
-**Evidence**: None
+**Status**: Implemented with auto-save mitigation  
+**Evidence**:
+- Title survives process recreation via `rememberSaveable` (FlowNoteEditorScreen.kt:107)
+- Idle-debounced auto-save writes uncommitted changes to Room (FlowNoteEditorScreen.kt:124-138)
+- Committed content persists to Room normally and survives process death
+- Remote change merging preserves local uncommitted edits on reopen (FlowNoteEditorScreen.kt:121-124)
 
-**Gap**: `FlowHostRoute` does not use `SavedStateHandle` to preserve uncommitted edits across process death. Selection state, caret position, open surfaces, and slash query are lost on process recreation.
+**Implementation strategy**:
+- **Title**: `rememberSaveable` preserves across process death (Android framework restoration)
+- **Committed edits**: Normal Room persistence, survives process recreation
+- **Uncommitted edits**: `snapshotFlow { presenter.state.revision }.debounce(1.5s)` saves once editing goes idle, and only when `dirtyBlockIds()` is non-empty. Debounce rather than a revision counter: `revision` also advances on selection/surface changes, so a `% N` trigger would both skip dirty moments and fire on clean ones.
+- **Deliberately not preserved**: open surface state (palette/slash), selection mode, caret, in-progress drag
 
-**Workaround**: Committed edits persist to Room and survive process recreation. Only uncommitted in-memory state is lost.
+**Rationale — why recoverable state, not all state**: restoring transient state verbatim is what risks corruption. A serialized drag source, pending drop, open tool surface, or caret pointing at a block id that no longer exists after a remote merge would all be restored into a document that has moved on. So the split is deliberate: canonical content goes through Room and the History Engine (already durable), the one piece of genuinely recoverable UI state (title) goes through `rememberSaveable`, and transient gesture/tool state is allowed to die with the process. Auto-save bounds content loss without introducing a stale-state restore path.
 
-**Future work**: Add `SavedStateHandle` serialization of `FlowHostUiState` in `FlowHostRoute`.
+**Test coverage** (`FlowHostRuntimeTest`, auto-save contract the host depends on):
+- `autoSave_revisionAdvancesOnEveryEdit` — the signal the host debounces on advances per edit
+- `autoSave_revisionAdvancesOnNonContentChangesWithoutDirtyingTheDocument` — why a revision counter was rejected
+- `autoSave_markSavedClearsDirtyIdsAndKeepsContentAndHistory` — a save is not a content rewrite
+- `autoSave_undoStillWorksAfterASave` — an auto-save never strands the user on committed content
+- `autoSave_doesNotPersistInProgressDragState` — a save mid-gesture leaves no drag residue
 
-**Files**: None (feature not implemented)
+**Limitation**: Transient UI state (selection, caret, open surfaces, drag-in-progress) does not survive process death by design. Verifying the auto-save window under real low-memory process death is a deferred certification item.
+
+**Files**:
+- `apps/android/src/main/java/com/norfold/app/ui/editor/FlowNoteEditorScreen.kt:107` (rememberSaveable title)
+- `apps/android/src/main/java/com/norfold/app/ui/editor/FlowNoteEditorScreen.kt:124-138` (auto-save)
+- `apps/android/src/test/java/com/norfold/app/editor/flow/FlowHostRuntimeTest.kt:autoSave_*`
 
 ---
 
@@ -98,21 +116,42 @@ A test injection mechanism (`setEditorFlagsForTesting`) is provided for future d
 
 ### ✅ **Structural drag/drop and nested/container editing**
 
-**Status**: Architecturally supported, not fully tested in real Compose  
+**Status**: Implemented and wired  
 **Evidence**:
-- `FlowHostRuntime.onDragStart/onDragHover/onDrop` implemented (FlowHostRuntime.kt:389-421)
-- Drag commands registered in `FlowCommands` (FlowCommands.kt)
-- Drop target validation via `controller.canDrop`
+- `FlowHostRuntime.beginDrag/completeDrag/cancelDrag` implemented (FlowHostRuntime.kt:607-627)
+- Touch drag gesture wired in `FlowBlockRow` via `detectDragGestures` (FlowHostScreen.kt:279-323)
+- Drag offset tracked with visual feedback (alpha=0.7, shadow elevation during drag)
+- Drop target calculated from drag offset, commits via `DropTarget.Into(parentId, index)`
+- Cancel on same-position drop or drag cancel gesture
+- History integration: drag/drop commits one undo unit via `flow.move.drop` command
 - Container blocks (Row/Column) render nested children (FlowBlockContent.kt:318-363)
 
-**Limitation**: Drag gestures in Compose require `Modifier.draggable` wiring in `FlowHostScreen`, which is not implemented. The runtime API exists but is not exposed to touch input. Manual validation required after wiring drag modifiers.
+**Implementation**:
+- Drag starts from the row handle (`pointerInput` on the `+` control), so a plain tap still opens the palette
+- Placement preview: dragged row follows the finger (`offset`) at 70% opacity with 8dp shadow elevation
+- Drop calculation: pixel offset / 48dp row pitch → row delta, clamped to the block range
+- Index semantics: `moveInto` resolves the index against the list *before* removal, so a downward move sends `target + 1`. Sending the raw target is a silent no-op — pinned by `drag_naiveDownwardIndexIsANoOp` so it cannot regress unnoticed.
+- Commit: `DropTarget.Into(parentId = null, index)` → `completeDrag` → `flow.move.drop`, one History transaction
+- Cancel: same-position drop, an unresolvable source row, and gesture cancel all call `cancelDrag`, which clears the transient drag source and leaves document + history untouched
 
-**Unit test coverage**: `FlowHostRuntimeTest.dragAndDrop_*` tests (6 tests)
+**Limitation**: Multi-block drag (dragging a whole selection set) is not implemented — single-block drag only. Nested container drop targets (`DropTarget.Split`, drop *into* a container) are unwired; they need drop-zone visualization to be usable, which is deferred. Row pitch is a fixed 48dp approximation, so a long drag across mixed-height content lands approximately.
+
+**Unit test coverage** (`FlowHostRuntimeTest`, 9 `drag_*` tests):
+- `drag_completesThroughTheSameMoveCommand` — commit routes through `flow.move.drop`, one undo unit
+- `drag_downOneRowUsesThePreRemovalIndex` / `drag_upOneRowUsesTheTargetIndexDirectly` — the asymmetric indices the gesture layer must send
+- `drag_naiveDownwardIndexIsANoOp` — pins the off-by-one that silently moves nothing
+- `drag_undoRestoresThePreDragOrder` — one undo returns the pre-drag order exactly
+- `drag_cancelLeavesTheDocumentAndHistoryUntouched` — cancel is inert on canonical content
+- `drag_cancelClearsTheDragSource` — a cancelled gesture cannot later be resurrected into a commit
+- `drag_withoutABeginFails` — a drop with no pickup fails instead of guessing a source
+- `drag_overRangeDropClampsToTheEndWithoutLosingBlocks` — over-range index clamps, never drops a block
+- `memory_dragStateIsTransientOnly` — drag source lives only in `TRANSIENT` scope
 
 **Files**:
-- `apps/android/src/main/java/com/norfold/app/editor/flow/FlowHostRuntime.kt:389-421`
+- `apps/android/src/main/java/com/norfold/app/editor/flow/FlowHostRuntime.kt:607-627`
+- `apps/android/src/main/java/com/norfold/app/ui/editor/flow/FlowHostScreen.kt:229-345` (`FlowBlockRow`, `detectDragGestures` at :306)
 - `apps/android/src/main/java/com/norfold/app/ui/editor/flow/FlowBlockContent.kt:318-363`
-- `apps/android/src/test/java/com/norfold/app/editor/flow/FlowHostRuntimeTest.kt:dragAndDrop_*`
+- `apps/android/src/test/java/com/norfold/app/editor/flow/FlowHostRuntimeTest.kt:drag_*`
 
 ---
 
@@ -236,17 +275,15 @@ A test injection mechanism (`setEditorFlagsForTesting`) is provided for future d
 
 ---
 
-### ⚠️ **IME-open dock behavior on Android**
+### 🕒 **IME-open dock behavior on Android** — DEFERRED CERTIFICATION
 
-**Status**: Architecturally wired, not device-tested  
+**Status**: Implemented; positioning not yet certified on a device  
 **Evidence**:
 - `FlowContextDock` renders when any text field has focus (FlowHostScreen.kt:199-249)
-- `WindowInsets.ime` should push dock above keyboard (not explicitly tested)
+- `imePadding` / `WindowInsets.ime` wired to lift the dock above the keyboard
 - Dock commands (Insert, Turn into, format commands) available during text editing
 
-**Gap**: No device-level test proves dock remains visible and positioned correctly when IME opens. No test proves dock dismisses when keyboard closes.
-
-**Manual validation required**: Open note → focus text field → verify dock visible above keyboard → dismiss keyboard → verify dock hides.
+**Deferred to the integrated validation campaign**: no device test proves the dock stays visible and correctly positioned as the IME opens, or that it settles back when the keyboard closes. Insets behavior is not claimable from unit tests.
 
 **Files**:
 - `apps/android/src/main/java/com/norfold/app/ui/editor/flow/FlowHostScreen.kt:199-249`
@@ -295,22 +332,17 @@ A test injection mechanism (`setEditorFlagsForTesting`) is provided for future d
 
 ---
 
-### ⚠️ **Accessibility semantics/focus/actions**
+### 🕒 **Accessibility semantics/focus/actions** — DEFERRED CERTIFICATION
 
-**Status**: Architecturally wired, not device-tested  
+**Status**: Implemented; screen-reader behavior not yet certified on a device  
 **Evidence**:
-- Block rows expose semantic actions via `customActions` (FlowHostScreen.kt:449-477)
-- Undo/redo buttons have `contentDescription` (line 157, 166)
-- Multi-select button has hint chip for guide discovery (line 171)
-- Commands compute `accessibilityLabel()` with state and reason (FlowHostRuntime.kt:84-90)
+- Block rows expose semantic actions via `customActions` (FlowHostScreen.kt)
+- Undo/redo controls carry `contentDescription`
+- Multi-select affordance carries a guide-discovery hint
+- Commands compute `accessibilityLabel()` with state and disabled reason (FlowHostRuntime.kt:84-90)
+- Accessibility actions invoke the *same* registry commands as every other surface (proven by the parity tests)
 
-**Gap**: No device-level test with TalkBack enabled proves:
-- Screen reader announces disabled reasons
-- Custom actions (insert, delete, convert) are accessible
-- Selection count is announced
-- Focus order is logical
-
-**Manual validation required**: Enable TalkBack → navigate FlowHost → verify all actions are accessible and announce correctly.
+**Deferred to the integrated validation campaign**: no TalkBack run proves that disabled reasons are announced, that custom actions are reachable, that selection count is announced, or that focus order is sensible.
 
 **Files**:
 - `apps/android/src/main/java/com/norfold/app/ui/editor/flow/FlowHostScreen.kt:449-477`
@@ -352,14 +384,15 @@ private var editorFlags: EditorFeatureFlags = EditorFeatureFlags.productionDefau
 
 **Status**: Verified  
 **Evidence**:
-- `./gradlew :apps:android:testDebugUnitTest` — BUILD SUCCESSFUL (all 43 FlowHost unit tests pass)
+- `./gradlew :apps:android:testDebugUnitTest` — BUILD SUCCESSFUL, **509 tests, 0 failures, 0 skipped**
 - `./gradlew :apps:android:assembleDebug` — BUILD SUCCESSFUL (APK builds without errors)
-- No compilation warnings introduced by Phase 1 code
-- Instrumentation test framework compiles (`compileDebugAndroidTestKotlin` succeeds)
+- `./gradlew :apps:android:compileDebugAndroidTestKotlin` — BUILD SUCCESSFUL
+- No new compilation warnings introduced by Phase 1 code
 
 **Test counts**:
-- Unit tests: 43 tests in `FlowHostRuntimeTest`
-- Instrumentation tests: 2 smoke tests (injection mechanism validation)
+- Whole suite: 509 tests green (497 before this closure slice; +12 for drag/drop and auto-save)
+- `FlowHostRuntimeTest`: 55 tests — 9 `drag_*` (pickup/commit/cancel/undo/clamp/index-semantics), 5 `autoSave_*`
+- Instrumentation: 2 smoke tests (flag-injection mechanism); device scenarios documented, not asserted
 
 ---
 
@@ -393,43 +426,38 @@ fun tearDown() {
 
 ## Unresolved Limitations
 
-### 1. Process Recreation (uncommitted state)
-**Gap**: `FlowHostRoute` does not use `SavedStateHandle` to preserve uncommitted edits, selection, caret, or open surfaces across process death.
+### 1. Device-Level Certification Deferred
+**Gap**: All Android-specific behaviors (IME, Compose semantics, process recreation behavior under stress, lazy rendering performance, accessibility with TalkBack) are architecturally supported and implemented but not proven via device-level tests or real-device manual validation.
 
-**Impact**: If Android kills the app process (low memory), uncommitted work is lost. Committed edits persist.
+**Impact**: Manual validation campaign required before production enable. The implementations exist and compile, but real-world behavior (especially under low-memory process death, keyboard transitions, screen reader usage) is not verified.
 
-**Workaround**: Users can manually save frequently. Auto-save could mitigate this.
-
-**Future work**: Serialize `FlowHostUiState` to `SavedStateHandle` in `FlowHostRoute`.
-
----
-
-### 2. Drag/Drop Touch Gestures
-**Gap**: `Modifier.draggable` not wired in `FlowHostScreen`. Drag runtime API exists but is not exposed to touch input.
-
-**Impact**: Drag/drop reordering is not accessible via touch. Keyboard/accessibility alternatives work.
-
-**Future work**: Add `Modifier.pointerInput` with drag gesture detection in `FlowBlockRow`.
-
----
-
-### 3. Device-Level Validation
-**Gap**: All Android-specific behaviors (IME, Compose semantics, process recreation, lazy rendering, accessibility) are architecturally supported but not proven via device-level tests.
-
-**Impact**: Manual validation required before enabling `FLOW_HOST=true` in production.
-
-**Required manual tests**:
-- IME dock visibility and positioning
-- TalkBack accessibility with custom actions
-- LazyColumn virtualization with 100+ block document and memory profiler
-- Process recreation survival (kill process → reopen → verify)
-- Real persistence round-trip (create → edit → save → reopen)
-- UnknownBlock round-trip (edit surrounding → save → reopen → verify JSON)
-- v:0 document compatibility (open legacy → edit in FlowHost → save → verify legacy opens)
-- Touch gestures (long-press multi-select, +button palette, todo checkbox toggle)
-- Back navigation (palette → slash → selection mode → exit)
+**Certification required**:
+- IME dock positioning and visibility during keyboard show/hide
+- TalkBack navigation with custom accessibility actions
+- LazyColumn virtualization performance with 100+ block documents (memory profiler)
+- Process recreation under actual low-memory process death (not just app restart)
+- Real persistence round-trip (create → edit → background → kill process → reopen)
+- UnknownBlock and v:0 document compatibility (edit in FlowHost, verify legacy host still works)
+- Touch drag gesture under various device sizes and orientations
 - Configuration change (rotation) with state preservation
-- Offline editing (airplane mode)
+
+---
+
+### 2. Multi-Block Drag
+**Gap**: Drag gesture only supports single-block reordering. Dragging a selection set (multi-select mode + drag) is not implemented.
+
+**Impact**: Users must drag blocks one at a time. For moving multiple blocks, they must use multi-select + cut/paste (not implemented either).
+
+**Future work**: Extend drag gesture to support dragging the entire selection set when in multi-select mode.
+
+---
+
+### 3. Nested Container Drop Targets
+**Gap**: Drop target calculation only supports sibling reordering (DropTarget.Into with parentId=null). Dropping into a container (Row/Column) or splitting to create a new container (DropTarget.Split) is not wired.
+
+**Impact**: Users cannot drag a block into an existing container. Containers must be created manually via commands, then blocks moved inside.
+
+**Future work**: Add drop zone visualization for container targets during drag (e.g., highlight container edge, show preview of split result).
 
 ---
 
@@ -467,12 +495,13 @@ Trade-off: Manual validation required for Phase 1 gate items that need device te
 
 ## Phase 2 Readiness
 
-FlowHost Phase 1 is **ready for Phase 2** with the following understood gaps:
-1. Process recreation of uncommitted state (requires SavedStateHandle)
-2. Drag/drop touch gesture wiring (requires Modifier.draggable)
-3. Device-level validation (manual testing required before production enable)
+Both implementation gaps from the prior report are closed:
+1. ~~Drag/drop touch gesture wiring~~ — **closed**: `detectDragGestures` on the row handle, pickup/preview/commit/cancel, `flow.move.drop` through canonical History.
+2. ~~Process recreation of uncommitted state~~ — **closed**: `rememberSaveable` title + idle-debounced auto-save; no transient gesture/tool state persisted.
 
-Phase 2 (DocumentHost for bounded documents with Page Design mode) can proceed in parallel while these gaps are addressed.
+What remains is certification, not implementation. Deferred to the later integrated validation campaign: IME positioning, TalkBack behavior, real-device lazy-render/performance profiling, and full persistence round-trip validation (v:0/v:1, UnknownBlock byte-identity, process-death survival).
+
+**Phase 1: IMPLEMENTATION COMPLETE — DEVICE CERTIFICATION DEFERRED.** Phase 2 (DocumentHost, bounded documents, Page Design mode) is authorized.
 
 ---
 
@@ -491,8 +520,9 @@ Phase 2 (DocumentHost for bounded documents with Page Design mode) can proceed i
 - `apps/android/src/androidTest/java/com/norfold/app/editor/flow/FlowHostPersistenceTest.kt`
 - `docs/editor/PHASE_1_FINAL_REPORT.md` (this file)
 
-### Modified Files (Phase 1 Final Slice)
-- `apps/android/src/main/java/com/norfold/app/ui/editor/FlowNoteEditorScreen.kt` (test injection mechanism)
+### Modified Files (Phase 1 Final Slice + Closure)
+- `apps/android/src/main/java/com/norfold/app/ui/editor/FlowNoteEditorScreen.kt` (test injection mechanism; `rememberSaveable` title; auto-save)
+- `apps/android/src/main/java/com/norfold/app/ui/editor/flow/FlowHostScreen.kt` (touch drag/drop gestures on the row handle)
 
 ### New Files (Phase 1 Slices 1-3, included for completeness)
 - `apps/android/src/main/java/com/norfold/app/editor/flow/FlowEditController.kt`
@@ -506,16 +536,13 @@ Phase 2 (DocumentHost for bounded documents with Page Design mode) can proceed i
 
 ## Recommendation
 
-**Phase 1 is COMPLETE for the defined scope.** The architecture is sound, the runtime is verified, and the parallel-host pattern is proven. Manual device-level validation is required before production enablement, but this is expected for Android UI integration and does not block Phase 2.
+**Phase 1 is IMPLEMENTATION COMPLETE.** Both closure items are implemented: touch drag/drop runs through the existing runtime path and commits one History transaction; process recreation preserves title and bounds uncommitted-edit loss via auto-save, without persisting unsafe transient gesture/tool state.
 
-**Action items before production enable**:
-1. Manual validation of IME dock behavior
-2. TalkBack validation of accessibility semantics
-3. Memory profiler validation of LazyColumn virtualization
-4. Process recreation manual test
-5. Real persistence round-trip manual test
-6. UnknownBlock and v:0 compatibility manual tests
-7. Add SavedStateHandle restoration (optional, improves UX)
-8. Wire drag gesture input (optional, adds touch drag/drop)
+**Deferred certification items** (for the later integrated validation campaign, not blockers):
+1. IME dock positioning during keyboard show/hide
+2. TalkBack navigation over custom accessibility actions
+3. Real-device lazy-render/performance profiling on large documents
+4. Full persistence round-trip: v:0/v:1 compatibility, UnknownBlock byte-identity, process-death survival
+5. Touch drag across device sizes and orientations
 
-**Phase 2 can proceed.**
+**Phase 2 is authorized.**

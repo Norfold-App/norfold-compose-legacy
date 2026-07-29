@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -50,16 +52,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DocumentBlock
+import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.editor.command.CommandSurface
@@ -227,6 +234,7 @@ private fun FlowBlockRow(
     modifier: Modifier = Modifier,
 ) {
     val selected = block.id in state.selectedIds
+    val density = LocalDensity.current
     val callbacks = remember(block.id, state.revision) {
         FlowBlockCallbacks(
             onEdit = { edit ->
@@ -250,8 +258,17 @@ private fun FlowBlockRow(
         )
     }
 
+    // Drag state for reordering blocks
+    var dragOffset by remember { mutableStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
     Row(
         modifier
+            .offset { IntOffset(0, dragOffset.roundToInt()) }
+            .graphicsLayer {
+                alpha = if (isDragging) 0.7f else 1f
+                shadowElevation = if (isDragging) 8f else 0f
+            }
             .clip(RoundedCornerShape(8.dp))
             .background(
                 if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent,
@@ -280,9 +297,53 @@ private fun FlowBlockRow(
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.Top,
     ) {
+        // Drag handle (+ button becomes draggable for block reordering)
         IconButton(
             onClick = { presenter.act { openInsertPalette(block.id) } },
-            modifier = Modifier.width(36.dp),
+            modifier = Modifier
+                .width(36.dp)
+                .pointerInput(block.id) {
+                    detectDragGestures(
+                        onDragStart = {
+                            isDragging = true
+                            presenter.act { beginDrag(block.id) }
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            dragOffset += dragAmount.y
+                        },
+                        onDragEnd = {
+                            val blocks = state.document.blocks
+                            val from = blocks.indexOfFirst { it.id == block.id }
+                            val rowPitchPx = with(density) { FLOW_DRAG_ROW_PITCH.toPx() }
+                            val to = if (from < 0) -1
+                            else (from + (dragOffset / rowPitchPx).roundToInt())
+                                .coerceIn(0, blocks.lastIndex)
+
+                            if (from >= 0 && to != from) {
+                                // `moveInto` resolves the index against the list *before* the block is
+                                // removed, so a downward move needs one extra slot. Sending the raw target
+                                // silently moves nothing (see drag_naiveDownwardIndexIsANoOp).
+                                val dropIndex = if (to > from) to + 1 else to
+                                val result = presenter.act {
+                                    completeDrag(DropTarget.Into(parentId = null, index = dropIndex))
+                                }
+                                if (result is com.norfold.app.editor.command.CommandResult.Failure) {
+                                    onNotice(result.reason)
+                                }
+                            } else {
+                                presenter.act { cancelDrag() }
+                            }
+                            isDragging = false
+                            dragOffset = 0f
+                        },
+                        onDragCancel = {
+                            presenter.act { cancelDrag() }
+                            isDragging = false
+                            dragOffset = 0f
+                        },
+                    )
+                },
         ) {
             Text("+", style = MaterialTheme.typography.titleMedium)
         }
@@ -599,3 +660,9 @@ private fun slashContextOf(block: DocumentBlock): FlowSlashContext = when (block
 /** Comfortable measure for continuous prose; wider windows gain margin, not line length. */
 private val FLOW_CONTENT_MAX_WIDTH = 760.dp
 private val FLOW_PANE_WIDTH = 360.dp
+
+/**
+ * Row pitch the drag gesture divides by to turn a pixel offset into a row delta. An approximation of typical
+ * row height — rows vary, so a long drag across mixed content lands approximately and the user adjusts.
+ */
+private val FLOW_DRAG_ROW_PITCH = 48.dp
