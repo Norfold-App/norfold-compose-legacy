@@ -571,21 +571,21 @@ had accepted anything. Each is fixed below.
 | 3 | Measured drag geometry replaces fixed pitch | PASS | `FlowDragGeometry` (new); `FlowRowBounds.documentIndex` carries the absolute document position; `FlowHostScreen` row `onGloballyPositioned` → `FlowDragState.bounds`, disposed when a row leaves composition; `detectDragGesturesAfterLongPress`; `FlowDragGeometry.edgeScroll` + the `withFrameNanos` loop keyed on `drag.sourceId` | `FlowHostCorrectionTest`: `dragGeometry_resolvesFromMeasuredBoundsNotAFixedPitch`, `_aboveTheMidpointPlacesBefore`, `_belowTheMidpointPlacesAfter`, `_coversTheWholeAxis`, `_clampsPastEitherEnd`, `_marksTheSourcePositionAsANoOp`, `_returnsNullWithNothingToPlaceAgainst`, `_indexCommitsAsARealMoveDownward`, `_indexCommitsAsARealMoveUpward`, `cancelDrag_leavesNoHistoryEntry`; `FlowHostBugfixTest`: `dragGeometry_usesAbsoluteDocumentIndices`, `_sortsRowsByDocumentIndex`, `_edgeScrollReturnsZeroInTheMiddle`, `_edgeScrollRampsNearTheTop`, `_edgeScrollRampsNearTheBottom` | Auto-scroll rate constants (96 px zone, 18 px/frame) are unverified against real finger movement without a device |
 | 4 | No uncontrolled overlap during drag | PASS | `FlowBlockRow` `graphicsLayer`/`zIndex` lift + source placeholder tint; `FlowDropMarker`; haptics on pickup/target-change/drop | Same as item 3 — the marker is drawn from the identical `FlowDropPlacement` the commit uses, so preview and result cannot disagree | Marker rendering itself is visual and unverified without a device |
 | 5 | Multi-select disables ordinary text interaction | PASS | `FlowBlockContext.selectionMode`; `FlowEditableLine` renders static `Text` (no field at all) in selection mode; to-do `Checkbox`, callout expand/collapse `IconButton`, table cell `clickable` and the row's `+` handle (button **and** its drag `pointerInput`) all disabled in selection mode, so no interactive child can steal the row's gesture | `FlowHostCorrectionTest`: `selectionMode_togglingDoesNotDisturbTheCaret`, `_cancelRestoresThePreModeSelectionAndCaret`, `_doneRetainsTheSelection`, `_caretDoesNotCollapseTheSelection`; instrumentation: `selectionMode_textFieldDoesNotTakeFocusOrTheCaret`, `_fieldRejectsInput` | Child-gesture suppression is structural (`enabled = !selectionMode` + early-return from `pointerInput`); that each disabled child genuinely forwards the tap to the row is a Compose fact, unverified without a device |
-| 6 | Inline-literal slash suppression wired from the host | PASS | `FlowInlineText.literalInlineAt` (new); `FlowHostRuntime.slashInputFor` supplies `literalInline` from the post-edit document; `FlowBlockRow.onEdit` calls it | `FlowHostCorrectionTest`: `literalInline_isTrueInsideInlineCode`, `_isTrueInsideInlineMath`, `_isFalseInsideOrdinaryProseSpans`, `_isFalseAtTheStartOfTheLine`, `_readsListItems`, `slashInputFor_carriesTheLiteralInlineFactFromTheDocument`, `slashMenu_staysClosedForASlashInsideInlineCode`, `_opensForASlashInOrdinaryProse` | — |
+| 6 | Slash suppression resolved from the addressed block | PASS | `FlowHostRuntime.slashInputFor` now derives **both** suppression facts from the document: the block-kind context via `findById` on the addressed id (failing closed to `CODE` when the id is gone), and `literalInline` via `FlowInlineText.literalInlineAt`, which traverses inline wrappers recursively. The surface no longer supplies a classification it could get wrong — `slashContextOf` is deleted | `FlowSlashContextTest`: cases A–O (see matrix below), 18 tests; `FlowHostCorrectionTest`: `literalInline_isTrueInsideInlineCode`, `slashInputFor_carriesTheLiteralInlineFactFromTheDocument`, `slashMenu_staysClosedForASlashInsideInlineCode`, `slashMenu_opensForASlashInOrdinaryProse` | Atomic inline nodes other than `CodeInline`/`MathInline` (emoji, tag, mention) keep their previous non-literal treatment |
 | 7 | Table cell establishes complete command context | PASS | `FlowHostRuntime.setTableCursor` now also selects the table and sets the caret; `tableCursor` in `FlowHostUiState`; `FlowTablePreview` highlights from that cursor | `FlowHostCorrectionTest`: `setTableCursor_makesTheTableThePrimaryTarget`, `_makesDirectionalCommandsImmediatelyInvokable`, `_isSurfacedInTheSnapshotForHighlighting`, `_ignoresACellInABlockThatDoesNotExist` | Cell *text* editing remains Phase-4 work (addressing only, as originally scoped) |
 | 8 | Dock/surface overlap with editable content | PASS | `FlowHostScreen` measures the lower-surface stack via `onSizeChanged` and feeds it into `LazyColumn` `contentPadding`; caret-request `LaunchedEffect` scrolls the target above the measured limit | Static: bottom inset is derived from measured height, not a constant. No automated assertion. | **Presentation-only, unverified without a device.** Measured-inset logic is correct by construction but IME/dock positioning across form factors is a certification item |
 | 9 | Bounded compact command surfaces | PASS | `FlowSlashMenu` and `FlowPaletteList` use `LazyColumn` with `heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT)`; tablet pane unbounded | Static: no unbounded `Column` of results remains | Same as item 8 — row-count-on-device is a certification matter |
 | 10 | Large-screen writing measure | PASS | `FlowHostScreen`: the list item is the full-width, `TopCenter`-aligned `Box`; the width cap sits on the *inner* row, so `fillMaxWidth()` no longer defeats `widthIn` | Static: modifier order corrected; cap is no longer on a `fillMaxWidth()` sibling | Visual centering unverified without a device |
 | 11 | Genuinely adaptive phone header | PASS | `FlowTopBar(compact = …)` moves Select into a `DropdownMenu` below `FLOW_COMPACT_WIDTH_DP`; title is the only element taking remaining space | Static: essential nav + Undo/Redo always present; secondary control in a labelled overflow, not a hidden gesture | Large font scale / RTL overflow behavior is a certification item |
 | 12 | Title editing reachable | PASS | `FlowTitleField` — a real `BasicTextField`, re-seeded only when the *owner's* value changes; newlines flattened | Static: `onTitleChange` is now reachable by the user rather than wired to nothing | — |
-| 13 | Persistence/save contract | PASS | `FlowNoteEditorScreen.saveIfDirty` schedules a write when **either** `dirtyBlockIds()` or `deletedBlockIds()` is non-empty, and takes success from a `CompletableDeferred` resolved by the Job's `invokeOnCompletion` handler — which sees the exception — rather than from `join()`, which returns `Unit` whether the write threw or not. `FlowEditController.markSaved(persisted)` overload; presenter no longer persists; `DisposableEffect` flush on exit; both long-lived effects read the title through `rememberUpdatedState` so a rename followed by a later body edit cannot re-persist the stale title | `FlowEditControllerTest`: `markSaved_withSnapshot_keepsLaterEditsDirty`, `markSaved_withSnapshot_clearsWhenNothingChangedSince`; `FlowHostBugfixTest`: `deletionOnlyChange_isPersistedRatherThanSkipped`, `failedWrite_leavesTheBaselineIntactAndIsRetryable` | Durability is only as authoritative as the repository's own write; a Room-level failure surfaces as a retained dirty set (retried on the next tick), not as a user-visible error |
+| 13 | Persistence/save contract | PASS | `FlowSaveCoordinator` (new) is the single authoritative save path for body edits, structural edits, deletions, title renames and the exit flush. It debounces (1.5 s idle), serializes (one write in flight for the document, asserted), retries a failure on bounded backoff (1 s → 30 s cap) **without waiting for another edit**, captures document/title/dirty/deleted/baseline-generation as one snapshot per attempt, and advances the baseline only via `FlowEditController.markSavedIfCurrent` — so a completion that raced a remote merge is discarded rather than applied. It runs on `viewModelScope`, so a pending retry outlives the composition; the title fire-and-forget path is gone | `FlowSaveCoordinatorTest`: cases A–W (see matrix below), 25 tests | Durability is only as authoritative as the repository's own write; a persistent Room failure surfaces as an indefinitely-retried pending state, not as a user-visible error |
 | 14 | Accessibility actions resolve per row | PASS | `FlowHostRuntime.accessibilityActionsFor` / `invokeAccessibilityOn` / `withTemporarySelection`; `FlowBlockRow.semantics` resolves per block | `FlowHostCorrectionTest`: `accessibilityActionsFor_describeTheRequestedRow`, `_restoresTheSelectionItBorrowed`, `_keepsDisabledEntriesWithReasons`, `invokeAccessibilityOn_operatesOnTheRowTheActionsDescribed`, `_isTheSameCommandAsTheDockRoute` | TalkBack traversal itself remains deferred certification; the semantics tree and command context are structurally correct |
 | 15 | Inline formatting visibly preserved | PASS | `FlowInlineText.runsOf` (new); `flowInlineSpans` + `FlowInlineTransformation` in `FlowBlockContent`, reusing the legacy `highlightColor` / `NorfoldFontFamilies` | `FlowHostCorrectionTest`: `runsOf_reportsNestedStylesInPlainTextOffsets`, `_tilesTheWholeTextWithoutGapsOrOverlap`, `_carriesEveryInlineAttributeTheDocumentSupports`, `editText_preservesInlineStylingOutsideTheEditedRange`; instrumentation: `inlineFormatting_isRenderedRatherThanFlattenedAway` | Inline styling is **rendered, not editable** — applying/removing marks is Phase-3 work as originally scoped. This is the least-misleading preserved rendering, not a flatten |
 | 16 | Collapsed/nested content reachable | PASS | `CalloutBlock` branch gains a labelled expand/collapse `IconButton` → `FlowHostRuntime.toggleCollapsed` (through History); **`BlockTree.containerChildren`/`withChildren` widened to `QuoteBlock` and `CalloutBlock`** | `FlowHostCorrectionTest`: `toggleCollapsed_expandsAndCollapsesThroughHistory`, `_ignoresBlocksThatDoNotCollapse`, `nestedContent_isReachableByTheStructuralCommands`; instrumentation: `collapsedCallout_canBeExpandedByTappingTheControl` | — |
 | 17 | No invented non-goals | PASS | Deterministic drag placement, drop feedback, Enter/Backspace, nested/container editing, caret/focus sync and touch selection are all implemented above rather than deferred | The table itself | Deferred items are named as device/OEM certification only |
-| 18 | Correct architecture preserved | PASS | No engine replaced. `FlowHostRuntime`, `CommandRegistry`, `SelectionEngine`, `HistoryEngine`, `SurfaceCoordinator`, `AdaptivePresentationRuntime`, `InteractionMemory`, `FlowEditController`, stable-ID model and default-off `FLOW_HOST` all intact; fixes are at integration seams and presentation | 577 unit tests pass, including the whole pre-existing Phase-0/Phase-1 suite | — |
+| 18 | Correct architecture preserved | PASS | No engine replaced. `FlowHostRuntime`, `CommandRegistry`, `SelectionEngine`, `HistoryEngine`, `SurfaceCoordinator`, `AdaptivePresentationRuntime`, `InteractionMemory`, `FlowEditController`, stable-ID model and default-off `FLOW_HOST` all intact; fixes are at integration seams and presentation | 619 unit tests pass, including the whole pre-existing Phase-0/Phase-1 suite | — |
 | 19 | Repository-scope discipline | PASS | Only FlowHost, its domain seams and directly necessary tests/docs touched | See file list below | — |
-| 20 | Validation | PARTIAL | — | 577 unit tests pass (`testDebugUnitTest`, 0 failures, up from 509 at HEAD 699c746); `assembleDebug` succeeds; `compileDebugAndroidTestKotlin` succeeds. The Todo-typing and drag-index regression tests were each re-run against the pre-fix code and confirmed to fail, so they pin real defects rather than restating current behaviour | **Instrumentation tests were compiled but not executed.** Device testing was explicitly deferred by the owner for the end of the phase programme |
+| 20 | Validation | PARTIAL | — | 619 unit tests pass (`testDebugUnitTest`, 0 failures, up from 509 at HEAD 699c746); `assembleDebug` succeeds; `compileDebugAndroidTestKotlin` succeeds. Six mutations were applied to the fixed code and each was confirmed to break specific tests: reverting the mergeRemote baseline (3 fail), removing automatic retry (6 fail), ignoring the stale-completion epoch (1 fail), dropping title dirtiness (2 fail), reverting recursive literal detection (5 fail), and classifying slash context from the top-level row (4 fail). The Todo-typing and drag-index tests were mutation-verified in the prior pass | **Instrumentation tests were compiled but not executed.** Device testing was explicitly deferred by the owner for the end of the phase programme |
 
 ## Root-cause note: `BlockTree` recursion
 
@@ -642,7 +642,7 @@ New:
 
 ## Build results
 
-- `:apps:android:testDebugUnitTest` — BUILD SUCCESSFUL, **577 tests, 0 failures**
+- `:apps:android:testDebugUnitTest` — BUILD SUCCESSFUL, **619 tests, 0 failures**
 - `:apps:android:assembleDebug` — BUILD SUCCESSFUL
 - `:apps:android:compileDebugAndroidTestKotlin` — BUILD SUCCESSFUL
 
@@ -665,3 +665,171 @@ is implemented and its placement rule is unit-tested, but its *feel* — the 96 
 has not been checked against a real finger.
 
 **Phase 1 implementation gate: satisfied. Device certification: outstanding, by owner instruction.**
+
+---
+
+# Data-safety + nested-context closure (2026-07-30, second pass)
+
+The seven fixes above were accepted. Direct review of the committed implementation then found five further
+defects, all of the same character: code that *looks* safe and is not. They are closed here.
+
+## Root causes
+
+| # | Defect | Root cause | Fix |
+|---|---|---|---|
+| 1 | A failed write was retryable but never retried | The failure left the dirty/deleted baseline intact and relied on "the next tick" — but the only tick was a debounce on `presenter.state.revision`. If the user stopped typing, no revision ever arrived, so the write was never attempted again. "Retryable" is not "will retry" | `FlowSaveCoordinator` re-arms after every failure on bounded backoff (1 s, 2 s, 4 s … capped at 30 s), with no user activity required, and resets the backoff on success |
+| 2 | Title saves bypassed the save contract | `onTitleChange` called `viewModel.updateActiveDocument(...)` directly on every keystroke, fire-and-forget: not debounced, not serialized against a body write, not retried, and its failure unobservable. Title dirtiness was also untracked, because the title lives outside the document the controller diffs | Title editing updates `desiredTitle` and calls `requestSave()`. The coordinator tracks `desiredTitle` vs `persistedTitle` explicitly, so a title-only rename schedules a write even with an empty dirty set — verified against the repository, where `updateNote` writes the title through `dao.updateNoteContent` regardless of `dirtyBlockIds` |
+| 3 | Remote merge marked unsaved local content as persisted | `mergeRemote` set `lastSavedDocument = merged`. The merge result *contains* the local dirty blocks it protected from the remote snapshot, so those blocks went clean without ever having been written — and a process death then lost content the server had never seen | The baseline becomes the accepted **remote** snapshot, which is the only document there is evidence for; the working document stays the merge result. Diffing the two re-derives the protected changes as dirty, leaves untouched remote changes clean, and legitimately clears a dirty block whose content the remote now genuinely carries |
+| 4 | A stale completion could overwrite a newer baseline | Nothing tied a write's result to the baseline it was measured against. A write of the pre-merge snapshot completing after a remote merge baselined that snapshot — which made the remote's own block look like a local edit, so the editor wrote the remote's content back as though the user had typed it | `FlowEditController.baselineGeneration()` is captured in each `FlowSaveRequest`; `markSavedIfCurrent` applies the baseline only if the generation still matches, and declines otherwise. Declining leaves content dirty for the next attempt — one redundant write is far cheaper than one lost edit |
+| 5 | A nested code block was treated as prose | `slashContextOf(block)` was computed in `FlowBlockRow` from the **top-level row's** type. Quotes, callouts and containers render children recursively while reusing the outer row's callbacks, so a `ContainerBlock → CodeBlock` reported `PROSE` and the command menu opened on a `/` the user was typing into code | Authority moved into `FlowHostRuntime.slashInputFor`, which resolves the addressed `blockId` against the document and classifies *that* block. Unknown ids fail closed to `CODE`. The surface has no classification to disagree with |
+| 6 | Wrapped inline literals evaded suppression | `literalInlineAt` asked whether the *top-level* node was `CodeInline`/`MathInline`. The schema permits wrappers, so ``**`a/b`**`` is `BoldInline(CodeInline)` — the check saw only the bold and called it prose | The traversal recurses through stylistic wrappers (bold, italic, underline, strike, highlight, font family/size, link) while keeping flattened plain-text offsets, so a literal payload is literal at any depth. Wrapped *plain text* stays prose |
+
+## Persistence regression matrix
+
+All in `FlowSaveCoordinatorTest`.
+
+| Case | Behavior | Result | Test |
+|---|---|---|---|
+| A | ordinary body edit succeeds | PASS | `caseA_ordinaryBodyEditIsPersisted` |
+| B | deletion-only change succeeds | PASS | `caseB_deletionOnlyChangeIsPersisted` |
+| C | title-only rename succeeds | PASS | `caseC_titleOnlyRenameIsPersisted` |
+| D | title + body succeeds | PASS | `caseD_titleAndBodyPersistTogether` |
+| E | title + deletion succeeds | PASS | `caseE_titleAndDeletionPersistTogether` |
+| F | first write fails → retries with no further edit | PASS | `caseF_firstFailureRetriesWithoutAnotherEdit` |
+| G | repeated failures back off rather than spin | PASS | `caseG_repeatedFailuresBackOffRatherThanSpin`, `caseG_backoffIsCapped` |
+| H | success resets retry/backoff | PASS | `caseH_successResetsTheBackoff` |
+| I | failure keeps body dirty | PASS | `caseI_J_K_failureKeepsBodyDeletionAndTitleDirty` |
+| J | failure keeps deletion pending | PASS | `caseI_J_K_failureKeepsBodyDeletionAndTitleDirty` |
+| K | failure keeps title dirty | PASS | `caseI_J_K_failureKeepsBodyDeletionAndTitleDirty` |
+| L | edit during save stays dirty after old snapshot succeeds | PASS | `caseL_editDuringSaveStaysDirtyAfterTheOldSnapshotSucceeds` |
+| M | rename during save stays pending after old title succeeds | PASS | `caseM_renameDuringSaveStaysPendingAfterTheOldTitleSucceeds` |
+| N | deletion during save remains pending | PASS | `caseN_deletionDuringSaveRemainsPending` |
+| O | old completion after remote merge cannot overwrite newer baseline | PASS | `caseO_staleCompletionAfterRemoteMergeCannotRewriteRemoteContent` |
+| P | clean remote block update does not become local dirty | PASS | `caseP_cleanRemoteUpdateDoesNotBecomeALocalEdit` |
+| Q | local dirty block survives remote merge and stays dirty | PASS | `caseQ_localDirtyBlockSurvivesRemoteMergeAndRemainsDirty` |
+| R | local deletion survives remote merge and stays pending | PASS | `caseR_localDeletionSurvivesRemoteMergeAndRemainsPending` |
+| S | remote snapshot matching local dirty content clears it | PASS | `caseS_remoteSnapshotMatchingLocalDirtyContentClearsThatDirtyState` |
+| T | no more than one persistence call in flight | PASS | `caseT_onlyOneWriteIsEverInFlight` |
+| U | exit during debounce requests immediate flush | PASS | `caseU_exitDuringDebounceRequestsAnImmediateFlush` |
+| V | exit during retry does not mark unsaved data saved | PASS | `caseV_exitDuringRetryDoesNotMarkUnsavedDataSaved` |
+| W | repository failure is observed, not inferred from `join()` | PASS | `caseW_repositoryFailureIsObservedNotInferred` |
+| 5.9 | remote echo of our own write does not loop | PASS | `remoteEchoOfOurOwnWriteDoesNotLoop` |
+| — | loop drains pending work then exits after close | PASS | `loopDrainsPendingWorkThenExitsAfterClose` |
+
+## Slash regression matrix
+
+All in `FlowSlashContextTest`.
+
+| Case | Behavior | Result | Test |
+|---|---|---|---|
+| A | Paragraph `/foo` → allowed | PASS | `caseA_paragraphAllowsTheResolver` |
+| B | top-level CodeBlock → suppressed | PASS | `caseB_topLevelCodeBlockSuppresses` |
+| C | Container → CodeBlock → suppressed | PASS | `caseC_containerNestedCodeBlockSuppresses` |
+| D | Callout → CodeBlock → suppressed | PASS | `caseD_calloutNestedCodeBlockSuppresses` |
+| E | Quote → CodeBlock → suppressed | PASS | `caseE_quoteNestedCodeBlockSuppresses` |
+| F | Container → Paragraph → allowed | PASS | `caseF_containerNestedParagraphAllows` |
+| G | Callout → Paragraph → allowed | PASS | `caseG_calloutNestedParagraphAllows` |
+| H | Quote → Paragraph → allowed | PASS | `caseH_quoteNestedParagraphAllows` |
+| I | `CodeInline` → suppressed | PASS | `caseI_bareCodeInlineSuppresses` |
+| J | Bold → `CodeInline` → suppressed | PASS | `caseJ_boldWrappedCodeInlineSuppresses` |
+| K | Link → Italic → `CodeInline` → suppressed | PASS | `caseK_linkItalicWrappedCodeInlineSuppresses` |
+| L | Bold → `MathInline` → suppressed | PASS | `caseL_boldWrappedMathInlineSuppresses` |
+| M | Bold → `InlineText` → allowed | PASS | `caseM_boldWrappedPlainTextRemainsProse` |
+| N | URL / path / date / fraction suppression | PASS | `caseN_urlPathDateAndFractionRemainSuppressed` |
+| O | `//` behavior | PASS | `caseO_doubledSlashRemainsSuppressed` |
+| — | unknown block id fails closed | PASS | `unknownBlockIdFailsClosed` |
+| — | boundary offsets around a literal span | PASS | `literalBoundaries_areExactAtEveryProbe` |
+| — | wrapped literal suppresses the resolver end to end | PASS | `wrappedCodeInlineSuppressesTheResolverEndToEnd` |
+
+## Mutation proof
+
+Each fix was reverted in place and the suite re-run, to prove the tests detect the defect rather than restate
+current behavior. No mutation was committed.
+
+| Mutation | Tests that failed |
+|---|---|
+| `mergeRemote` baselines the merged working document again | 3 — cases O, Q, S |
+| failure returns instead of scheduling a retry | 6 — cases F, G, H, I/J/K, V, W |
+| completion baselines unconditionally (no epoch check) | 1 — case O |
+| `hasPendingWork` ignores title dirtiness | 2 — cases C, M |
+| `literalInlineAt` checks only the top-level node | 5 — cases J, K, L, boundary, end-to-end |
+| slash context classified from the top-level row | 4 — cases C, D, E, fail-closed |
+
+The first draft of case O asserted only final convergence, which held with *and* without the epoch guard — the
+mutation run caught that the test was too weak, and it was rewritten to assert the dirty set left by the stale
+completion, where the harm actually shows.
+
+## Race safety
+
+| Scenario | Behavior |
+|---|---|
+| edit during save | State becomes `DIRTY_WHILE_SAVING`. The completion baselines only its own snapshot, so the newer edit stays dirty; the loop continues rather than returning, and writes it immediately. |
+| title during save | Identical. `persistedTitle` advances to the *request's* title, not the current one, so a rename made mid-write stays pending. |
+| delete during save | Identical; `deletedBlockIds` is re-read per attempt. |
+| failure then idle | Backoff timer fires the next attempt. No user activity required — this is the defect that was fixed. |
+| repeated failure | 1 s → 2 s → 4 s … capped at 30 s, one attempt at a time, no coroutine per attempt. |
+| remote during save | The merge advances the baseline generation. The in-flight write is not cancelled. |
+| stale completion after remote | `markSavedIfCurrent` declines, content stays dirty, the loop reconciles against the current baseline. |
+| remote echo of our own write | `mergeRemote` skips baselining when the remote snapshot already equals the baseline, so an echo neither churns the generation nor invalidates an in-flight write, and cannot start a save/merge/save cycle. |
+| screen disposal during pending work | `flush()` skips the debounce and marks the loop to close *after* draining. The loop is on `viewModelScope`, so retries continue after the composable is gone; once everything pending is accepted it exits, leaving no parked coroutine per note. |
+
+## Deliberate design notes
+
+- **`NonCancellable` removed.** It was papering over ownership: the retry lifecycle now belongs to
+  `viewModelScope`, which is the scope that genuinely outlives the composition, so nothing needs to be made
+  uncancellable to survive teardown.
+- **`markSaved(document)` retained** for the non-racing paths (tests, initial bind); `markSavedIfCurrent` is
+  what the coordinator uses.
+- **`mergeRemote` return value narrowed** to "the working document changed" — the baseline may advance without
+  it, which is what lets a remote snapshot matching local content clear that dirty state.
+- **One assertion, not a mutex.** Serialization is structural (one loop, one sequential `await`), but
+  `check(!writing)` makes a future refactor that breaks it fail loudly rather than silently reorder baselines.
+
+## Test results
+
+- Targeted: `FlowSaveCoordinatorTest` 25, `FlowSlashContextTest` 18 — all pass
+- Full unit suite: `:apps:android:testDebugUnitTest` — **619 tests, 0 failures** (up from 577)
+- `:apps:android:assembleDebug` — BUILD SUCCESSFUL
+- `:apps:android:compileDebugAndroidTestKotlin` — BUILD SUCCESSFUL (compiled, **not executed**)
+
+## Files changed
+
+| File | Change |
+|---|---|
+| `editor/flow/FlowSaveCoordinator.kt` | **New.** The persistence state machine, `FlowSaveRequest`, `FlowPersister` |
+| `editor/flow/FlowEditController.kt` | `baselineGeneration()`, `markSavedIfCurrent`, `setBaseline`; `mergeRemote` baselines the remote snapshot |
+| `editor/flow/FlowHostRuntime.kt` | `slashInputFor` derives block context from the addressed block; `context` parameter removed |
+| `editor/flow/FlowInlineText.kt` | `literalInlineAt` recurses through inline wrappers; `styleChildren` helper |
+| `ui/editor/FlowNoteEditorScreen.kt` | Wires the coordinator on `viewModelScope`; title routes through it; `saveIfDirty`, `NonCancellable` and the debounce effect removed |
+| `ui/editor/flow/FlowHostScreen.kt` | `slashContextOf` deleted; four now-dead imports removed |
+| `test/…/FlowSaveCoordinatorTest.kt` | **New.** Persistence matrix A–W |
+| `test/…/FlowSlashContextTest.kt` | **New.** Slash matrix A–O |
+| `test/…/FlowHostCorrectionTest.kt` | Three `slashInputFor` call sites updated to the new signature |
+| `docs/editor/PHASE_1_FINAL_REPORT.md` | This section; rows 6, 13, 18, 20 updated; counts 577 → 619 |
+
+## Scope check
+
+- Phase 2 not started; no `DocumentHost`, no Scene model, no Page Control
+- Collaboration untouched; no CRDT, no merge engine, no room partitioning, no transport changes
+- No Supabase / Ably / Cloudflare / Telegram / website / roadmap changes
+- No `BlockDocument` schema version bump; no Room schema change
+- `FLOW_HOST` still default-off
+- No AI attribution anywhere in the diff or the commits
+
+## Status
+
+| Gate | State |
+|---|---|
+| Phase 1 implementation | COMPLETE |
+| Static / data-safety audit | PASS |
+| Nested-context audit | PASS |
+| Device certification | DEFERRED (owner instruction) |
+| `FLOW_HOST` | DEFAULT OFF |
+
+Every regression-matrix case passes. A failed save retries itself; title saves go through the coordinator;
+`mergeRemote` cannot launder unsaved local content into the baseline; a stale completion cannot overwrite a
+newer baseline; only one write races for a document; a nested code block is never prose; and a wrapped
+`CodeInline`/`MathInline` never escapes suppression.
+
+What remains outstanding is unchanged and is device work, not logic: drag feel, IME animation, TalkBack
+navigation, large font / RTL, and performance profiling.
