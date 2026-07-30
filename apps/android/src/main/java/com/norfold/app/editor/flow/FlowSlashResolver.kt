@@ -2,8 +2,10 @@ package com.norfold.app.editor.flow
 
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DocumentBlock
+import com.norfold.app.domain.findById
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
+import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.editor.command.CommandRegistry
 import com.norfold.app.editor.command.CommandResult
 import com.norfold.app.editor.command.CommandStatus
@@ -159,10 +161,23 @@ class FlowSlashResolver(
      * [FlowEditController.transaction] exists: undoing a slash invocation must restore the text the user
      * typed, not leave the document with the trigger silently eaten.
      *
+     * The erase dispatches on the addressed block, not on whether an item id happens to be present. A to-do
+     * list holds `TodoItem` and a bullet/numbered list holds `ListItem`; they share no supertype, so
+     * `editListItem` finds nothing in a to-do and returns without editing. The typed `/query` was then left in
+     * the text while the command still ran — and being inside the composite, the undo step recorded a document
+     * the user never saw. Asking the block which vocabulary it speaks is the only thing that gets both right.
+     *
      * @param blockId the block whose text carries the query.
      */
     fun accept(blockId: String, input: FlowSlashInput, command: EditorCommand): CommandResult {
         val query = detect(input) ?: return CommandResult.Failure("No slash query at the caret")
+        val block = scope.controller.document().findById(blockId)
+            ?: return CommandResult.Failure("The block being edited no longer exists")
+        if (input.itemId != null && FlowInlineText.itemsOf(block)?.any { it.id == input.itemId } != true) {
+            // The item is gone (a remote merge, an undo). Running the command would leave the trigger typed
+            // into text that no longer exists, so fail before opening a transaction.
+            return CommandResult.Failure("The item being edited no longer exists")
+        }
         val status = command.status(scope.commandContext(CommandSurface.SLASH))
         if (!status.isInvokable) {
             return CommandResult.Failure(status.reason ?: "'${command.label}' is not available here")
@@ -170,10 +185,10 @@ class FlowSlashResolver(
         val cleaned = input.text.removeRange(query.triggerOffset, query.endOffset.coerceAtMost(input.text.length))
         return scope.controller.transaction(command.label) {
             scope.controller.mutate("Remove slash query") { session ->
-                if (input.itemId != null) {
-                    session.editListItem(blockId, input.itemId, input.text, cleaned)
-                } else {
-                    session.editText(blockId, input.text, cleaned)
+                when {
+                    input.itemId == null -> session.editText(blockId, input.text, cleaned)
+                    block is TodoListBlock -> session.editTodoItem(blockId, input.itemId, input.text, cleaned)
+                    else -> session.editListItem(blockId, input.itemId, input.text, cleaned)
                 }
             }
             registry.execute(command.id, scope.commandContext(CommandSurface.SLASH))
