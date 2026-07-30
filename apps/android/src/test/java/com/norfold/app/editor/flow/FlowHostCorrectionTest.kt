@@ -351,10 +351,18 @@ class FlowHostCorrectionTest {
 
     private fun rows(vararg heights: Pair<String, Float>): List<FlowRowBounds> {
         var y = 0f
-        return heights.map { (id, height) ->
-            FlowRowBounds(id, y, y + height).also { y += height }
+        return heights.mapIndexed { index, (id, height) ->
+            FlowRowBounds(id, documentIndex = index, top = y, bottom = y + height).also { y += height }
         }
     }
+
+    /**
+     * Placement is resolved against absolute document indices, so these tests address the source the way the
+     * screen does — by id — and convert here rather than hard-coding ordinals that would silently stop matching
+     * the rows they refer to.
+     */
+    private fun List<FlowRowBounds>.indexOfId(blockId: String): Int =
+        indexOfFirst { it.blockId == blockId }
 
     /**
      * The defect this replaces divided the drag distance by a fixed 48dp pitch. With mixed row heights that
@@ -365,7 +373,7 @@ class FlowHostCorrectionTest {
         val measured = rows("a" to 40f, "b" to 300f, "c" to 40f)
         // Pointer 200px down from the top of a 40px row: a 48dp-pitch guess computes four rows of travel; the
         // real geometry says this is still inside row "b".
-        val placement = FlowDragGeometry.placementFor(measured, sourceId = "a", pointerY = 200f)
+        val placement = FlowDragGeometry.placementFor(measured, measured.indexOfId("a"), pointerY = 200f)
         assertNotNull(placement)
         assertEquals("b", placement!!.referenceId)
     }
@@ -373,7 +381,7 @@ class FlowHostCorrectionTest {
     @Test
     fun dragGeometry_aboveTheMidpointPlacesBefore() {
         val measured = rows("a" to 100f, "b" to 100f, "c" to 100f)
-        val placement = FlowDragGeometry.placementFor(measured, sourceId = "c", pointerY = 120f)!!
+        val placement = FlowDragGeometry.placementFor(measured, measured.indexOfId("c"), pointerY = 120f)!!
         assertEquals(FlowDropEdge.BEFORE, placement.edge)
         assertEquals(1, placement.index)
         assertEquals(100f, placement.markerY, 0.01f)
@@ -382,7 +390,7 @@ class FlowHostCorrectionTest {
     @Test
     fun dragGeometry_belowTheMidpointPlacesAfter() {
         val measured = rows("a" to 100f, "b" to 100f, "c" to 100f)
-        val placement = FlowDragGeometry.placementFor(measured, sourceId = "a", pointerY = 180f)!!
+        val placement = FlowDragGeometry.placementFor(measured, measured.indexOfId("a"), pointerY = 180f)!!
         assertEquals(FlowDropEdge.AFTER, placement.edge)
         assertEquals(2, placement.index)
         assertEquals(200f, placement.markerY, 0.01f)
@@ -393,29 +401,29 @@ class FlowHostCorrectionTest {
     fun dragGeometry_coversTheWholeAxis() {
         val measured = rows("a" to 50f, "b" to 50f, "c" to 50f)
         (-40..200 step 5).forEach { y ->
-            assertNotNull("No placement at y=$y", FlowDragGeometry.placementFor(measured, "b", y.toFloat()))
+            assertNotNull("No placement at y=$y", FlowDragGeometry.placementFor(measured, measured.indexOfId("b"), y.toFloat()))
         }
     }
 
     @Test
     fun dragGeometry_clampsPastEitherEnd() {
         val measured = rows("a" to 50f, "b" to 50f)
-        assertEquals(0, FlowDragGeometry.placementFor(measured, "b", -500f)!!.index)
-        assertEquals(2, FlowDragGeometry.placementFor(measured, "a", 5000f)!!.index)
+        assertEquals(0, FlowDragGeometry.placementFor(measured, measured.indexOfId("b"), -500f)!!.index)
+        assertEquals(2, FlowDragGeometry.placementFor(measured, measured.indexOfId("a"), 5000f)!!.index)
     }
 
     /** Either boundary touching the dragged block is its own position: a no-op, and marked as one. */
     @Test
     fun dragGeometry_marksTheSourcePositionAsANoOp() {
         val measured = rows("a" to 100f, "b" to 100f, "c" to 100f)
-        assertTrue(FlowDragGeometry.placementFor(measured, "b", 120f)!!.isNoOp)
-        assertTrue(FlowDragGeometry.placementFor(measured, "b", 180f)!!.isNoOp)
-        assertFalse(FlowDragGeometry.placementFor(measured, "b", 20f)!!.isNoOp)
+        assertTrue(FlowDragGeometry.placementFor(measured, measured.indexOfId("b"), 120f)!!.isNoOp)
+        assertTrue(FlowDragGeometry.placementFor(measured, measured.indexOfId("b"), 180f)!!.isNoOp)
+        assertFalse(FlowDragGeometry.placementFor(measured, measured.indexOfId("b"), 20f)!!.isNoOp)
     }
 
     @Test
     fun dragGeometry_returnsNullWithNothingToPlaceAgainst() {
-        assertNull(FlowDragGeometry.placementFor(emptyList(), "a", 10f))
+        assertNull(FlowDragGeometry.placementFor(emptyList(), 0, 10f))
     }
 
     /**
@@ -427,7 +435,7 @@ class FlowHostCorrectionTest {
     fun dragGeometry_indexCommitsAsARealMoveDownward() {
         val runtime = runtimeOf(paragraphs("a", "b", "c"))
         val measured = rows("p0" to 100f, "p1" to 100f, "p2" to 100f)
-        val placement = FlowDragGeometry.placementFor(measured, "p0", 280f)!!
+        val placement = FlowDragGeometry.placementFor(measured, measured.indexOfId("p0"), 280f)!!
 
         runtime.beginDrag("p0")
         runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(parentId = null, index = placement.index))
@@ -442,7 +450,7 @@ class FlowHostCorrectionTest {
     fun dragGeometry_indexCommitsAsARealMoveUpward() {
         val runtime = runtimeOf(paragraphs("a", "b", "c"))
         val measured = rows("p0" to 100f, "p1" to 100f, "p2" to 100f)
-        val placement = FlowDragGeometry.placementFor(measured, "p2", 20f)!!
+        val placement = FlowDragGeometry.placementFor(measured, measured.indexOfId("p2"), 20f)!!
 
         runtime.beginDrag("p2")
         runtime.completeDrag(com.norfold.app.domain.DropTarget.Into(parentId = null, index = placement.index))
