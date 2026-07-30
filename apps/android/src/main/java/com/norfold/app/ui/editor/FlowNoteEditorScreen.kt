@@ -1,6 +1,7 @@
 package com.norfold.app.ui.editor
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -11,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.flags.EditorFeatureFlags
@@ -81,10 +83,17 @@ fun FlowNoteEditorScreen(
  * The controller derives dirty/deleted block ids by diffing against the last-saved document, which is exactly
  * the shape the repository writes (one Room row per top-level block), so saving needs no bookkeeping here.
  *
- * Process recreation: committed content is already durable in Room, the title survives via `rememberSaveable`,
- * and the idle auto-save below bounds how much uncommitted work a process death can take. Transient state
- * (open surfaces, selection, caret, in-progress drag) is deliberately *not* restored — reviving a drag source
- * or a caret pointing at a block id that a remote merge has since removed is how you corrupt canonical content.
+ * **The save contract.** `updateActiveDocument` launches a coroutine and returns immediately, so calling it is
+ * a *request* to persist, not proof of persistence. Only one place saves — the debounced effect below — and it
+ * clears the dirty set strictly after that request has completed without throwing. Saving from the presenter
+ * callback as well would fire on every keystroke, which both defeats the debounce and clears dirty state
+ * before Room has accepted anything: a process death in that window would treat unsaved work as durable.
+ * A failed save leaves the dirty ids intact, so the next tick retries them rather than losing them.
+ *
+ * Process recreation: accepted content is durable in Room, the title survives via `rememberSaveable`, and the
+ * idle auto-save bounds how much uncommitted work a process death can take. Transient state (open surfaces,
+ * selection, caret, in-progress drag) is deliberately *not* restored — reviving a drag source or a caret
+ * pointing at a block id that a remote merge has since removed is how you corrupt canonical content.
  */
 @OptIn(FlowPreview::class)
 @Composable
@@ -116,29 +125,31 @@ private fun FlowHostRoute(
         )
     }
 
-    val presenter = rememberFlowHostPresenter(runtime) { document ->
-        viewModel.updateActiveDocument(owner, title, document, runtime.controller.dirtyBlockIds())
-        runtime.controller.markSaved()
-    }
+    // The presenter republishes the snapshot; it deliberately does not persist. See the save contract above.
+    val presenter = rememberFlowHostPresenter(runtime) { }
 
     // A remote save arrived: converge block-safely, preserving anything edited locally since.
     LaunchedEffect(active.updatedAt) {
         if (runtime.controller.mergeRemote(active.document)) presenter.refresh()
     }
 
-    // Auto-save bounds how much uncommitted work a process death can take. Debounced on an idle gap rather
-    // than counting revisions: `revision` also advances for selection/surface changes, so a counter would
-    // both skip dirty moments and fire on clean ones. Saving only when dirty keeps this a no-op while idle.
+    // Debounced on an idle gap rather than counting revisions: `revision` also advances for selection and
+    // surface changes, so a counter would both skip dirty moments and fire on clean ones.
     LaunchedEffect(owner.documentId) {
         snapshotFlow { presenter.state.revision }
             .debounce(AUTO_SAVE_IDLE_MS)
-            .collect {
-                val dirtyIds = runtime.controller.dirtyBlockIds()
-                if (dirtyIds.isNotEmpty()) {
-                    viewModel.updateActiveDocument(owner, title, runtime.controller.document(), dirtyIds)
-                    runtime.controller.markSaved()
-                }
+            .collect { saveIfDirty(viewModel, owner, title, runtime) }
+    }
+
+    // Leaving the editor must not drop work still inside the debounce window. Runs on the ViewModel's scope
+    // via the same request path, so a save in flight when this composable goes away still completes.
+    DisposableEffect(owner.documentId) {
+        onDispose {
+            val dirtyIds = runtime.controller.dirtyBlockIds()
+            if (dirtyIds.isNotEmpty()) {
+                viewModel.updateActiveDocument(owner, title, runtime.controller.document(), dirtyIds)
             }
+        }
     }
 
     FlowHostScreen(
@@ -152,6 +163,26 @@ private fun FlowHostRoute(
         onExit = viewModel::handleBack,
         modifier = modifier,
     )
+}
+
+/**
+ * Persists the document if anything is dirty, and clears the dirty set only once persistence has accepted it.
+ *
+ * The ids are captured *before* awaiting, so edits made while the write is in flight stay dirty and are picked
+ * up by the next tick instead of being silently marked saved along with it.
+ */
+private suspend fun saveIfDirty(
+    viewModel: DocsViewModel,
+    owner: DocumentOwner,
+    title: String,
+    runtime: FlowHostRuntime,
+) {
+    val dirtyIds = runtime.controller.dirtyBlockIds()
+    if (dirtyIds.isEmpty()) return
+    val document = runtime.controller.document()
+    // A failure leaves the dirty state untouched, so the work is retried rather than lost.
+    val saved = runCatching { viewModel.updateActiveDocument(owner, title, document, dirtyIds).join() }
+    if (saved.isSuccess) runtime.controller.markSaved(document)
 }
 
 /** Idle gap after the last edit before an auto-save fires, bounding what a process death can take. */
