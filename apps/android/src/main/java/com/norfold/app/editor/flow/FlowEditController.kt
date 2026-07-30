@@ -9,6 +9,7 @@ import com.norfold.app.editor.history.EditWorkspace
 import com.norfold.app.editor.history.HistoryEngine
 import com.norfold.app.editor.history.HistoryListener
 import com.norfold.app.editor.history.InMemoryEditWorkspace
+import com.norfold.app.editor.history.PersistableEditController
 
 /**
  * The authoritative edit controller for one Flow note (roadmap Phase 1 D1/D9; spec §13).
@@ -34,11 +35,11 @@ import com.norfold.app.editor.history.InMemoryEditWorkspace
  * persistence, or collaboration dependency — the host wires those in.
  */
 class FlowEditController(
-    val target: EditTarget,
+    override val target: EditTarget,
     initialDocument: BlockDocument,
     historyListener: HistoryListener? = null,
     private val nanoTime: () -> Long = System::nanoTime,
-) {
+) : PersistableEditController {
     private val workspace: EditWorkspace =
         InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
 
@@ -64,7 +65,7 @@ class FlowEditController(
     private var batchBefore: BlockDocument? = null
 
     /** The live, authoritative document. */
-    fun document(): BlockDocument = workspace.documentOf(target)
+    override fun document(): BlockDocument = workspace.documentOf(target)
 
     fun canUndo(): Boolean = history.canUndo()
     fun canRedo(): Boolean = history.canRedo()
@@ -191,22 +192,23 @@ class FlowEditController(
      * Top-level block ids whose content is new or changed since the last save. The repository also
      * deletes rows for ids in [deletedBlockIds], so removals are not listed here (§17.1).
      */
-    fun dirtyBlockIds(): Set<String> = FlowDocumentDiff.dirtyTopLevelIds(lastSavedDocument, document())
+    override fun dirtyBlockIds(): Set<String> =
+        FlowDocumentDiff.dirtyTopLevelIds(lastSavedDocument, document())
 
     /** Top-level block ids present at last save but gone now — their Room rows must be deleted. */
-    fun deletedBlockIds(): Set<String> {
+    override fun deletedBlockIds(): Set<String> {
         val current = document().blocks.mapTo(HashSet()) { it.id }
         return lastSavedDocument.blocks.mapNotNullTo(linkedSetOf()) { it.id.takeIf { id -> id !in current } }
     }
 
-    fun hasUnsavedChanges(): Boolean = document() != lastSavedDocument
+    override fun hasUnsavedChanges(): Boolean = document() != lastSavedDocument
 
     /**
      * The current baseline generation. A save attempt reads this before starting and hands it back to
      * [markSavedIfCurrent] on success, which is how a completion that raced a remote merge is recognised as
      * describing a baseline that no longer exists.
      */
-    fun baselineGeneration(): Long = baselineGeneration
+    override fun baselineGeneration(): Long = baselineGeneration
 
     /** Marks the live document as persisted; resets the dirty/deleted baseline. */
     fun markSaved() {
@@ -235,7 +237,7 @@ class FlowEditController(
      * dirty, so the next attempt reconciles against the current baseline — one redundant write is a far cheaper
      * outcome than losing an edit.
      */
-    fun markSavedIfCurrent(persisted: BlockDocument, expectedGeneration: Long): Boolean {
+    override fun markSavedIfCurrent(persisted: BlockDocument, expectedGeneration: Long): Boolean {
         if (expectedGeneration != baselineGeneration) return false
         setBaseline(persisted)
         return true

@@ -1,6 +1,7 @@
 package com.norfold.app.editor.flow
 
 import com.norfold.app.domain.BlockDocument
+import com.norfold.app.editor.history.PersistableEditController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -68,7 +69,7 @@ fun interface FlowPersister {
  * virtual clock; no Compose, no Android, no repository knowledge.
  */
 class FlowSaveCoordinator(
-    private val controller: FlowEditController,
+    private val controller: PersistableEditController,
     private val persister: FlowPersister,
     private val debounceMillis: Long = DEFAULT_DEBOUNCE_MS,
     private val delayFor: suspend (Long) -> Unit = { delay(it) },

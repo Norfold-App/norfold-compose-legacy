@@ -106,6 +106,7 @@ import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.domain.VaultCrypto
 import com.norfold.app.editor.flow.FlowSessionRegistry
+import com.norfold.app.editor.document.DocumentSessionRegistry
 import com.norfold.app.branding.palette
 import com.norfold.app.cloud.MutualChatContacts
 import com.norfold.app.cloud.NorfoldPresence
@@ -1077,6 +1078,15 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
      */
     val flowSessions = FlowSessionRegistry()
 
+    /**
+     * The live DocumentHost editing sessions, keyed by document id.
+     *
+     * A separate registry from [flowSessions], for the same reason the hosts are separate: a document
+     * session holds a [com.norfold.app.editor.document.DocumentHostRuntime], and one map holding either
+     * kind would have to be unwrapped by type at every use.
+     */
+    val documentSessions = DocumentSessionRegistry()
+
     init {
         // Ending a session is deliberately not the editor screen's call: that screen is disposed on every
         // rotation, while the document has only genuinely been left once nothing selects it any more. Closing
@@ -1084,6 +1094,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             selectedDocumentOwner.collect { owner ->
                 flowSessions.closeAllExcept(owner?.documentId)
+                documentSessions.closeAllExcept(owner?.documentId)
             }
         }
     }
@@ -6933,6 +6944,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         cancelVoiceRecording()
         stopChatAudio()
         flowSessions.closeAll()
+        documentSessions.closeAll()
         super.onCleared()
     }
 

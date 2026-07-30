@@ -13,7 +13,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.editor.flags.EditorFeatureFlag
-import com.norfold.app.editor.flags.EditorFeatureFlags
 import com.norfold.app.editor.flow.FlowDocumentSession
 import com.norfold.app.editor.flow.FlowEditController
 import com.norfold.app.editor.flow.FlowHostRuntime
@@ -27,26 +26,6 @@ import com.norfold.app.ui.editor.flow.rememberFlowHostPresenter
 import com.norfold.app.ui.screens.EditorSurface
 import com.norfold.app.ui.screens.StructuredBlockEditorHost
 import kotlinx.coroutines.CompletableDeferred
-
-/**
- * Process-local editor flags. Every flag defaults **off**, so this resolves to the legacy host until an
- * internal build or a test flips [EditorFeatureFlag.FLOW_HOST] — the parallel-host arrangement Phase 0
- * established, with no user-visible change while Phase 1 is in progress.
- *
- * Tests can inject a custom instance via [setEditorFlagsForTesting]. This is not exposed to production code.
- */
-private var editorFlags: EditorFeatureFlags = EditorFeatureFlags.productionDefaults()
-
-/**
- * **Test/internal-only injection path.** Allows instrumentation tests to enable [EditorFeatureFlag.FLOW_HOST]
- * without changing the production default. Not accessible from production builds.
- *
- * Call before the first composition of [FlowNoteEditorScreen]. Resets to production defaults if [flags] is null.
- */
-@Suppress("TestOnlyProblems") // This annotation documents intent; enforcement is via code-review only
-internal fun setEditorFlagsForTesting(flags: EditorFeatureFlags?) {
-    editorFlags = flags ?: EditorFeatureFlags.productionDefaults()
-}
 
 /**
  * The Notes entry point.
