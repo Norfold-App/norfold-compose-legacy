@@ -48,6 +48,16 @@ class FlowCommandScope(
     var tableCursor: FlowTableCursor? = null
 
     /**
+     * The list/to-do item the caret sits in, when it is inside one.
+     *
+     * The Selection Engine's [TextCaret] addresses the *block*, because that is the unit every structural
+     * command resolves against. But a list block holds several independently editable items, so "split here"
+     * and "merge backwards" are ambiguous without knowing which one. Held beside [tableCursor] for the same
+     * reason and with the same rule: the host reports it, commands read it, nobody guesses it.
+     */
+    var caretItemId: String? = null
+
+    /**
      * The drop the host has resolved from an in-flight structural drag. `flow.move.drop` consumes it, so
      * drag/drop is the same semantic command as every other move rather than a private gesture path (§4.1).
      */
@@ -79,11 +89,15 @@ class FlowCommandScope(
 
     /** Replaces the Flow selection with [ids] (first becomes primary). */
     fun selectBlocks(ids: List<String>) {
+        // §4.5 keeps text and structural state distinct, so changing the *structural* selection must not
+        // discard the caret: during multi-select the user's insertion point has to survive every toggle.
+        val caret = selection.caret()
         selection.clear()
         ids.forEachIndexed { index, id ->
             val target = SelectionTarget(id, flowGranularityFor(ids.size))
             if (index == 0) selection.select(target) else selection.addToSelection(target)
         }
+        caret?.let { selection.setCaret(it) }
     }
 
     /** Applies the §4.14 post-command selection rule and returns the resulting selection. */
