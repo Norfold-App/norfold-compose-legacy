@@ -201,6 +201,18 @@ class FlowEditController(
     }
 
     /**
+     * Marks [persisted] — the exact snapshot the repository accepted — as the new baseline.
+     *
+     * Persistence is asynchronous, so the live document can already be several keystrokes ahead of what was
+     * written. Baselining on the live document instead would mark those keystrokes saved without ever having
+     * sent them, and a process death then loses them silently. Baselining on the accepted snapshot leaves them
+     * dirty, so the next save picks them up.
+     */
+    fun markSaved(persisted: BlockDocument) {
+        lastSavedDocument = persisted
+    }
+
+    /**
      * Applies a remote snapshot with block-safe convergence, preserving locally-dirty top-level
      * blocks (§14.7 — this is last-saved-writer-wins block merge, **not** a CRDT). Undo history is
      * conservatively cleared because remote state forked the timeline. Returns true if the document
