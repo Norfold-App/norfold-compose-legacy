@@ -10,6 +10,8 @@ import com.norfold.app.domain.ListItem
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.ParagraphBlock
+import com.norfold.app.domain.TodoItem
+import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.findById
 import com.norfold.app.editor.command.CommandResult
 import com.norfold.app.editor.command.CommandState
@@ -258,6 +260,94 @@ class FlowSlashResolverTest {
         assertEquals("first", updated.items[0].content.joinToString("") { it.plainText() })
         assertEquals(1, scope.controller.undoDepth())
     }
+
+    /**
+     * A to-do list holds `TodoItem`, a bullet list holds `ListItem`, and they share no supertype. Routing every
+     * item on `itemId != null` sent to-do text through `editListItem`, which found nothing and returned without
+     * editing — so the typed `/query` stayed in the text while the command ran anyway, and the single undo step
+     * recorded a document the user never saw.
+     */
+    @Test fun accept_insideATodoItem_erasesTheQueryFromThatItem() {
+        val todo = TodoListBlock(
+            id = "t",
+            items = listOf(
+                TodoItem(id = "i1", checked = true, content = listOf(InlineText("done"))),
+                TodoItem(id = "i2", checked = false, content = listOf(InlineText("second /divider"))),
+            ),
+        )
+        val (scope, resolver) = setup(todo)
+        scope.selectBlocks(listOf("t"))
+        val typed = FlowSlashInput(text = "second /divider", caret = 15, itemId = "i2")
+        val command = resolver.resolve(typed)!!.results.first().command
+
+        val result = resolver.accept("t", typed, command)
+        assertTrue(result is CommandResult.Success)
+
+        val updated = scope.document().findById("t") as TodoListBlock
+        assertEquals("the trigger is erased from the to-do's own text", "second ", updated.items[1].plain())
+        assertEquals("the sibling item is untouched", "done", updated.items[0].plain())
+        assertEquals("checked state is content, not a casualty of the erase", true, updated.items[0].checked)
+        assertEquals(false, updated.items[1].checked)
+        assertEquals("Erase + command is one undo step", 1, scope.controller.undoDepth())
+    }
+
+    @Test fun accept_insideATodoItem_undoRestoresTheTypedTextAndTheCheckedState() {
+        val todo = TodoListBlock(
+            id = "t",
+            items = listOf(
+                TodoItem(id = "i1", checked = true, content = listOf(InlineText("done"))),
+                TodoItem(id = "i2", checked = true, content = listOf(InlineText("ship it /divider"))),
+            ),
+        )
+        val (scope, resolver) = setup(todo)
+        scope.selectBlocks(listOf("t"))
+        val typed = FlowSlashInput(text = "ship it /divider", caret = 16, itemId = "i2")
+        val command = resolver.resolve(typed)!!.results.first().command
+
+        resolver.accept("t", typed, command)
+        // Asserted before undoing: without this the test passes vacuously against an erase that never
+        // happened, because "undo restores the typed text" is trivially true when nothing removed it.
+        val afterAccept = scope.document().findById("t") as TodoListBlock
+        assertEquals("ship it ", afterAccept.items[1].plain())
+
+        scope.controller.undo()
+
+        val restored = scope.document().findById("t") as TodoListBlock
+        assertEquals("ship it /divider", restored.items[1].plain())
+        assertEquals(true, restored.items[1].checked)
+        assertEquals("done", restored.items[0].plain())
+        assertEquals(true, restored.items[0].checked)
+        assertEquals("the divider the command inserted is gone too", 1, scope.document().blocks.size)
+    }
+
+    @Test fun accept_failsSafely_whenTheAddressedItemIsGone() {
+        val todo = TodoListBlock(
+            id = "t",
+            items = listOf(TodoItem(id = "i1", content = listOf(InlineText("only /divider")))),
+        )
+        val (scope, resolver) = setup(todo)
+        scope.selectBlocks(listOf("t"))
+        val typed = FlowSlashInput(text = "only /divider", caret = 13, itemId = "gone")
+        val command = FlowCommands.registry(scope).get("flow.insert.divider")!!
+
+        val result = resolver.accept("t", typed, command)
+        assertTrue(result is CommandResult.Failure)
+        assertEquals("nothing is committed against an item that no longer exists", 0, scope.controller.undoDepth())
+        assertEquals(1, scope.document().blocks.size)
+    }
+
+    @Test fun accept_failsSafely_whenTheAddressedBlockIsGone() {
+        val (scope, resolver) = setup(para("a", "text /divider"))
+        scope.selectBlocks(listOf("a"))
+        val typed = input("text /divider")
+        val command = FlowCommands.registry(scope).get("flow.insert.divider")!!
+
+        val result = resolver.accept("missing", typed, command)
+        assertTrue(result is CommandResult.Failure)
+        assertEquals(0, scope.controller.undoDepth())
+    }
+
+    private fun TodoItem.plain(): String = content.joinToString("") { it.plainText() }
 
     @Test fun accept_refusesAnIneligibleCommand_andLeavesTheTextAlone() {
         val (scope, resolver) = setup(para("a", "one"), para("b", "/move up"))

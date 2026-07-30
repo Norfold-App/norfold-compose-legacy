@@ -833,3 +833,117 @@ newer baseline; only one write races for a document; a nested code block is neve
 
 What remains outstanding is unchanged and is device work, not logic: drag feel, IME animation, TalkBack
 navigation, large font / RTL, and performance profiling.
+
+---
+
+# Session ownership, title lifecycle and Todo slash (2026-07-30, third pass)
+
+Three defects remained after the data-safety closure. All three sit *above* the persistence state machine, in
+who owns a coordinator, who owns a title, and which vocabulary an item edit speaks — which is why a correct
+state machine could not prevent any of them.
+
+## Root causes
+
+| Defect | Root cause |
+|---|---|
+| Two writers per document | The coordinator was built in `remember(documentId)` but its retry loop runs on `viewModelScope`. A screen recreation while that loop was still retrying built a *second* coordinator, with its own controller and its own baseline. "One write in flight" held only inside one instance — exactly what recreation breaks. |
+| Title disagreed with persistence | The visible title was `rememberSaveable` while the coordinator was seeded from the stored row. After a recreation the screen showed the restored rename while persistence believed the older stored title was both desired and persisted, so the rename was never written. |
+| Slash acceptance broke Todo items | `accept()` routed every `itemId != null` through `editListItem`. A to-do holds `TodoItem`, a list holds `ListItem`, and they share no supertype — so the call found nothing, the typed `/query` stayed in the text while the command ran anyway, and the single undo step recorded a document the user never saw. |
+
+## Implementation
+
+**`FlowSessionRegistry` / `FlowDocumentSession` (new).** The runtime and its coordinator are bound into one
+value (they share a baseline; pairing a coordinator with a different controller silently invalidates the epoch
+guard) and owned by the ViewModel, keyed by document id. `open` returns the live session or builds one; a
+session leaves the map exactly when its coordinator retires, and a retired coordinator can never write again.
+That single rule is what makes two concurrent writers unrepresentable rather than merely unlikely.
+
+**`flush()` and `close()` separated.** Disposal happens on every rotation, so it may not end a session — it
+only asks for an immediate attempt. `close()` drains and then retires, and is called from the ViewModel when
+the selected document actually changes, plus on `onCleared`.
+
+**Title moved into the coordinator.** `title()` / `isTitleDirty()` / `onStoredTitle()` give one coherent
+model: an incoming stored title always advances the persisted baseline (it is evidence, whoever wrote it) but
+adopts into the visible title only when no local rename is pending. Local-dirty wins, identically to block
+content. The screen keeps a Compose mirror re-seeded from the session — never from a parallel saved-state copy
+that could disagree with it.
+
+**`accept()` dispatches on the addressed block.** It resolves the block, fails closed when the block or the
+addressed item is gone (before opening a transaction, so nothing is committed), and picks `editTodoItem` for
+`TodoListBlock` and `editListItem` otherwise. Erase + command remain one transaction.
+
+## Adversarial test matrix
+
+| # | Case | Result | Test |
+|---|---|---|---|
+| X1 | Recreation rebinds to the live save owner | PASS | `recreatingTheScreenReusesTheSameSaveOwner` |
+| X2 | Disposal after everything landed still does not end the session | PASS | `disposalDoesNotEndTheSessionEvenAfterEverythingPendingHasLanded` |
+| X3 | Recreation during a retry creates no second writer | PASS | `recreationDuringARetryDoesNotCreateASecondWriter` |
+| X4 | A retired session is replaced and cannot write again | PASS | `aRetiredSessionIsReplacedAndCannotWriteAgain` |
+| X5 | Max concurrent writes per document is 1 across reopen | PASS | `recreationDuringARetryDoesNotCreateASecondWriter`, `aRetiredSessionIsReplacedAndCannotWriteAgain` |
+| X6 | A second document does not disturb the first | PASS | `openingASecondDocumentDoesNotDisturbTheFirst` |
+| Y1 | Restored local title + older stored title | PASS | `restoredLocalTitleSurvivesRecreationAndIsNotRevertedByTheOlderStoredTitle` |
+| Y2 | Incoming stored title, no rename pending | PASS | `incomingStoredTitleIsAdoptedWhenNoRenameIsPending` |
+| Y3 | Incoming stored title, rename pending | PASS | `incomingStoredTitleDoesNotClobberAPendingLocalRename` |
+| Y4 | Title changed during an in-flight save | PASS | `titleChangedDuringAnInFlightSaveIsNotMarkedSavedByThatWrite` |
+| Y5 | Stale completion cannot mark a newer title saved | PASS | `staleCompletionCannotMarkANewerTitleSaved` |
+| Z1 | Slash accept inside Todo removes `/query` | PASS | `accept_insideATodoItem_erasesTheQueryFromThatItem` |
+| Z2 | Todo checked state preserved | PASS | `accept_insideATodoItem_erasesTheQueryFromThatItem` |
+| Z3 | Undo restores exact Todo text and checked state | PASS | `accept_insideATodoItem_undoRestoresTheTypedTextAndTheCheckedState` |
+| Z4 | Bullet/numbered acceptance still works | PASS | `accept_insideAListItem_erasesTheQueryFromThatItem` |
+| Z5 | Fails safely when the item is gone | PASS | `accept_failsSafely_whenTheAddressedItemIsGone` |
+| Z6 | Fails safely when the block is gone | PASS | `accept_failsSafely_whenTheAddressedBlockIsGone` |
+
+## Mutation proof
+
+Each fix was reverted locally and the suite re-run; every mutation was restored afterwards and the diff
+checked for residue.
+
+| # | Mutation | Tests that failed |
+|---|---|---|
+| M1 | `accept()` routes all items through `editListItem` | 2 |
+| M2 | `flush()` also retires the session (the old ownership model) | 1 |
+| M3 | Retirement does not free the registry slot | 1 |
+| M4 | Stored title overwrites a pending local rename | 2 |
+| M5 | Title baselined regardless of the epoch guard | 1 |
+
+Two tests were caught being weak by this pass and were strengthened rather than kept:
+`accept_insideATodoItem_undoRestoresTheTypedTextAndTheCheckedState` passed vacuously under M1 (undo trivially
+restores text that was never erased) and now asserts the erase before undoing; and the original
+recreation test did not observe M2 because it recomposed before the drain ran, so X2 was added to cover the
+ordering a slow recreation actually produces.
+
+## Test results
+
+- Full unit suite: `:apps:android:testDebugUnitTest` — **633 tests, 0 failures** (up from 619)
+- `:apps:android:assembleDebug` — BUILD SUCCESSFUL
+- `:apps:android:compileDebugAndroidTestKotlin` — BUILD SUCCESSFUL (compiled, **not executed**)
+
+## Files changed
+
+| File | Change |
+|---|---|
+| `editor/flow/FlowDocumentSession.kt` | **New.** `FlowDocumentSession` + `FlowSessionRegistry` |
+| `editor/flow/FlowSaveCoordinator.kt` | `flush`/`close` split, retirement, `title()`/`isTitleDirty()`/`onStoredTitle()` |
+| `editor/flow/FlowSlashResolver.kt` | `accept()` resolves the block, dispatches to `editTodoItem`/`editListItem`, fails closed |
+| `ui/editor/FlowNoteEditorScreen.kt` | Session looked up from the registry; title mirrors the coordinator; `rememberSaveable` removed |
+| `ui/NotesViewModel.kt` | Owns `flowSessions`; closes sessions on document change and `onCleared` |
+| `test/…/FlowSessionRegistryTest.kt` | **New.** Ownership + title matrices |
+| `test/…/FlowSlashResolverTest.kt` | Todo acceptance, undo fidelity, fail-closed cases |
+| `test/…/FlowSaveCoordinatorTest.kt` | Drain test uses `close()` and asserts retirement |
+
+## Scope check
+
+Unchanged from the previous pass: no Phase 2, no `DocumentHost`, no Scene model, no Page Control, no
+collaboration/CRDT/transport, no Supabase/Ably/Cloudflare/Telegram/website/roadmap changes, no schema bump,
+`FLOW_HOST` still default-off, no third-party attribution anywhere.
+
+## Status
+
+| Gate | State |
+|---|---|
+| Phase 1 implementation | COMPLETE |
+| Static / data-safety audit | PASS |
+| Nested-context audit | PASS |
+| Device certification | DEFERRED (owner instruction) |
+| Phase 2 | AUTHORIZED |
