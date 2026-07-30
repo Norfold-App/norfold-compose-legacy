@@ -137,6 +137,7 @@ class BlockEditorSession(initial: BlockDocument) {
 
     fun splitListItem(blockId: String, itemId: String, offset: Int): BlockCursor {
         val block = document.findById(blockId) ?: return BlockCursor(blockId, offset, itemId)
+        if (block is TodoListBlock) return splitTodoItem(block, itemId, offset)
         val items = block.listItems() ?: return BlockCursor(blockId, offset, itemId)
         val index = items.indexOfFirst { it.id == itemId }
         if (index < 0) return BlockCursor(blockId, offset, itemId)
@@ -153,6 +154,7 @@ class BlockEditorSession(initial: BlockDocument) {
 
     fun exitEmptyListItem(blockId: String, itemId: String): BlockCursor {
         val block = document.findById(blockId) ?: return firstCursor()
+        if (block is TodoListBlock) return exitEmptyTodoItem(block, itemId)
         val items = block.listItems() ?: return BlockCursor(blockId, 0, itemId)
         val itemIndex = items.indexOfFirst { it.id == itemId }
         if (itemIndex < 0 || items[itemIndex].content.plainText().isNotBlank()) return BlockCursor(blockId, 0, itemId)
@@ -172,6 +174,7 @@ class BlockEditorSession(initial: BlockDocument) {
 
     fun mergeListItemWithPrevious(blockId: String, itemId: String): BlockCursor {
         val block = document.findById(blockId) ?: return BlockCursor(blockId, 0, itemId)
+        if (block is TodoListBlock) return mergeTodoItemWithPrevious(block, itemId)
         val items = block.listItems() ?: return BlockCursor(blockId, 0, itemId)
         val index = items.indexOfFirst { it.id == itemId }
         if (index <= 0) return BlockCursor(blockId, 0, itemId)
@@ -184,6 +187,62 @@ class BlockEditorSession(initial: BlockDocument) {
         }
         replaceListItems(block, updated)
         return BlockCursor(blockId, join, previous.id)
+    }
+
+    /**
+     * A to-do list holds [TodoItem]s, not [ListItem]s, so it is invisible to [listItems]. These three mirror
+     * the bullet/numbered behavior for it — without them Enter and Backspace inside a to-do would resolve to a
+     * no-op, which reads as a frozen editor rather than as an unsupported block.
+     */
+    private fun splitTodoItem(block: TodoListBlock, itemId: String, offset: Int): BlockCursor {
+        val index = block.items.indexOfFirst { it.id == itemId }
+        if (index < 0) return BlockCursor(block.id, offset, itemId)
+        val item = block.items[index]
+        val (before, after) = splitInline(item.content, offset.coerceIn(0, item.content.plainText().length))
+        // The new item starts unchecked: it is new work, and inheriting "done" from the item it was split off
+        // would silently mark something complete that the user has not done.
+        val next = TodoItem(content = after)
+        val updated = block.items.toMutableList().apply {
+            this[index] = item.copy(content = before)
+            add(index + 1, next)
+        }
+        replaceBlock(block.copy(items = updated))
+        return BlockCursor(block.id, 0, next.id)
+    }
+
+    private fun exitEmptyTodoItem(block: TodoListBlock, itemId: String): BlockCursor {
+        val index = block.items.indexOfFirst { it.id == itemId }
+        if (index < 0 || block.items[index].content.plainText().isNotBlank()) {
+            return BlockCursor(block.id, 0, itemId)
+        }
+        val paragraph = ParagraphBlock(id = if (block.items.size == 1) block.id else ParagraphBlock().id)
+        mutateSiblings(block.id, setOf(block.id, paragraph.id)) { siblings, position, _ ->
+            siblings.toMutableList().apply {
+                if (block.items.size == 1) {
+                    this[position] = paragraph
+                } else {
+                    this[position] = block.copy(
+                        items = block.items.toMutableList().apply { removeAt(index) },
+                    )
+                    add(position + 1, paragraph)
+                }
+            }
+        }
+        return BlockCursor(paragraph.id, 0)
+    }
+
+    private fun mergeTodoItemWithPrevious(block: TodoListBlock, itemId: String): BlockCursor {
+        val index = block.items.indexOfFirst { it.id == itemId }
+        if (index <= 0) return BlockCursor(block.id, 0, itemId)
+        val previous = block.items[index - 1]
+        val current = block.items[index]
+        val join = previous.content.plainText().length
+        val updated = block.items.toMutableList().apply {
+            this[index - 1] = previous.copy(content = previous.content + current.content)
+            removeAt(index)
+        }
+        replaceBlock(block.copy(items = updated))
+        return BlockCursor(block.id, join, previous.id)
     }
 
     fun insertAfter(anchorId: String?, block: DocumentBlock): BlockCursor {
