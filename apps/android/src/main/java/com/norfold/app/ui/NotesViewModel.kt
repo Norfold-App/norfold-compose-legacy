@@ -105,6 +105,7 @@ import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.domain.VaultCrypto
+import com.norfold.app.editor.flow.FlowSessionRegistry
 import com.norfold.app.branding.palette
 import com.norfold.app.cloud.MutualChatContacts
 import com.norfold.app.cloud.NorfoldPresence
@@ -1066,6 +1067,26 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     // through updateActiveDocument) gets to land before finalizeDraftDiscard decides.
     private val pendingDraftDiscardIds = mutableSetOf<Long>()
     private val editorSaveJobs = mutableSetOf<Job>()
+
+    /**
+     * The live FlowHost editing sessions, keyed by document id.
+     *
+     * Held here rather than in the editor composable because a save coordinator's retry loop deliberately
+     * outlives the screen. Keyed to a composition it would be rebuilt on every recreation, so a rotation during
+     * a retry produced two writers for one document. See [FlowSessionRegistry].
+     */
+    val flowSessions = FlowSessionRegistry()
+
+    init {
+        // Ending a session is deliberately not the editor screen's call: that screen is disposed on every
+        // rotation, while the document has only genuinely been left once nothing selects it any more. Closing
+        // here flushes whatever is still pending and retires the writer once the repository accepts it.
+        viewModelScope.launch {
+            selectedDocumentOwner.collect { owner ->
+                flowSessions.closeAllExcept(owner?.documentId)
+            }
+        }
+    }
 
     // The sets above die with the process, which used to leak an empty "Untitled doc" after
     // process death mid-draft. Mirror the ids to prefs and sweep survivors on next launch.
@@ -6911,6 +6932,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         // MediaRecorder/MediaPlayer hold native resources the GC won't reclaim for us.
         cancelVoiceRecording()
         stopChatAudio()
+        flowSessions.closeAll()
         super.onCleared()
     }
 
