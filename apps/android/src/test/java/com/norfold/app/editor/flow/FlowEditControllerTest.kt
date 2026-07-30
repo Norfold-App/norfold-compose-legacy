@@ -28,7 +28,7 @@ class FlowEditControllerTest {
     private fun doc(vararg blocks: com.norfold.app.domain.DocumentBlock) = BlockDocument(blocks.toList())
 
     /** A controller with a controllable clock so coalescing is deterministic. */
-    private class Clock(var now: Long = 0L) : () -> Long { override fun invoke(): Long = now }
+    internal class Clock(var now: Long = 0L) : () -> Long { override fun invoke(): Long = now }
 
     @Test fun structuralInsert_commitsOneTransaction_andUndoRestores() {
         val ctl = FlowEditController(target, doc(para("a", "one")))
