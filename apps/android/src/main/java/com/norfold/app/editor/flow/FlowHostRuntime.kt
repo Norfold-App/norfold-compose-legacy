@@ -2,9 +2,12 @@ package com.norfold.app.editor.flow
 
 import com.norfold.app.domain.BlockCursor
 import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.CalloutBlock
+import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.findById
+import com.norfold.app.domain.plainText
 import com.norfold.app.editor.command.CommandRegistry
 import com.norfold.app.editor.command.CommandResult
 import com.norfold.app.editor.command.CommandState
@@ -98,6 +101,26 @@ sealed interface FlowBackResult {
     data object LeftEditor : FlowBackResult
 }
 
+/**
+ * A caret the *runtime* has placed and the surface must follow (correction item 1).
+ *
+ * Caret/focus sync has to be two-way, and the two directions are not symmetric. When the user taps or drags
+ * the caret, the field already shows it and the runtime only records it. When a command moves it — split,
+ * merge, insert, convert, slash, undo, redo — the field knows nothing, so the runtime must *ask*, and the
+ * surface must move real focus and a real selection.
+ *
+ * [stamp] is what makes that safe. It advances only when the runtime originates a move, never when the field
+ * reports one, so a field echoing its own caret back cannot re-trigger the request that produced it. The
+ * surface applies a request once per stamp; without it, "runtime sets caret → field reports caret → runtime
+ * sets caret" is an infinite recomposition loop.
+ */
+data class FlowCaretRequest(
+    val blockId: String,
+    val itemId: String?,
+    val offset: Int,
+    val stamp: Long,
+)
+
 /** The immutable snapshot the Compose shell renders. Rebuilt whenever [FlowHostRuntime.revision] changes. */
 data class FlowHostUiState(
     val revision: Long,
@@ -105,6 +128,8 @@ data class FlowHostUiState(
     val selectedIds: List<String>,
     val primaryId: String?,
     val caret: TextCaret?,
+    val caretRequest: FlowCaretRequest?,
+    val tableCursor: FlowTableCursor?,
     val selectionMode: Boolean,
     val selectedCount: Int,
     val formFactor: FormFactor,
@@ -174,6 +199,16 @@ class FlowHostRuntime(
 
     private var lastFailure: String? = null
 
+    /**
+     * The caret the runtime last asked the surface to show, and the stamp that makes the request idempotent.
+     *
+     * Held separately from the Selection Engine's caret on purpose. The engine's caret is *state* — where the
+     * caret is, whoever put it there. This is an *event* — "the runtime moved it, go follow". Merging them
+     * would make every field-originated caret report look like a fresh instruction to move focus.
+     */
+    private var caretRequest: FlowCaretRequest? = null
+    private var caretStamp: Long = 0L
+
     private data class SelectionSnapshot(
         val ids: List<String>,
         val primary: String?,
@@ -196,10 +231,15 @@ class FlowHostRuntime(
      */
     fun invoke(commandId: String, surface: CommandSurface): CommandResult {
         val context = scope.commandContext(surface)
+        val caretBefore = scope.caret()
         val result = registry.execute(commandId, context)
         when (result) {
             is CommandResult.Success -> {
                 lastFailure = null
+                // A command that moved the caret (§4.14) has to move real focus too, or the field the user is
+                // looking at keeps its own stale cursor and the next keystroke lands in the wrong place. This
+                // is the single place every route passes through, so no surface can forget to do it.
+                publishCaretRequest(caretBefore)
                 if (commandId.startsWith(FlowIds.INSERT_PREFIX)) {
                     // Which block kind this author reaches for is a preference *for this context*, not a
                     // device-wide setting and not transient interaction state.
@@ -218,10 +258,42 @@ class FlowHostRuntime(
         return result
     }
 
-    /** Undo/redo go to the canonical history, not the registry — they are not per-selection commands. */
-    fun undo(): Boolean = controller.undo().also { if (it) { syncSelectionToDocument(); revision++ } }
+    /**
+     * Undo/redo go to the canonical history, not the registry — they are not per-selection commands.
+     *
+     * A history step rewrites block text behind the field's back, so the caret request is republished even
+     * when the caret offset is unchanged: the *text* moved under it, and a field holding a stale
+     * `TextFieldValue` would otherwise keep showing the pre-undo string until something else touched it.
+     */
+    fun undo(): Boolean = controller.undo().also { if (it) afterHistoryStep() }
 
-    fun redo(): Boolean = controller.redo().also { if (it) { syncSelectionToDocument(); revision++ } }
+    fun redo(): Boolean = controller.redo().also { if (it) afterHistoryStep() }
+
+    private fun afterHistoryStep() {
+        syncSelectionToDocument()
+        scope.caret()?.let { caret ->
+            val length = textLengthOf(caret.targetId, scope.caretItemId)
+            // The document the caret pointed into may now be shorter; an offset past the end would make the
+            // field clamp silently and disagree with the engine about where the caret is.
+            requestCaret(caret.targetId, scope.caretItemId, caret.offset.coerceIn(0, length))
+        }
+        revision++
+    }
+
+    /**
+     * Length of the plain text the caret addresses, for clamping. Zero when the target no longer exists, which
+     * is the honest answer after a history step removed it.
+     */
+    private fun textLengthOf(blockId: String, itemId: String?): Int {
+        val block = controller.document().findById(blockId) ?: return 0
+        if (itemId != null) {
+            return FlowInlineText.itemsOf(block)?.firstOrNull { it.id == itemId }?.content?.plainText()?.length ?: 0
+        }
+        return when (block) {
+            is CodeBlock -> block.code.length
+            else -> FlowInlineText.nodesOf(block)?.plainText()?.length ?: block.plainText().length
+        }
+    }
 
     // ── Keyboard (deliverable 6) ──────────────────────────────────────────────────────────────────────
 
@@ -313,12 +385,131 @@ class FlowHostRuntime(
      */
     fun editText(blockId: String, before: String, after: String, itemId: String? = null): Boolean {
         if (before == after) return false
-        controller.mutate("Typing", coalescingKey = "block:$blockId") { session ->
+        // The coalescing key names the *editable field*, not the block: two items of one list are separate
+        // writing runs, and merging them would make one undo step swallow edits in both.
+        val key = if (itemId != null) "block:$blockId/item:$itemId" else "block:$blockId"
+        controller.mutate("Typing", coalescingKey = key) { session ->
             if (itemId != null) session.editListItem(blockId, itemId, before, after)
             else session.editText(blockId, before, after)
         } ?: return false
         revision++
         return true
+    }
+
+    /**
+     * Enter at [offset] in the caret's block (correction item 2).
+     *
+     * Writing semantics, not a structural command in disguise. Three cases, and the differences are the whole
+     * point of handling this here rather than letting the field insert a `\n`:
+     *
+     *  - **empty list item** → leave the list and continue as a paragraph. Pressing Enter twice is how every
+     *    editor ends a list; inserting a blank item instead is the behavior users read as "stuck".
+     *  - **inside a list item** → split that item into two, so the caret lands on a fresh bullet.
+     *  - **anywhere else** → `flow.split` from the registry, so Enter in prose is *literally* the same
+     *    transaction, undo unit and post-command selection as the Split command from the dock.
+     *
+     * A newline inside a [CodeBlock] is content, so it is deliberately not handled: the field keeps it.
+     */
+    fun newLine(): Boolean {
+        val caret = scope.caret() ?: return false
+        val blockId = caret.targetId
+        val block = controller.document().findById(blockId) ?: return false
+        if (block is CodeBlock) return false
+        val itemId = scope.caretItemId
+
+        val items = FlowInlineText.itemsOf(block)
+        if (itemId != null && items != null) {
+            val item = items.firstOrNull { it.id == itemId } ?: return false
+            val empty = item.content.plainText().isBlank()
+            val before = controller.document()
+            val cursor = controller.mutate(
+                if (empty) "Leave list" else "Split list item",
+                coalescingKey = null,
+            ) { session ->
+                if (empty) session.exitEmptyListItem(blockId, itemId)
+                else session.splitListItem(blockId, itemId, caret.offset)
+            } ?: return false
+            // The vocabulary returns a cursor even when it declined to change anything. Publishing a caret
+            // request for a move that never happened would yank focus for nothing, so the document is the
+            // arbiter of whether this keystroke did something.
+            if (controller.document() == before) return false
+            requestCaret(cursor.blockId, cursor.itemId, cursor.offset)
+            revision++
+            return true
+        }
+
+        return invoke(FlowIds.SPLIT, CommandSurface.KEYBOARD) is CommandResult.Success
+    }
+
+    /**
+     * Backspace with the caret at offset 0 (correction item 2).
+     *
+     * Only the boundary case belongs to the runtime — a Backspace anywhere else is an ordinary text edit the
+     * field already reports through [editText]. At offset 0 there is no character to delete, so the keystroke
+     * means "join this line to the one above", which is a document change no field can make on its own.
+     *
+     * Returns false when there is nothing above to join, letting the keystroke fall through unhandled rather
+     * than being silently swallowed.
+     */
+    fun backspaceAtStart(): Boolean {
+        val caret = scope.caret() ?: return false
+        val blockId = caret.targetId
+        val block = controller.document().findById(blockId) ?: return false
+        val itemId = scope.caretItemId
+        val items = FlowInlineText.itemsOf(block)
+
+        if (itemId != null && items != null) {
+            val index = items.indexOfFirst { it.id == itemId }
+            if (index < 0) return false
+            // The first item has no previous item to merge into; leaving the list is the meaningful move, and
+            // it is the same operation Enter-on-empty performs, so both keys agree on what "exit" means.
+            val before = controller.document()
+            val cursor = controller.mutate(
+                if (index == 0) "Leave list" else "Merge list item",
+                coalescingKey = null,
+            ) { session ->
+                if (index == 0) session.exitEmptyListItem(blockId, itemId)
+                else session.mergeListItemWithPrevious(blockId, itemId)
+            } ?: return false
+            // `exitEmptyListItem` declines on a *non-empty* first item, and the vocabulary still hands back a
+            // cursor. Falling through unhandled is right there: the keystroke did nothing, so it should not
+            // consume the key or move focus.
+            if (controller.document() == before) return false
+            requestCaret(cursor.blockId, cursor.itemId, cursor.offset)
+            revision++
+            return true
+        }
+
+        if (!statusOf(FlowIds.MERGE_PREVIOUS, CommandSurface.KEYBOARD).isInvokable) return false
+        return invoke(FlowIds.MERGE_PREVIOUS, CommandSurface.KEYBOARD) is CommandResult.Success
+    }
+
+    /**
+     * Builds the slash input for an edit the surface just reported (correction item 6).
+     *
+     * `literalInline` is the fact the surface cannot supply: whether the caret sits inside a span where `/` is
+     * content — inline code, inline math. A plain string cannot say, and the resolver deliberately does not
+     * read documents. So it is resolved here, against the **post-edit** document, which is why this is called
+     * after [editText] rather than from the field's own state.
+     *
+     * The block-kind context ([FlowSlashContext]) stays a surface parameter because it describes which block is
+     * being edited, which the surface already knows without a lookup.
+     */
+    fun slashInputFor(
+        blockId: String,
+        text: String,
+        caret: Int,
+        itemId: String?,
+        context: FlowSlashContext,
+    ): FlowSlashInput {
+        val block = controller.document().findById(blockId)
+        return FlowSlashInput(
+            text = text,
+            caret = caret,
+            context = context,
+            literalInline = block != null && FlowInlineText.literalInlineAt(block, itemId, caret),
+            itemId = itemId,
+        )
     }
 
     /**
@@ -343,9 +534,16 @@ class FlowHostRuntime(
     }
 
     /** Moves the caret. Leaving a block breaks the typing run so the next edit opens a new undo unit. */
-    fun setCaret(blockId: String, offset: Int) {
+    fun setCaret(blockId: String, offset: Int, itemId: String? = null) {
         val current = scope.caret()
         if (current?.targetId != blockId) controller.breakTypingGroup()
+        // An item id is only meaningful if that item exists in that block. Storing one the document does not
+        // have would make the next Enter/Backspace resolve against nothing and silently do the wrong thing,
+        // so the boundary validates it here rather than trusting whatever the surface last saw.
+        val block = controller.document().findById(blockId)
+        scope.caretItemId = itemId?.takeIf { candidate ->
+            block != null && FlowInlineText.itemsOf(block)?.any { it.id == candidate } == true
+        }
         // Selection first, caret second: replacing the selection resets the engine's text state, so setting
         // the caret before selecting would silently discard it.
         if (!selectionModeActive) scope.selectBlocks(listOf(blockId))
@@ -353,10 +551,110 @@ class FlowHostRuntime(
         revision++
     }
 
+    /**
+     * Asks the surface to move real focus and the IME cursor to [blockId]/[itemId] at [offset].
+     *
+     * Called by commands that move the caret programmatically — split, merge, insert, undo, redo — so the
+     * field the user is looking at actually follows. The stamp advances on every call so the surface can
+     * apply the request exactly once and ignore echoes of its own caret reports.
+     */
+    private fun requestCaret(blockId: String, itemId: String?, offset: Int) {
+        caretRequest = FlowCaretRequest(blockId, itemId, offset, ++caretStamp)
+        setCaret(blockId, offset, itemId)
+    }
+
+    /**
+     * Publishes a caret request when a command's §4.14 outcome actually moved the caret.
+     *
+     * Compares against [before] rather than requesting unconditionally: a command that only changes structure
+     * (move up, nest, duplicate) leaves the caret where it was, and asking the surface to re-seed focus there
+     * would steal it back from wherever the user had put it. Only a genuine move is published.
+     */
+    private fun publishCaretRequest(before: TextCaret?) {
+        val after = scope.caret() ?: return
+        if (after == before) return
+        caretRequest = FlowCaretRequest(after.targetId, scope.caretItemId, after.offset, ++caretStamp)
+    }
+
     /** Addresses a table cell so the directional row/column commands become eligible (§4.15). */
     fun setTableCursor(cursor: FlowTableCursor?) {
+        // Addressing a cell must also make the table the primary structural target, or the cell looks selected
+        // while every table command still resolves against whatever was selected before (correction item 7).
+        if (cursor != null && controller.document().findById(cursor.blockId) == null) return
         scope.tableCursor = cursor
+        if (cursor != null) {
+            controller.breakTypingGroup()
+            scope.caretItemId = null
+            if (!selectionModeActive) scope.selectBlocks(listOf(cursor.blockId))
+            scope.selection.setCaret(TextCaret(cursor.blockId, 0))
+        }
         revision++
+    }
+
+    /** The addressed cell, for the surface to highlight. Never row-local state — this is the command context. */
+    fun tableCursor(): FlowTableCursor? = scope.tableCursor
+
+    /**
+     * Expands or collapses a callout (correction item 16).
+     *
+     * Through the canonical history like every other change: a collapsed callout hides content, and a state
+     * change the user can perform but not undo is exactly the asymmetry §13 exists to prevent.
+     */
+    fun toggleCollapsed(blockId: String): Boolean {
+        val block = controller.document().findById(blockId) as? CalloutBlock ?: return false
+        controller.mutate(
+            if (block.collapsed) "Expand callout" else "Collapse callout",
+            coalescingKey = null,
+        ) { session ->
+            session.replaceBlock(block.copy(collapsed = !block.collapsed))
+            BlockCursor(blockId, 0, null)
+        } ?: return false
+        revision++
+        return true
+    }
+
+    /**
+     * The accessibility actions for [blockId] specifically (correction item 14).
+     *
+     * The defect this replaces resolved the catalogue once against the *global* selection, and the action
+     * callback then re-pointed the selection at whichever row was activated. Availability and reason therefore
+     * described a different block than the one that would be operated on — a screen-reader user could be told
+     * "Unnest, unavailable: not nested" for a row that is in fact nested.
+     *
+     * Resolving against a temporarily-selected [blockId] means the enabled state, the reason and the execution
+     * all describe the same row. The selection is restored afterwards so merely *reading* the action list never
+     * changes what the user had selected; execution goes through [invokeAccessibilityOn], which re-selects
+     * deliberately.
+     */
+    fun accessibilityActionsFor(blockId: String): List<FlowCommandItem> =
+        withTemporarySelection(blockId) { accessibilityActions() }
+
+    /**
+     * Runs an accessibility action against [blockId]. Selects the row *first* and leaves it selected, because
+     * the command genuinely operated on it and the post-command selection rule (§4.14) applies to it.
+     */
+    fun invokeAccessibilityOn(blockId: String, commandId: String): CommandResult {
+        if (!selectionModeActive) scope.selectBlocks(listOf(blockId))
+        return invoke(commandId, CommandSurface.ACCESSIBILITY)
+    }
+
+    private fun <T> withTemporarySelection(blockId: String, body: () -> T): T {
+        if (controller.document().findById(blockId) == null) return body()
+        val ids = scope.selectedBlockIds()
+        val primary = scope.primaryBlockId()
+        val caret = scope.caret()
+        val tableCursorBefore = scope.tableCursor
+        return try {
+            scope.selectBlocks(listOf(blockId))
+            scope.tableCursor = tableCursorBefore?.takeIf { it.blockId == blockId }
+            body()
+        } finally {
+            scope.selection.clear()
+            scope.selectBlocks(ids)
+            primary?.takeIf { it in ids }?.let { scope.selection.promote(it) }
+            caret?.let { scope.selection.setCaret(it) }
+            scope.tableCursor = tableCursorBefore
+        }
     }
 
     // ── Slash (deliverable 3 + 5) ─────────────────────────────────────────────────────────────────────
@@ -648,6 +946,8 @@ class FlowHostRuntime(
             selectedIds = scope.selectedBlockIds(),
             primaryId = scope.primaryBlockId(),
             caret = scope.caret(),
+            caretRequest = caretRequest,
+            tableCursor = scope.tableCursor,
             selectionMode = selectionModeActive,
             selectedCount = selectedCount,
             formFactor = presentation.formFactor,
@@ -678,7 +978,26 @@ class FlowHostRuntime(
         val surviving = scope.selectedBlockIds().filter { document.findById(it) != null }
         if (surviving.size != scope.selectedBlockIds().size) scope.selectBlocks(surviving)
         scope.caret()?.let { caret ->
-            if (document.findById(caret.targetId) == null) controller.breakTypingGroup()
+            val block = document.findById(caret.targetId)
+            if (block == null) {
+                controller.breakTypingGroup()
+                // Focus must not stay in a block the runtime no longer treats as active (correction item 1).
+                // Retarget to the nearest surviving block rather than leaving a caret pointing at a phantom.
+                val fallback = surviving.firstOrNull() ?: document.blocks.firstOrNull()?.id
+                if (fallback == null) {
+                    scope.caretItemId = null
+                } else {
+                    scope.caretItemId = null
+                    if (!selectionModeActive) scope.selectBlocks(listOf(fallback))
+                    scope.selection.setCaret(TextCaret(fallback, 0))
+                }
+            } else if (scope.caretItemId != null && FlowInlineText.itemsOf(block)
+                    ?.none { it.id == scope.caretItemId } != false
+            ) {
+                // The block survived but the item did not — a merge or a list exit consumed it. Keeping the
+                // stale item id would make the next Enter/Backspace resolve against an item that is gone.
+                scope.caretItemId = null
+            }
         }
     }
 }
