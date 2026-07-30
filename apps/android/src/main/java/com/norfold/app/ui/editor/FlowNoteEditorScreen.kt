@@ -7,7 +7,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -15,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.flags.EditorFeatureFlags
+import com.norfold.app.editor.flow.FlowDocumentSession
 import com.norfold.app.editor.flow.FlowEditController
 import com.norfold.app.editor.flow.FlowHostRuntime
 import com.norfold.app.editor.flow.FlowSaveCoordinator
@@ -88,13 +88,17 @@ fun FlowNoteEditorScreen(
  * another keystroke, and advances the persisted baseline only on evidence the repository accepted a specific
  * snapshot against a baseline that is still current.
  *
- * It runs on the ViewModel's scope, not on a `LaunchedEffect`. A retry loop scoped to this composition would
- * die at the exact moment it matters most — the user closing the screen while a write is failing.
+ * **Ownership.** The runtime and its coordinator live in the ViewModel's [FlowSessionRegistry], not in a
+ * `remember` here. A retry loop must outlive the screen — that is when it matters most — but anything keyed to
+ * the composition is rebuilt on recreation, so a rotation during a retry used to produce a second writer for
+ * the same document, with its own baseline. Looking the session up instead means recreation rebinds to the
+ * live writer, and a replacement is only ever built once the previous one has retired and is inert.
  *
- * Process recreation: accepted content is durable in Room, the title survives via `rememberSaveable`, and the
- * idle auto-save bounds how much uncommitted work a process death can take. Transient state (open surfaces,
- * selection, caret, in-progress drag) is deliberately *not* restored — reviving a drag source or a caret
- * pointing at a block id that a remote merge has since removed is how you corrupt canonical content.
+ * Process recreation: accepted content is durable in Room, the pending title is held by the session (which is
+ * why it needs no `rememberSaveable` shadow that could disagree with it), and the idle auto-save bounds how
+ * much uncommitted work a process death can take. Transient state (open surfaces, selection, caret, in-progress
+ * drag) is deliberately *not* restored — reviving a drag source or a caret pointing at a block id that a remote
+ * merge has since removed is how you corrupt canonical content.
  */
 @Composable
 private fun FlowHostRoute(
@@ -115,41 +119,54 @@ private fun FlowHostRoute(
             state.calendarEvents.firstOrNull { it.id == owner.id }?.title ?: "Untitled event"
     }
 
-    // rememberSaveable ensures title survives process recreation
-    var title by rememberSaveable(owner.documentId) { mutableStateOf(storedTitle) }
-
-    val runtime = remember(owner.documentId) {
-        FlowHostRuntime(
-            controller = FlowEditController(EditTarget(owner.documentId), active.document),
-            initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
-        )
+    val session = remember(owner.documentId) {
+        viewModel.flowSessions.open(owner.documentId, viewModel.viewModelScope) {
+            val runtime = FlowHostRuntime(
+                controller = FlowEditController(EditTarget(owner.documentId), active.document),
+                initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
+            )
+            FlowDocumentSession(
+                runtime = runtime,
+                saves = FlowSaveCoordinator(
+                    controller = runtime.controller,
+                    // The persistence seam is the existing repository path, awaited properly.
+                    // `updateActiveDocument` returns a Job that completes whether or not the write threw, and
+                    // `join()` returns Unit either way, so it is not success evidence; only the completion
+                    // handler's exception (or its absence) distinguishes an accepted write from a rejected one.
+                    persister = { request ->
+                        val outcome = CompletableDeferred<Result<Unit>>()
+                        val job = viewModel.updateActiveDocument(
+                            owner,
+                            request.title,
+                            request.document,
+                            request.dirtyBlockIds,
+                        )
+                        job.invokeOnCompletion { error ->
+                            outcome.complete(
+                                if (error == null) Result.success(Unit) else Result.failure(error),
+                            )
+                        }
+                        outcome.await()
+                    },
+                ).apply { bindTitle(storedTitle) },
+            )
+        }
     }
+    val runtime = session.runtime
+    val saves = session.saves
 
-    val saves = remember(owner.documentId) {
-        FlowSaveCoordinator(
-            controller = runtime.controller,
-            // The persistence seam is the existing repository path, awaited properly. `updateActiveDocument`
-            // returns a Job that completes whether or not the write threw, and `join()` returns Unit either
-            // way, so it is not success evidence; only the completion handler's exception (or its absence)
-            // distinguishes an accepted write from a rejected one.
-            persister = { request ->
-                val outcome = CompletableDeferred<Result<Unit>>()
-                val job = viewModel.updateActiveDocument(
-                    owner,
-                    request.title,
-                    request.document,
-                    request.dirtyBlockIds,
-                )
-                job.invokeOnCompletion { error ->
-                    outcome.complete(if (error == null) Result.success(Unit) else Result.failure(error))
-                }
-                outcome.await()
-            },
-        ).apply { bindTitle(storedTitle) }
+    // The coordinator holds the authoritative title; this is only the Compose mirror that makes it draw. It is
+    // re-seeded from the session, never from a separate saved-state copy, so a recreation cannot revive an
+    // older title and then persist it over a newer rename.
+    var title by remember(session) { mutableStateOf(saves.title()) }
+
+    // The stored title is evidence of what is persisted, so it always moves the baseline — but it must not
+    // discard a rename the user has typed and the repository has not accepted yet. The coordinator applies
+    // local-dirty-wins, identically to block content; the mirror follows whatever it decides.
+    LaunchedEffect(session, storedTitle) {
+        saves.onStoredTitle(storedTitle)
+        title = saves.title()
     }
-
-    // Owned by the ViewModel's scope so a pending retry survives this composable going away.
-    LaunchedEffect(owner.documentId) { saves.start(viewModel.viewModelScope) }
 
     // The presenter republishes the snapshot; it deliberately does not persist. See the save contract above.
     val presenter = rememberFlowHostPresenter(runtime) { saves.requestSave() }
@@ -157,17 +174,17 @@ private fun FlowHostRoute(
     // A remote save arrived: converge block-safely, preserving anything edited locally since. The controller
     // baselines on the remote snapshot rather than the merge result, so protected local edits stay dirty and
     // the coordinator's next pass sends them.
-    LaunchedEffect(active.updatedAt) {
+    LaunchedEffect(session, active.updatedAt) {
         if (runtime.controller.mergeRemote(active.document)) presenter.refresh()
         // Convergence can leave content dirty (protected local edits) or clean (remote already had them).
         // Either way the coordinator decides, from evidence, whether a write is needed.
         saves.requestSave()
     }
 
-    // Leaving the editor must not drop work still inside the debounce window. The coordinator lives on the
-    // ViewModel's scope, so this is a request for an immediate attempt rather than a last-ditch write here —
-    // and unlike the fire-and-forget it replaces, a failure during teardown is still retried.
-    DisposableEffect(owner.documentId) {
+    // Leaving the screen must not drop work still inside the debounce window. This is a flush, not a close:
+    // the session belongs to the ViewModel, and a rotation disposes this composable without the document
+    // having been left. Ending the session is the registry's call, once the document is genuinely closed.
+    DisposableEffect(session) {
         onDispose { saves.flush() }
     }
 
@@ -177,6 +194,7 @@ private fun FlowHostRoute(
         onTitleChange = { next ->
             title = next
             // Title typing enters the same pipeline as content: debounced, serialized, retried on failure.
+            // The coordinator holds the authoritative value, so there is one answer to "what is this called".
             saves.onTitleChanged(next)
         },
         onOpenSidebar = onOpenSidebar,

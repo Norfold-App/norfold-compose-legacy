@@ -97,6 +97,12 @@ class FlowSaveCoordinator(
 
     private var loop: Job? = null
 
+    /** True once the loop has drained and exited. A retired coordinator can never write again. */
+    private var retired: Boolean = false
+
+    /** Invoked once, from the loop, when it exits — lets the owning registry drop this session. */
+    private var onRetired: (() -> Unit)? = null
+
     /** True while a write is awaiting the repository. Guards against a second concurrent write. */
     private var writing: Boolean = false
 
@@ -110,18 +116,52 @@ class FlowSaveCoordinator(
     enum class State { CLEAN, WAITING_FOR_DEBOUNCE, SAVING, DIRTY_WHILE_SAVING, RETRY_WAIT }
 
     /**
-     * Seeds the titles without marking anything dirty. Called once when the document is bound, so opening a
-     * note does not immediately look like a rename.
+     * Seeds the titles without marking anything dirty. Called once when the document session is created, so
+     * opening a note does not immediately look like a rename.
      */
     fun bindTitle(title: String) {
         desiredTitle = title
         persistedTitle = title
     }
 
-    /** Starts the loop on [scope]. Idempotent. */
+    /** The title the editor should display. Authoritative: it survives every composition of the screen. */
+    fun title(): String = desiredTitle
+
+    /** True when the user has renamed the document and the repository has not accepted it yet. */
+    fun isTitleDirty(): Boolean = desiredTitle != persistedTitle
+
+    /**
+     * A title observed from storage — the repository row, or a remote write echoed into it.
+     *
+     * It always updates the *baseline*, because it is evidence of what is persisted, and that is true whoever
+     * wrote it. What it must not do is silently discard a rename the user has typed but that has not been
+     * accepted yet: local-dirty wins, exactly as it does for block content, and the pending rename is simply
+     * re-measured against the new baseline and saved again. With no local rename pending there is nothing to
+     * protect, so the stored title is adopted and becomes what the editor shows.
+     */
+    fun onStoredTitle(stored: String) {
+        val renamePending = isTitleDirty()
+        persistedTitle = stored
+        if (renamePending) requestSave() else desiredTitle = stored
+    }
+
+    /**
+     * Starts the loop on [scope]. Idempotent, and safe to call again for a session that was disposed and
+     * recomposed before it finished draining — that is what keeps one writer per document across a screen
+     * recreation.
+     */
     fun start(scope: CoroutineScope) {
-        if (loop != null) return
-        loop = scope.launch { run() }
+        // Reopened mid-drain: cancel the retirement rather than let a second writer appear beside this one.
+        closeAfterDrain = false
+        if (loop == null) loop = scope.launch { run() }
+    }
+
+    /** True once the loop has drained and exited. A retired coordinator is inert. */
+    fun isRetired(): Boolean = retired
+
+    /** Registers the callback the loop fires when it retires, so an owning registry can drop the entry. */
+    fun onRetired(callback: () -> Unit) {
+        onRetired = callback
     }
 
     /** The title the user has typed. Schedules persistence; it does not write. */
@@ -137,17 +177,28 @@ class FlowSaveCoordinator(
     }
 
     /**
-     * Asks for an immediate attempt, skipping the debounce, and then for the loop to finish — the editor is
-     * closing.
+     * Asks for an immediate attempt, skipping the debounce — the editor's screen is going away.
      *
      * The write itself is deliberately not awaited: the loop lives on a scope that outlives this composition, so
-     * a flush requested during teardown completes (and retries until accepted) after the screen is gone. Once
-     * everything pending is accepted the loop exits, so no coroutine is left parked per note.
+     * a flush requested during teardown completes (and retries until accepted) after the screen is gone.
+     *
+     * This does **not** end the session. A configuration change disposes and recomposes the same document, and
+     * retiring here would let the recomposition build a second coordinator beside a first one that can still
+     * write. Ending the session is [close]'s job, and only the registry that knows the document was genuinely
+     * left calls it.
      */
     fun flush() {
         flushRequested = true
-        closeAfterDrain = true
         requestSave()
+    }
+
+    /**
+     * Ends the session: attempt everything pending immediately, then retire once the repository has accepted
+     * it. Called when the document is genuinely closed, not when its screen is merely recreated.
+     */
+    fun close() {
+        closeAfterDrain = true
+        flush()
     }
 
     /** True when the document or the title differs from what the repository has accepted. */
@@ -164,9 +215,18 @@ class FlowSaveCoordinator(
             if (!flushRequested) waitForIdle()
             flushRequested = false
             saveUntilAcceptedOrClean()
-            // Everything pending has been accepted. If the editor has closed there is nothing more to wait for,
-            // so exit rather than park a coroutine on the ViewModel's scope for every note ever opened.
-            if (closeAfterDrain) return
+            // Everything pending has been accepted. If the editor has closed and has not been reopened in the
+            // meantime, retire rather than park a coroutine on the ViewModel's scope for every note ever
+            // opened. Retiring is one-way and observable, so the registry can replace this session knowing it
+            // is inert — the alternative, letting a second coordinator appear beside a live one, is two
+            // writers for one document.
+            if (closeAfterDrain) {
+                retired = true
+                loop = null
+                onRetired?.invoke()
+                onRetired = null
+                return
+            }
         }
     }
 
