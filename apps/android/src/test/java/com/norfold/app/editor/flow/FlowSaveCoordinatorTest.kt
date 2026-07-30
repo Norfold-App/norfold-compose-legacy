@@ -564,9 +564,9 @@ class FlowSaveCoordinatorTest {
     }
 
     /**
-     * The loop must not park forever on the ViewModel's scope once the editor has closed — that would leak one
-     * idle coroutine per note ever opened. It drains first (so a failing write's retry still outlives the
-     * screen) and only then exits.
+     * The loop must not park forever on the ViewModel's scope once the document has been closed — that would
+     * leak one idle coroutine per note ever opened. It drains first (so a failing write's retry still outlives
+     * the screen) and only then retires.
      */
     @Test
     fun loopDrainsPendingWorkThenExitsAfterClose() = runTest {
@@ -576,10 +576,11 @@ class FlowSaveCoordinatorTest {
         saves.start(backgroundScope)
 
         ctl.mutate("edit") { it.editText("a", "one", "ONE") }
-        saves.flush()
+        saves.close()
         settle()
 
         assertFalse("the retries still landed after the screen closed", ctl.hasUnsavedChanges())
+        assertTrue("a drained, closed session is retired", saves.isRetired())
 
         // A later request cannot be served, because the loop has finished — which is exactly what closing means.
         ctl.mutate("edit again") { it.editText("a", "ONE", "TWO") }
