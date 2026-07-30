@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,12 +52,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +83,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
+import kotlinx.coroutines.isActive
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DropTarget
@@ -197,7 +202,7 @@ fun FlowHostScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(state.document.blocks, key = { it.id }) { block ->
+                    itemsIndexed(state.document.blocks, key = { _, block -> block.id }) { index, block ->
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -208,12 +213,19 @@ fun FlowHostScreen(
                                     val top = coordinates.positionInWindow().y - drag.viewportTop
                                     drag.bounds[block.id] = FlowRowBounds(
                                         blockId = block.id,
+                                        documentIndex = index,
                                         top = top,
                                         bottom = top + coordinates.size.height,
                                     )
                                 },
                             contentAlignment = Alignment.TopCenter,
                         ) {
+                            // A row measured at a stale index (scrolled away, or the list reordered under it)
+                            // must stop claiming a screen position once it leaves composition, or the geometry
+                            // would keep resolving drops against where it *used* to be.
+                            DisposableEffect(block.id) {
+                                onDispose { drag.bounds.remove(block.id) }
+                            }
                             FlowBlockRow(
                                 block = block,
                                 state = state,
@@ -232,6 +244,26 @@ fun FlowHostScreen(
                             .fillMaxWidth()
                             .zIndex(1f),
                     )
+                }
+            }
+        }
+
+        // Edge auto-scroll (correction item 5): restarts exactly when a drag begins or ends, because
+        // `drag.sourceId` is the key. While a drag is active it scrolls the list towards whichever edge the
+        // finger is resting in, re-measuring the placement every frame so the marker tracks the moving content
+        // instead of lagging behind it. Ending the drag — drop or cancel — clears `sourceId` first, which is
+        // what stops the loop; nothing here needs to know which happened.
+        val dragHaptics = LocalHapticFeedback.current
+        LaunchedEffect(drag.sourceId) {
+            if (drag.sourceId == null) return@LaunchedEffect
+            while (isActive && drag.sourceId != null) {
+                withFrameNanos { }
+                val amount = FlowDragGeometry.edgeScroll(drag.pointerY, drag.viewportHeight)
+                if (amount != 0f) listState.scrollBy(amount)
+                val order = state.document.blocks.map { it.id }
+                val crossed = drag.refresh(order)
+                if (crossed && drag.placement?.isNoOp == false) {
+                    dragHaptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 }
             }
         }
@@ -299,20 +331,60 @@ fun FlowHostScreen(
 /** Mutable, non-snapshot drag bookkeeping plus the snapshot state the marker and the lift read. */
 @androidx.compose.runtime.Stable
 private class FlowDragState {
-    /** Measured row bounds, keyed by block id. Written on every layout pass; not observed. */
+    /**
+     * Measured row bounds, keyed by block id. Written on every layout pass and **removed when a row leaves
+     * composition**: a virtualized list stops measuring rows it has scrolled away from, so bounds left behind
+     * would keep claiming a screen position the row no longer occupies and place drops against it.
+     */
     val bounds = mutableMapOf<String, FlowRowBounds>()
     var viewportTop: Float = 0f
     var viewportHeight: Float = 0f
 
     var sourceId: String? by mutableStateOf(null)
+
+    /**
+     * The finger's position in viewport space, advanced only by raw touch deltas. Kept independent of [lift]
+     * because auto-scroll moves the *content* underneath a finger that has not itself moved: if this were
+     * re-derived from the dragged row's own measured position, every auto-scroll tick would double-count the
+     * scroll as additional finger travel and the clone would run away from the touch point.
+     */
+    var pointerY: Float = 0f
+
+    /**
+     * The dragged row's visual offset from its own layout slot. Recomputed — not accumulated — from
+     * [pointerY] minus the row's current measured center, so it self-corrects every time the list scrolls
+     * the row's slot out from underneath the still-stationary finger.
+     */
     var lift: Float by mutableStateOf(0f)
     var placement: FlowDropPlacement? by mutableStateOf(null)
 
-    /** Rows in document order, which is the order [FlowDragGeometry] resolves indices against. */
-    fun orderedBounds(order: List<String>): List<FlowRowBounds> = order.mapNotNull { bounds[it] }
+    fun begin(blockId: String) {
+        sourceId = blockId
+        pointerY = bounds[blockId]?.center ?: 0f
+        lift = 0f
+        placement = null
+    }
+
+    /**
+     * Recomputes [lift] and the placement from the rows currently measured. Returns true when the placement
+     * crossed to a different boundary, which is the only moment worth a haptic.
+     */
+    fun refresh(order: List<String>): Boolean {
+        val sourceId = sourceId ?: return false
+        bounds[sourceId]?.let { lift = pointerY - it.center }
+        val next = FlowDragGeometry.placementFor(
+            rows = bounds.values.toList(),
+            sourceDocumentIndex = order.indexOf(sourceId),
+            pointerY = pointerY,
+        )
+        val crossed = next?.index != placement?.index
+        placement = next
+        return crossed
+    }
 
     fun reset() {
         sourceId = null
+        pointerY = 0f
         lift = 0f
         placement = null
     }
@@ -389,6 +461,12 @@ private fun FlowBlockRow(
         )
     }
 
+    // Structural selection means the *row* owns every gesture inside it (correction item 6). The defect this
+    // replaces let a child control — the insert handle, a table cell, a callout toggle — take a tap that was
+    // meant to select or toggle the block, editing or navigating instead of selecting. Disabling the handle
+    // here and threading `context.selectionMode` into every interactive child below is what makes "tap a block
+    // in selection mode" mean the same thing everywhere in the row, not just in the text field.
+    val rowSelectable = state.selectionMode
     Row(
         modifier
             .graphicsLayer {
@@ -439,33 +517,28 @@ private fun FlowBlockRow(
         verticalAlignment = Alignment.Top,
     ) {
         // Tap inserts; long-press starts a reorder. Both live on the handle so an ordinary long-press in the
-        // text still means multi-select.
+        // text still means multi-select. Disabled during structural selection: the handle's own gestures would
+        // otherwise compete with the row's select/toggle tap for the same touch.
         IconButton(
             onClick = { presenter.act { openInsertPalette(block.id) } },
+            enabled = !rowSelectable,
             modifier = Modifier
                 .width(36.dp)
-                .pointerInput(block.id, state.document.blocks.size) {
+                .pointerInput(block.id, state.document.blocks.size, rowSelectable) {
+                    if (rowSelectable) return@pointerInput
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
-                            drag.sourceId = block.id
-                            drag.lift = 0f
-                            drag.placement = null
+                            drag.begin(block.id)
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             presenter.act { beginDrag(block.id) }
                         },
                         onDrag = { change, amount ->
                             change.consume()
-                            drag.lift += amount.y
+                            drag.pointerY += amount.y
                             val order = state.document.blocks.map { it.id }
-                            val rows = drag.orderedBounds(order)
-                            val self = drag.bounds[block.id]
-                            val pointer = (self?.center ?: 0f) + drag.lift
-                            val next = FlowDragGeometry.placementFor(rows, block.id, pointer)
-                            if (next?.index != drag.placement?.index) {
-                                if (next != null && !next.isNoOp) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                }
-                                drag.placement = next
+                            val crossed = drag.refresh(order)
+                            if (crossed && drag.placement?.isNoOp == false) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             }
                         },
                         onDragEnd = {

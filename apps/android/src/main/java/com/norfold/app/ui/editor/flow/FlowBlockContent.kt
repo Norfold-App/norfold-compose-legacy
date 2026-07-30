@@ -261,7 +261,12 @@ fun FlowBlockContent(
             // A collapsed callout with no control is content the user cannot reach at all, and structural
             // commands would still operate on children nobody can see (correction item 16).
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { callbacks.onToggleCollapsed(block.id) }) {
+                // Disabled in structural selection so a tap meant to select the callout block cannot instead
+                // expand/collapse it (correction item 6) — the same reason the Todo checkbox above is disabled.
+                IconButton(
+                    onClick = { callbacks.onToggleCollapsed(block.id) },
+                    enabled = !context.selectionMode,
+                ) {
                     Icon(
                         imageVector = if (block.collapsed) Icons.Filled.ChevronRight else Icons.Filled.ExpandMore,
                         contentDescription = if (block.collapsed) "Expand callout" else "Collapse callout",
@@ -359,6 +364,9 @@ private fun FlowTablePreview(
                     text = cell.content.plainText(),
                     header = true,
                     addressed = cursor?.row == -1 && cursor.column == column,
+                    // In structural selection a cell tap must select the table block, not address a cell
+                    // (correction item 6); the click is disabled so the row's own gesture sees it instead.
+                    enabled = !context.selectionMode,
                     modifier = Modifier.weight(1f),
                     onClick = { callbacks.onTableCell(FlowTableCursor(block.id, row = -1, column = column)) },
                 )
@@ -372,6 +380,7 @@ private fun FlowTablePreview(
                         text = cell.content.plainText(),
                         header = false,
                         addressed = cursor?.row == rowIndex && cursor.column == column,
+                        enabled = !context.selectionMode,
                         modifier = Modifier.weight(1f),
                         onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
                     )
@@ -388,12 +397,13 @@ private fun FlowTableCell(
     addressed: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Text(
         text = text.ifBlank { " " },
         style = if (header) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium,
         modifier = modifier
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .then(
                 if (addressed) {
                     Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
