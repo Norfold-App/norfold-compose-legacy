@@ -259,6 +259,7 @@ import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.DocumentBlock
+import com.norfold.app.domain.DocumentPageBlock
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.Edge
@@ -277,6 +278,7 @@ import com.norfold.app.domain.DocPagePreset
 import com.norfold.app.domain.DocPagination
 import com.norfold.app.domain.DocSectionAction
 import com.norfold.app.domain.DocSections
+import com.norfold.app.domain.withFreshIds
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.HeadingBlock
@@ -3744,6 +3746,25 @@ private fun RenderBlock(
     renderChild: (@Composable (DocumentBlock) -> Unit)? = null,
 ) {
     when (block) {
+        // The legacy host has no page geometry, so it deliberately does not attempt to render or edit a
+        // bounded page. Showing a read-only placeholder keeps the content intact and saved verbatim rather
+        // than flattening a page into blocks this host happens to understand.
+        is DocumentPageBlock -> Surface(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Document page", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text(
+                    "${block.objects.size} object${if (block.objects.size == 1) "" else "s"} · " +
+                        "open in the document editor to edit this page.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         is UnknownBlock -> Surface(
             Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(10.dp),
@@ -5417,6 +5438,7 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp)
     is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp)
     is ShapeBlock -> block.copy(id = java.util.UUID.randomUUID().toString())
+    is DocumentPageBlock -> block.withFreshIds()
     is UnknownBlock -> BlockDocumentJson.reidentify(block)
 }
 
@@ -5439,6 +5461,7 @@ private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
     is MathBlock -> copy(id = id)
     is MermaidBlock -> copy(id = id)
     is ShapeBlock -> copy(id = id)
+    is DocumentPageBlock -> copy(id = id)
     is UnknownBlock -> BlockDocumentJson.reidentify(this, id)
 }
 

@@ -1108,6 +1108,7 @@ private fun DocumentBlock.withId(nextId: String): DocumentBlock = when (this) {
     is MathBlock -> copy(id = nextId)
     is MermaidBlock -> copy(id = nextId)
     is ShapeBlock -> copy(id = nextId)
+    is DocumentPageBlock -> copy(id = nextId)
     is UnknownBlock -> BlockDocumentJson.reidentify(this, nextId)
 }
 

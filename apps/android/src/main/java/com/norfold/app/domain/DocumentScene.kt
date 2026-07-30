@@ -1,0 +1,537 @@
+package com.norfold.app.domain
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.sqrt
+
+/**
+ * The bounded-page document model (roadmap Phase 2).
+ *
+ * Three things are deliberately kept apart, because conflating any two of them is what made the legacy
+ * document editor unable to grow:
+ *
+ *  - **content truth** — an ordinary [DocumentBlock]. A paragraph on a page is the *same* paragraph the
+ *    Flow editor understands, with the same id and the same payload. Nothing about being placed on a page
+ *    changes what the content *is*;
+ *  - **scene placement** — [SceneObject]. Where that content sits, how big it is, how it is rotated, which
+ *    layer it is on, and whether it is locked. This wraps content rather than mutating it, which is the
+ *    whole reason the legacy `FreeformPlacement` side-map could drift out of sync with the blocks it
+ *    described: a placement whose block had been deleted simply lingered, and a block whose placement was
+ *    missing silently jumped to the origin. A wrapper cannot desynchronize from the thing it wraps;
+ *  - **page structure** — [DocumentPageBlock]. The physical sheet: its geometry, margins, columns and the
+ *    ordered objects it owns.
+ *
+ * **Why pages are top-level blocks.** The repository persists one row per top-level block and the canonical
+ * History Engine's operations are top-level-block granular. Making a page a block therefore buys durable
+ * per-page rows, atomic undo, recovery-snapshot coverage and the verbatim unknown-payload round trip from
+ * machinery that is already proven — instead of a parallel scene store with its own persistence, its own
+ * undo stack and its own migration story. Objects nest *inside* their page for the same structural reason:
+ * page ownership is then a fact about the tree rather than a foreign key that reordering can invalidate.
+ *
+ * **Why this does not bump [BlockDocumentJson.SCHEMA_VERSION].** These are new block kinds, not a
+ * reinterpretation of existing ones. An older build that meets a `page` block cannot decode it, so it
+ * degrades to [UnknownBlock] and writes the payload back verbatim — content is preserved without the older
+ * build having to understand it. A version bump would instead make every *existing* block unreadable to
+ * that same build, which is a migration nobody needs.
+ *
+ * Geometry is in **document points** (72 per inch), matching [DocCanvasSpec], PDF and CSS print units, so
+ * it is independent of screen density and exports without a conversion step.
+ */
+
+/** Points per millimetre. Page limits are specified in millimetres; geometry is stored in points. */
+const val POINTS_PER_MM: Float = 72f / 25.4f
+
+/** Canonical custom-page limits. Both apply: a page must satisfy the side limit *and* the area limit. */
+object PageLimits {
+    /** No page side may exceed 2000 mm. */
+    const val MAX_SIDE_MM: Float = 2000f
+
+    /** No page may exceed 2 m² (2,000,000 mm²). */
+    const val MAX_AREA_MM2: Float = 2_000_000f
+
+    /** Below this a page cannot hold anything meaningful, and zero/negative sizes break layout maths. */
+    const val MIN_SIDE_MM: Float = 10f
+
+    val MAX_SIDE_PT: Float get() = MAX_SIDE_MM * POINTS_PER_MM
+    val MIN_SIDE_PT: Float get() = MIN_SIDE_MM * POINTS_PER_MM
+    val MAX_AREA_PT2: Float get() = MAX_AREA_MM2 * POINTS_PER_MM * POINTS_PER_MM
+
+    /**
+     * The largest page not exceeding either limit that keeps [widthPt] × [heightPt]'s aspect ratio.
+     *
+     * Sides are clamped first, then — if the result is still too large in area — both sides are scaled by
+     * the same factor. Scaling proportionally rather than truncating one side means an over-large page
+     * arrives at a legal size that still looks like the page the user asked for, which matters because this
+     * runs on *persisted* data during migration, not only on fresh user input.
+     */
+    fun fit(widthPt: Float, heightPt: Float): Pair<Float, Float> {
+        val w = widthPt.coerceIn(MIN_SIDE_PT, MAX_SIDE_PT).takeIf { it.isFinite() } ?: MIN_SIDE_PT
+        val h = heightPt.coerceIn(MIN_SIDE_PT, MAX_SIDE_PT).takeIf { it.isFinite() } ?: MIN_SIDE_PT
+        val area = w * h
+        if (area <= MAX_AREA_PT2) return w to h
+        val scale = sqrt(MAX_AREA_PT2 / area)
+        return (w * scale).coerceAtLeast(MIN_SIDE_PT) to (h * scale).coerceAtLeast(MIN_SIDE_PT)
+    }
+}
+
+@Serializable
+enum class PageOrientation { Portrait, Landscape }
+
+/** Uniform page margins in points. */
+@Serializable
+data class PageMargins(
+    val top: Float = 72f,
+    val right: Float = 72f,
+    val bottom: Float = 72f,
+    val left: Float = 72f,
+) {
+    fun normalized(maxWidth: Float, maxHeight: Float): PageMargins {
+        // Margins may never consume the whole sheet: a page with no content box cannot be laid out at all,
+        // and a persisted document with absurd margins must still open.
+        val maxH = (maxWidth / 2f - 1f).coerceAtLeast(0f)
+        val maxV = (maxHeight / 2f - 1f).coerceAtLeast(0f)
+        return PageMargins(
+            top = top.coerceIn(0f, maxV),
+            right = right.coerceIn(0f, maxH),
+            bottom = bottom.coerceIn(0f, maxV),
+            left = left.coerceIn(0f, maxH),
+        )
+    }
+
+    companion object {
+        val NONE = PageMargins(0f, 0f, 0f, 0f)
+    }
+}
+
+/** Multi-column text flow within the content box. [count] of 1 means a single column. */
+@Serializable
+data class PageColumns(val count: Int = 1, val gutter: Float = 18f) {
+    fun normalized() = PageColumns(count = count.coerceIn(1, 12), gutter = gutter.coerceIn(0f, 144f))
+}
+
+/** Optional printed border drawn [inset] points inside the page edge. Null [color] means no border. */
+@Serializable
+data class PageBorder(val color: Long? = null, val width: Float = 1f, val inset: Float = 0f) {
+    val isVisible: Boolean get() = color != null && width > 0f
+    fun normalized() = PageBorder(color = color, width = width.coerceIn(0f, 48f), inset = inset.coerceIn(0f, 144f))
+}
+
+/** Design grid and guide metadata. Guides are authoring aids and are never printed or exported. */
+@Serializable
+data class PageGrid(
+    val visible: Boolean = false,
+    val spacing: Float = 36f,
+    val subdivisions: Int = 2,
+    val snapToGrid: Boolean = false,
+    /** Custom guide positions in points, measured from the page's left/top edge respectively. */
+    val verticalGuides: List<Float> = emptyList(),
+    val horizontalGuides: List<Float> = emptyList(),
+) {
+    fun normalized() = PageGrid(
+        visible = visible,
+        spacing = spacing.coerceIn(2f, 288f),
+        subdivisions = subdivisions.coerceIn(1, 10),
+        snapToGrid = snapToGrid,
+        verticalGuides = verticalGuides.filter { it.isFinite() },
+        horizontalGuides = horizontalGuides.filter { it.isFinite() },
+    )
+}
+
+/**
+ * Print-production metadata: [bleed] extends artwork past the trim edge, [safeArea] keeps content away from
+ * it. Phase 2 stores and round-trips these; the export pipeline that consumes them arrives in Phase 8.
+ */
+@Serializable
+data class PageBleed(val bleed: Float = 0f, val safeArea: Float = 0f) {
+    fun normalized() = PageBleed(bleed = bleed.coerceIn(0f, 144f), safeArea = safeArea.coerceIn(0f, 144f))
+}
+
+/**
+ * Header/footer band metadata. A seam: Phase 2 reserves and round-trips the bands and their text, so page
+ * geometry and the content box are already correct; rich header/footer *content* is a later phase.
+ */
+@Serializable
+data class PageHeaderFooter(
+    val headerHeight: Float = 0f,
+    val footerHeight: Float = 0f,
+    val headerText: String = "",
+    val footerText: String = "",
+    /** A section's first page commonly suppresses the running head. */
+    val differentFirstPage: Boolean = false,
+) {
+    val hasHeader: Boolean get() = headerHeight > 0f || headerText.isNotBlank()
+    val hasFooter: Boolean get() = footerHeight > 0f || footerText.isNotBlank()
+
+    fun normalized(maxHeight: Float): PageHeaderFooter {
+        val limit = (maxHeight / 3f).coerceAtLeast(0f)
+        return copy(
+            headerHeight = headerHeight.coerceIn(0f, limit),
+            footerHeight = footerHeight.coerceIn(0f, limit),
+        )
+    }
+}
+
+@Serializable
+enum class PageNumberFormat { Decimal, RomanLower, RomanUpper, AlphaLower, AlphaUpper }
+
+/**
+ * Numbering and sectioning metadata. [startsSection] is what makes "This section" a real Page Control
+ * scope: a section runs from a page that starts one up to (not including) the next such page.
+ */
+@Serializable
+data class PageNumbering(
+    val startsSection: Boolean = false,
+    val sectionName: String = "",
+    /** Restarts numbering at this value when this page starts a section; null continues the sequence. */
+    val restartAt: Int? = null,
+    val format: PageNumberFormat = PageNumberFormat.Decimal,
+    val showNumber: Boolean = false,
+) {
+    fun normalized() = copy(restartAt = restartAt?.coerceIn(0, 100_000))
+}
+
+/**
+ * The complete physical description of one sheet.
+ *
+ * [structureLocked] defaults to **true**, which encodes the "page structure locked; content editable" rule
+ * as a property of the data rather than a convention the UI is trusted to remember. Editing objects never
+ * consults it; only page-geometry commands do, and they refuse rather than silently reshaping a sheet the
+ * user is composing against.
+ */
+@Serializable
+data class PageGeometry(
+    val preset: DocPagePreset = DocPagePreset.A4,
+    val width: Float = 595f,
+    val height: Float = 842f,
+    val margins: PageMargins = PageMargins(),
+    val columns: PageColumns = PageColumns(),
+    val background: Long? = null,
+    val border: PageBorder = PageBorder(),
+    val grid: PageGrid = PageGrid(),
+    val bleed: PageBleed = PageBleed(),
+    val headerFooter: PageHeaderFooter = PageHeaderFooter(),
+    val numbering: PageNumbering = PageNumbering(),
+    val structureLocked: Boolean = true,
+) {
+    /** Derived, never stored: a second stored copy could contradict the dimensions it describes. */
+    val orientation: PageOrientation
+        get() = if (width > height) PageOrientation.Landscape else PageOrientation.Portrait
+
+    /** The area objects are laid out against — the sheet inset by its margins. */
+    val contentLeft: Float get() = margins.left
+    val contentTop: Float get() = margins.top + headerFooter.headerHeight
+    val contentWidth: Float get() = (width - margins.left - margins.right).coerceAtLeast(1f)
+    val contentHeight: Float
+        get() = (height - margins.top - margins.bottom - headerFooter.headerHeight - headerFooter.footerHeight)
+            .coerceAtLeast(1f)
+
+    /** Width of a single column within the content box, accounting for gutters. */
+    val columnWidth: Float
+        get() {
+            val c = columns.count.coerceAtLeast(1)
+            return ((contentWidth - columns.gutter * (c - 1)) / c).coerceAtLeast(1f)
+        }
+
+    /** Left edge of column [index] relative to the page's left edge. */
+    fun columnLeft(index: Int): Float =
+        contentLeft + index.coerceIn(0, columns.count - 1) * (columnWidth + columns.gutter)
+
+    fun normalized(): PageGeometry {
+        val (w, h) = PageLimits.fit(width, height)
+        return copy(
+            width = w,
+            height = h,
+            margins = margins.normalized(w, h),
+            columns = columns.normalized(),
+            border = border.normalized(),
+            grid = grid.normalized(),
+            bleed = bleed.normalized(),
+            headerFooter = headerFooter.normalized(h),
+            numbering = numbering.normalized(),
+        )
+    }
+
+    /** Swaps the sheet's dimensions if it is not already in [orientation]. Margins follow the rotation. */
+    fun withOrientation(target: PageOrientation): PageGeometry {
+        if (orientation == target) return this
+        return copy(
+            width = height,
+            height = width,
+            margins = PageMargins(
+                top = margins.left,
+                right = margins.top,
+                bottom = margins.right,
+                left = margins.bottom,
+            ),
+        ).normalized()
+    }
+
+    /** Applies a size in millimetres, honouring both canonical limits. */
+    fun withSizeMm(widthMm: Float, heightMm: Float): PageGeometry =
+        copy(preset = DocPagePreset.Custom, width = widthMm * POINTS_PER_MM, height = heightMm * POINTS_PER_MM)
+            .normalized()
+
+    companion object {
+        fun a4() = PageGeometry(DocPagePreset.A4, 595f, 842f)
+        fun letter() = PageGeometry(DocPagePreset.Letter, 612f, 792f)
+        fun legal() = PageGeometry(DocPagePreset.Legal, 612f, 1008f)
+
+        fun ofPreset(preset: DocPagePreset): PageGeometry = when (preset) {
+            DocPagePreset.A4 -> a4()
+            DocPagePreset.Letter -> letter()
+            DocPagePreset.Legal -> legal()
+            DocPagePreset.Custom -> a4().copy(preset = DocPagePreset.Custom)
+        }
+    }
+}
+
+/** What a scene object may have done to it. Drives capability mapping and the lock rules. */
+@Serializable
+enum class SceneObjectKind {
+    /** A text frame: content reflows within the object's box. */
+    TextFrame,
+
+    /** An image, resizable and rotatable. */
+    Image,
+
+    /** A vector/geometric shape. */
+    Shape,
+
+    /** A table placed on the page. Resizable, but rotation is not meaningful. */
+    Table,
+
+    /** A chart placed on the page. */
+    Chart,
+
+    /** An embed/file/diagram card. */
+    Media,
+
+    /**
+     * Legacy content preserved from an earlier document model that this version can place but not natively
+     * interpret. It moves, resizes and round-trips; it is never silently flattened or dropped.
+     */
+    Preserved,
+    ;
+
+    val supportsRotation: Boolean get() = this != SceneObjectKind.Table
+}
+
+/**
+ * Lock scope on a scene object (§4.13). A locked object stays **selectable and inspectable** — it is the
+ * commands that refuse and explain, never the selection that pretends the object is not there. Mirrors
+ * `editor.selection.LockScope`; declared here because the serialized form belongs to the domain and the
+ * domain layer must not depend on the editor layer.
+ */
+@Serializable
+enum class SceneLock {
+    None,
+    Position,
+    Size,
+    Content,
+    Full,
+    ;
+
+    val blocksMove: Boolean get() = this == Position || this == Full
+    val blocksResize: Boolean get() = this == Size || this == Full
+    val blocksRotate: Boolean get() = this == Size || this == Full
+    val blocksContent: Boolean get() = this == Content || this == Full
+}
+
+/** An object's box on its page, in points, relative to the page's top-left corner. */
+@Serializable
+data class SceneGeometry(
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val width: Float = 240f,
+    val height: Float = 120f,
+    val rotation: Float = 0f,
+) {
+    val right: Float get() = x + width
+    val bottom: Float get() = y + height
+    val centerX: Float get() = x + width / 2f
+    val centerY: Float get() = y + height / 2f
+
+    fun normalized(): SceneGeometry = SceneGeometry(
+        x = x.finiteOr(0f),
+        y = y.finiteOr(0f),
+        width = width.finiteOr(MIN_SIZE).coerceIn(MIN_SIZE, PageLimits.MAX_SIDE_PT),
+        height = height.finiteOr(MIN_SIZE).coerceIn(MIN_SIZE, PageLimits.MAX_SIDE_PT),
+        // Normalizing into [0, 360) keeps repeated rotations from accumulating an unbounded value that
+        // eventually loses float precision.
+        rotation = ((rotation.finiteOr(0f) % 360f) + 360f) % 360f,
+    )
+
+    fun translatedBy(dx: Float, dy: Float): SceneGeometry = copy(x = x + dx, y = y + dy).normalized()
+
+    /** True when this box overlaps [other]. Axis-aligned; rotation is ignored for coarse hit tests. */
+    fun intersects(other: SceneGeometry): Boolean =
+        x < other.right && right > other.x && y < other.bottom && bottom > other.y
+
+    /** True when [px], [py] falls inside this box, in the object's own unrotated coordinate space. */
+    fun contains(px: Float, py: Float): Boolean = px >= x && px <= right && py >= y && py <= bottom
+
+    private fun Float.finiteOr(fallback: Float): Float = if (isFinite()) this else fallback
+
+    companion object {
+        /** Below this an object cannot present a usable touch target or resize handle. */
+        const val MIN_SIZE = 8f
+    }
+}
+
+/**
+ * One independently addressable thing on a page: placement, capability and identity around a piece of
+ * content.
+ *
+ * [content] is an ordinary [DocumentBlock] — the same value the Flow editor would hold — so placing content
+ * on a page never rewrites what it is, and an object can be moved between the two products without a
+ * content conversion. [extensions] carries payload this build does not interpret: a later phase (styles,
+ * relationships, effects) can attach data that survives being opened, edited and saved by *this* build,
+ * which is the forward-compatibility guarantee an unknown-kind fallback alone cannot give.
+ */
+@Serializable
+data class SceneObject(
+    val id: String = sceneId("obj"),
+    val kind: SceneObjectKind = SceneObjectKind.TextFrame,
+    val geometry: SceneGeometry = SceneGeometry(),
+    /** Higher draws in front. Kept contiguous from 0 by [DocumentPageBlock.normalized]. */
+    val z: Int = 0,
+    val lock: SceneLock = SceneLock.None,
+    val visible: Boolean = true,
+    val name: String = "",
+    val content: DocumentBlock = ParagraphBlock(),
+    val extensions: Map<String, String> = emptyMap(),
+) {
+    val canMove: Boolean get() = !lock.blocksMove
+    val canResize: Boolean get() = !lock.blocksResize
+    val canRotate: Boolean get() = kind.supportsRotation && !lock.blocksRotate
+    val canEditContent: Boolean get() = !lock.blocksContent
+
+    /** A human label for accessibility and the layer list; falls back to the content's own text. */
+    fun displayName(): String = name.ifBlank {
+        content.plainText().lineSequence().firstOrNull()?.take(40)?.ifBlank { null } ?: kind.name
+    }
+
+    fun normalized(): SceneObject = copy(geometry = geometry.normalized())
+}
+
+/**
+ * One page of a bounded document: its [geometry] and the [objects] it owns.
+ *
+ * Objects are stored **in z-order** (index 0 is furthest back) and their [SceneObject.z] is renormalized to
+ * match on every [normalized] call. One ordering, kept in two forms that cannot disagree: the list order is
+ * what iteration and hit-testing use, and the explicit z survives serialization for anything that reads
+ * objects out of order.
+ */
+@Serializable @SerialName("page")
+data class DocumentPageBlock(
+    override val id: String = sceneId("page"),
+    val geometry: PageGeometry = PageGeometry(),
+    val objects: List<SceneObject> = emptyList(),
+    val extensions: Map<String, String> = emptyMap(),
+) : DocumentBlock {
+
+    override fun plainText(): String =
+        objects.sortedBy { it.z }.joinToString("\n") { it.content.plainText() }.trim()
+
+    fun objectById(objectId: String): SceneObject? = objects.firstOrNull { it.id == objectId }
+
+    fun indexOfObject(objectId: String): Int = objects.indexOfFirst { it.id == objectId }
+
+    /** Objects from front to back — the order hit-testing must consider, since the front one wins. */
+    fun objectsFrontToBack(): List<SceneObject> = objects.sortedByDescending { it.z }
+
+    /**
+     * Every object whose box contains the point, front-most first. The full list is returned rather than
+     * just the winner so overlapping objects have a deterministic deep-selection path: tapping repeatedly
+     * walks down this list instead of being stuck on whatever is on top.
+     */
+    fun hitTest(px: Float, py: Float): List<SceneObject> =
+        objectsFrontToBack().filter { it.visible && it.geometry.contains(px, py) }
+
+    fun normalized(): DocumentPageBlock {
+        val ordered = objects
+            .sortedWith(compareBy({ it.z }, { it.id }))
+            .mapIndexed { index, obj -> obj.normalized().copy(z = index) }
+        return copy(geometry = geometry.normalized(), objects = ordered)
+    }
+
+    fun withObject(obj: SceneObject): DocumentPageBlock {
+        val index = indexOfObject(obj.id)
+        val next = if (index < 0) objects + obj else objects.toMutableList().apply { set(index, obj) }
+        return copy(objects = next).normalized()
+    }
+
+    fun withoutObject(objectId: String): DocumentPageBlock =
+        copy(objects = objects.filterNot { it.id == objectId }).normalized()
+}
+
+/**
+ * The pages of [this] document, in order. Non-page blocks are ignored rather than coerced: a bounded
+ * document that also carries preserved legacy content must not have that content reinterpreted as a page.
+ */
+fun BlockDocument.pages(): List<DocumentPageBlock> = blocks.filterIsInstance<DocumentPageBlock>()
+
+fun BlockDocument.pageById(pageId: String): DocumentPageBlock? =
+    blocks.firstOrNull { it.id == pageId } as? DocumentPageBlock
+
+/** Index of [pageId] within the document's **top-level block list** — the index History operations use. */
+fun BlockDocument.blockIndexOfPage(pageId: String): Int = blocks.indexOfFirst { it.id == pageId }
+
+/** True when this document is a bounded-page document rather than a continuous Flow document. */
+fun BlockDocument.isBoundedDocument(): Boolean = blocks.any { it is DocumentPageBlock }
+
+/** Locates the page owning [objectId], with the object itself. */
+fun BlockDocument.locateObject(objectId: String): Pair<DocumentPageBlock, SceneObject>? {
+    for (page in pages()) {
+        val obj = page.objectById(objectId) ?: continue
+        return page to obj
+    }
+    return null
+}
+
+/**
+ * Total height of the document when pages are stacked vertically with [gap] between them, and the top of
+ * each page in that stack. Presentation reads these to virtualize; they are derived, never stored.
+ */
+fun List<DocumentPageBlock>.stackedPageTops(gap: Float = DEFAULT_PAGE_GAP): List<Float> {
+    var y = 0f
+    return map { page ->
+        val top = y
+        y += page.geometry.height + gap
+        top
+    }
+}
+
+fun List<DocumentPageBlock>.stackedHeight(gap: Float = DEFAULT_PAGE_GAP): Float {
+    if (isEmpty()) return 0f
+    return sumOf { it.geometry.height.toDouble() }.toFloat() + gap * (size - 1)
+}
+
+/** Vertical gap drawn between stacked pages. A presentation constant, not page geometry. */
+const val DEFAULT_PAGE_GAP: Float = 24f
+
+/** Largest page width in the document — the width the page stack must be able to accommodate. */
+fun List<DocumentPageBlock>.widestPage(): Float = maxOfOrNull { it.geometry.width } ?: 0f
+
+/** True when the document mixes page sizes or orientations, which the stack layout must tolerate. */
+fun List<DocumentPageBlock>.hasMixedGeometry(): Boolean {
+    val first = firstOrNull()?.geometry ?: return false
+    return any { abs(it.geometry.width - first.width) > 0.5f || abs(it.geometry.height - first.height) > 0.5f }
+}
+
+/**
+ * The section each page belongs to, as an index. A section starts at a page whose numbering declares
+ * [PageNumbering.startsSection] and runs to the page before the next one that does; the first page always
+ * opens section 0 so every page has an answer.
+ */
+fun List<DocumentPageBlock>.sectionIndices(): List<Int> {
+    var section = 0
+    return mapIndexed { index, page ->
+        if (index > 0 && page.geometry.numbering.startsSection) section++
+        section
+    }
+}
+
+internal fun sceneId(prefix: String): String = "$prefix-${UUID.randomUUID()}"
