@@ -2,10 +2,10 @@ package com.norfold.app.ui.editor.flow
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -28,13 +30,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -52,17 +60,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DocumentBlock
@@ -71,9 +86,11 @@ import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.flow.FlowCommandItem
+import com.norfold.app.editor.flow.FlowDragGeometry
+import com.norfold.app.editor.flow.FlowDropPlacement
 import com.norfold.app.editor.flow.FlowHostUiState
+import com.norfold.app.editor.flow.FlowRowBounds
 import com.norfold.app.editor.flow.FlowSlashContext
-import com.norfold.app.editor.flow.FlowSlashInput
 import com.norfold.app.editor.flow.FlowSurfaces
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.presentation.PresentationMode
@@ -135,6 +152,14 @@ fun FlowHostScreen(
         }
     }
 
+    // The lower surfaces stack — notice, slash results, selection bar, dock — and their combined height is
+    // whatever they happen to be, not a constant anyone can guess right. Measuring it and padding the list by
+    // exactly that much is what keeps the last paragraph and the active caret reachable (correction item 8).
+    var lowerSurfaceHeight by remember { mutableStateOf(0) }
+    val lowerSurfaceDp = with(density) { lowerSurfaceHeight.toDp() }
+
+    val drag = rememberFlowDragState()
+
     Box(
         modifier
             .fillMaxSize()
@@ -152,27 +177,60 @@ fun FlowHostScreen(
                 onUndo = { presenter.act { undo() } },
                 onRedo = { presenter.act { redo() } },
                 onEnterSelection = { presenter.act { enterSelectionMode(state.primaryId) } },
+                compact = configuration.screenWidthDp < FLOW_COMPACT_WIDTH_DP,
             )
             HorizontalDivider()
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(state.document.blocks, key = { it.id }) { block ->
-                    FlowBlockRow(
-                        block = block,
-                        state = state,
-                        presenter = presenter,
-                        onNotice = { notice = it },
+            Box(Modifier.weight(1f)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onGloballyPositioned { drag.viewportTop = it.positionInWindow().y }
+                        .onSizeChanged { drag.viewportHeight = it.height.toFloat() },
+                    contentPadding = PaddingValues(
+                        start = 20.dp,
+                        end = 20.dp,
+                        top = 16.dp,
+                        // Reserve the real height of everything docked below, so the last block and the active
+                        // caret can always be scrolled clear of it instead of sitting under it.
+                        bottom = 16.dp + lowerSurfaceDp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(state.document.blocks, key = { it.id }) { block ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                // Writing-first measure: the *row* fills the list so the centering works, and
+                                // the content inside it stops at a comfortable line length. Putting the
+                                // width cap on a fillMaxWidth() row would have been defeated by the fill.
+                                .onGloballyPositioned { coordinates ->
+                                    val top = coordinates.positionInWindow().y - drag.viewportTop
+                                    drag.bounds[block.id] = FlowRowBounds(
+                                        blockId = block.id,
+                                        top = top,
+                                        bottom = top + coordinates.size.height,
+                                    )
+                                },
+                            contentAlignment = Alignment.TopCenter,
+                        ) {
+                            FlowBlockRow(
+                                block = block,
+                                state = state,
+                                presenter = presenter,
+                                drag = drag,
+                                onNotice = { notice = it },
+                                modifier = Modifier.widthIn(max = FLOW_CONTENT_MAX_WIDTH),
+                            )
+                        }
+                    }
+                }
+                drag.placement?.let { placement ->
+                    FlowDropMarker(
+                        placement = placement,
                         modifier = Modifier
                             .fillMaxWidth()
-                            // Writing-first measure: text stops at a comfortable line length and centres
-                            // on wide windows instead of stretching to the edge of a tablet.
-                            .widthIn(max = FLOW_CONTENT_MAX_WIDTH),
+                            .zIndex(1f),
                     )
                 }
             }
@@ -184,7 +242,8 @@ fun FlowHostScreen(
                 .fillMaxWidth()
                 // The dock rides the keyboard: IME padding first, navigation bars only when it is closed.
                 .imePadding()
-                .navigationBarsPadding(),
+                .navigationBarsPadding()
+                .onSizeChanged { lowerSurfaceHeight = it.height },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             notice?.let { FlowNotice(it) { notice = null } }
@@ -221,6 +280,70 @@ fun FlowHostScreen(
             onNotice = { notice = it },
         )
     }
+
+    // Keep the edited line above the keyboard and the dock. Driven by the runtime's caret request rather than
+    // by focus, so a caret the *runtime* moved (split, merge, undo) scrolls into view exactly like a tap does.
+    val caretRequest = state.caretRequest
+    LaunchedEffect(caretRequest?.stamp, lowerSurfaceHeight, imeBottom) {
+        val target = caretRequest ?: return@LaunchedEffect
+        val index = state.document.blocks.indexOfFirst { it.id == target.blockId }
+        if (index < 0) return@LaunchedEffect
+        val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        val limit = listState.layoutInfo.viewportEndOffset - lowerSurfaceHeight
+        if (visible == null || visible.offset + visible.size > limit || visible.offset < 0) {
+            listState.animateScrollToItem(index)
+        }
+    }
+}
+
+/** Mutable, non-snapshot drag bookkeeping plus the snapshot state the marker and the lift read. */
+@androidx.compose.runtime.Stable
+private class FlowDragState {
+    /** Measured row bounds, keyed by block id. Written on every layout pass; not observed. */
+    val bounds = mutableMapOf<String, FlowRowBounds>()
+    var viewportTop: Float = 0f
+    var viewportHeight: Float = 0f
+
+    var sourceId: String? by mutableStateOf(null)
+    var lift: Float by mutableStateOf(0f)
+    var placement: FlowDropPlacement? by mutableStateOf(null)
+
+    /** Rows in document order, which is the order [FlowDragGeometry] resolves indices against. */
+    fun orderedBounds(order: List<String>): List<FlowRowBounds> = order.mapNotNull { bounds[it] }
+
+    fun reset() {
+        sourceId = null
+        lift = 0f
+        placement = null
+    }
+}
+
+@Composable
+private fun rememberFlowDragState(): FlowDragState = remember { FlowDragState() }
+
+/**
+ * The insertion marker: a line exactly where the block will land.
+ *
+ * Drawn from the same [FlowDropPlacement] the drop commits, so the preview cannot promise one position and
+ * the command perform another (correction items 3 and 4). A no-op placement is drawn muted rather than hidden
+ * — "this changes nothing" is feedback, silence is not.
+ */
+@Composable
+private fun FlowDropMarker(placement: FlowDropPlacement, modifier: Modifier = Modifier) {
+    val color = if (placement.isNoOp) {
+        MaterialTheme.colorScheme.outlineVariant
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    Box(
+        modifier
+            .offset { IntOffset(0, placement.markerY.roundToInt() - 1) }
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .height(3.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(color),
+    )
 }
 
 /** One block: its content, its `+` affordance, its selection state, and its accessibility actions. */
@@ -230,48 +353,60 @@ private fun FlowBlockRow(
     block: DocumentBlock,
     state: FlowHostUiState,
     presenter: FlowHostPresenter,
+    drag: FlowDragState,
     onNotice: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val selected = block.id in state.selectedIds
-    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    val dragging = drag.sourceId == block.id
     val callbacks = remember(block.id, state.revision) {
         FlowBlockCallbacks(
             onEdit = { edit ->
                 presenter.act {
                     editText(edit.blockId, edit.before, edit.after, edit.itemId)
-                    setCaret(edit.blockId, edit.caret)
+                    setCaret(edit.blockId, edit.caret, edit.itemId)
+                    // The runtime builds the slash input, because whether the caret sits in a verbatim inline
+                    // span is a fact only the document holds (correction item 6).
                     onTextInput(
                         edit.blockId,
-                        FlowSlashInput(
+                        slashInputFor(
+                            blockId = edit.blockId,
                             text = edit.after,
                             caret = edit.caret,
-                            context = slashContextOf(block),
                             itemId = edit.itemId,
+                            context = slashContextOf(block),
                         ),
                     )
                 }
             },
-            onCaret = { blockId, _, caret -> presenter.act { setCaret(blockId, caret) } },
+            onCaret = { blockId, itemId, caret -> presenter.act { setCaret(blockId, caret, itemId) } },
             onToggleTodo = { blockId, itemId -> presenter.act { toggleTodo(blockId, itemId) } },
             onTableCell = { cursor -> presenter.act { setTableCursor(cursor) } },
+            onNewLine = { presenter.act { newLine() } },
+            onBackspaceAtStart = { presenter.act { backspaceAtStart() } },
+            onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },
         )
     }
 
-    // Drag state for reordering blocks
-    var dragOffset by remember { mutableStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
-
     Row(
         modifier
-            .offset { IntOffset(0, dragOffset.roundToInt()) }
             .graphicsLayer {
-                alpha = if (isDragging) 0.7f else 1f
-                shadowElevation = if (isDragging) 8f else 0f
+                // The lifted clone rides above the list and stays translucent, so the destination marker under
+                // it remains visible instead of being covered by the thing being moved (correction item 4).
+                translationY = if (dragging) drag.lift else 0f
+                alpha = if (dragging) 0.85f else 1f
+                shadowElevation = if (dragging) 12f else 0f
             }
+            .zIndex(if (dragging) 2f else 0f)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent,
+                when {
+                    // The source keeps a visible placeholder tint so its origin stays legible during the drag.
+                    dragging -> MaterialTheme.colorScheme.surfaceVariant
+                    selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                    else -> Color.Transparent
+                },
             )
             .combinedClickable(
                 onClick = {
@@ -283,13 +418,19 @@ private fun FlowBlockRow(
                 onLongClick = { presenter.act { enterSelectionMode(block.id) } },
             )
             .semantics {
-                // Accessibility actions are the *same* registry commands the dock shows, resolved against the
-                // live selection. Activating a row selects it first, exactly as a tap does, so the action list
-                // that follows describes this block.
-                customActions = state.accessibilityActions.map { item ->
+                // Actions are resolved against *this* block, so the availability and reason a screen reader
+                // announces describe the row it is on rather than whatever happened to be selected
+                // (correction item 14). Execution re-selects the row and runs the same registry command.
+                customActions = presenter.runtime.accessibilityActionsFor(block.id).map { item ->
                     CustomAccessibilityAction(item.accessibilityLabel()) {
-                        if (block.id !in state.selectedIds) presenter.act { setCaret(block.id, 0) }
-                        presenter.invokeItem(item, CommandSurface.ACCESSIBILITY, onNotice)
+                        if (!item.enabled) {
+                            onNotice(item.disabledReason ?: "'${item.label}' is not available here")
+                        } else {
+                            val result = presenter.act { invokeAccessibilityOn(block.id, item.id) }
+                            if (result is com.norfold.app.editor.command.CommandResult.Failure) {
+                                onNotice(result.reason)
+                            }
+                        }
                         true
                     }
                 }
@@ -297,50 +438,57 @@ private fun FlowBlockRow(
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Drag handle (+ button becomes draggable for block reordering)
+        // Tap inserts; long-press starts a reorder. Both live on the handle so an ordinary long-press in the
+        // text still means multi-select.
         IconButton(
             onClick = { presenter.act { openInsertPalette(block.id) } },
             modifier = Modifier
                 .width(36.dp)
-                .pointerInput(block.id) {
-                    detectDragGestures(
+                .pointerInput(block.id, state.document.blocks.size) {
+                    detectDragGesturesAfterLongPress(
                         onDragStart = {
-                            isDragging = true
+                            drag.sourceId = block.id
+                            drag.lift = 0f
+                            drag.placement = null
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             presenter.act { beginDrag(block.id) }
                         },
-                        onDrag = { change, dragAmount ->
+                        onDrag = { change, amount ->
                             change.consume()
-                            dragOffset += dragAmount.y
+                            drag.lift += amount.y
+                            val order = state.document.blocks.map { it.id }
+                            val rows = drag.orderedBounds(order)
+                            val self = drag.bounds[block.id]
+                            val pointer = (self?.center ?: 0f) + drag.lift
+                            val next = FlowDragGeometry.placementFor(rows, block.id, pointer)
+                            if (next?.index != drag.placement?.index) {
+                                if (next != null && !next.isNoOp) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                drag.placement = next
+                            }
                         },
                         onDragEnd = {
-                            val blocks = state.document.blocks
-                            val from = blocks.indexOfFirst { it.id == block.id }
-                            val rowPitchPx = with(density) { FLOW_DRAG_ROW_PITCH.toPx() }
-                            val to = if (from < 0) -1
-                            else (from + (dragOffset / rowPitchPx).roundToInt())
-                                .coerceIn(0, blocks.lastIndex)
-
-                            if (from >= 0 && to != from) {
-                                // `moveInto` resolves the index against the list *before* the block is
-                                // removed, so a downward move needs one extra slot. Sending the raw target
-                                // silently moves nothing (see drag_naiveDownwardIndexIsANoOp).
-                                val dropIndex = if (to > from) to + 1 else to
+                            val placement = drag.placement
+                            if (placement == null || placement.isNoOp) {
+                                // Same position, or nowhere to place: cancel, so history records nothing and
+                                // the list snaps back to exactly its pre-drag state.
+                                presenter.act { cancelDrag() }
+                            } else {
                                 val result = presenter.act {
-                                    completeDrag(DropTarget.Into(parentId = null, index = dropIndex))
+                                    completeDrag(DropTarget.Into(parentId = null, index = placement.index))
                                 }
                                 if (result is com.norfold.app.editor.command.CommandResult.Failure) {
                                     onNotice(result.reason)
+                                } else {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 }
-                            } else {
-                                presenter.act { cancelDrag() }
                             }
-                            isDragging = false
-                            dragOffset = 0f
+                            drag.reset()
                         },
                         onDragCancel = {
                             presenter.act { cancelDrag() }
-                            isDragging = false
-                            dragOffset = 0f
+                            drag.reset()
                         },
                     )
                 },
@@ -348,11 +496,32 @@ private fun FlowBlockRow(
             Text("+", style = MaterialTheme.typography.titleMedium)
         }
         Box(Modifier.weight(1f)) {
-            FlowBlockContent(block, callbacks, Modifier.fillMaxWidth())
+            FlowBlockContent(
+                block = block,
+                callbacks = callbacks,
+                modifier = Modifier.fillMaxWidth(),
+                context = FlowBlockContext(
+                    caretRequest = state.caretRequest,
+                    selectionMode = state.selectionMode,
+                    tableCursor = state.tableCursor,
+                ),
+            )
         }
     }
 }
 
+/**
+ * The header (correction items 11 and 12).
+ *
+ * On a compact window the five controls no longer share one row and squeeze each other: navigation, the title
+ * and Undo/Redo stay visible, and Select moves into an overflow menu — a real, labelled surface, not a hidden
+ * gesture. The title is the only element allowed to take the remaining space, because it is the only one whose
+ * content is unbounded.
+ *
+ * The title is a text field, not a label. `onTitleChange` was previously wired to nothing the user could
+ * reach; here typing in the field is the one intentional edit interaction, and navigating never lands a caret
+ * in it by accident because nothing else focuses it.
+ */
 @Composable
 private fun FlowTopBar(
     state: FlowHostUiState,
@@ -362,7 +531,9 @@ private fun FlowTopBar(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onEnterSelection: () -> Unit,
+    compact: Boolean,
 ) {
+    var overflow by remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
@@ -371,20 +542,82 @@ private fun FlowTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(onClick = onOpenSidebar) { Text("Notes") }
-        Text(
-            text = title.ifBlank { "Untitled" },
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+        FlowTitleField(
+            title = title,
+            onTitleChange = onTitleChange,
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 8.dp),
         )
         TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
         TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
-        // The multi-select entry is a permanent, labelled control — not a hidden long-press. The hint chip
-        // appears until the affordance has been used once (GUIDE_DISCOVERY, not a user setting).
-        TextButton(onClick = onEnterSelection) {
-            Text(if (state.showMultiSelectHint) "Select blocks" else "Select")
+        if (compact) {
+            Box {
+                IconButton(onClick = { overflow = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More actions")
+                }
+                DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
+                    DropdownMenuItem(
+                        text = { Text(if (state.showMultiSelectHint) "Select blocks" else "Select") },
+                        onClick = {
+                            overflow = false
+                            onEnterSelection()
+                        },
+                    )
+                }
+            }
+        } else {
+            // The multi-select entry is a permanent, labelled control — not a hidden long-press. The hint
+            // appears until the affordance has been used once (GUIDE_DISCOVERY, not a user setting).
+            TextButton(onClick = onEnterSelection) {
+                Text(if (state.showMultiSelectHint) "Select blocks" else "Select")
+            }
         }
+    }
+}
+
+/**
+ * The note title, editable in place.
+ *
+ * The field is re-seeded when the *owner's* value changes — a rename from elsewhere, or a process recreation
+ * restoring the saved title — but not merely because it differs from the local text. Comparing against the
+ * last observed owner value is what distinguishes "someone else changed it" from "the owner has not caught up
+ * with this keystroke yet"; re-seeding on the latter would delete characters as they are typed.
+ */
+@Composable
+private fun FlowTitleField(title: String, onTitleChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    var value by remember { mutableStateOf(title) }
+    var lastOwner by remember { mutableStateOf(title) }
+    if (title != lastOwner) {
+        lastOwner = title
+        value = title
+    }
+    Box(modifier) {
+        if (value.isBlank()) {
+            Text(
+                "Untitled",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            )
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = {
+                // A title is one line by definition; newlines pasted in are flattened rather than silently
+                // producing a header that renders differently everywhere it is shown.
+                val single = it.replace("\n", " ")
+                value = single
+                lastOwner = single
+                onTitleChange(single)
+            },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.titleMedium.copy(
+                fontWeight = FontWeight.SemiBold,
+                color = LocalContentColor.current,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -466,6 +699,10 @@ private fun FlowCommandChip(item: FlowCommandItem, onCommand: (FlowCommandItem) 
 /**
  * The slash menu. Its only input is the `/query` already in the block text — there is deliberately no search
  * field here, so the list can never disagree with what the user typed.
+ *
+ * Its height is capped at roughly five rows and the remainder scrolls (correction item 9). An unbounded Column
+ * of results would grow over the line being edited, which is the one thing the user needs to keep seeing while
+ * choosing a command.
  */
 @Composable
 private fun FlowSlashMenu(
@@ -492,26 +729,28 @@ private fun FlowSlashMenu(
             TextButton(onClick = onDismiss) { Text("Close") }
         }
         HorizontalDivider()
-        session.results.forEach { result ->
-            val enabled = result.status.isInvokable
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = enabled, onClick = { onPick(result.command.id) })
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text(
-                    result.command.label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                )
-                if (!enabled) {
+        LazyColumn(Modifier.heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT)) {
+            items(session.results, key = { it.command.id }) { result ->
+                val enabled = result.status.isInvokable
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = enabled, onClick = { onPick(result.command.id) })
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
                     Text(
-                        result.status.reason ?: "Not available here",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        result.command.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (enabled) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                     )
+                    if (!enabled) {
+                        Text(
+                            result.status.reason ?: "Not available here",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -537,11 +776,14 @@ private fun FlowPaletteSurface(
     }
     val heading = if (surfaceId == FlowSurfaces.INSERT_PALETTE) "Insert" else "Turn into"
     val dismiss: () -> Unit = { presenter.act { closeSurface(surfaceId, DismissTrigger.OUTSIDE_TAP) } }
+    val compact = state.presentationMode == PresentationMode.PHONE_SHEET ||
+        state.presentationMode == PresentationMode.PHONE_POPOVER
     val body = @Composable {
         FlowPaletteList(
             heading = heading,
             items = items,
             recentId = state.recentInsertId.takeIf { surfaceId == FlowSurfaces.INSERT_PALETTE },
+            compact = compact,
             onPick = { item -> presenter.invokeItem(item, CommandSurface.DOCK, onNotice) },
         )
     }
@@ -569,6 +811,7 @@ private fun FlowPaletteList(
     heading: String,
     items: List<FlowCommandItem>,
     recentId: String?,
+    compact: Boolean,
     onPick: (FlowCommandItem) -> Unit,
 ) {
     Column(Modifier.padding(bottom = 24.dp)) {
@@ -578,34 +821,40 @@ private fun FlowPaletteList(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
         )
         val ordered = items.sortedByDescending { it.id == recentId }
-        ordered.forEach { item ->
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = { onPick(item) })
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        item.label,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (item.enabled) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                        modifier = Modifier.weight(1f),
-                    )
-                    item.shortcut?.let {
-                        Text(it.display(), style = MaterialTheme.typography.labelSmall)
+        // Bounded on a compact window so the list keeps the document visible behind it and scrolls the rest;
+        // the tablet pane is given the room it has (correction item 9).
+        LazyColumn(
+            if (compact) Modifier.heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT) else Modifier,
+        ) {
+            items(ordered, key = { it.id }) { item ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = { onPick(item) })
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            item.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (item.enabled) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                            modifier = Modifier.weight(1f),
+                        )
+                        item.shortcut?.let {
+                            Text(it.display(), style = MaterialTheme.typography.labelSmall)
+                        }
+                        if (item.id == recentId) {
+                            Text("Recent", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
-                    if (item.id == recentId) {
-                        Text("Recent", style = MaterialTheme.typography.labelSmall)
+                    item.disabledReason?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                }
-                item.disabledReason?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }
@@ -661,8 +910,8 @@ private fun slashContextOf(block: DocumentBlock): FlowSlashContext = when (block
 private val FLOW_CONTENT_MAX_WIDTH = 760.dp
 private val FLOW_PANE_WIDTH = 360.dp
 
-/**
- * Row pitch the drag gesture divides by to turn a pixel offset into a row delta. An approximation of typical
- * row height — rows vary, so a long drag across mixed content lands approximately and the user adjusts.
- */
-private val FLOW_DRAG_ROW_PITCH = 48.dp
+/** Below this the header sheds its secondary control into an overflow menu rather than squeezing. */
+private const val FLOW_COMPACT_WIDTH_DP = 400
+
+/** Roughly five rows: enough to choose from, little enough that the document stays visible behind. */
+private val FLOW_COMPACT_LIST_MAX_HEIGHT = 260.dp
