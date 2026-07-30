@@ -49,3 +49,9 @@ build/
 .metadata
 *.iml
 apps/android/google-services.json
+
+# Windows-download metadata: NTFS alternate-data-stream files that appear beside
+# any file fetched through a browser on the Windows side of WSL.
+*:Zone.Identifier
+
+# Local AI/agent tooling. Editor-side scaffolding, not part of the product.
