@@ -7,6 +7,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -26,8 +27,11 @@ import com.norfold.app.ui.editor.flow.FlowHostScreen
 import com.norfold.app.ui.editor.flow.rememberFlowHostPresenter
 import com.norfold.app.ui.screens.EditorSurface
 import com.norfold.app.ui.screens.StructuredBlockEditorHost
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.withContext
 
 /**
  * Process-local editor flags. Every flag defaults **off**, so this resolves to the legacy host until an
@@ -134,20 +138,26 @@ private fun FlowHostRoute(
     }
 
     // Debounced on an idle gap rather than counting revisions: `revision` also advances for selection and
-    // surface changes, so a counter would both skip dirty moments and fire on clean ones.
+    // surface changes, so a counter would both skip dirty moments and fire on clean ones. The autosave effect
+    // must read the latest title without restarting the debounce every time it changes — that's what
+    // `rememberUpdatedState` exists for (correction item 7).
+    val latestTitle by rememberUpdatedState(title)
     LaunchedEffect(owner.documentId) {
         snapshotFlow { presenter.state.revision }
             .debounce(AUTO_SAVE_IDLE_MS)
-            .collect { saveIfDirty(viewModel, owner, title, runtime) }
+            .collect { saveIfDirty(viewModel, owner, latestTitle, runtime) }
     }
 
     // Leaving the editor must not drop work still inside the debounce window. Runs on the ViewModel's scope
-    // via the same request path, so a save in flight when this composable goes away still completes.
+    // via the same request path, so a save in flight when this composable goes away still completes. The
+    // dispose handler also reads the latest title via `rememberUpdatedState`, for the same reason.
+    val latestTitleOnDispose by rememberUpdatedState(title)
     DisposableEffect(owner.documentId) {
         onDispose {
             val dirtyIds = runtime.controller.dirtyBlockIds()
-            if (dirtyIds.isNotEmpty()) {
-                viewModel.updateActiveDocument(owner, title, runtime.controller.document(), dirtyIds)
+            val deletedIds = runtime.controller.deletedBlockIds()
+            if (dirtyIds.isNotEmpty() || deletedIds.isNotEmpty()) {
+                viewModel.updateActiveDocument(owner, latestTitleOnDispose, runtime.controller.document(), dirtyIds)
             }
         }
     }
@@ -166,10 +176,19 @@ private fun FlowHostRoute(
 }
 
 /**
- * Persists the document if anything is dirty, and clears the dirty set only once persistence has accepted it.
+ * Persists the document if anything is dirty or deleted, and clears the baseline only once persistence succeeds.
  *
  * The ids are captured *before* awaiting, so edits made while the write is in flight stay dirty and are picked
- * up by the next tick instead of being silently marked saved along with it.
+ * up by the next tick instead of being silently marked saved along with it. A deletion-only change (empty dirty
+ * set, non-empty deleted) must still schedule persistence — `persistDocument` derives removals from the document
+ * itself, so the write path is the same whether the change is an edit, a deletion, or both.
+ *
+ * The Job the ViewModel returns completes whether or not the repository threw, and `join()` returns Unit either
+ * way, so it is not success evidence. Awaiting the Job and then checking `isCompleted && !isCancelled` would
+ * still not distinguish "wrote successfully" from "threw an exception inside the launch". Instead, attach an
+ * `invokeOnCompletion` handler that can see the exception (or its absence), and suspend on a `CompletableDeferred`
+ * the handler resolves once it knows the outcome. A failed write leaves the dirty/deleted baseline intact so the
+ * next tick retries rather than losing the change.
  */
 private suspend fun saveIfDirty(
     viewModel: DocsViewModel,
@@ -178,10 +197,17 @@ private suspend fun saveIfDirty(
     runtime: FlowHostRuntime,
 ) {
     val dirtyIds = runtime.controller.dirtyBlockIds()
-    if (dirtyIds.isEmpty()) return
+    val deletedIds = runtime.controller.deletedBlockIds()
+    if (dirtyIds.isEmpty() && deletedIds.isEmpty()) return
     val document = runtime.controller.document()
-    // A failure leaves the dirty state untouched, so the work is retried rather than lost.
-    val saved = runCatching { viewModel.updateActiveDocument(owner, title, document, dirtyIds).join() }
+    val saved = withContext(NonCancellable) {
+        val result = CompletableDeferred<Result<Unit>>()
+        val job = viewModel.updateActiveDocument(owner, title, document, dirtyIds)
+        job.invokeOnCompletion { error ->
+            result.complete(if (error == null) Result.success(Unit) else Result.failure(error))
+        }
+        result.await()
+    }
     if (saved.isSuccess) runtime.controller.markSaved(document)
 }
 
