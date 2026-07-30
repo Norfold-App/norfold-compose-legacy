@@ -528,7 +528,7 @@ class FlowHostCorrectionTest {
         val runtime = runtimeOf(
             BlockDocument(listOf(ParagraphBlock(id = "p0", content = listOf(CodeInline("cmd /h"))))),
         )
-        val input = runtime.slashInputFor("p0", "cmd /h", caret = 6, itemId = null, context = FlowSlashContext.PROSE)
+        val input = runtime.slashInputFor("p0", "cmd /h", caret = 6, itemId = null)
         assertTrue(input.literalInline)
     }
 
@@ -541,7 +541,7 @@ class FlowHostCorrectionTest {
         runtime.setCaret("p0", 6)
         val session = runtime.onTextInput(
             "p0",
-            runtime.slashInputFor("p0", "cmd /h", 6, null, FlowSlashContext.PROSE),
+            runtime.slashInputFor("p0", "cmd /h", 6, null),
         )
         assertNull(session)
     }
@@ -552,7 +552,7 @@ class FlowHostCorrectionTest {
         runtime.setCaret("p0", 0)
         val session = runtime.onTextInput(
             "p0",
-            runtime.slashInputFor("p0", "/h", 2, null, FlowSlashContext.PROSE),
+            runtime.slashInputFor("p0", "/h", 2, null),
         )
         assertNotNull(session)
     }

@@ -84,18 +84,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
 import kotlinx.coroutines.isActive
-import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DropTarget
-import com.norfold.app.domain.MathBlock
-import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.flow.FlowCommandItem
 import com.norfold.app.editor.flow.FlowDragGeometry
 import com.norfold.app.editor.flow.FlowDropPlacement
 import com.norfold.app.editor.flow.FlowHostUiState
 import com.norfold.app.editor.flow.FlowRowBounds
-import com.norfold.app.editor.flow.FlowSlashContext
 import com.norfold.app.editor.flow.FlowSurfaces
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.presentation.PresentationMode
@@ -438,8 +434,10 @@ private fun FlowBlockRow(
                 presenter.act {
                     editText(edit.blockId, edit.before, edit.after, edit.itemId)
                     setCaret(edit.blockId, edit.caret, edit.itemId)
-                    // The runtime builds the slash input, because whether the caret sits in a verbatim inline
-                    // span is a fact only the document holds (correction item 6).
+                    // The runtime builds the whole slash input, because both suppression facts — which block
+                    // kind is actually addressed, and whether the caret sits in a verbatim inline span — are
+                    // held by the document. This row may be rendering a nested child, so the block it was
+                    // composed for is not necessarily the one being edited (correction item 6).
                     onTextInput(
                         edit.blockId,
                         slashInputFor(
@@ -447,7 +445,6 @@ private fun FlowBlockRow(
                             text = edit.after,
                             caret = edit.caret,
                             itemId = edit.itemId,
-                            context = slashContextOf(block),
                         ),
                     )
                 }
@@ -969,14 +966,6 @@ private fun FlowHostPresenter.invokeItem(
     }
     val result = act { invoke(item.id, surface) }
     if (result is com.norfold.app.editor.command.CommandResult.Failure) onNotice(result.reason)
-}
-
-/** Blocks whose `/` is content, so the slash resolver stays closed inside them. */
-private fun slashContextOf(block: DocumentBlock): FlowSlashContext = when (block) {
-    is CodeBlock -> FlowSlashContext.CODE
-    is MathBlock -> FlowSlashContext.EQUATION
-    is MermaidBlock -> FlowSlashContext.DIAGRAM
-    else -> FlowSlashContext.PROSE
 }
 
 /** Comfortable measure for continuous prose; wider windows gain margin, not line length. */

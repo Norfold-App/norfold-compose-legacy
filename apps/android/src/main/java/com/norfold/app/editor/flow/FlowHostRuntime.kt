@@ -496,26 +496,31 @@ class FlowHostRuntime(
     /**
      * Builds the slash input for an edit the surface just reported (correction item 6).
      *
-     * `literalInline` is the fact the surface cannot supply: whether the caret sits inside a span where `/` is
-     * content — inline code, inline math. A plain string cannot say, and the resolver deliberately does not
-     * read documents. So it is resolved here, against the **post-edit** document, which is why this is called
-     * after [editText] rather than from the field's own state.
+     * Both suppression facts are resolved here, against the **post-edit** document, which is why this is called
+     * after [editText] rather than from the field's own state:
      *
-     * The block-kind context ([FlowSlashContext]) stays a surface parameter because it describes which block is
-     * being edited, which the surface already knows without a lookup.
+     *  - **block context** — whether this is code, an equation or a diagram, where `/` is content. The surface
+     *    used to pass this, computed from the *top-level row* it was rendering. Quotes, callouts and containers
+     *    render their children recursively while reusing the outer row's callbacks, so a code block nested in a
+     *    container was described as PROSE and the menu opened on a slash inside code. Only the addressed block
+     *    can answer, so only the runtime asks.
+     *  - **literalInline** — whether the caret sits inside a verbatim inline span. A plain string cannot say,
+     *    and the resolver deliberately does not read documents.
+     *
+     * Fails closed when [blockId] no longer exists: an unknown target is reported as CODE, the most restrictive
+     * context, so a menu never opens against a block that is gone.
      */
     fun slashInputFor(
         blockId: String,
         text: String,
         caret: Int,
-        itemId: String?,
-        context: FlowSlashContext,
+        itemId: String? = null,
     ): FlowSlashInput {
         val block = controller.document().findById(blockId)
         return FlowSlashInput(
             text = text,
             caret = caret,
-            context = context,
+            context = if (block == null) FlowSlashContext.CODE else FlowSlashContext.of(block),
             literalInline = block != null && FlowInlineText.literalInlineAt(block, itemId, caret),
             itemId = itemId,
         )

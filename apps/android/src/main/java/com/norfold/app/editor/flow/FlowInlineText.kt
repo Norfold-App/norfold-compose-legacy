@@ -148,23 +148,62 @@ object FlowInlineText {
 
     /**
      * True when [offset] in the text of [block]/[itemId] sits inside an inline span where `/` is content —
-     * inline code or inline math.
+     * inline code or inline math, **at any wrapper depth**.
      *
      * The probe is the character *before* the caret, because that is the span the next keystroke joins: a
      * caret parked immediately after `` `a/b` `` is still typing inside that code span. At offset 0 there is
      * no preceding character, so nothing is literal.
+     *
+     * The traversal is recursive because the schema permits wrappers around literal spans — `**`a/b`**` is
+     * `BoldInline(CodeInline)`, and a link around an italic around code is three levels deep. A one-level check
+     * (the defect this replaces) saw only `BoldInline`, decided "not literal", and opened the command menu on a
+     * slash the user was typing inside a code span. Offsets stay in the flattened plain text throughout, so
+     * descending into a wrapper cannot shift them.
      */
     fun literalInlineAt(block: DocumentBlock, itemId: String?, offset: Int): Boolean {
         val nodes = nodesOf(block, itemId) ?: return false
         if (offset <= 0) return false
-        val probe = offset - 1
-        var cursor = 0
+        return literalAt(nodes, offset - 1, base = 0)
+    }
+
+    /**
+     * Whether [probe] — an index into the flattened text of [nodes], where the first character is at [base] —
+     * falls inside a literal span.
+     *
+     * Wrappers are descended into with the child's own base offset; the literal leaves answer for themselves.
+     * A node whose range does not contain the probe is skipped by advancing the cursor, so the walk is a single
+     * pass and every character maps to exactly one node.
+     */
+    private fun literalAt(nodes: List<InlineNode>, probe: Int, base: Int): Boolean {
+        var cursor = base
         for (node in nodes) {
             val length = node.plainText().length
-            if (probe < cursor + length) return node.isLiteralSlashSpan()
+            if (probe < cursor + length) {
+                val children = node.styleChildren()
+                return if (children != null) literalAt(children, probe, cursor) else node.isLiteralSlashSpan()
+            }
             cursor += length
         }
         return false
+    }
+
+    /**
+     * The children of a purely *stylistic* wrapper, or null for anything that owns its own text.
+     *
+     * Bold, italic and a link decorate ordinary prose, so whether a slash inside them is literal is a question
+     * about what they contain, not about them. Inline code and inline math own verbatim payloads and answer for
+     * themselves; so does plain text.
+     */
+    private fun InlineNode.styleChildren(): List<InlineNode>? = when (this) {
+        is BoldInline -> children
+        is ItalicInline -> children
+        is UnderlineInline -> children
+        is StrikethroughInline -> children
+        is HighlightInline -> children
+        is FontFamilyInline -> children
+        is FontSizeInline -> children
+        is LinkInline -> children
+        else -> null
     }
 
     /**
