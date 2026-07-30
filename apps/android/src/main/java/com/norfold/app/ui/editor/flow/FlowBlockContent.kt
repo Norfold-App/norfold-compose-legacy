@@ -14,12 +14,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,12 +34,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.BulletListBlock
@@ -43,6 +67,8 @@ import com.norfold.app.domain.ContainerBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.HeadingBlock
+import com.norfold.app.domain.InlineNode
+import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.NumberedListBlock
@@ -52,7 +78,12 @@ import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.UnknownBlock
 import com.norfold.app.domain.plainText
+import com.norfold.app.editor.flow.FlowCaretRequest
+import com.norfold.app.editor.flow.FlowInlineStyle
+import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.editor.flow.FlowTableCursor
+import com.norfold.app.ui.fonts.NorfoldFontFamilies
+import com.norfold.app.ui.screens.highlightColor
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -75,6 +106,42 @@ class FlowBlockCallbacks(
     val onCaret: (blockId: String, itemId: String?, caret: Int) -> Unit,
     val onToggleTodo: (blockId: String, itemId: String) -> Unit,
     val onTableCell: (FlowTableCursor) -> Unit,
+    /**
+     * Enter pressed with the caret inside this field. Returns true when the runtime turned it into a document
+     * change (split, new list item, leaving a list) and the field should *not* also insert a newline.
+     */
+    val onNewLine: () -> Boolean = { false },
+    /**
+     * Backspace pressed with the caret collapsed at offset 0. Returns true when the runtime merged backwards;
+     * false lets the keystroke fall through, which is what "nothing above to join" should feel like.
+     */
+    val onBackspaceAtStart: () -> Boolean = { false },
+    /** Expand/collapse a collapsible block (correction item 16). */
+    val onToggleCollapsed: (blockId: String) -> Unit = {},
+)
+
+/**
+ * The per-row presentation facts a block needs from the runtime snapshot (correction items 1 and 5).
+ *
+ * Passed as one value rather than five parameters threaded through every nested `FlowBlockContent` call, so
+ * adding a fact later does not mean touching every block branch.
+ */
+data class FlowBlockContext(
+    /**
+     * The caret the runtime wants shown, or null. Applied once per [FlowCaretRequest.stamp]; see that type for
+     * why the stamp, and not the caret value, is what makes this loop-free.
+     */
+    val caretRequest: FlowCaretRequest? = null,
+    /**
+     * True while structural multi-select is active. Text fields go read-only and stop taking focus, so tapping
+     * a block's *text* toggles the block instead of dropping a caret into it (correction item 5).
+     */
+    val selectionMode: Boolean = false,
+    /**
+     * The cell the runtime has addressed, or null. Comes from the runtime rather than from row-local state so
+     * a highlighted cell always means the command system genuinely has a table cursor (correction item 7).
+     */
+    val tableCursor: FlowTableCursor? = null,
 )
 
 /**
@@ -90,25 +157,28 @@ fun FlowBlockContent(
     block: DocumentBlock,
     callbacks: FlowBlockCallbacks,
     modifier: Modifier = Modifier,
+    context: FlowBlockContext = FlowBlockContext(),
 ) {
     when (block) {
         is ParagraphBlock -> FlowEditableLine(
             blockId = block.id,
             itemId = null,
-            text = block.plainText(),
+            nodes = block.content,
             style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp),
             placeholder = "Write something…",
             callbacks = callbacks,
+            context = context,
             modifier = modifier,
         )
 
         is HeadingBlock -> FlowEditableLine(
             blockId = block.id,
             itemId = null,
-            text = block.plainText(),
+            nodes = block.content,
             style = headingStyle(block.level),
             placeholder = "Heading ${block.level}",
             callbacks = callbacks,
+            context = context,
             modifier = modifier,
         )
 
@@ -118,10 +188,11 @@ fun FlowBlockContent(
                     FlowEditableLine(
                         blockId = block.id,
                         itemId = item.id,
-                        text = item.content.plainText(),
+                        nodes = item.content,
                         style = MaterialTheme.typography.bodyLarge,
                         placeholder = "List item",
                         callbacks = callbacks,
+                        context = context,
                     )
                 }
             }
@@ -133,10 +204,11 @@ fun FlowBlockContent(
                     FlowEditableLine(
                         blockId = block.id,
                         itemId = item.id,
-                        text = item.content.plainText(),
+                        nodes = item.content,
                         style = MaterialTheme.typography.bodyLarge,
                         placeholder = "List item",
                         callbacks = callbacks,
+                        context = context,
                     )
                 }
             }
@@ -147,15 +219,19 @@ fun FlowBlockContent(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = item.checked,
+                        // In structural multi-select the row owns the gesture; a live checkbox here would let
+                        // a stray tap edit content while the user is selecting blocks (correction item 5).
+                        enabled = !context.selectionMode,
                         onCheckedChange = { callbacks.onToggleTodo(block.id, item.id) },
                     )
                     FlowEditableLine(
                         blockId = block.id,
                         itemId = item.id,
-                        text = item.content.plainText(),
+                        nodes = item.content,
                         style = MaterialTheme.typography.bodyLarge,
                         placeholder = "To-do",
                         callbacks = callbacks,
+                        context = context,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -171,7 +247,7 @@ fun FlowBlockContent(
             )
             Column(Modifier.padding(start = 12.dp)) {
                 block.children.forEach { child ->
-                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth())
+                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth(), context)
                 }
             }
         }
@@ -182,21 +258,38 @@ fun FlowBlockContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(12.dp),
         ) {
-            Text(block.title, style = MaterialTheme.typography.titleSmall)
+            // A collapsed callout with no control is content the user cannot reach at all, and structural
+            // commands would still operate on children nobody can see (correction item 16).
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { callbacks.onToggleCollapsed(block.id) }) {
+                    Icon(
+                        imageVector = if (block.collapsed) Icons.Filled.ChevronRight else Icons.Filled.ExpandMore,
+                        contentDescription = if (block.collapsed) "Expand callout" else "Collapse callout",
+                    )
+                }
+                Text(
+                    block.title.ifBlank { "Callout" },
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             if (!block.collapsed) {
                 block.children.forEach { child ->
-                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth())
+                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth(), context)
                 }
             }
         }
 
+        // A code block holds a plain string, not inline nodes. Wrapping it in a single [InlineText] is the
+        // honest description of that: one run, no styling, same editing path as every other line.
         is CodeBlock -> FlowEditableLine(
             blockId = block.id,
             itemId = null,
-            text = block.code,
+            nodes = listOf(InlineText(block.code)),
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             placeholder = "Code",
             callbacks = callbacks,
+            context = context,
             modifier = modifier
                 .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
@@ -208,16 +301,18 @@ fun FlowBlockContent(
         is ContainerBlock -> if (block.axis == ContainerAxis.Row) {
             Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 block.children.forEach { child ->
-                    Box(Modifier.weight(1f)) { FlowBlockContent(child, callbacks) }
+                    Box(Modifier.weight(1f)) { FlowBlockContent(child, callbacks, context = context) }
                 }
             }
         } else {
             Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                block.children.forEach { child -> FlowBlockContent(child, callbacks, Modifier.fillMaxWidth()) }
+                block.children.forEach { child ->
+                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth(), context)
+                }
             }
         }
 
-        is TableBlock -> FlowTablePreview(block, callbacks, modifier)
+        is TableBlock -> FlowTablePreview(block, callbacks, context, modifier)
 
         is MathBlock -> FlowPlaceholder("Equation", block.tex.ifBlank { "empty" }, modifier)
         is MermaidBlock -> FlowPlaceholder("Diagram", block.code.ifBlank { "empty" }, modifier)
@@ -241,13 +336,18 @@ fun FlowBlockContent(
  * `flow.table.insertRowAbove` and friends are disabled with a reason until a cell is selected, because a
  * directional command without a reference cell is the ambiguous `addRow()` the spec rejects. Cell text
  * editing belongs to the Phase-4 table work.
+ *
+ * The addressed cell is drawn from [FlowBlockContext.tableCursor], i.e. from the runtime's own cursor. That is
+ * the correction for item 7: a cell can only *look* selected when the command system agrees it is.
  */
 @Composable
 private fun FlowTablePreview(
     block: TableBlock,
     callbacks: FlowBlockCallbacks,
+    context: FlowBlockContext,
     modifier: Modifier = Modifier,
 ) {
+    val cursor = context.tableCursor?.takeIf { it.blockId == block.id }
     Column(
         modifier
             .clip(RoundedCornerShape(10.dp))
@@ -258,6 +358,7 @@ private fun FlowTablePreview(
                 FlowTableCell(
                     text = cell.content.plainText(),
                     header = true,
+                    addressed = cursor?.row == -1 && cursor.column == column,
                     modifier = Modifier.weight(1f),
                     onClick = { callbacks.onTableCell(FlowTableCursor(block.id, row = -1, column = column)) },
                 )
@@ -270,6 +371,7 @@ private fun FlowTablePreview(
                     FlowTableCell(
                         text = cell.content.plainText(),
                         header = false,
+                        addressed = cursor?.row == rowIndex && cursor.column == column,
                         modifier = Modifier.weight(1f),
                         onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
                     )
@@ -283,6 +385,7 @@ private fun FlowTablePreview(
 private fun FlowTableCell(
     text: String,
     header: Boolean,
+    addressed: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -291,6 +394,13 @@ private fun FlowTableCell(
         style = if (header) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium,
         modifier = modifier
             .clickable(onClick = onClick)
+            .then(
+                if (addressed) {
+                    Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+                } else {
+                    Modifier
+                },
+            )
             .padding(horizontal = 10.dp, vertical = 8.dp),
     )
 }
@@ -331,24 +441,79 @@ private fun FlowPlaceholder(title: String, detail: String, modifier: Modifier = 
  * One editable line of block text.
  *
  * The field holds its own [TextFieldValue] so the IME behaves, but it is never the source of truth: the
- * document is. When [text] changes underneath the field — an undo, a convert, a remote merge — the field is
+ * document is. When the text changes underneath the field — an undo, a convert, a remote merge — the field is
  * re-seeded and the caret is clamped, so history rewrites are visible immediately instead of being masked by
  * stale local state.
+ *
+ * Three correction items meet here, because they are all the *same* seam:
+ *
+ *  - **item 1** — [FlowBlockContext.caretRequest] moves real focus and a real caret when the runtime moves
+ *    its own. Applied once per stamp, so the field echoing its caret back cannot start a sync loop.
+ *  - **item 2** — Enter and Backspace-at-start are asked of the runtime first. Consumed only when the runtime
+ *    actually restructured the document; otherwise the keystroke stays an ordinary keystroke.
+ *  - **item 5** — in structural multi-select there is no field at all, so a tap on a block's text is the
+ *    row's gesture. Read-only would still place a caret; not existing cannot.
+ *  - **item 15** — existing bold/italic/link/code/highlight/font content is *shown* through a visual
+ *    transformation. The field still edits plain text, and the inline metadata outside the edited range is
+ *    never touched, so nothing is flattened on the way through.
  */
 @Composable
 private fun FlowEditableLine(
     blockId: String,
     itemId: String?,
-    text: String,
+    nodes: List<InlineNode>,
     style: TextStyle,
     placeholder: String,
     callbacks: FlowBlockCallbacks,
+    context: FlowBlockContext,
     modifier: Modifier = Modifier,
 ) {
+    val text = nodes.plainText()
+    val styled = flowInlineSpans(nodes)
+
+    if (context.selectionMode) {
+        Box(modifier) {
+            Text(
+                text = if (text.isEmpty()) AnnotatedString(placeholder) else styled,
+                style = style.copy(
+                    color = if (text.isEmpty()) {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    } else {
+                        LocalContentColor.current
+                    },
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        return
+    }
+
     var value by remember(blockId, itemId) { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
     if (value.text != text) {
         value = value.copy(text = text, selection = TextRange(value.selection.start.coerceIn(0, text.length)))
     }
+
+    val focus = remember(blockId, itemId) { FocusRequester() }
+    var appliedStamp by remember(blockId, itemId) { mutableStateOf(0L) }
+    val request = context.caretRequest
+    // Only the request that names *this* field, and only once per stamp: the field reports its caret back on
+    // every change, and re-applying on value would make that report re-arm the request forever.
+    if (request != null && request.blockId == blockId && request.itemId == itemId &&
+        request.stamp != appliedStamp
+    ) {
+        appliedStamp = request.stamp
+        val offset = request.offset.coerceIn(0, value.text.length)
+        value = value.copy(selection = TextRange(offset))
+        LaunchedEffect(request.stamp) { runCatching { focus.requestFocus() } }
+    }
+
+    // Latched by hardware Shift+Enter so the newline that follows is inserted as a soft break instead of
+    // being read as a structural split. Soft keyboards send no modifier, which is why the latch and not the
+    // key event itself decides.
+    var softBreak by remember(blockId, itemId) { mutableStateOf(false) }
+
+    val transformation = remember(styled) { FlowInlineTransformation(styled) }
+
     Box(modifier) {
         if (value.text.isEmpty()) {
             Text(
@@ -361,6 +526,13 @@ private fun FlowEditableLine(
             value = value,
             onValueChange = { next ->
                 val before = value.text
+                val newline = next.text.length > before.length && next.selection.collapsed &&
+                    next.selection.start > 0 && next.text.getOrNull(next.selection.start - 1) == '\n'
+                if (newline && !softBreak && callbacks.onNewLine()) {
+                    // The runtime restructured; the re-seed from the new document is what moves this field.
+                    return@BasicTextField
+                }
+                softBreak = false
                 value = next
                 if (next.text != before) {
                     callbacks.onEdit(FlowTextEdit(blockId, itemId, before, next.text, next.selection.start))
@@ -368,10 +540,96 @@ private fun FlowEditableLine(
                     callbacks.onCaret(blockId, itemId, next.selection.start)
                 }
             },
+            visualTransformation = transformation,
             textStyle = style.copy(color = LocalContentColor.current),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focus)
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.Enter, Key.NumPadEnter -> when {
+                            event.isShiftPressed -> {
+                                softBreak = true
+                                false
+                            }
+                            else -> callbacks.onNewLine()
+                        }
+                        Key.Backspace ->
+                            value.selection.collapsed && value.selection.start == 0 &&
+                                callbacks.onBackspaceAtStart()
+                        else -> false
+                    }
+                },
         )
+    }
+}
+
+/**
+ * Maps [FlowInlineText]'s toolkit-independent runs onto Compose spans.
+ *
+ * Kept beside the renderer rather than in [FlowInlineText] so the run model stays unit-testable without
+ * Compose, and reuses the legacy editor's [highlightColor] and [NorfoldFontFamilies] so the same note looks
+ * the same in both hosts.
+ */
+@Composable
+private fun flowInlineSpans(nodes: List<InlineNode>): AnnotatedString {
+    val colors = MaterialTheme.colorScheme
+    return remember(nodes, colors) {
+        val text = nodes.plainText()
+        val spans = FlowInlineText.runsOf(nodes).mapNotNull { run ->
+            if (run.style.isPlain) return@mapNotNull null
+            val start = run.start.coerceIn(0, text.length)
+            val end = run.end.coerceIn(start, text.length)
+            if (start == end) return@mapNotNull null
+            AnnotatedString.Range(run.style.toSpanStyle(colors), start, end)
+        }
+        AnnotatedString(text, spans)
+    }
+}
+
+private fun FlowInlineStyle.toSpanStyle(colors: ColorScheme): SpanStyle = SpanStyle(
+    fontWeight = if (bold) FontWeight.Bold else null,
+    fontStyle = if (italic) FontStyle.Italic else null,
+    fontSize = fontSizeSp?.coerceIn(6f, 144f)?.sp ?: TextUnit.Unspecified,
+    fontFamily = when {
+        code || math -> FontFamily.Monospace
+        fontFamily != null -> NorfoldFontFamilies.resolve(fontFamily)
+        else -> null
+    },
+    color = if (link != null) colors.primary else Color.Unspecified,
+    background = when {
+        highlight != null -> highlightColor(highlight.ifBlank { null })
+        code -> colors.surfaceVariant.copy(alpha = 0.55f)
+        math -> colors.surfaceVariant.copy(alpha = 0.35f)
+        else -> Color.Unspecified
+    },
+    textDecoration = when {
+        underline && strikethrough -> TextDecoration.combine(
+            listOf(TextDecoration.Underline, TextDecoration.LineThrough),
+        )
+        underline || link != null -> TextDecoration.Underline
+        strikethrough -> TextDecoration.LineThrough
+        else -> null
+    },
+)
+
+/**
+ * Shows the block's inline styling inside a plain-text field.
+ *
+ * [OffsetMapping.Identity] is correct here precisely because no character is added, removed or reordered —
+ * only painted. Spans are re-clamped against the live field text because the field can be a keystroke ahead
+ * of the document, and an out-of-range span would crash rather than merely look wrong.
+ */
+private class FlowInlineTransformation(private val styled: AnnotatedString) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val spans = styled.spanStyles.mapNotNull { span ->
+            val start = span.start.coerceIn(0, text.length)
+            val end = span.end.coerceIn(start, text.length)
+            if (start == end) null else AnnotatedString.Range(span.item, start, end)
+        }
+        return TransformedText(AnnotatedString(text.text, spans), OffsetMapping.Identity)
     }
 }
 
