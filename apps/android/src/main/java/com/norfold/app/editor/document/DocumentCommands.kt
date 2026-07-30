@@ -239,10 +239,10 @@ class InsertPageCommand(
 
     override fun runOn(targetIds: List<String>): CommandResult {
         val anchor = activePageId()
-        // A new page inherits the anchor's geometry — a document of mixed sizes would otherwise silently
-        // revert to A4 halfway through, which is never what the user meant by "insert a page here".
-        val template = anchor?.let { scope.controller.page(it)?.geometry } ?: PageGeometry.a4()
-        val page = DocumentPageBlock(geometry = template)
+        // A new page inherits the explicit "New pages by default" template if the user set one, else the
+        // anchor's geometry — a document of mixed sizes would otherwise silently revert to A4 halfway
+        // through, which is never what the user meant by "insert a page here".
+        val page = DocumentPageBlock(geometry = scope.newPageTemplate())
         val ok = scope.controller.insertPage(page, anchor, after)
         if (!ok) return CommandResult.Failure("Could not insert a page")
         scope.selectPage(page.id)
@@ -316,6 +316,10 @@ class SetPageStructureLockCommand(
     override val aliases = listOf("page lock", "protect page")
 
     override fun refine(resolution: ApplicabilityResolution?): CommandStatus {
+        if (pageScope == PageScope.NewPagesByDefault) {
+            return if (scope.newPageTemplate().structureLocked == locked) CommandStatus.Active
+            else CommandStatus.Available
+        }
         val pages = scopedPageIds(pageScope).mapNotNull { scope.controller.page(it) }
         if (pages.isEmpty()) return CommandStatus.Available
         val states = pages.mapTo(HashSet()) { it.geometry.structureLocked }
@@ -327,8 +331,12 @@ class SetPageStructureLockCommand(
     }
 
     override fun runOn(targetIds: List<String>): CommandResult {
+        if (pageScope == PageScope.NewPagesByDefault) {
+            scope.applyToNewPageTemplate { it.copy(structureLocked = locked) }
+            return CommandResult.Success(0, PageScope.NEW_PAGE_CONFIRMATION)
+        }
         val ids = scopedPageIds(pageScope)
-        if (ids.isEmpty()) return CommandStatus.Available.let { CommandResult.Failure("No page selected") }
+        if (ids.isEmpty()) return CommandResult.Failure("No page selected")
         val changed = scope.controller.setPageStructureLocked(ids, locked)
         return if (changed) CommandResult.Success(ids.size) else CommandResult.NoOp
     }
@@ -348,21 +356,48 @@ class ApplyPageGeometryCommand(
     override val id: String,
     override val label: String,
     private val pageScope: PageScope,
+    /**
+     * Whether a page is *already* in the state this command produces (§4.2 ACTIVE, §4.11 MIXED).
+     *
+     * Defaults to "applying the change would do nothing", which is the correct answer for every control
+     * that sets a value. A toggle needs its own predicate: applying it always changes something, so the
+     * derived answer would report every toggle as inactive and the sheet would never show what is on.
+     */
+    private val activeWhen: ((PageGeometry) -> Boolean)? = null,
     private val change: (PageGeometry) -> PageGeometry,
 ) : PageCommand(scope) {
     override val aliases = listOf("page setup", "page settings")
 
+    private fun isActiveFor(geometry: PageGeometry): Boolean =
+        activeWhen?.invoke(geometry) ?: (change(geometry).normalized() == geometry.normalized())
+
     override fun refine(resolution: ApplicabilityResolution?): CommandStatus {
+        // The new-page template is not a page: it has no structure lock to respect and no selection to
+        // resolve against, so it answers only "is this already the default".
+        if (pageScope == PageScope.NewPagesByDefault) {
+            return if (isActiveFor(scope.newPageTemplate())) CommandStatus.Active else CommandStatus.Available
+        }
         val pages = scopedPageIds(pageScope).mapNotNull { scope.controller.page(it) }
         if (pages.isEmpty()) return CommandStatus.disabled("No page selected")
         // The refusal is stated, not silent: the user is told the page is protected and how to proceed.
         if (pages.all { it.geometry.structureLocked }) {
             return CommandStatus.disabled("Page structure is locked — unlock it to change page setup")
         }
-        return CommandStatus.Available
+        val states = pages.mapTo(HashSet()) { isActiveFor(it.geometry) }
+        return when {
+            states.size > 1 -> CommandStatus.Mixed
+            states.single() -> CommandStatus.Active
+            else -> CommandStatus.Available
+        }
     }
 
     override fun runOn(targetIds: List<String>): CommandResult {
+        if (pageScope == PageScope.NewPagesByDefault) {
+            // Deliberately not a transaction: changing what *future* pages will look like did not change the
+            // document, so it must not occupy an undo step that appears to have done nothing.
+            scope.applyToNewPageTemplate(change)
+            return CommandResult.Success(0, PageScope.NEW_PAGE_CONFIRMATION)
+        }
         val ids = scopedPageIds(pageScope)
         if (ids.isEmpty()) return CommandResult.Failure("No page selected")
         val changed = scope.controller.editPageGeometry(ids, label, force = false, change = change)
@@ -385,19 +420,25 @@ class ApplyPageGeometryCommand(
  * genuinely different things at different scopes and the user must be able to say which they meant.
  */
 sealed interface PageScope {
+    /** How this scope reads in the "Apply settings to…" selector. */
+    val label: String
+
     fun resolve(scope: DocumentCommandScope): List<String>
 
     data object CurrentPage : PageScope {
+        override val label = "Current page"
         override fun resolve(scope: DocumentCommandScope) = listOfNotNull(scope.activePage()?.id)
     }
 
     data object SelectedPages : PageScope {
+        override val label = "Selected pages"
         override fun resolve(scope: DocumentCommandScope): List<String> =
             scope.selectedPageIds.ifEmpty { CurrentPage.resolve(scope) }
     }
 
     /** The section containing the active page — the run of pages between two section starts. */
     data object ThisSection : PageScope {
+        override val label = "This section"
         override fun resolve(scope: DocumentCommandScope): List<String> {
             val pages = scope.pages()
             val active = scope.activePage()?.id ?: return emptyList()
@@ -411,6 +452,7 @@ sealed interface PageScope {
 
     /** The active page and every page after it — "from here on". */
     data object ThisPageOnward : PageScope {
+        override val label = "This page onward"
         override fun resolve(scope: DocumentCommandScope): List<String> {
             val pages = scope.pages()
             val index = pages.indexOfFirst { it.id == scope.activePage()?.id }
@@ -420,7 +462,35 @@ sealed interface PageScope {
     }
 
     data object WholeDocument : PageScope {
+        override val label = "Whole document"
         override fun resolve(scope: DocumentCommandScope) = scope.pages().map { it.id }
+    }
+
+    /**
+     * The template future pages inherit — it deliberately resolves to **no** existing page.
+     *
+     * Setting a default is not an edit to the document, so it changes nothing that exists and enters no
+     * transaction. A scope that quietly also applied to the current page would make "set this for new pages"
+     * silently reformat the page the user is looking at.
+     */
+    data object NewPagesByDefault : PageScope {
+        override val label = "New pages by default"
+        override fun resolve(scope: DocumentCommandScope): List<String> = emptyList()
+    }
+
+    companion object {
+        /** The order the "Apply settings to…" selector offers, narrowest first. */
+        val ALL: List<PageScope> = listOf(
+            CurrentPage,
+            SelectedPages,
+            ThisSection,
+            ThisPageOnward,
+            WholeDocument,
+            NewPagesByDefault,
+        )
+
+        /** Said back to the user, because a default change has no visible effect on the current page. */
+        const val NEW_PAGE_CONFIRMATION = "Saved as the default for new pages"
     }
 }
 
@@ -476,73 +546,103 @@ object DocumentCommands {
     }
 
     /**
-     * Page-setup commands at document scope. The Page Control surface builds scoped variants on demand via
-     * [pageSetupCommand], because a scope is a user choice made at invocation time, not a fixed catalogue
-     * dimension — registering every control once per scope would multiply the catalogue for no gain.
+     * Page-setup commands at [PageScope.CurrentPage] — the ids the registry, slash menu and Command Explorer
+     * know. The Page Control surface rebuilds the *same* control at the user's chosen scope via
+     * [pageSetupCommand], because a scope is a choice made at invocation time, not a catalogue dimension:
+     * registering all sixteen controls once per scope would sextuple the catalogue and give the slash menu
+     * six near-identical rows for every one the user wanted.
      */
     private fun registerPageSetup(scope: DocumentCommandScope, registry: CommandRegistry) {
-        registry.registerAll(
-            pageSetupCommand(scope, "document.page.sizeA4", "A4", PageScope.CurrentPage) {
-                PageGeometry.a4().copy(structureLocked = it.structureLocked, margins = it.margins)
-            },
-            pageSetupCommand(scope, "document.page.sizeLetter", "Letter", PageScope.CurrentPage) {
-                PageGeometry.letter().copy(structureLocked = it.structureLocked, margins = it.margins)
-            },
-            pageSetupCommand(scope, "document.page.sizeLegal", "Legal", PageScope.CurrentPage) {
-                PageGeometry.legal().copy(structureLocked = it.structureLocked, margins = it.margins)
-            },
-            pageSetupCommand(scope, "document.page.portrait", "Portrait", PageScope.CurrentPage) {
-                it.withOrientation(PageOrientation.Portrait)
-            },
-            pageSetupCommand(scope, "document.page.landscape", "Landscape", PageScope.CurrentPage) {
-                it.withOrientation(PageOrientation.Landscape)
-            },
-            pageSetupCommand(scope, "document.page.marginsNarrow", "Narrow margins", PageScope.CurrentPage) {
-                it.copy(margins = PageMargins(36f, 36f, 36f, 36f))
-            },
-            pageSetupCommand(scope, "document.page.marginsNormal", "Normal margins", PageScope.CurrentPage) {
-                it.copy(margins = PageMargins())
-            },
-            pageSetupCommand(scope, "document.page.marginsWide", "Wide margins", PageScope.CurrentPage) {
-                it.copy(margins = PageMargins(108f, 108f, 108f, 108f))
-            },
-            pageSetupCommand(scope, "document.page.oneColumn", "One column", PageScope.CurrentPage) {
-                it.copy(columns = PageColumns(1))
-            },
-            pageSetupCommand(scope, "document.page.twoColumns", "Two columns", PageScope.CurrentPage) {
-                it.copy(columns = PageColumns(2))
-            },
-            pageSetupCommand(scope, "document.page.threeColumns", "Three columns", PageScope.CurrentPage) {
-                it.copy(columns = PageColumns(3))
-            },
-            pageSetupCommand(scope, "document.page.toggleGrid", "Show grid", PageScope.CurrentPage) {
-                it.copy(grid = it.grid.copy(visible = !it.grid.visible))
-            },
-            pageSetupCommand(scope, "document.page.toggleSnapGrid", "Snap to grid", PageScope.CurrentPage) {
-                it.copy(grid = it.grid.copy(snapToGrid = !it.grid.snapToGrid))
-            },
-            pageSetupCommand(scope, "document.page.startSection", "Start section here", PageScope.CurrentPage) {
-                it.copy(numbering = it.numbering.copy(startsSection = !it.numbering.startsSection))
-            },
-            pageSetupCommand(scope, "document.page.showNumbers", "Show page numbers", PageScope.WholeDocument) {
-                it.copy(numbering = it.numbering.copy(showNumber = !it.numbering.showNumber))
-            },
-            // Restoring defaults deliberately keeps the lock state: it resets the page's setup, not the
-            // user's decision about whether that setup may be changed at all.
-            pageSetupCommand(scope, "document.page.restoreDefaults", "Restore page defaults", PageScope.CurrentPage) {
-                PageGeometry.ofPreset(DocPagePreset.A4).copy(structureLocked = it.structureLocked)
-            },
-        )
+        PAGE_SETUP_CONTROLS.forEach { control ->
+            registry.register(pageSetupCommand(scope, control, PageScope.CurrentPage))
+        }
     }
 
-    /** Builds a page-setup command at an explicit [pageScope] — how the Page Control surface applies scopes. */
+    /**
+     * One page-setup control, independent of which pages it is applied to.
+     *
+     * Separating the control from its scope is what makes "Apply settings to…" real: the same definition
+     * resolves its own ACTIVE/MIXED state and performs its own change whether it is aimed at one page, a
+     * section, the whole document, or the new-page template.
+     */
+    data class PageSetupControl(
+        val key: String,
+        val label: String,
+        val group: String,
+        /** Null means "already applied" is derived from the change being a no-op — correct for setters. */
+        val activeWhen: ((PageGeometry) -> Boolean)? = null,
+        val change: (PageGeometry) -> PageGeometry,
+    ) {
+        val id: String get() = "document.page.$key"
+    }
+
+    /** The Page Control catalogue, in the order the surface presents it. */
+    val PAGE_SETUP_CONTROLS: List<PageSetupControl> = listOf(
+        PageSetupControl("sizeA4", "A4", "Size") {
+            PageGeometry.a4().copy(structureLocked = it.structureLocked, margins = it.margins)
+        },
+        PageSetupControl("sizeLetter", "Letter", "Size") {
+            PageGeometry.letter().copy(structureLocked = it.structureLocked, margins = it.margins)
+        },
+        PageSetupControl("sizeLegal", "Legal", "Size") {
+            PageGeometry.legal().copy(structureLocked = it.structureLocked, margins = it.margins)
+        },
+        PageSetupControl(
+            "portrait", "Portrait", "Orientation",
+            activeWhen = { it.orientation == PageOrientation.Portrait },
+        ) { it.withOrientation(PageOrientation.Portrait) },
+        PageSetupControl(
+            "landscape", "Landscape", "Orientation",
+            activeWhen = { it.orientation == PageOrientation.Landscape },
+        ) { it.withOrientation(PageOrientation.Landscape) },
+        PageSetupControl("marginsNarrow", "Narrow margins", "Margins") {
+            it.copy(margins = PageMargins(36f, 36f, 36f, 36f))
+        },
+        PageSetupControl("marginsNormal", "Normal margins", "Margins") {
+            it.copy(margins = PageMargins())
+        },
+        PageSetupControl("marginsWide", "Wide margins", "Margins") {
+            it.copy(margins = PageMargins(108f, 108f, 108f, 108f))
+        },
+        PageSetupControl("oneColumn", "One column", "Columns") { it.copy(columns = PageColumns(1)) },
+        PageSetupControl("twoColumns", "Two columns", "Columns") { it.copy(columns = PageColumns(2)) },
+        PageSetupControl("threeColumns", "Three columns", "Columns") { it.copy(columns = PageColumns(3)) },
+        // Toggles need an explicit predicate: a toggle's change is never a no-op, so the derived answer
+        // would report every one of them as inactive and the sheet would never show what is switched on.
+        PageSetupControl("toggleGrid", "Show grid", "Grid", activeWhen = { it.grid.visible }) {
+            it.copy(grid = it.grid.copy(visible = !it.grid.visible))
+        },
+        PageSetupControl("toggleSnapGrid", "Snap to grid", "Grid", activeWhen = { it.grid.snapToGrid }) {
+            it.copy(grid = it.grid.copy(snapToGrid = !it.grid.snapToGrid))
+        },
+        PageSetupControl(
+            "startSection", "Start section here", "Sections",
+            activeWhen = { it.numbering.startsSection },
+        ) { it.copy(numbering = it.numbering.copy(startsSection = !it.numbering.startsSection)) },
+        PageSetupControl(
+            "showNumbers", "Show page numbers", "Sections",
+            activeWhen = { it.numbering.showNumber },
+        ) { it.copy(numbering = it.numbering.copy(showNumber = !it.numbering.showNumber)) },
+        // Restoring defaults deliberately keeps the lock state: it resets the page's setup, not the
+        // user's decision about whether that setup may be changed at all.
+        PageSetupControl("restoreDefaults", "Restore page defaults", "Reset") {
+            PageGeometry.ofPreset(DocPagePreset.A4).copy(structureLocked = it.structureLocked)
+        },
+    )
+
+    /** Builds [control] aimed at [pageScope] — how the Page Control surface applies a chosen scope. */
     fun pageSetupCommand(
         scope: DocumentCommandScope,
-        id: String,
-        label: String,
+        control: PageSetupControl,
         pageScope: PageScope,
-        change: (PageGeometry) -> PageGeometry,
-    ): EditorCommand = ApplyPageGeometryCommand(scope, id, label, pageScope, change)
+    ): EditorCommand = ApplyPageGeometryCommand(
+        scope = scope,
+        id = control.id,
+        label = control.label,
+        pageScope = pageScope,
+        activeWhen = control.activeWhen,
+        change = control.change,
+    )
 
     /**
      * Accessibility actions for [obj]: the command ids TalkBack should expose for it.
