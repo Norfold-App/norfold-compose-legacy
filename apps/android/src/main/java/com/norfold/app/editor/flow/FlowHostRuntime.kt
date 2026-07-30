@@ -388,10 +388,19 @@ class FlowHostRuntime(
         // The coalescing key names the *editable field*, not the block: two items of one list are separate
         // writing runs, and merging them would make one undo step swallow edits in both.
         val key = if (itemId != null) "block:$blockId/item:$itemId" else "block:$blockId"
+        // A to-do holds `TodoItem`, not `ListItem`, so `editListItem` cannot see its items at all and would
+        // return a cursor while changing nothing — typing into a checklist that silently discards every
+        // keystroke. The item type decides which vocabulary call addresses it.
+        val todo = itemId != null && controller.document().findById(blockId) is TodoListBlock
+        val previous = controller.document()
         controller.mutate("Typing", coalescingKey = key) { session ->
-            if (itemId != null) session.editListItem(blockId, itemId, before, after)
-            else session.editText(blockId, before, after)
+            when {
+                itemId == null -> session.editText(blockId, before, after)
+                todo -> session.editTodoItem(blockId, itemId, before, after)
+                else -> session.editListItem(blockId, itemId, before, after)
+            }
         } ?: return false
+        if (controller.document() == previous) return false
         revision++
         return true
     }
