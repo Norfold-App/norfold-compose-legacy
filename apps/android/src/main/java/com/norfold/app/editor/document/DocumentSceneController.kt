@@ -19,6 +19,7 @@ import com.norfold.app.editor.history.EditWorkspace
 import com.norfold.app.editor.history.HistoryEngine
 import com.norfold.app.editor.history.HistoryListener
 import com.norfold.app.editor.history.InMemoryEditWorkspace
+import com.norfold.app.editor.history.PersistableEditController
 import com.norfold.app.editor.history.TransactionOrigin
 
 /**
@@ -41,12 +42,18 @@ import com.norfold.app.editor.history.TransactionOrigin
  * [com.norfold.app.editor.flow.FlowEditController] does for Flow.
  */
 class DocumentSceneController(
-    val target: EditTarget,
+    override val target: EditTarget,
     initialDocument: BlockDocument,
     historyListener: HistoryListener? = null,
-) {
-    private val workspace: EditWorkspace =
-        InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
+) : PersistableEditController {
+    /**
+     * The workspace this controller edits.
+     *
+     * Exposed so a [com.norfold.app.editor.recovery.RecoverySnapshotManager] can capture and restore the
+     * *same* documents the controller mutates. A snapshot taken over a different workspace would restore
+     * something the editor is not looking at, which is worse than no snapshot: it would report success.
+     */
+    val workspace: EditWorkspace = InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
 
     private val history = HistoryEngine(workspace, historyListener)
 
@@ -54,7 +61,7 @@ class DocumentSceneController(
     private var baselineGeneration: Long = 0L
     private var transactionCounter: Long = 0L
 
-    fun document(): BlockDocument = workspace.documentOf(target)
+    override fun document(): BlockDocument = workspace.documentOf(target)
 
     fun pages(): List<DocumentPageBlock> = document().pages()
 
@@ -357,28 +364,28 @@ class DocumentSceneController(
 
     // --- Persistence hand-off (mirrors FlowEditController) --------------------------------------------
 
-    fun dirtyBlockIds(): Set<String> {
+    override fun dirtyBlockIds(): Set<String> {
         val baseline = lastSavedDocument.blocks.associateBy { it.id }
         return document().blocks.mapNotNullTo(linkedSetOf()) { block ->
             block.id.takeIf { baseline[block.id] != block }
         }
     }
 
-    fun deletedBlockIds(): Set<String> {
+    override fun deletedBlockIds(): Set<String> {
         val current = document().blocks.mapTo(HashSet()) { it.id }
         return lastSavedDocument.blocks.mapNotNullTo(linkedSetOf()) { it.id.takeIf { id -> id !in current } }
     }
 
-    fun hasUnsavedChanges(): Boolean = document() != lastSavedDocument
+    override fun hasUnsavedChanges(): Boolean = document() != lastSavedDocument
 
-    fun baselineGeneration(): Long = baselineGeneration
+    override fun baselineGeneration(): Long = baselineGeneration
 
     fun markSaved() = setBaseline(document())
 
     fun markSaved(persisted: BlockDocument) = setBaseline(persisted)
 
     /** See [com.norfold.app.editor.flow.FlowEditController.markSavedIfCurrent] — the same stale-write guard. */
-    fun markSavedIfCurrent(persisted: BlockDocument, expectedGeneration: Long): Boolean {
+    override fun markSavedIfCurrent(persisted: BlockDocument, expectedGeneration: Long): Boolean {
         if (expectedGeneration != baselineGeneration) return false
         setBaseline(persisted)
         return true
