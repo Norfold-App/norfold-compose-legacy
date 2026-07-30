@@ -115,6 +115,37 @@ class FlowEditControllerTest {
         assertTrue(ctl.deletedBlockIds().isEmpty())
     }
 
+    /**
+     * Persistence is asynchronous, so the live document can be ahead of what the repository accepted. The
+     * baseline must be the accepted snapshot, or edits made during the write are marked saved without ever
+     * having been sent — and a process death then loses them silently.
+     */
+    @Test fun markSaved_withSnapshot_keepsLaterEditsDirty() {
+        val ctl = FlowEditController(target, doc(para("a", "one"), para("b", "two")))
+        ctl.markSaved()
+
+        ctl.mutate("edit a") { it.editText("a", "one", "one!") }
+        val persisted = ctl.document()
+        // An edit lands while the write of `persisted` is still in flight.
+        ctl.mutate("edit b") { it.editText("b", "two", "two!") }
+
+        ctl.markSaved(persisted)
+
+        assertEquals(
+            "Only the block edited after the accepted snapshot stays dirty",
+            setOf("b"),
+            ctl.dirtyBlockIds(),
+        )
+    }
+
+    @Test fun markSaved_withSnapshot_clearsWhenNothingChangedSince() {
+        val ctl = FlowEditController(target, doc(para("a", "one")))
+        ctl.mutate("edit a") { it.editText("a", "one", "one!") }
+        ctl.markSaved(ctl.document())
+        assertTrue(ctl.dirtyBlockIds().isEmpty())
+        assertFalse(ctl.hasUnsavedChanges())
+    }
+
     @Test fun undoRedo_restoreExactDocumentState_bytewise() {
         val start = doc(para("a", "alpha"), para("b", "beta"))
         val ctl = FlowEditController(target, start)

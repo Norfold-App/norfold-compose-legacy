@@ -154,6 +154,11 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.4")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    // Compose behavior that JVM logic cannot prove — a field genuinely taking focus, a tap reaching the row
+    // instead of the text field, a drop marker actually drawn — is asserted with the Compose test rule.
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("androidx.arch.core:core-testing:2.2.0")
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

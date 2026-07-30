@@ -1,129 +1,343 @@
 package com.norfold.app.editor.flow
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextInputSelection
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.text.TextRange
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.BulletListBlock
+import com.norfold.app.domain.CalloutBlock
+import com.norfold.app.domain.InlineText
+import com.norfold.app.domain.ListItem
+import com.norfold.app.domain.ParagraphBlock
+import com.norfold.app.domain.findById
+import com.norfold.app.domain.plainText
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.flags.EditorFeatureFlags
+import com.norfold.app.editor.history.EditTarget
+import com.norfold.app.editor.presentation.FormFactor
+import com.norfold.app.ui.editor.flow.FlowBlockCallbacks
+import com.norfold.app.ui.editor.flow.FlowBlockContent
+import com.norfold.app.ui.editor.flow.FlowBlockContext
 import com.norfold.app.ui.editor.setEditorFlagsForTesting
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Instrumentation tests for FlowHost Android-specific behavior that pure JVM tests cannot prove.
+ * The Compose half of the Phase 1 interaction gate.
  *
- * NOTE: Full Compose UI testing requires integration with DocsViewModel and the actual app navigation,
- * which is beyond the scope of Phase 1 slice 4. These tests validate the test injection mechanism
- * and demonstrate the test structure for future device-level validation.
+ * `FlowHostCorrectionTest` proves what the runtime *decides*; nothing in a JVM test can prove that a field
+ * genuinely takes focus, that a tap in multi-select reaches the row instead of the text field, or that a
+ * caret request actually lands. Those are compositions, so they are asserted here against a real one.
  *
- * The core Phase-1 validation gate items that require device testing will be validated manually:
- * - IME behavior (keyboard show/hide with dock visibility)
- * - Compose semantics and accessibility actions
- * - Actual lazy rendering (LazyColumn virtualization)
- * - Real touch interactions (long-press, drag)
- * - Process recreation and restoration
- * - Back navigation hierarchy in real Android
- * - Focus management
- *
- * This test file documents the intended device-level test coverage and provides the injection
- * mechanism (setEditorFlagsForTesting) that would enable such tests.
+ * These drive `FlowBlockContent` directly with a live [FlowHostRuntime] rather than the whole screen: the
+ * seam under test is row ↔ runtime, and going through app navigation would make a failure ambiguous between
+ * the seam and the surrounding scaffolding.
  */
+@OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
 class FlowHostInstrumentationTest {
 
+    @get:Rule
+    val compose = createComposeRule()
+
     @Before
     fun setUp() {
-        // Enable FlowHost for these tests
         setEditorFlagsForTesting(
-            EditorFeatureFlags.withOverrides(EditorFeatureFlag.FLOW_HOST to true)
+            EditorFeatureFlags.withOverrides(EditorFeatureFlag.FLOW_HOST to true),
         )
     }
 
     @After
     fun tearDown() {
-        // Restore production defaults
         setEditorFlagsForTesting(null)
     }
 
-    @Test
-    fun testInjectionMechanism_enablesFlowHost() {
-        // Verify the test injection mechanism works
-        val flags = EditorFeatureFlags.withOverrides(EditorFeatureFlag.FLOW_HOST to true)
-        setEditorFlagsForTesting(flags)
+    private fun runtimeOf(document: BlockDocument) = FlowHostRuntime(
+        controller = FlowEditController(EditTarget("note:flow"), document),
+        initialFormFactor = FormFactor(widthDp = 400, heightDp = 900),
+    )
 
-        // The actual validation would happen in a Compose test that navigates to a note
-        // and verifies FlowHostScreen is composed instead of StructuredBlockEditorHost.
-        // For now, this proves the injection mechanism compiles and runs.
+    private fun paragraphs(vararg text: String) = BlockDocument(
+        text.mapIndexed { i, v -> ParagraphBlock(id = "p$i", content = listOf(InlineText(v))) },
+    )
 
-        assertEquals(true, flags.isEnabled(EditorFeatureFlag.FLOW_HOST))
+    /**
+     * Renders every block of [runtime]'s document, re-reading the snapshot on each recomposition so a runtime
+     * change is visible to the assertions exactly as it would be on screen.
+     */
+    private fun setContent(runtime: FlowHostRuntime, selectionMode: Boolean = false) {
+        compose.setContent {
+            var revision by remember { mutableStateOf(0) }
+            // Read `revision` so a runtime mutation recomposes this subtree exactly as the real screen does.
+            val state = remember(revision) { runtime.uiState() }
+            Column {
+                state.document.blocks.forEach { block ->
+                    FlowBlockContent(
+                        block = block,
+                        callbacks = FlowBlockCallbacks(
+                            onEdit = { runtime.editText(it.blockId, it.before, it.after, it.itemId); revision++ },
+                            onCaret = { id, item, caret -> runtime.setCaret(id, caret, item); revision++ },
+                            onToggleTodo = { id, item -> runtime.toggleTodo(id, item); revision++ },
+                            onTableCell = { runtime.setTableCursor(it); revision++ },
+                            onNewLine = { runtime.newLine().also { revision++ } },
+                            onBackspaceAtStart = { runtime.backspaceAtStart().also { revision++ } },
+                            onToggleCollapsed = { runtime.toggleCollapsed(it); revision++ },
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        context = FlowBlockContext(
+                            caretRequest = state.caretRequest,
+                            selectionMode = selectionMode,
+                        ),
+                    )
+                }
+            }
+        }
     }
 
+    // ── Item 1: a caret request moves *visible* focus ────────────────────────────────────────────────
+
+    /**
+     * The defect this pins: the runtime moved its caret and no field followed, so the next keystroke landed
+     * in whichever block still held focus. Only a real composition can show that focus actually moved.
+     */
     @Test
-    fun testInjectionMechanism_restoresDefaults() {
-        // Enable, then reset
-        setEditorFlagsForTesting(
-            EditorFeatureFlags.withOverrides(EditorFeatureFlag.FLOW_HOST to true)
+    fun caretRequest_movesFocusToTheRequestedField() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        setContent(runtime)
+
+        compose.onNodeWithText("beta").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("beta").assertIsFocused()
+
+        // A real structural route: Backspace at the start of "beta" merges it into "alpha", so the caret
+        // belongs in the surviving block. Focus must follow it there.
+        compose.runOnUiThread { runtime.backspaceAtStart() }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("alphabeta").assertIsFocused()
+    }
+
+    /** A field the user has since focused must not be yanked back by an already-applied request. */
+    @Test
+    fun caretRequest_isAppliedOncePerStamp() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        setContent(runtime)
+
+        compose.runOnUiThread {
+            runtime.setCaret("p0", 5)
+            runtime.editText("p0", "alpha", "alpha more")
+            runtime.undo()
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("alpha").assertIsFocused()
+
+        compose.onNodeWithText("beta").performClick()
+        compose.waitForIdle()
+
+        // Same stamp, so no re-application: focus stays where the user just put it.
+        compose.onNodeWithText("beta").assertIsFocused()
+    }
+
+    /** Typing reaches the document through the runtime, which is the only writer. */
+    @Test
+    fun typing_reachesTheDocumentThroughTheRuntime() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        setContent(runtime)
+
+        compose.onNodeWithText("alpha").performTextInput("!")
+        compose.waitForIdle()
+
+        assertTrue(runtime.controller.document().blocks[0].plainText().contains("!"))
+    }
+
+    // ── Item 2: Enter and Backspace are structural in a real field ───────────────────────────────────
+
+    /**
+     * A `BasicTextField` inserts `\n` by default. The gate is that the key is intercepted *before* the field
+     * sees it, which no JVM test can show — the text would simply gain a newline and the block count stay 1.
+     */
+    @Test
+    fun enter_splitsTheBlockInsteadOfInsertingANewline() {
+        val runtime = runtimeOf(paragraphs("hello world"))
+        setContent(runtime)
+
+        compose.onNodeWithText("hello world").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("hello world").performKeyInput {
+            pressKey(androidx.compose.ui.input.key.Key.Enter)
+        }
+        compose.waitForIdle()
+
+        val blocks = runtime.controller.document().blocks
+        assertEquals("Enter must split rather than type a newline", 2, blocks.size)
+        assertTrue(
+            "No block may contain the literal newline the field would have inserted",
+            blocks.none { it.plainText().contains("\n") },
         )
-        setEditorFlagsForTesting(null)
+    }
 
-        // After reset, production defaults should apply
-        val productionFlags = EditorFeatureFlags.productionDefaults()
-        assertEquals(false, productionFlags.isEnabled(EditorFeatureFlag.FLOW_HOST))
+    /** Backspace at offset 0 merges backwards rather than deleting a character somewhere. */
+    @Test
+    fun backspaceAtStart_mergesInARealField() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        setContent(runtime)
+
+        compose.onNodeWithText("beta").performClick()
+        compose.waitForIdle()
+        // The handler fires only for a collapsed caret at offset 0, which is the whole point: an ordinary
+        // Backspace elsewhere must stay an ordinary deletion. A tap lands wherever it lands, so address it.
+        compose.onNodeWithText("beta").performTextInputSelection(TextRange(0))
+        compose.onNodeWithText("beta").performKeyInput {
+            pressKey(androidx.compose.ui.input.key.Key.Backspace)
+        }
+        compose.waitForIdle()
+
+        assertEquals(1, runtime.controller.document().blocks.size)
+        assertEquals("alphabeta", runtime.controller.document().blocks[0].plainText())
+    }
+
+    // ── Item 5: multi-select takes the gesture away from the text field ──────────────────────────────
+
+    /**
+     * The defect: an editable child stole the tap, so selecting a block dropped a caret into it instead. In
+     * selection mode the field must be read-only and unfocusable.
+     */
+    @Test
+    fun selectionMode_textFieldDoesNotTakeFocusOrTheCaret() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.enterSelectionMode("p0")
+        setContent(runtime, selectionMode = true)
+
+        compose.onNodeWithText("beta").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("beta").assertIsNotFocused()
+        assertEquals(
+            "The caret must not be re-pointed by a tap in selection mode",
+            "p0",
+            runtime.scope.caret()?.targetId,
+        )
+    }
+
+    /** Read-only means read-only: a keystroke in selection mode must not change the document. */
+    @Test
+    fun selectionMode_fieldRejectsInput() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        runtime.enterSelectionMode("p0")
+        setContent(runtime, selectionMode = true)
+        val before = runtime.controller.document()
+
+        compose.onNodeWithText("alpha").performTextInput("x")
+        compose.waitForIdle()
+
+        assertEquals(before, runtime.controller.document())
+    }
+
+    // ── Item 15: existing inline formatting is visibly preserved ─────────────────────────────────────
+
+    /**
+     * A bold run must reach the composition as a span. Asserting the *style* needs the text layout, so this
+     * asserts the weaker but still meaningful fact the defect violated: the styled text is rendered at all,
+     * rather than the row falling back to a placeholder or empty line.
+     */
+    @Test
+    fun inlineFormatting_isRenderedRatherThanFlattenedAway() {
+        val runtime = runtimeOf(
+            BlockDocument(
+                listOf(
+                    ParagraphBlock(
+                        id = "p0",
+                        content = listOf(
+                            com.norfold.app.domain.BoldInline(listOf(InlineText("bold"))),
+                            InlineText(" plain"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        setContent(runtime)
+
+        compose.onNodeWithText("bold plain").assertIsDisplayed()
+    }
+
+    // ── Item 16: collapsed content has a real route open ─────────────────────────────────────────────
+
+    /** A collapsed callout with no control is unreachable content; the toggle must be tappable. */
+    @Test
+    fun collapsedCallout_canBeExpandedByTappingTheControl() {
+        val runtime = runtimeOf(
+            BlockDocument(
+                listOf(
+                    CalloutBlock(
+                        id = "c0",
+                        title = "Note",
+                        collapsed = true,
+                        children = listOf(
+                            ParagraphBlock(id = "inner", content = listOf(InlineText("hidden text"))),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        setContent(runtime)
+
+        // Targeted by its content description rather than a test tag: if the control is unlabelled it is also
+        // unreachable by a screen reader, so this asserts both at once.
+        compose.onNodeWithContentDescription("Expand callout").performClick()
+        compose.waitForIdle()
+
+        assertFalse((runtime.controller.document().findById("c0") as CalloutBlock).collapsed)
+        compose.onNodeWithText("hidden text").assertIsDisplayed()
+    }
+
+    // ── Item 1 + 2 on list items: the item id reaches the runtime ───────────────────────────────────
+
+    /** Tapping a specific item must address *that* item, or Enter/Backspace resolve against the wrong one. */
+    @Test
+    fun tappingAListItem_reportsThatItemToTheRuntime() {
+        val runtime = runtimeOf(
+            BlockDocument(
+                listOf(
+                    BulletListBlock(
+                        id = "b0",
+                        items = listOf(
+                            ListItem(id = "i0", content = listOf(InlineText("one"))),
+                            ListItem(id = "i1", content = listOf(InlineText("two"))),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        setContent(runtime)
+
+        compose.onNodeWithText("two").performClick()
+        compose.waitForIdle()
+
+        assertEquals("i1", runtime.scope.caretItemId)
+        assertNotNull(runtime.scope.caret())
     }
 }
-
-/**
- * Future device-level test scenarios (require full app integration):
- *
- * ── Accessibility Semantics ──────────────────────────────────────────────────────────────
- * - Undo/redo buttons expose semantic actions with correct labels
- * - Block rows expose insert/delete custom actions
- * - Multi-select mode announces selection count to screen readers
- * - Disabled commands announce their disabled reason
- *
- * ── Lazy Rendering / Virtualization ──────────────────────────────────────────────────────
- * - LazyColumn only composes visible blocks (create 100-block document, verify block 100
- *   does not exist until scrolled into view)
- * - reportVisibleRange events fire correctly as user scrolls
- * - Blocks outside viewport are recycled
- *
- * ── Touch Interactions ───────────────────────────────────────────────────────────────────
- * - Plus button opens insert palette
- * - Long-press on block enters multi-select mode
- * - Todo checkbox toggles on tap
- * - Drag handle enables block reordering
- *
- * ── Back Navigation ──────────────────────────────────────────────────────────────────────
- * - Back closes slash menu before exiting editor
- * - Back closes palette before exiting editor
- * - Back exits multi-select mode before closing surfaces
- * - Back exits editor when no surface is open
- *
- * ── IME Behavior ─────────────────────────────────────────────────────────────────────────
- * - Context dock is visible when keyboard shows
- * - Dock hides when keyboard dismisses
- * - Slash menu appears above keyboard
- * - Text field maintains focus across IME show/hide
- *
- * ── Cross-Surface Parity ─────────────────────────────────────────────────────────────────
- * - Undo from top bar produces same result as Ctrl+Z
- * - Insert from + button produces same document as slash command
- * - Accessibility semantic action produces same result as touch
- *
- * ── Multi-Select Behavior ────────────────────────────────────────────────────────────────
- * - Cancel restores pre-mode selection and caret position
- * - Done retains selection for next command
- * - Selection count updates correctly as blocks are toggled
- *
- * ── Process Recreation ───────────────────────────────────────────────────────────────────
- * - Uncommitted edits survive process death (requires SavedStateHandle integration)
- * - Committed content survives recreation
- * - Selection state survives backgrounding/foregrounding
- *
- * ── Real Persistence ─────────────────────────────────────────────────────────────────────
- * - Edits made via FlowHost persist to Room and survive app restart
- * - v:0 documents load correctly in FlowHost
- * - v:1 documents with UnknownBlock round-trip verbatim
- * - Offline editing works without network
- */
