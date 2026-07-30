@@ -1,9 +1,10 @@
 package com.norfold.app.domain
 
 /**
- * Recursion utilities for the nested block tree. The document is a `List<DocumentBlock>` where any
- * [ContainerBlock] may hold further children (including other containers), so structural editing must
- * address blocks by a **path of ids** (container ancestors then the target id) rather than a flat index.
+ * Recursion utilities for the nested block tree. The document is a `List<DocumentBlock>` where a
+ * [ContainerBlock], [QuoteBlock] or [CalloutBlock] may hold further children (including other nesting
+ * blocks), so structural editing must address blocks by a **path of ids** (ancestors then the target id)
+ * rather than a flat index.
  *
  * These are the single source of tree recursion, reused by [BlockEditorSession] and the editor UI.
  * All operations are immutable — they return new lists/blocks and never mutate in place.
@@ -16,12 +17,28 @@ data class BlockPath(val ids: List<String>) {
     val rootId: String? get() = ids.firstOrNull()
 }
 
-/** This block's children if it is a container, else null. */
-fun DocumentBlock.containerChildren(): List<DocumentBlock>? = (this as? ContainerBlock)?.children
+/**
+ * This block's nested blocks if it holds any, else null.
+ *
+ * Every block that *stores* `List<DocumentBlock>` must be listed here, not just [ContainerBlock]: this is the
+ * only recursion the tree vocabulary has, so a block whose children are omitted becomes invisible to
+ * [findById], [allIds], [locate] and every structural command built on them. A paragraph inside a quote or a
+ * callout would then be unaddressable — visible on screen but unreachable by the commands operating on it.
+ */
+fun DocumentBlock.containerChildren(): List<DocumentBlock>? = when (this) {
+    is ContainerBlock -> children
+    is QuoteBlock -> children
+    is CalloutBlock -> children
+    else -> null
+}
 
-/** Copy of this block with replaced children (only [ContainerBlock] carries children; others unchanged). */
-fun DocumentBlock.withChildren(children: List<DocumentBlock>): DocumentBlock =
-    if (this is ContainerBlock) copy(children = children) else this
+/** Copy of this block with replaced children; blocks that hold none are returned unchanged. */
+fun DocumentBlock.withChildren(children: List<DocumentBlock>): DocumentBlock = when (this) {
+    is ContainerBlock -> copy(children = children)
+    is QuoteBlock -> copy(children = children)
+    is CalloutBlock -> copy(children = children)
+    else -> this
+}
 
 /** Depth-first path (ancestor container ids + target id) to [id], or null if absent. */
 fun BlockDocument.pathOf(id: String): BlockPath? = blocks.pathOf(id, emptyList())
