@@ -2,6 +2,7 @@ package com.norfold.app.editor.document
 
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.DocumentPageBlock
+import com.norfold.app.domain.PageGeometry
 import com.norfold.app.domain.SceneObject
 import com.norfold.app.domain.pages
 import com.norfold.app.editor.command.Capability
@@ -43,6 +44,34 @@ class DocumentCommandScope(
     /** Pages the user has explicitly selected — the "Selected pages" Page Control scope. */
     var selectedPageIds: List<String> = emptyList()
 
+    /**
+     * An explicit template for new pages, or null while new pages inherit from the page they follow.
+     *
+     * Null rather than a pre-filled default so the two behaviours stay distinguishable: until the user says
+     * otherwise, inserting a page into a Letter document should produce a Letter page, and a stored default
+     * would quietly override that with whatever it was seeded from.
+     */
+    var newPageTemplateOverride: PageGeometry? = null
+        private set
+
+    /**
+     * The geometry a page inserted right now would get: the explicit template if the user set one, else the
+     * active page's own geometry, else A4.
+     *
+     * Resolved rather than stored, so "New pages by default" reports what will actually happen instead of a
+     * default that the inherit-from-anchor rule is about to ignore.
+     */
+    fun newPageTemplate(): PageGeometry =
+        newPageTemplateOverride ?: activePage()?.geometry ?: PageGeometry.a4()
+
+    /**
+     * Sets the new-page template. Deliberately not a history transaction: nothing in the document changed,
+     * and an undo step that visibly does nothing is worse than no undo step at all.
+     */
+    fun applyToNewPageTemplate(change: (PageGeometry) -> PageGeometry) {
+        newPageTemplateOverride = change(newPageTemplate()).normalized()
+    }
+
     fun document(): BlockDocument = controller.document()
 
     fun pages(): List<DocumentPageBlock> = document().pages()
@@ -53,16 +82,28 @@ class DocumentCommandScope(
 
     // --- Selection projection -----------------------------------------------------------------------
 
-    /** Ids of the selected scene objects, primary first. Pages are a separate granularity. */
+    /**
+     * Ids of the selected scene objects, primary first. Pages are a separate granularity.
+     *
+     * Both object granularities count: a multi-selection tags its targets [DOC_MULTIPLE_OBJECTS], and
+     * accepting only the singular form would make every multi-object command silently see an empty selection.
+     */
     fun selectedObjectIds(): List<String> = selection.selection()
-        .filter { it.granularity == SelectionGranularity.DOC_OBJECT }
+        .filter {
+            it.granularity == SelectionGranularity.DOC_OBJECT ||
+                it.granularity == SelectionGranularity.DOC_MULTIPLE_OBJECTS
+        }
         .map { it.id }
 
     fun selectedObjects(): List<SceneObject> =
         selectedObjectIds().mapNotNull { controller.findObject(it)?.second }
 
-    fun primaryObjectId(): String? =
-        selection.primary()?.takeIf { it.granularity == SelectionGranularity.DOC_OBJECT }?.id
+    fun primaryObjectId(): String? = selection.primary()
+        ?.takeIf {
+            it.granularity == SelectionGranularity.DOC_OBJECT ||
+                it.granularity == SelectionGranularity.DOC_MULTIPLE_OBJECTS
+        }
+        ?.id
 
     fun primaryObject(): SceneObject? = primaryObjectId()?.let { controller.findObject(it)?.second }
 
@@ -143,6 +184,22 @@ class DocumentCommandScope(
     }
 
     // --- Capability projection ----------------------------------------------------------------------
+
+    /**
+     * The [CommandContext] for a hypothetical single-object selection of [objectId].
+     *
+     * Used to resolve what a surface should offer *for one object* without selecting it first. Asking by
+     * mutating the live selection and restoring it afterwards would be observably destructive: [SelectionEngine.clear]
+     * also drops the text caret, so building an accessibility action list would silently move the user's
+     * insertion point. This answers the same question without touching any state.
+     */
+    fun contextForObject(objectId: String, surface: CommandSurface = CommandSurface.ACCESSIBILITY): CommandContext =
+        CommandContext(
+            offeredCapabilities = capabilitiesOf(objectId),
+            targetCount = if (controller.findObject(objectId) == null) 0 else 1,
+            hasPrimary = controller.findObject(objectId) != null,
+            surface = surface,
+        )
 
     fun capabilitiesOf(targetId: String): Set<Capability> {
         controller.findObject(targetId)?.let { (_, obj) -> return DocumentCapabilities.of(obj) }
