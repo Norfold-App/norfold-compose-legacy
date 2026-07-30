@@ -63,6 +63,12 @@ fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
     is MathBlock -> copy(id = freshId())
     is MermaidBlock -> copy(id = freshId())
     is ShapeBlock -> copy(id = freshId())
+    // A duplicated page needs fresh identities all the way down: two pages sharing an object id would
+    // make "which page owns this object" ambiguous, and object lookup returns the first match.
+    is DocumentPageBlock -> copy(
+        id = freshId(),
+        objects = objects.map { it.copy(id = freshId(), content = it.content.withFreshIds()) },
+    )
 }
 
 private fun ListItem.withFreshIds(): ListItem =

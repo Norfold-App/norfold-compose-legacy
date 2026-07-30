@@ -346,6 +346,10 @@ object MarkdownBlockCodec {
             append(']')
             if (block.text.isNotBlank()) append(' ').append(block.text)
         }
+        // Markdown has no page geometry, so a page exports as its objects' content in z-order. Placement is
+        // lost by the format, not by this codec — the structured payload keeps it.
+        is DocumentPageBlock -> block.objects.sortedBy { it.z }
+            .joinToString("\n\n") { blockMarkdown(it.content) }
     }
 
     /**
