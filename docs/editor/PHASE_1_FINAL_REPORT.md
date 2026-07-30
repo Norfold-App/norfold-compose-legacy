@@ -546,3 +546,100 @@ What remains is certification, not implementation. Deferred to the later integra
 5. Touch drag across device sizes and orientations
 
 **Phase 2 is authorized.**
+
+---
+
+# Addendum: Phase 1 Final Corrective Pass — Interaction Correctness Gate
+
+**Date**: 2026-07-30
+**Scope**: Close the gap between runtime correctness and human-visible Compose behavior.
+**Status**: IMPLEMENTATION COMPLETE — DEVICE/OEM CERTIFICATION DEFERRED
+
+The section above claimed Phase 1 complete on the strength of compilation, unit tests and "the logic
+exists". This pass audited the same slice at the host/presentation boundary and found real defects: a caret
+the runtime moved that no field followed, an Enter key the text field turned into a `\n`, a drag that
+divided pixel offsets by a guessed 48dp row pitch, accessibility actions resolved against the wrong block,
+rich inline content flattened to `plainText()`, and a save that cleared dirty state before the repository
+had accepted anything. Each is fixed below.
+
+## Validation table
+
+| # | Item | Status | Implementation | Evidence | Remaining limitation |
+|---|---|---|---|---|---|
+| 1 | Caret/selection ↔ field focus two-way | PASS | `FlowCaretRequest` + `FlowHostRuntime.requestCaret` / `publishCaretRequest` / `afterHistoryStep` / `textLengthOf` / `syncSelectionToDocument`; `FlowEditableLine` focus application per `stamp` | `FlowHostCorrectionTest`: `caretRequest_isPublishedWhenACommandMovesTheCaret`, `_isNotRepublishedByACommandThatDoesNotMoveTheCaret`, `_stampIsMonotonic`, `_isNotAdvancedByAFieldReportedCaret`, `undo_publishesAClampedCaretRequest`, `undo_retargetsTheCaretWhenItsBlockDisappears`, `caretItemId_isDroppedWhenTheItemDisappears`; `FlowHostInstrumentationTest`: `caretRequest_movesFocusToTheRequestedField`, `_isAppliedOncePerStamp` | Instrumentation tests compile but were not executed (device testing deferred at owner's instruction) |
+| 2 | Enter/Backspace writing semantics | PASS | `FlowHostRuntime.newLine` / `backspaceAtStart`; `BlockEditorSession.splitTodoItem` / `exitEmptyTodoItem` / `mergeTodoItemWithPrevious`; `FlowEditableLine.onPreviewKeyEvent` | `FlowHostCorrectionTest`: `newLine_splitsAParagraphAtTheCaret`, `_splitsAListItemIntoTwo`, `_onAnEmptyListItemLeavesTheList`, `_splitsATodoItem`, `_declinesInsideACodeBlock`, `_usesTheSameCommandAsTheDockSplit`, `backspaceAtStart_mergesWithThePreviousBlock`, `_mergesListItems`, `_returnsFalseAtTheTopOfTheDocument`, `_returnsFalseWhenTheVocabularyDeclines`, `editText_coalescesPerItemNotPerBlock`; instrumentation: `enter_splitsTheBlockInsteadOfInsertingANewline`, `backspaceAtStart_mergesInARealField` | Shift+Enter soft-break is latched from hardware modifiers only; soft keyboards send no modifier, so IME newline is treated as a structural split |
+| 3 | Measured drag geometry replaces fixed pitch | PASS | `FlowDragGeometry` (new); `FlowHostScreen` row `onGloballyPositioned` → `FlowDragState.bounds`; `detectDragGesturesAfterLongPress` | `FlowHostCorrectionTest`: `dragGeometry_resolvesFromMeasuredBoundsNotAFixedPitch`, `_aboveTheMidpointPlacesBefore`, `_belowTheMidpointPlacesAfter`, `_coversTheWholeAxis`, `_clampsPastEitherEnd`, `_marksTheSourcePositionAsANoOp`, `_returnsNullWithNothingToPlaceAgainst`, `_indexCommitsAsARealMoveDownward`, `_indexCommitsAsARealMoveUpward`, `cancelDrag_leavesNoHistoryEntry` | Edge auto-scroll during drag is not implemented; a drag to a target outside the viewport requires releasing and re-dragging |
+| 4 | No uncontrolled overlap during drag | PASS | `FlowBlockRow` `graphicsLayer`/`zIndex` lift + source placeholder tint; `FlowDropMarker`; haptics on pickup/target-change/drop | Same as item 3 — the marker is drawn from the identical `FlowDropPlacement` the commit uses, so preview and result cannot disagree | Marker rendering itself is visual and unverified without a device |
+| 5 | Multi-select disables ordinary text interaction | PASS | `FlowBlockContext.selectionMode`; `FlowEditableLine` renders static `Text` (no field at all) in selection mode; to-do `Checkbox` disabled | `FlowHostCorrectionTest`: `selectionMode_togglingDoesNotDisturbTheCaret`, `_cancelRestoresThePreModeSelectionAndCaret`, `_doneRetainsTheSelection`, `_caretDoesNotCollapseTheSelection`; instrumentation: `selectionMode_textFieldDoesNotTakeFocusOrTheCaret`, `_fieldRejectsInput` | — |
+| 6 | Inline-literal slash suppression wired from the host | PASS | `FlowInlineText.literalInlineAt` (new); `FlowHostRuntime.slashInputFor` supplies `literalInline` from the post-edit document; `FlowBlockRow.onEdit` calls it | `FlowHostCorrectionTest`: `literalInline_isTrueInsideInlineCode`, `_isTrueInsideInlineMath`, `_isFalseInsideOrdinaryProseSpans`, `_isFalseAtTheStartOfTheLine`, `_readsListItems`, `slashInputFor_carriesTheLiteralInlineFactFromTheDocument`, `slashMenu_staysClosedForASlashInsideInlineCode`, `_opensForASlashInOrdinaryProse` | — |
+| 7 | Table cell establishes complete command context | PASS | `FlowHostRuntime.setTableCursor` now also selects the table and sets the caret; `tableCursor` in `FlowHostUiState`; `FlowTablePreview` highlights from that cursor | `FlowHostCorrectionTest`: `setTableCursor_makesTheTableThePrimaryTarget`, `_makesDirectionalCommandsImmediatelyInvokable`, `_isSurfacedInTheSnapshotForHighlighting`, `_ignoresACellInABlockThatDoesNotExist` | Cell *text* editing remains Phase-4 work (addressing only, as originally scoped) |
+| 8 | Dock/surface overlap with editable content | PASS | `FlowHostScreen` measures the lower-surface stack via `onSizeChanged` and feeds it into `LazyColumn` `contentPadding`; caret-request `LaunchedEffect` scrolls the target above the measured limit | Static: bottom inset is derived from measured height, not a constant. No automated assertion. | **Presentation-only, unverified without a device.** Measured-inset logic is correct by construction but IME/dock positioning across form factors is a certification item |
+| 9 | Bounded compact command surfaces | PASS | `FlowSlashMenu` and `FlowPaletteList` use `LazyColumn` with `heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT)`; tablet pane unbounded | Static: no unbounded `Column` of results remains | Same as item 8 — row-count-on-device is a certification matter |
+| 10 | Large-screen writing measure | PASS | `FlowHostScreen`: the list item is the full-width, `TopCenter`-aligned `Box`; the width cap sits on the *inner* row, so `fillMaxWidth()` no longer defeats `widthIn` | Static: modifier order corrected; cap is no longer on a `fillMaxWidth()` sibling | Visual centering unverified without a device |
+| 11 | Genuinely adaptive phone header | PASS | `FlowTopBar(compact = …)` moves Select into a `DropdownMenu` below `FLOW_COMPACT_WIDTH_DP`; title is the only element taking remaining space | Static: essential nav + Undo/Redo always present; secondary control in a labelled overflow, not a hidden gesture | Large font scale / RTL overflow behavior is a certification item |
+| 12 | Title editing reachable | PASS | `FlowTitleField` — a real `BasicTextField`, re-seeded only when the *owner's* value changes; newlines flattened | Static: `onTitleChange` is now reachable by the user rather than wired to nothing | — |
+| 13 | Persistence/save contract | PASS | `FlowNoteEditorScreen.saveIfDirty` awaits `updateActiveDocument(...).join()` before baselining; `FlowEditController.markSaved(persisted)` overload; presenter no longer persists; `DisposableEffect` flush on exit | `FlowEditControllerTest`: `markSaved_withSnapshot_keepsLaterEditsDirty`, `markSaved_withSnapshot_clearsWhenNothingChangedSince` | Durability is only as authoritative as the repository's own write; a Room-level failure surfaces as a retained dirty set (retried), not as a user-visible error |
+| 14 | Accessibility actions resolve per row | PASS | `FlowHostRuntime.accessibilityActionsFor` / `invokeAccessibilityOn` / `withTemporarySelection`; `FlowBlockRow.semantics` resolves per block | `FlowHostCorrectionTest`: `accessibilityActionsFor_describeTheRequestedRow`, `_restoresTheSelectionItBorrowed`, `_keepsDisabledEntriesWithReasons`, `invokeAccessibilityOn_operatesOnTheRowTheActionsDescribed`, `_isTheSameCommandAsTheDockRoute` | TalkBack traversal itself remains deferred certification; the semantics tree and command context are structurally correct |
+| 15 | Inline formatting visibly preserved | PASS | `FlowInlineText.runsOf` (new); `flowInlineSpans` + `FlowInlineTransformation` in `FlowBlockContent`, reusing the legacy `highlightColor` / `NorfoldFontFamilies` | `FlowHostCorrectionTest`: `runsOf_reportsNestedStylesInPlainTextOffsets`, `_tilesTheWholeTextWithoutGapsOrOverlap`, `_carriesEveryInlineAttributeTheDocumentSupports`, `editText_preservesInlineStylingOutsideTheEditedRange`; instrumentation: `inlineFormatting_isRenderedRatherThanFlattenedAway` | Inline styling is **rendered, not editable** — applying/removing marks is Phase-3 work as originally scoped. This is the least-misleading preserved rendering, not a flatten |
+| 16 | Collapsed/nested content reachable | PASS | `CalloutBlock` branch gains a labelled expand/collapse `IconButton` → `FlowHostRuntime.toggleCollapsed` (through History); **`BlockTree.containerChildren`/`withChildren` widened to `QuoteBlock` and `CalloutBlock`** | `FlowHostCorrectionTest`: `toggleCollapsed_expandsAndCollapsesThroughHistory`, `_ignoresBlocksThatDoNotCollapse`, `nestedContent_isReachableByTheStructuralCommands`; instrumentation: `collapsedCallout_canBeExpandedByTappingTheControl` | — |
+| 17 | No invented non-goals | PASS | Deterministic drag placement, drop feedback, Enter/Backspace, nested/container editing, caret/focus sync and touch selection are all implemented above rather than deferred | The table itself | Deferred items are named as device/OEM certification only |
+| 18 | Correct architecture preserved | PASS | No engine replaced. `FlowHostRuntime`, `CommandRegistry`, `SelectionEngine`, `HistoryEngine`, `SurfaceCoordinator`, `AdaptivePresentationRuntime`, `InteractionMemory`, `FlowEditController`, stable-ID model and default-off `FLOW_HOST` all intact; fixes are at integration seams and presentation | 567 unit tests pass, including the whole pre-existing Phase-0/Phase-1 suite | — |
+| 19 | Repository-scope discipline | PASS | Only FlowHost, its domain seams and directly necessary tests/docs touched | See file list below | — |
+| 20 | Validation | PARTIAL | — | 567 unit tests pass (`testDebugUnitTest --rerun-tasks`, 0 failures, up from 509 at HEAD 699c746); `assembleDebug` succeeds; `compileDebugAndroidTestKotlin` succeeds | **Instrumentation tests were compiled but not executed.** Device testing was explicitly deferred by the owner for the end of the phase programme |
+
+## Root-cause note: `BlockTree` recursion
+
+The nested-content defect was not presentational. `DocumentBlock.containerChildren()` recognised only
+`ContainerBlock`, but `QuoteBlock` and `CalloutBlock` also store `List<DocumentBlock>`. Since that helper is
+the *only* recursion `findById`, `allIds`, `locate`, `updateBlock` and every structural command are built on,
+a paragraph inside a quote or callout was unaddressable — visible on screen, unreachable by the commands
+operating on it. Both helpers are used exclusively inside `BlockTree.kt`, so widening them fixed the whole
+tree vocabulary coherently rather than patching one call site.
+
+## Commits
+
+Committed as coherent behavior-sized slices (see `git log`), not micro-commits.
+
+## Files changed
+
+Modified:
+- `apps/android/build.gradle.kts` (Compose UI test artifacts)
+- `apps/android/src/main/java/com/norfold/app/domain/BlockTree.kt`
+- `apps/android/src/main/java/com/norfold/app/domain/BlockEditorSession.kt`
+- `apps/android/src/main/java/com/norfold/app/editor/flow/FlowCommandScope.kt`
+- `apps/android/src/main/java/com/norfold/app/editor/flow/FlowEditController.kt`
+- `apps/android/src/main/java/com/norfold/app/editor/flow/FlowHostRuntime.kt`
+- `apps/android/src/main/java/com/norfold/app/ui/editor/FlowNoteEditorScreen.kt`
+- `apps/android/src/main/java/com/norfold/app/ui/editor/flow/FlowBlockContent.kt`
+- `apps/android/src/main/java/com/norfold/app/ui/editor/flow/FlowHostScreen.kt`
+- `apps/android/src/androidTest/java/com/norfold/app/editor/flow/FlowHostInstrumentationTest.kt` (replaced a placeholder that asserted only the flag-injection mechanism)
+- `apps/android/src/test/java/com/norfold/app/editor/flow/FlowEditControllerTest.kt`
+
+New:
+- `apps/android/src/main/java/com/norfold/app/editor/flow/FlowDragGeometry.kt`
+- `apps/android/src/main/java/com/norfold/app/editor/flow/FlowInlineText.kt`
+- `apps/android/src/test/java/com/norfold/app/editor/flow/FlowHostCorrectionTest.kt`
+
+## Build results
+
+- `:apps:android:testDebugUnitTest --rerun-tasks` — BUILD SUCCESSFUL, **567 tests, 0 failures**
+- `:apps:android:assembleDebug` — BUILD SUCCESSFUL
+- `:apps:android:compileDebugAndroidTestKotlin` — BUILD SUCCESSFUL
+
+## Scope confirmations
+
+- **No unrelated collaboration, website, Telegram, Supabase, infrastructure, provider or agent-skill files
+  were changed.** The frozen collaboration foundation was not modified. Pre-existing unrelated working-tree
+  changes were left untouched and out of these commits.
+- **Phase 2 was not started.** No `DocumentHost`, no Scene model, no CRDT selection, no collaboration
+  binding, no room partitioning, no transport changes, no roadmap rewrite.
+
+## Honest status
+
+Items 1–19 are implemented. Item 20 is **partial**: every statically-testable behavior is covered by
+automated tests that pass, but the Compose instrumentation tests are compiled-only — the owner deferred all
+device execution to the end of the phase programme. Items 8, 9, 10 and 11 are presentation fixes whose
+*logic* is correct by construction (measured insets, bounded lists, corrected modifier order, overflow
+menu) but whose on-screen result has not been observed.
+
+**Phase 1 implementation gate: satisfied. Device certification: outstanding, by owner instruction.**
