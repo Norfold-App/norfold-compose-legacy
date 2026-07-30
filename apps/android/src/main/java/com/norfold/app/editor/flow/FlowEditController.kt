@@ -47,6 +47,12 @@ class FlowEditController(
     /** The document as last persisted; the baseline for [dirtyBlockIds]/[deletedBlockIds]. */
     private var lastSavedDocument: BlockDocument = workspace.documentOf(target)
 
+    /**
+     * Advances every time [lastSavedDocument] moves, so an in-flight save can tell whether the baseline it
+     * measured itself against is still the current one. See [markSavedIfCurrent].
+     */
+    private var baselineGeneration: Long = 0L
+
     // Coalescing bookkeeping (History-Engine-driven; see class doc).
     private var lastRawKey: String? = null
     private var lastCommitNanos: Long = 0L
@@ -195,9 +201,16 @@ class FlowEditController(
 
     fun hasUnsavedChanges(): Boolean = document() != lastSavedDocument
 
+    /**
+     * The current baseline generation. A save attempt reads this before starting and hands it back to
+     * [markSavedIfCurrent] on success, which is how a completion that raced a remote merge is recognised as
+     * describing a baseline that no longer exists.
+     */
+    fun baselineGeneration(): Long = baselineGeneration
+
     /** Marks the live document as persisted; resets the dirty/deleted baseline. */
     fun markSaved() {
-        lastSavedDocument = document()
+        setBaseline(document())
     }
 
     /**
@@ -209,7 +222,28 @@ class FlowEditController(
      * dirty, so the next save picks them up.
      */
     fun markSaved(persisted: BlockDocument) {
-        lastSavedDocument = persisted
+        setBaseline(persisted)
+    }
+
+    /**
+     * Marks [persisted] as the baseline **only if** the baseline has not moved since [expectedGeneration].
+     * Returns true when it was applied.
+     *
+     * This is the stale-completion guard. A write started against baseline P can complete after a remote
+     * snapshot has already advanced the baseline to R; applying P then would declare content persisted that R
+     * never contained, and the local edits R protected would silently go clean. Declining leaves everything
+     * dirty, so the next attempt reconciles against the current baseline — one redundant write is a far cheaper
+     * outcome than losing an edit.
+     */
+    fun markSavedIfCurrent(persisted: BlockDocument, expectedGeneration: Long): Boolean {
+        if (expectedGeneration != baselineGeneration) return false
+        setBaseline(persisted)
+        return true
+    }
+
+    private fun setBaseline(next: BlockDocument) {
+        lastSavedDocument = next
+        baselineGeneration++
     }
 
     /**
@@ -217,22 +251,38 @@ class FlowEditController(
      * blocks (§14.7 — this is last-saved-writer-wins block merge, **not** a CRDT). Undo history is
      * conservatively cleared because remote state forked the timeline. Returns true if the document
      * changed.
+     *
+     * The **working** document becomes the merge result — remote's clean changes plus the local changes that
+     * were protected from it. The **baseline** becomes the accepted remote snapshot, which is the only document
+     * anyone has evidence for. Baselining the merge result instead (the defect this replaces) declared the
+     * protected local edits persisted purely because the merge kept them, so a process death lost content that
+     * had never been written and had stopped being marked dirty.
+     *
+     * Diffing working-against-remote then re-derives exactly the protected changes as dirty, while a remote
+     * block the user had not touched is clean on both sides and stays clean. Where remote turns out to carry
+     * the same content as a local dirty block, the diff finds no difference and that block legitimately goes
+     * clean — the content genuinely is persisted now.
      */
     fun mergeRemote(remote: BlockDocument): Boolean {
         val before = document()
+        val normalizedRemote = remote.normalized()
         val session = BlockEditorSession(before).apply {
             dirtyBlockIds += this@FlowEditController.dirtyBlockIds()
             deletedBlockIds += this@FlowEditController.deletedBlockIds()
         }
-        if (!session.mergeRemote(remote)) return false
-        val merged = session.document
-        if (merged == before) return false
-        workspace.setDocument(target, merged)
-        history.clear()
-        breakTypingGroup()
-        // Remote convergence is the new persisted baseline for anything it accepted cleanly.
-        lastSavedDocument = merged
-        return true
+        val documentChanged = session.mergeRemote(remote) && session.document != before
+        if (documentChanged) {
+            workspace.setDocument(target, session.document)
+            history.clear()
+            breakTypingGroup()
+        }
+        // The baseline advances even when the working document does not, because it is a statement about what
+        // is *persisted*, not about what is shown. A remote snapshot that already matches a locally-dirty block
+        // is exactly how that block legitimately goes clean; without this the editor would keep resaving
+        // content the server already has. Skipped when remote matches the baseline already — the echo of our
+        // own write must not churn the generation and invalidate a save that is still in flight.
+        if (normalizedRemote != lastSavedDocument) setBaseline(normalizedRemote)
+        return documentChanged
     }
 
     private fun resolveCoalescingKey(rawKey: String?): String? {
