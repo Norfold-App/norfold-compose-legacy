@@ -3,7 +3,10 @@ package com.norfold.app.domain
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.util.UUID
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -174,7 +177,67 @@ data class PageHeaderFooter(
 }
 
 @Serializable
-enum class PageNumberFormat { Decimal, RomanLower, RomanUpper, AlphaLower, AlphaUpper }
+enum class PageNumberFormat {
+    Decimal,
+    RomanLower,
+    RomanUpper,
+    AlphaLower,
+    AlphaUpper,
+    ;
+
+    /** How this format reads in Page Control — an example, because "RomanLower" is not what a user calls it. */
+    fun displayLabel(): String = when (this) {
+        Decimal -> "1, 2, 3"
+        RomanLower -> "i, ii, iii"
+        RomanUpper -> "I, II, III"
+        AlphaLower -> "a, b, c"
+        AlphaUpper -> "A, B, C"
+    }
+
+    /**
+     * [number] rendered in this format. Used by the page-number band, so what is drawn matches the format
+     * the user chose rather than always being decimal.
+     */
+    fun format(number: Int): String {
+        if (number <= 0) return number.toString()
+        return when (this) {
+            Decimal -> number.toString()
+            RomanLower -> roman(number).lowercase()
+            RomanUpper -> roman(number)
+            AlphaLower -> alpha(number).lowercase()
+            AlphaUpper -> alpha(number)
+        }
+    }
+
+    private fun roman(value: Int): String {
+        // Beyond the classical range the numeral becomes unreadably long, so it degrades to digits rather
+        // than printing a page number nobody can parse.
+        if (value > 3999) return value.toString()
+        val numerals = intArrayOf(1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1)
+        val symbols = arrayOf("M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I")
+        var remaining = value
+        return buildString {
+            numerals.forEachIndexed { index, numeral ->
+                while (remaining >= numeral) {
+                    append(symbols[index])
+                    remaining -= numeral
+                }
+            }
+        }
+    }
+
+    /** Spreadsheet-style: 1→A, 26→Z, 27→AA. Wrapping at Z would give two pages the same label. */
+    private fun alpha(value: Int): String {
+        var remaining = value
+        return buildString {
+            while (remaining > 0) {
+                val index = (remaining - 1) % 26
+                insert(0, ('A' + index))
+                remaining = (remaining - 1) / 26
+            }
+        }
+    }
+}
 
 /**
  * Numbering and sectioning metadata. [startsSection] is what makes "This section" a real Page Control
@@ -372,12 +435,99 @@ data class SceneGeometry(
     /** True when [px], [py] falls inside this box, in the object's own unrotated coordinate space. */
     fun contains(px: Float, py: Float): Boolean = px >= x && px <= right && py >= y && py <= bottom
 
+    /**
+     * True when [px], [py] falls inside this box **as drawn**, honouring [rotation].
+     *
+     * The point is rotated backwards about the box's centre and then tested against the unrotated box, which
+     * is the exact inverse of how the renderer rotates the box about that same centre. Testing the axis-aligned
+     * box instead would disagree with what the user sees the moment anything is rotated: the corners of a
+     * 45°-rotated frame would be selectable where nothing is drawn, and its visible corners would not respond.
+     */
+    fun containsRotated(px: Float, py: Float): Boolean {
+        if (rotation == 0f) return contains(px, py)
+        val radians = -rotation.toDouble() * PI / 180.0
+        val cos = cos(radians).toFloat()
+        val sin = sin(radians).toFloat()
+        val dx = px - centerX
+        val dy = py - centerY
+        return contains(centerX + dx * cos - dy * sin, centerY + dx * sin + dy * cos)
+    }
+
+    /**
+     * The box produced by dragging one [corner] to ([px], [py]) in page points, with the opposite corner
+     * anchored.
+     *
+     * Two rules make this behave the way a human expects. The opposite corner is computed *first* and held
+     * fixed, so dragging the top-left moves x and y as well as width and height rather than only resizing
+     * downward. And each axis is clamped at [MIN_SIZE] against that anchor rather than being allowed to pass
+     * through it: dragging the left edge past the right one pins the box at its minimum width instead of
+     * inverting it into a negative-width box that the renderer would draw inside-out and hit testing would
+     * miss entirely.
+     */
+    fun resizedTo(corner: ResizeCorner, px: Float, py: Float): SceneGeometry {
+        val anchorX = if (corner.movingRight) x else right
+        val anchorY = if (corner.movingBottom) y else bottom
+        val nx = px.finiteOr(anchorX)
+        val ny = py.finiteOr(anchorY)
+        val width = if (corner.movingRight) nx - anchorX else anchorX - nx
+        val height = if (corner.movingBottom) ny - anchorY else anchorY - ny
+        val w = width.coerceAtLeast(MIN_SIZE)
+        val h = height.coerceAtLeast(MIN_SIZE)
+        return copy(
+            x = if (corner.movingRight) anchorX else anchorX - w,
+            y = if (corner.movingBottom) anchorY else anchorY - h,
+            width = w,
+            height = h,
+        )
+    }
+
+    /**
+     * The axis-aligned box that fully contains this one **as drawn**, honouring [rotation].
+     *
+     * Used for culling and coarse overlap. A rotated frame's corners reach outside its own x/y/width/height,
+     * so culling against the unrotated box would drop an object whose visible corner is still on screen.
+     */
+    fun boundingBox(): SceneGeometry {
+        if (rotation == 0f) return this
+        val radians = rotation.toDouble() * PI / 180.0
+        val cos = abs(cos(radians)).toFloat()
+        val sin = abs(sin(radians)).toFloat()
+        val w = width * cos + height * sin
+        val h = width * sin + height * cos
+        return SceneGeometry(centerX - w / 2f, centerY - h / 2f, w, h)
+    }
+
     private fun Float.finiteOr(fallback: Float): Float = if (isFinite()) this else fallback
 
     companion object {
         /** Below this an object cannot present a usable touch target or resize handle. */
         const val MIN_SIZE = 8f
     }
+}
+
+/**
+ * One of the four corners a resize gesture can drag.
+ *
+ * The two flags are what [SnapGuideEngine] already asks for — *which* edges are moving — so a corner carries
+ * its own snapping contract rather than each call site re-deriving it and one of them eventually getting the
+ * pair backwards.
+ */
+enum class ResizeCorner(val movingRight: Boolean, val movingBottom: Boolean) {
+    TOP_LEFT(movingRight = false, movingBottom = false),
+    TOP_RIGHT(movingRight = true, movingBottom = false),
+    BOTTOM_LEFT(movingRight = false, movingBottom = true),
+    BOTTOM_RIGHT(movingRight = true, movingBottom = true),
+    ;
+
+    /** The corner held fixed while this one is dragged. */
+    fun anchorOf(geometry: SceneGeometry): Pair<Float, Float> =
+        (if (movingRight) geometry.x else geometry.right) to
+            (if (movingBottom) geometry.y else geometry.bottom)
+
+    /** Where this corner currently sits, for placing its handle. */
+    fun positionIn(geometry: SceneGeometry): Pair<Float, Float> =
+        (if (movingRight) geometry.right else geometry.x) to
+            (if (movingBottom) geometry.bottom else geometry.y)
 }
 
 /**
@@ -446,9 +596,13 @@ data class DocumentPageBlock(
      * Every object whose box contains the point, front-most first. The full list is returned rather than
      * just the winner so overlapping objects have a deterministic deep-selection path: tapping repeatedly
      * walks down this list instead of being stuck on whatever is on top.
+     *
+     * Rotation is honoured ([SceneGeometry.containsRotated]), so what responds to a tap is what is drawn.
+     * The ordering is still strictly z-descending — rotating an object changes its shape, never its layer —
+     * which is what keeps repeat-tap cycling stable while a rotated object is in the stack.
      */
     fun hitTest(px: Float, py: Float): List<SceneObject> =
-        objectsFrontToBack().filter { it.visible && it.geometry.contains(px, py) }
+        objectsFrontToBack().filter { it.visible && it.geometry.containsRotated(px, py) }
 
     fun normalized(): DocumentPageBlock {
         val ordered = objects
@@ -466,6 +620,40 @@ data class DocumentPageBlock(
     fun withoutObject(objectId: String): DocumentPageBlock =
         copy(objects = objects.filterNot { it.id == objectId }).normalized()
 }
+
+/**
+ * Document-level bounded-document settings, as a top-level block.
+ *
+ * **Why a block and not a field on [BlockDocument].** Persistence stores one row per top-level block and
+ * History operates on top-level-block indices. A field on the document would have neither a row of its own
+ * nor an undoable representation, so "New pages by default" would live only in memory and quietly reset on
+ * the next session — which is exactly the failure this type exists to prevent. As a block it is persisted,
+ * undone and round-tripped by machinery that is already proven.
+ *
+ * [newPageTemplate] is nullable and defaults to null, which is a *distinct* state from any concrete geometry:
+ * null means "a new page inherits from the page it follows", the behaviour a document has until the user
+ * deliberately overrides it. Seeding a default here would silently convert every document into one with an
+ * explicit template, overriding the inherit rule that makes inserting into a Letter document produce Letter.
+ *
+ * It carries no text, so it is invisible in any surface that renders content.
+ */
+@Serializable @SerialName("document_settings")
+data class DocumentSettingsBlock(
+    override val id: String = sceneId("settings"),
+    val newPageTemplate: PageGeometry? = null,
+    val extensions: Map<String, String> = emptyMap(),
+) : DocumentBlock {
+    override fun plainText(): String = ""
+
+    fun normalized(): DocumentSettingsBlock = copy(newPageTemplate = newPageTemplate?.normalized())
+}
+
+/** The document's settings block, or null when it has none (the ordinary case for an untouched document). */
+fun BlockDocument.documentSettings(): DocumentSettingsBlock? =
+    blocks.firstNotNullOfOrNull { it as? DocumentSettingsBlock }
+
+/** Index of the settings block within the top-level block list, or -1. */
+fun BlockDocument.blockIndexOfSettings(): Int = blocks.indexOfFirst { it is DocumentSettingsBlock }
 
 /**
  * The pages of [this] document, in order. Non-page blocks are ignored rather than coerced: a bounded
@@ -532,6 +720,29 @@ fun List<DocumentPageBlock>.sectionIndices(): List<Int> {
         if (index > 0 && page.geometry.numbering.startsSection) section++
         section
     }
+}
+
+/**
+ * The printed number of each page, honouring section restarts.
+ *
+ * Numbering runs from 1 and continues across pages until a page both starts a section and declares a
+ * [PageNumbering.restartAt]; from there the sequence resumes at that value. Derived rather than stored,
+ * because a stored number would fall out of step the moment a page was inserted or reordered — and a page
+ * number that disagrees with the page's position is worse than none.
+ */
+fun List<DocumentPageBlock>.pageNumbers(): List<Int> {
+    var current = 0
+    return map { page ->
+        val numbering = page.geometry.numbering
+        current = if (numbering.startsSection && numbering.restartAt != null) numbering.restartAt else current + 1
+        current
+    }
+}
+
+/** Each page's number as it should be *printed*, in that page's own chosen format. */
+fun List<DocumentPageBlock>.pageNumberLabels(): List<String> {
+    val numbers = pageNumbers()
+    return mapIndexed { index, page -> page.geometry.numbering.format.format(numbers[index]) }
 }
 
 internal fun sceneId(prefix: String): String = "$prefix-${UUID.randomUUID()}"

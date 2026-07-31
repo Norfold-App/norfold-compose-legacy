@@ -2,8 +2,11 @@ package com.norfold.app.editor.document
 
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.DocumentPageBlock
+import com.norfold.app.domain.ResizeCorner
 import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneObject
+import com.norfold.app.domain.SceneObjectKind
+import com.norfold.app.domain.pageNumberLabels
 import com.norfold.app.domain.pages
 import com.norfold.app.editor.command.CommandContext
 import com.norfold.app.editor.command.CommandRegistry
@@ -12,12 +15,18 @@ import com.norfold.app.editor.command.CommandState
 import com.norfold.app.editor.command.CommandStatus
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.command.EditorCommand
+import com.norfold.app.editor.flow.FlowShortcut
 import com.norfold.app.editor.memory.InteractionMemory
 import com.norfold.app.editor.presentation.AdaptivePresentationRuntime
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.recovery.RecoveryReason
 import com.norfold.app.editor.recovery.RecoverySnapshotManager
+import com.norfold.app.editor.surface.BackOutcome
+import com.norfold.app.editor.surface.DismissTrigger
+import com.norfold.app.editor.surface.DispatchResult
+import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.surface.SurfaceCoordinator
+import com.norfold.app.editor.surface.ToolSurface
 import com.norfold.app.editor.selection.SelectionEngine
 
 /** One command as a Document surface should render it: the same status behind every route (§4.1, §4.2). */
@@ -33,6 +42,22 @@ data class DocumentCommandItem(
     val mixed: Boolean get() = status.state == CommandState.MIXED
 
     /** The reason to show when this row is greyed out, or null when it is not disabled (§4.2). */
+    val disabledReason: String?
+        get() = if (status.state == CommandState.DISABLED) status.reason ?: "Not available here" else null
+}
+
+/** One value-driven Page Control row: its current value, whether the scope disagrees, and its status. */
+data class DocumentPageValueItem(
+    val id: String,
+    val label: String,
+    val category: String,
+    val kind: PageValueControl.Kind,
+    /** The value to seed the field with; empty when the scope's pages disagree. */
+    val value: String,
+    val mixed: Boolean,
+    val status: CommandStatus,
+) {
+    val enabled: Boolean get() = status.isInvokable
     val disabledReason: String?
         get() = if (status.state == CommandState.DISABLED) status.reason ?: "Not available here" else null
 }
@@ -55,20 +80,37 @@ data class DocumentHostUiState(
     val representation: LayoutRepresentation,
     val intent: WorkingIntent,
     val zoom: Float,
+    val panX: Float,
     val manipulation: ActiveManipulation?,
+    /** The object whose text content is being edited, or null. Never entered by a first tap. */
+    val editingObjectId: String?,
+    /** True while object multi-select is active — the count bar with Cancel/Done is showing. */
+    val selectionMode: Boolean,
     val formFactor: FormFactor,
     val presentationMode: com.norfold.app.editor.presentation.PresentationMode,
+    /** The tool surface the coordinator says is active, or null when only the editor is showing. */
+    val activeSurfaceId: String?,
     val dock: List<DocumentCommandItem>,
     val pageControls: List<DocumentCommandItem>,
+    /** The value-driven Page Control rows, each seeded with the scope's current value. */
+    val pageValueControls: List<DocumentPageValueItem>,
     /** The scope [pageControls] were resolved at, and that invoking one of them will apply. */
     val pageScope: PageScope,
     /** How many pages the current scope names — what "Apply settings to…" is actually promising. */
     val pageScopeCount: Int,
+    /** The durable new-page template, or null while new pages inherit from the page they follow. */
+    val newPageTemplate: com.norfold.app.domain.PageGeometry?,
+    /** Each page's printed number, honouring section restarts and per-page format. */
+    val pageNumberLabels: List<String>,
     val canUndo: Boolean,
     val canRedo: Boolean,
     val notice: String?,
     val lastFailure: String?,
-)
+) {
+    /** The primary selected object, which is the only one that exposes individual manipulation handles. */
+    val primaryObject: SceneObject?
+        get() = primaryObjectId?.let { id -> pages.firstNotNullOfOrNull { it.objectById(id) } }
+}
 
 /**
  * The authoritative runtime for one open bounded document (roadmap Phase 2).
@@ -166,6 +208,10 @@ class DocumentHostRuntime(
             }
         }
         scope.selectedPageIds = scope.selectedPageIds.filter { id -> live.pages().any { it.id == id } }
+        // A caret in a deleted object is a keyboard open over content that no longer exists, and every
+        // keystroke it accepts would be discarded silently. Undo can remove the object being edited, so this
+        // has to be checked here rather than only where a delete is issued.
+        editingObjectId?.let { if (controller.findObject(it) == null) editingObjectId = null }
     }
 
     // --- View axes -----------------------------------------------------------------------------------
@@ -185,6 +231,45 @@ class DocumentHostRuntime(
     fun setZoom(zoom: Float) {
         view.setZoom(zoom)
         revision++
+    }
+
+    fun setPan(panX: Float) {
+        view.setPan(panX)
+        revision++
+    }
+
+    /**
+     * The measured viewport in page points.
+     *
+     * Reported by the host because only the composable knows how big it is, and remembered here because Fit
+     * width and Fit page are commands that can be invoked from a chip, a keyboard chord or an accessibility
+     * action — none of which are in a position to measure anything.
+     */
+    private var viewportWidthPt: Float = 0f
+    private var viewportHeightPt: Float = 0f
+
+    fun reportViewport(widthPt: Float, heightPt: Float) {
+        viewportWidthPt = widthPt
+        viewportHeightPt = heightPt
+    }
+
+    /** Zooms so the widest page fills the viewport. Stored page geometry is never touched. */
+    fun fitWidth(): Float {
+        setRepresentationIfNeeded()
+        return view.fitWidth(pages(), viewportWidthPt).also { revision++ }
+    }
+
+    /** Zooms so the active page fits entirely. Stored page geometry is never touched. */
+    fun fitPage(): Float {
+        setRepresentationIfNeeded()
+        return view.fitPage(scope.activePage(), viewportWidthPt, viewportHeightPt).also { revision++ }
+    }
+
+    /** Zoom is an Original-View concept; asking to fit while adapted is asking to see the real page. */
+    private fun setRepresentationIfNeeded() {
+        if (view.representation != LayoutRepresentation.ORIGINAL) {
+            view.setRepresentation(LayoutRepresentation.ORIGINAL)
+        }
     }
 
     /**
@@ -221,6 +306,10 @@ class DocumentHostRuntime(
         if (view.intent != WorkingIntent.EDIT) setIntent(WorkingIntent.EDIT)
         val objects = scope.selectedObjects()
         if (objects.isEmpty()) return null
+        // Manipulating an object ends editing its text: the caret and the drag cannot both own it, and leaving
+        // a field focused mid-drag keeps the keyboard up over the thing being moved. Typing already committed
+        // through its own coalescing transaction, so nothing is lost by leaving.
+        if (editingObjectId != null && objects.any { it.id == editingObjectId }) editingObjectId = null
         return view.beginManipulation(objects, kind).also { revision++ }
     }
 
@@ -231,11 +320,52 @@ class DocumentHostRuntime(
     fun updateMove(dx: Float, dy: Float): ActiveManipulation? =
         view.updateMove(dx, dy, manipulationPage()).also { revision++ }
 
-    fun updateResize(geometry: SceneGeometry, movingRight: Boolean, movingBottom: Boolean): ActiveManipulation? =
-        view.updateResize(geometry, manipulationPage(), movingRight, movingBottom).also { revision++ }
+    /** Drags [corner] to a page point. The opposite corner stays anchored; see [SceneGeometry.resizedTo]. */
+    fun updateResize(corner: ResizeCorner, px: Float, py: Float): ActiveManipulation? =
+        view.updateResize(corner, px, py, manipulationPage()).also { revision++ }
 
     fun updateRotation(degrees: Float): ActiveManipulation? =
         view.updateRotation(degrees).also { revision++ }
+
+    /**
+     * Applies one geometry field to the primary selected object as **one** transaction — the inspector route.
+     *
+     * A begin/preview/commit round trip rather than a direct write, so a typed value and a dragged corner
+     * reach history through exactly the same path and produce exactly the same kind of entry. Returns false
+     * when the value is unusable, and in that case nothing is begun, previewed or committed: a rejected value
+     * must leave the object where it was, not clamp it somewhere.
+     */
+    fun applyGeometryField(field: GeometryInspector.Field, raw: String): Boolean {
+        // A gesture in flight owns this object's geometry: committing a typed value underneath it would be
+        // overwritten the moment the drag released, because the drag commits from the geometry it *started*
+        // from. Ending the gesture first makes the two edits sequential rather than racing — and the object
+        // is re-read afterwards, because ending it is exactly what changed the geometry being edited.
+        if (view.manipulation != null) endManipulation()
+        val obj = scope.primaryObject() ?: return false
+        if (field.isLockedFor(obj)) {
+            lastFailure = field.lockReasonFor(obj)
+            revision++
+            return false
+        }
+        val value = GeometryInspector.parse(field, raw)
+        if (value == null) {
+            lastFailure = "'$raw' is not a valid ${field.label}"
+            revision++
+            return false
+        }
+        val next = GeometryInspector.apply(obj.geometry, field, value)
+        if (next == obj.geometry) return false
+        val label = when (field) {
+            GeometryInspector.Field.ROTATION -> "Rotate"
+            GeometryInspector.Field.WIDTH, GeometryInspector.Field.HEIGHT -> "Resize"
+            else -> "Move"
+        }
+        lastFailure = null
+        val committed = controller.commitGeometry(obj.id, next, label)
+        instrumentation.onManipulationCommitted(label, 1)
+        revision++
+        return committed
+    }
 
     /**
      * Commits the completed manipulation as **one** canonical transaction, or nothing if it did not move.
@@ -309,6 +439,285 @@ class DocumentHostRuntime(
         revision++
     }
 
+    /**
+     * Toggles [pageId] in/out of the explicit page selection — the visible route to "Selected pages".
+     *
+     * Without this, that Page Control scope resolved to nothing a user could ever populate: it existed in the
+     * catalogue and silently fell back to the current page, which made choosing it look broken.
+     */
+    fun togglePageSelection(pageId: String) {
+        if (pages().none { it.id == pageId }) return
+        val current = scope.selectedPageIds
+        scope.selectedPageIds = if (pageId in current) current - pageId else current + pageId
+        // The page a multi-page change is anchored at should be one the user actually named.
+        if (pageId in scope.selectedPageIds) scope.activePageId = pageId
+        instrumentation.onSelectionChanged(scope.selectedPageIds.size, pageId)
+        revision++
+    }
+
+    fun clearPageSelection() {
+        scope.selectedPageIds = emptyList()
+        revision++
+    }
+
+    // --- Object multi-select ------------------------------------------------------------------------
+
+    /**
+     * Whether object multi-select is active.
+     *
+     * A real mode rather than an implicit consequence of two things being selected, because the user needs a
+     * visible count and an explicit Cancel/Done — and because Cancel must restore what was selected *before*
+     * the mode, which is impossible to do without knowing when the mode began.
+     */
+    var selectionMode: Boolean = false
+        private set
+
+    private var selectionRestore: List<String>? = null
+
+    val selectedObjectCount: Int get() = scope.selectedObjectIds().size
+
+    /** Enters multi-select, optionally seeded with [anchorObjectId], capturing what to restore on Cancel. */
+    fun enterSelectionMode(anchorObjectId: String? = null) {
+        if (!selectionMode) {
+            selectionRestore = scope.selectedObjectIds()
+            selectionMode = true
+        }
+        anchorObjectId?.let { scope.selectObjects(listOf(it)) }
+        instrumentation.onSelectionChanged(selectedObjectCount, anchorObjectId)
+        revision++
+    }
+
+    /** Toggles an object in/out of the multi-selection, entering the mode if it is not already active. */
+    fun toggleObjectSelection(objectId: String) {
+        if (!selectionMode) enterSelectionMode(null)
+        val current = scope.selectedObjectIds()
+        scope.selectObjects(if (objectId in current) current - objectId else current + objectId)
+        instrumentation.onSelectionChanged(selectedObjectCount, objectId)
+        revision++
+    }
+
+    /** Cancel: discards the multi-selection and restores exactly what was selected before the mode began. */
+    fun cancelSelectionMode() {
+        val restore = selectionRestore
+        selectionMode = false
+        selectionRestore = null
+        scope.selectObjects(restore.orEmpty())
+        instrumentation.onSelectionChanged(selectedObjectCount, restore?.firstOrNull())
+        revision++
+    }
+
+    /** Done: leaves the mode keeping the selection, so a follow-up command still has its targets. */
+    fun finishSelectionMode() {
+        selectionMode = false
+        selectionRestore = null
+        instrumentation.onSelectionChanged(selectedObjectCount, scope.primaryObjectId())
+        revision++
+    }
+
+    /** Selects every object on the active page — the Ctrl+A route. */
+    fun selectAllOnActivePage() {
+        val page = scope.activePage() ?: return
+        if (page.objects.isEmpty()) return
+        if (!selectionMode) enterSelectionMode(null)
+        scope.selectObjects(page.objects.map { it.id })
+        instrumentation.onSelectionChanged(selectedObjectCount, page.objects.firstOrNull()?.id)
+        revision++
+    }
+
+    // --- Surfaces and the back hierarchy -------------------------------------------------------------
+
+    /**
+     * Opens a tool surface through the shared [SurfaceCoordinator].
+     *
+     * Page Control and the geometry inspector go through the coordinator rather than a Compose `remember`,
+     * which is what makes Back dismiss them by the coordinator's own policy and what lets a form-factor
+     * change re-present them without their state being rebuilt from scratch.
+     */
+    fun openSurface(surfaceId: String, surfaceClass: SurfaceClass = SurfaceClass.PICKER_BROWSER): ToolSurface {
+        val existing = surfaces.openSurfaces().firstOrNull { it.id == surfaceId }
+        if (existing != null) return existing
+        val surface = ToolSurface(
+            id = surfaceId,
+            surfaceClass = surfaceClass,
+            compatibleDomains = setOf(DocumentSurfaces.DOMAIN),
+        )
+        if (surfaces.active() == null) surfaces.open(surface) else surfaces.openChild(surface)
+        presentation.present(
+            com.norfold.app.editor.presentation.ToolPresentationState(surfaceId),
+            compactPreferenceFor(surfaceId),
+        )
+        revision++
+        return surface
+    }
+
+    fun closeSurface(surfaceId: String, trigger: DismissTrigger = DismissTrigger.CANCEL) {
+        if (surfaces.active()?.id == surfaceId) {
+            dismiss(trigger)
+        } else {
+            presentation.close(surfaceId)
+            revision++
+        }
+    }
+
+    /** Applies [trigger] to the active surface **through its own policy** — never a blanket close (§5.3). */
+    fun dismiss(trigger: DismissTrigger): DispatchResult {
+        val result = surfaces.dispatch(trigger)
+        if (result is DispatchResult.Dismissed) {
+            presentation.close(result.closed.id)
+            revision++
+        }
+        return result
+    }
+
+    fun activeSurfaceId(): String? = surfaces.active()?.id
+
+    /**
+     * One Back/Escape press against the whole hierarchy: surface → multi-select → selection → editor.
+     *
+     * Routed through the coordinator so DocumentHost unwinds in exactly the order FlowHost does. Clearing the
+     * selection before leaving is the level that would otherwise be missing: a user with an object selected
+     * pressing Back expects to deselect, not to leave the document.
+     */
+    fun back(): DocumentBackResult {
+        val outcome = surfaces.back(hasSelectionMode = selectionMode)
+        revision++
+        return when (outcome) {
+            is BackOutcome.ClosedSurface -> {
+                presentation.close(outcome.closed.id)
+                DocumentBackResult.ClosedSurface(outcome.closed.id, outcome.nowActive?.id)
+            }
+            is BackOutcome.Consumed -> DocumentBackResult.Consumed(outcome.surface.id)
+            BackOutcome.ExitedSelectionMode -> {
+                cancelSelectionMode()
+                DocumentBackResult.ExitedSelectionMode
+            }
+            BackOutcome.LeftEditor -> {
+                // A live gesture owns Back before anything else does: cancelling the drag is what the user
+                // is asking for, and leaving the editor mid-drag would commit nothing and lose the gesture.
+                if (view.manipulation != null) {
+                    cancelManipulation()
+                    return DocumentBackResult.CancelledManipulation
+                }
+                if (scope.selectedObjectIds().isNotEmpty()) {
+                    scope.selectObjects(emptyList())
+                    revision++
+                    return DocumentBackResult.ClearedSelection
+                }
+                DocumentBackResult.LeftEditor
+            }
+        }
+    }
+
+    private fun compactPreferenceFor(surfaceId: String?): com.norfold.app.editor.presentation.CompactPreference =
+        when (surfaceId) {
+            // Page Control is a browsable catalogue of dozens of controls; on a phone it needs a sheet, not
+            // a popover it would overflow.
+            DocumentSurfaces.PAGE_CONTROL -> com.norfold.app.editor.presentation.CompactPreference.SHEET
+            else -> com.norfold.app.editor.presentation.CompactPreference.POPOVER
+        }
+
+    // --- Keyboard ------------------------------------------------------------------------------------
+
+    /**
+     * Handles one physical chord. Returns true when it was consumed.
+     *
+     * Every bound chord resolves to a **registered command id** and goes through [invoke], so there is no
+     * keyboard-only behaviour anywhere: a chord whose command is disabled is inert for the same stated reason
+     * the dock would give. Undo/redo and Escape are the only exceptions, and only because they are History
+     * and surface-hierarchy operations rather than registry commands.
+     */
+    fun handleShortcut(shortcut: FlowShortcut): Boolean {
+        when (shortcut) {
+            DocumentKeyboardMap.UNDO -> return undo()
+            DocumentKeyboardMap.REDO, DocumentKeyboardMap.REDO_ALT -> return redo()
+            DocumentKeyboardMap.ESCAPE -> {
+                back()
+                return true
+            }
+            DocumentKeyboardMap.SELECT_MODE -> {
+                enterSelectionMode(scope.primaryObjectId())
+                return true
+            }
+            DocumentKeyboardMap.SELECT_ALL -> {
+                selectAllOnActivePage()
+                return true
+            }
+        }
+        val commandId = DocumentKeyboardMap.commandFor(shortcut) ?: return false
+        // Consumed even when the command refuses: the chord *is* bound, and letting it fall through would
+        // send a Delete the editor decided not to act on to whatever is behind it.
+        invoke(commandId, CommandSurface.KEYBOARD)
+        return true
+    }
+
+    // --- Object content ------------------------------------------------------------------------------
+
+    /**
+     * The object whose text is being edited, or null.
+     *
+     * Text editing is a deliberate second step, never the first tap: one tap selects the object so it can be
+     * moved, resized and deleted, and only a second tap on an already-selected text frame enters its content.
+     * Entering on the first tap would make every attempt to *move* a text frame drop a caret into it instead.
+     */
+    var editingObjectId: String? = null
+        private set
+
+    /**
+     * Enters content editing for [objectId], or refuses.
+     *
+     * A content-locked object refuses and says so rather than silently doing nothing — "why can I not type in
+     * this" is the question the lock badge exists to answer, and a no-op answers it badly.
+     */
+    fun beginContentEdit(objectId: String): Boolean {
+        val obj = controller.findObject(objectId)?.second ?: return false
+        if (!obj.canEditContent) {
+            lastFailure = "This object's content is locked"
+            revision++
+            return false
+        }
+        if (obj.kind == SceneObjectKind.Preserved) {
+            lastFailure = "This content was saved by another version and is kept exactly as stored"
+            revision++
+            return false
+        }
+        prepareFor(LayoutSensitiveAction.INSERT_AT_POSITION)
+        if (view.intent != WorkingIntent.EDIT) setIntent(WorkingIntent.EDIT)
+        // A drag and a caret cannot own the same object at once. Cancelling rather than committing is right:
+        // the user's intent was to type, so a stray movement on the way to the tap must not be kept.
+        if (view.manipulation != null) view.cancelManipulation()
+        editingObjectId = objectId
+        lastFailure = null
+        revision++
+        return true
+    }
+
+    fun endContentEdit() {
+        if (editingObjectId == null) return
+        editingObjectId = null
+        revision++
+    }
+
+    /**
+     * Applies a text edit to the object being edited, as a coalescing transaction.
+     *
+     * Routed through [DocumentSceneController.editObjectText] so typing inside a scene object produces the
+     * same kind of history entry as typing in Flow: consecutive keystrokes in one field merge into one undo
+     * step, and moving to a different field starts a new one.
+     */
+    fun editObjectText(objectId: String, itemId: String?, before: String, after: String): Boolean {
+        if (before == after) return false
+        val edited = controller.editObjectText(objectId, itemId, before, after)
+        if (edited) {
+            lastFailure = null
+            revision++
+        }
+        return edited
+    }
+
+    /** Toggles a to-do item inside a scene object's content. */
+    fun toggleObjectTodo(objectId: String, itemId: String): Boolean =
+        controller.toggleObjectTodo(objectId, itemId).also { if (it) revision++ }
+
     /** The accessibility actions for [obj], as registered command ids that are invokable right now. */
     fun accessibilityActions(obj: SceneObject): List<Pair<String, String>> =
         DocumentCommands.accessibilityActionsFor(obj).mapNotNull { id ->
@@ -319,13 +728,17 @@ class DocumentHostRuntime(
 
     /**
      * Applies a form-factor change. Open tools keep their exact state; only their presentation mode moves.
+     *
+     * Nothing here rebuilds the session, the selection, the history, the representation/intent axes or an
+     * in-flight gesture. A rotation is a change of *window*, so treating it as a reason to reset editor state
+     * is what makes a device rotation feel like having the document closed and reopened — and re-presenting a
+     * surface must carry its state forward verbatim rather than rebuilding it (§2.6, §5.1).
      */
     fun onFormFactorChanged(next: FormFactor) {
-        val presented = presentation.onFormFactorChanged(next)
+        if (presentation.formFactor == next) return
+        presentation.onFormFactorChanged(next) { compactPreferenceFor(it) }
         instrumentation.onPresentationChanged(presentation.modeFor("document"), next)
-        // A reflow must not abandon an in-progress gesture silently mid-drag; the gesture owns its own
-        // lifecycle and a rotation does not end it.
-        if (presented.isEmpty()) return
+        revision++
     }
 
     /** The pages that must be composed for the current scroll position. */
@@ -336,6 +749,23 @@ class DocumentHostRuntime(
     }
 
     // --- Legacy migration ----------------------------------------------------------------------------
+
+    /**
+     * The migration refusal that is currently blocking this document, or null.
+     *
+     * Held rather than merely returned, because the *host* has to act on it: a refused migration means this
+     * runtime has no pages, and rendering it anyway would show the user a blank bounded document where their
+     * content used to be. The host reads this and falls back to the legacy editor, which can still open the
+     * original document unchanged.
+     *
+     * `allowLossy` is deliberately never set automatically anywhere in this class. Forcing a migration that
+     * was refused is a decision only the owner of the content can make.
+     */
+    var migrationRefusal: LegacyDocumentMigration.Report? = null
+        private set
+
+    /** True when this runtime holds no usable bounded document because a migration was refused. */
+    fun requiresLegacyFallback(): Boolean = migrationRefusal != null && pages().isEmpty()
 
     /**
      * Migrates the open legacy document to a bounded scene, protected by a recovery snapshot.
@@ -372,12 +802,17 @@ class DocumentHostRuntime(
 
         val report = LegacyDocumentMigration.migrate(original, layout, canvas, mode)
         if (!report.isLossless && !allowLossy) {
+            // Refused, and *recorded* as refused. The orphan information in the report is kept intact rather
+            // than being summarized away, so the host can tell the user exactly what would be dropped — and
+            // so nothing here can quietly retry with allowLossy on their behalf.
+            migrationRefusal = report
             lastFailure = "Migration would discard content — review before continuing"
             revision++
             return report
         }
 
         controller.replaceDocument(report.document, "Convert to bounded document")
+        migrationRefusal = null
         // The old selection named blocks that are now *inside* scene objects; keeping it would leave
         // commands resolving against ids that no longer identify anything selectable.
         selection.clear()
@@ -460,6 +895,61 @@ class DocumentHostRuntime(
         return result
     }
 
+    /**
+     * The value-driven Page Control rows resolved at [pageScope], each carrying the value to seed its field.
+     *
+     * MIXED here is honest and load-bearing: with a multi-page scope "what is the top margin" often has no
+     * single answer, and seeding the field with one page's value would invite the user to press Apply and
+     * silently flatten the others to it.
+     */
+    fun pageValueControls(pageScope: PageScope): List<DocumentPageValueItem> {
+        val context = scope.commandContext(CommandSurface.INSPECTOR)
+        val pages = if (pageScope == PageScope.NewPagesByDefault) {
+            listOf(scope.newPageTemplate())
+        } else {
+            pageScope.resolve(scope).mapNotNull { scope.controller.page(it)?.geometry }
+        }
+        return DocumentCommands.PAGE_VALUE_CONTROLS.map { control ->
+            val values = pages.mapTo(LinkedHashSet()) { control.valueOf(it) }
+            val command = DocumentCommands.pageValueCommand(scope, control, pageScope, raw = "")
+            DocumentPageValueItem(
+                id = control.id,
+                label = control.label,
+                category = control.group,
+                kind = control.kind,
+                value = values.singleOrNull() ?: "",
+                mixed = values.size > 1,
+                status = command.status(context),
+            )
+        }
+    }
+
+    /** Applies a value control at [pageScope] with the text the user typed. */
+    fun invokePageValue(
+        commandId: String,
+        pageScope: PageScope,
+        raw: String,
+        surface: CommandSurface = CommandSurface.INSPECTOR,
+    ): CommandResult {
+        val control = DocumentCommands.PAGE_VALUE_CONTROLS.firstOrNull { it.id == commandId }
+            ?: return CommandResult.Failure("Unknown page control '$commandId'")
+        val command = DocumentCommands.pageValueCommand(scope, control, pageScope, raw)
+        val result = command.execute(scope.commandContext(surface))
+        instrumentation.onCommandInvoked(commandId, surface, result)
+        lastFailure = (result as? CommandResult.Failure)?.reason
+        notice = (result as? CommandResult.Success)?.message ?: notice
+        pruneSelection()
+        revision++
+        return result
+    }
+
+    /** Clears the durable "New pages by default" template, restoring inherit-from-anchor. */
+    fun clearNewPageTemplate(): Boolean {
+        scope.clearNewPageTemplate()
+        revision++
+        return true
+    }
+
     /** The scope Page Control currently applies changes at. */
     var pageScope: PageScope = PageScope.CurrentPage
         private set
@@ -500,51 +990,72 @@ class DocumentHostRuntime(
     // --- Snapshot ------------------------------------------------------------------------------------
 
     /** Everything the Compose shell needs, resolved once per [revision]. */
-    fun uiState(): DocumentHostUiState = DocumentHostUiState(
-        revision = revision,
-        document = document(),
-        pages = pages(),
-        selectedObjectIds = scope.selectedObjectIds(),
-        primaryObjectId = scope.primaryObjectId(),
-        activePageId = scope.activePage()?.id,
-        selectedPageIds = scope.selectedPageIds,
-        representation = view.representation,
-        intent = view.intent,
-        zoom = view.zoom,
-        manipulation = view.manipulation,
-        formFactor = presentation.formFactor,
-        presentationMode = presentation.modeFor("document"),
-        dock = dockCommands(),
-        pageControls = pageControlCommands(pageScope),
-        pageScope = pageScope,
-        pageScopeCount = pageScope.resolve(scope).size,
-        canUndo = canUndo(),
-        canRedo = canRedo(),
-        notice = notice,
-        lastFailure = lastFailure,
-    )
+    fun uiState(): DocumentHostUiState {
+        val pages = pages()
+        return DocumentHostUiState(
+            revision = revision,
+            document = document(),
+            pages = pages,
+            selectedObjectIds = scope.selectedObjectIds(),
+            primaryObjectId = scope.primaryObjectId(),
+            activePageId = scope.activePage()?.id,
+            selectedPageIds = scope.selectedPageIds,
+            representation = view.representation,
+            intent = view.intent,
+            zoom = view.zoom,
+            panX = view.panX,
+            manipulation = view.manipulation,
+            editingObjectId = editingObjectId,
+            selectionMode = selectionMode,
+            formFactor = presentation.formFactor,
+            presentationMode = presentation.modeFor(
+                activeSurfaceId().orEmpty(),
+                compactPreferenceFor(activeSurfaceId()),
+            ),
+            activeSurfaceId = activeSurfaceId(),
+            dock = dockCommands(),
+            pageControls = pageControlCommands(pageScope),
+            pageValueControls = pageValueControls(pageScope),
+            pageScope = pageScope,
+            pageScopeCount = pageScope.resolve(scope).size,
+            newPageTemplate = controller.newPageTemplate(),
+            pageNumberLabels = pages.pageNumberLabels(),
+            canUndo = canUndo(),
+            canRedo = canRedo(),
+            notice = notice,
+            lastFailure = lastFailure,
+        )
+    }
 
     companion object {
-        /** The touch dock when an object is selected: the actions a phone user reaches for directly. */
+        /**
+         * The touch dock when an object is selected.
+         *
+         * Ordered by how often a phone user reaches for it, and **complete** — every entry here is rendered,
+         * because a dock that silently drops its tail is a dock whose last actions (Unlock and Delete, the two
+         * most consequential) are unreachable. The surface scrolls instead of truncating.
+         */
         val OBJECT_DOCK_ORDER = listOf(
-            "document.object.bringForward",
-            "document.object.sendBackward",
-            "document.object.bringToFront",
-            "document.object.sendToBack",
-            "document.object.duplicate",
-            "document.object.lock",
-            "document.object.unlock",
-            "document.object.delete",
+            DocumentIds.DUPLICATE,
+            DocumentIds.BRING_FORWARD,
+            DocumentIds.SEND_BACKWARD,
+            DocumentIds.BRING_TO_FRONT,
+            DocumentIds.SEND_TO_BACK,
+            DocumentIds.LOCK,
+            DocumentIds.UNLOCK,
+            DocumentIds.DELETE,
         )
 
-        /** The touch dock when nothing but a page is selected — page structure, not object actions. */
+        /** The touch dock when nothing but a page is selected — insertion and page structure. */
         val PAGE_DOCK_ORDER = listOf(
-            "document.page.insertAfter",
-            "document.page.insertBefore",
-            "document.page.duplicate",
-            "document.page.moveUp",
-            "document.page.moveDown",
-            "document.page.delete",
+            DocumentIds.INSERT_TEXT,
+            DocumentIds.INSERT_SHAPE,
+            DocumentIds.PAGE_INSERT_AFTER,
+            DocumentIds.PAGE_INSERT_BEFORE,
+            DocumentIds.PAGE_DUPLICATE,
+            DocumentIds.PAGE_MOVE_UP,
+            DocumentIds.PAGE_MOVE_DOWN,
+            DocumentIds.PAGE_DELETE,
         )
     }
 }

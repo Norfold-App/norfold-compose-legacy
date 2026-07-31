@@ -1,6 +1,7 @@
 package com.norfold.app.editor.document
 
 import com.norfold.app.domain.DocumentPageBlock
+import com.norfold.app.domain.ResizeCorner
 import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneObject
 import com.norfold.app.domain.stackedHeight
@@ -121,6 +122,17 @@ class DocumentViewState(
     var zoom: Float = 1f
         private set
 
+    /**
+     * Horizontal pan in **page points**, in Original View only.
+     *
+     * Stored in points rather than pixels so it means the same thing at every zoom and density: panning,
+     * zooming, then panning again lands where the user aimed instead of drifting by the zoom ratio. There is
+     * no vertical counterpart because the page stack already scrolls vertically — a second vertical offset
+     * would be a second scroll position, and the two would disagree.
+     */
+    var panX: Float = 0f
+        private set
+
     fun setIntent(next: WorkingIntent) {
         intent = next
     }
@@ -131,6 +143,38 @@ class DocumentViewState(
 
     fun setZoom(next: Float) {
         zoom = next.coerceIn(MIN_ZOOM, MAX_ZOOM)
+    }
+
+    fun setPan(next: Float) {
+        panX = if (next.isFinite()) next else 0f
+    }
+
+    /**
+     * Zooms so the widest page exactly fills [viewportWidthPt], and re-centres.
+     *
+     * Fit is computed from real page geometry, so a document of mixed page sizes fits the page that would
+     * otherwise overflow rather than the first one.
+     */
+    fun fitWidth(pages: List<DocumentPageBlock>, viewportWidthPt: Float): Float {
+        val widest = pages.widestPage()
+        if (widest <= 0f || viewportWidthPt <= 0f) return zoom
+        setZoom(viewportWidthPt / widest)
+        panX = 0f
+        return zoom
+    }
+
+    /**
+     * Zooms so one whole page — width *and* height — is visible, and re-centres.
+     *
+     * The smaller of the two ratios wins, which is what "fit page" means: satisfying only the width would
+     * leave a tall page cropped, and the user asked to see the sheet.
+     */
+    fun fitPage(page: DocumentPageBlock?, viewportWidthPt: Float, viewportHeightPt: Float): Float {
+        val geometry = page?.geometry ?: return zoom
+        if (viewportWidthPt <= 0f || viewportHeightPt <= 0f) return zoom
+        setZoom(min(viewportWidthPt / geometry.width, viewportHeightPt / geometry.height))
+        panX = 0f
+        return zoom
     }
 
     /**
@@ -190,25 +234,74 @@ class DocumentViewState(
         return active.copy(preview = preview, guides = snapped?.guides.orEmpty()).also { manipulation = it }
     }
 
-    /** Updates a resize preview for the single object being resized. */
+    /**
+     * Updates a resize preview by dragging [corner] to ([px], [py]) in page points.
+     *
+     * The corner is the input, not a width/height pair, because the two are not interchangeable: dragging the
+     * top-left has to move the origin as well as the size, and a caller that could only express "the box is
+     * now this big" would have to reconstruct the origin itself — which is exactly where an off-by-one anchor
+     * turns a resize into a resize-plus-jump.
+     *
+     * The proposed box is always derived from the geometry the gesture *started* from, so a snap cannot become
+     * the base for the next frame's arithmetic and stick.
+     */
     fun updateResize(
-        geometry: SceneGeometry,
+        corner: ResizeCorner,
+        px: Float,
+        py: Float,
         page: DocumentPageBlock?,
-        movingRight: Boolean,
-        movingBottom: Boolean,
     ): ActiveManipulation? {
         val active = manipulation ?: return null
         if (active.kind != ActiveManipulation.Kind.RESIZE) return active
         val objectId = active.objectIds.first()
+        val original = active.original[objectId] ?: return active
+        return applyResize(active, objectId, original.resizedTo(corner, px, py), page, corner)
+    }
+
+    /**
+     * Updates a resize preview from an exact box — the geometry inspector's route.
+     *
+     * Snapping is deliberately not applied: a number the user typed is the number they meant, and quietly
+     * moving it six points to a margin would make the field disagree with what it just reported.
+     */
+    fun setResizePreview(geometry: SceneGeometry): ActiveManipulation? {
+        val active = manipulation ?: return null
+        if (active.kind != ActiveManipulation.Kind.RESIZE) return active
+        val objectId = active.objectIds.first()
+        return active.copy(preview = mapOf(objectId to geometry.normalized()), guides = emptyList())
+            .also { manipulation = it }
+    }
+
+    private fun applyResize(
+        active: ActiveManipulation,
+        objectId: String,
+        proposed: SceneGeometry,
+        page: DocumentPageBlock?,
+        corner: ResizeCorner,
+    ): ActiveManipulation {
         val snapped = page?.let {
-            SnapGuideEngine.snapResize(geometry, it, movingRight, movingBottom, setOf(objectId))
+            SnapGuideEngine.snapResize(
+                proposed,
+                it,
+                movingRight = corner.movingRight,
+                movingBottom = corner.movingBottom,
+                excludeIds = setOf(objectId),
+            )
         }
         return active.copy(
-            preview = mapOf(objectId to (snapped?.geometry ?: geometry.normalized())),
+            preview = mapOf(objectId to (snapped?.geometry ?: proposed.normalized())),
             guides = snapped?.guides.orEmpty(),
         ).also { manipulation = it }
     }
 
+    /**
+     * Updates a rotation preview to [degrees], rotating every object in the manipulation about **its own**
+     * centre.
+     *
+     * Per-object rather than about the selection's collective centre, because rotating a group about a shared
+     * pivot also *moves* each member — and a rotation that silently repositions things is the behaviour a user
+     * reads as the app having lost their layout. Group-pivot rotation is a distinct operation, not a default.
+     */
     fun updateRotation(degrees: Float): ActiveManipulation? {
         val active = manipulation ?: return null
         if (active.kind != ActiveManipulation.Kind.ROTATE) return active
@@ -300,4 +393,48 @@ object PageVirtualizer {
         if (widest <= 0f || viewportWidth <= 0f) return 1f
         return ((viewportWidth - padding) / widest).coerceIn(0.05f, 1f)
     }
+
+    /**
+     * The objects of [page] that must actually be composed, in z order (back to front).
+     *
+     * A page can hold hundreds of objects while only a handful are on screen, so composing all of them makes
+     * scrolling a long document cost the whole document. The window is the visible band of the page inflated
+     * by [overscan] points, tested against each object's own box.
+     *
+     * Three exceptions are **always** composed regardless of where they are:
+     *
+     *  - anything in [keepIds] — a selected object, or one the user is mid-gesture on. Dropping it would tear
+     *    the handles out from under a live drag and leave the selection outline pointing at nothing;
+     *  - anything whose *preview* is on screen, via [previewOf] — an object dragged from off-page onto the
+     *    visible band has stored geometry that is still outside it, and testing only stored geometry would
+     *    make the thing being dragged vanish exactly while it is being dragged.
+     *
+     * Objects are compared by their rotated bounding box, so a rotated frame whose corner reaches into the
+     * band is kept rather than being culled on the strength of an axis-aligned box that does not.
+     */
+    fun visibleObjects(
+        page: DocumentPageBlock,
+        topPt: Float,
+        bottomPt: Float,
+        keepIds: Set<String> = emptySet(),
+        previewOf: (String) -> SceneGeometry? = { null },
+        overscan: Float = OBJECT_OVERSCAN,
+    ): List<SceneObject> {
+        // A degenerate band (the page has not been measured yet) must not cull everything: an empty page is
+        // indistinguishable from an unmeasured one, and rendering nothing looks exactly like data loss. Tested
+        // on the *raw* band, before overscan — inflating it first would turn an unmeasured page into a small
+        // real one and quietly cull everything outside the overscan.
+        if (bottomPt <= topPt) return page.objects
+        val top = topPt - overscan
+        val bottom = bottomPt + overscan
+        return page.objects.filter { obj ->
+            if (obj.id in keepIds) return@filter true
+            val geometry = previewOf(obj.id) ?: obj.geometry
+            val bounds = geometry.boundingBox()
+            bounds.bottom >= top && bounds.y <= bottom
+        }
+    }
+
+    /** How far beyond the visible band an object is still composed, in page points. */
+    const val OBJECT_OVERSCAN = 96f
 }

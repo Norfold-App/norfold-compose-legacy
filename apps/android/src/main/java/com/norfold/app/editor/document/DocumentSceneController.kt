@@ -1,13 +1,19 @@
 package com.norfold.app.editor.document
 
 import com.norfold.app.domain.BlockDocument
+import com.norfold.app.domain.BlockEditorSession
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DocumentPageBlock
+import com.norfold.app.domain.DocumentSettingsBlock
 import com.norfold.app.domain.PageGeometry
 import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneLock
 import com.norfold.app.domain.SceneObject
+import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.blockIndexOfPage
+import com.norfold.app.domain.blockIndexOfSettings
+import com.norfold.app.domain.documentSettings
+import com.norfold.app.domain.findById
 import com.norfold.app.domain.locateObject
 import com.norfold.app.domain.pageById
 import com.norfold.app.domain.pages
@@ -177,6 +183,54 @@ class DocumentSceneController(
     fun setContent(objectId: String, content: DocumentBlock, label: String = "Edit content"): Boolean =
         editObject(objectId, label) { obj -> if (obj.canEditContent) obj.copy(content = content) else obj }
 
+    /**
+     * Applies a text edit inside an object's content, as a **coalescing** transaction.
+     *
+     * Typing is the one thing that must not be one undo step per keystroke, so this is the only path in this
+     * controller that passes a coalescing key. The key names the *editable field* — object plus list item —
+     * not the object, because two items of one list are separate writing runs and merging them would make a
+     * single undo swallow edits in both.
+     *
+     * The edit itself goes through [BlockEditorSession], the same vocabulary the Flow editor uses, so inline
+     * styling around the changed range survives rather than being flattened by a plain-string replacement.
+     * A to-do item holds `TodoItem` rather than `ListItem`, so the item type decides which call addresses it;
+     * using the list call on a checklist would report a cursor while changing nothing.
+     */
+    fun editObjectText(objectId: String, itemId: String?, before: String, after: String): Boolean {
+        if (before == after) return false
+        val document = document()
+        val (page, obj) = document.locateObject(objectId) ?: return false
+        if (!obj.canEditContent) return false
+
+        val session = BlockEditorSession(BlockDocument(listOf(obj.content)))
+        val blockId = obj.content.id
+        when {
+            itemId == null -> session.editText(blockId, before, after)
+            session.document.findById(blockId) is TodoListBlock -> session.editTodoItem(blockId, itemId, before, after)
+            else -> session.editListItem(blockId, itemId, before, after)
+        }
+        val edited = session.document.blocks.firstOrNull() ?: return false
+        if (edited == obj.content) return false
+
+        val next = page.withObject(obj.copy(content = edited))
+        val key = if (itemId != null) "object:$objectId/item:$itemId" else "object:$objectId"
+        return commit("Typing", listOf(replacePage(document, page, next)), coalescingKey = key)
+    }
+
+    /** Toggles a to-do item inside an object's content. Never coalesces: a tick is a discrete action. */
+    fun toggleObjectTodo(objectId: String, itemId: String): Boolean {
+        val document = document()
+        val (page, obj) = document.locateObject(objectId) ?: return false
+        if (!obj.canEditContent) return false
+        val list = obj.content as? TodoListBlock ?: return false
+        val index = list.items.indexOfFirst { it.id == itemId }
+        if (index < 0) return false
+        val items = list.items.toMutableList()
+        items[index] = items[index].copy(checked = !items[index].checked)
+        val next = page.withObject(obj.copy(content = list.copy(items = items)))
+        return commit("Toggle to-do", listOf(replacePage(document, page, next)))
+    }
+
     // --- Layer ordering ------------------------------------------------------------------------------
 
     /**
@@ -205,6 +259,67 @@ class DocumentSceneController(
             objects = order.mapIndexedNotNull { z, id -> page.objectById(id)?.copy(z = z) },
         ).normalized()
         return commit(move.label, listOf(replacePage(document, page, reordered)))
+    }
+
+    /**
+     * Reorders every object in [objectIds] by [move], as **one** transaction.
+     *
+     * Not a loop over [reorderObject]: that would commit once per object, so a four-object "bring to front"
+     * would need four Undos to reverse one thing the user did. Objects are grouped by their page and each
+     * page's ordering is recomputed once, so a selection spanning two pages is still a single transaction.
+     *
+     * The selection's own relative order is preserved. For the one-step moves that means a selected object
+     * never leapfrogs another selected object — the block moves together and stops as a block when it reaches
+     * the end, instead of the group inverting itself as each member passes the last.
+     */
+    fun reorderObjects(objectIds: Collection<String>, move: LayerMove): Boolean {
+        val document = document()
+        val byPage = LinkedHashMap<String, MutableList<String>>()
+        for (id in objectIds) {
+            val (page, _) = document.locateObject(id) ?: continue
+            byPage.getOrPut(page.id) { mutableListOf() } += id
+        }
+        if (byPage.isEmpty()) return false
+        val ops = mutableListOf<EditOperation>()
+        for ((pageId, ids) in byPage) {
+            val page = document.pageById(pageId) ?: continue
+            val order = page.objects.map { it.id }.toMutableList()
+            val selected = ids.toSet()
+            when (move) {
+                // Absolute moves: lift the selection out and re-insert it at the end it is heading for,
+                // keeping the order the objects already had relative to each other.
+                LayerMove.TO_FRONT -> {
+                    val moving = order.filter { it in selected }
+                    order.removeAll(selected)
+                    order.addAll(moving)
+                }
+                LayerMove.TO_BACK -> {
+                    val moving = order.filter { it in selected }
+                    order.removeAll(selected)
+                    order.addAll(0, moving)
+                }
+                // One-step moves: walk from the edge being moved toward, so each object's destination has
+                // already been vacated. A neighbour that is itself selected blocks the swap, which is what
+                // keeps the group together rather than letting its members trade places.
+                LayerMove.FORWARD -> for (i in order.indices.reversed()) {
+                    if (order[i] !in selected) continue
+                    val above = i + 1
+                    if (above > order.lastIndex || order[above] in selected) continue
+                    order[i] = order[above].also { order[above] = order[i] }
+                }
+                LayerMove.BACKWARD -> for (i in order.indices) {
+                    if (order[i] !in selected) continue
+                    val below = i - 1
+                    if (below < 0 || order[below] in selected) continue
+                    order[i] = order[below].also { order[below] = order[i] }
+                }
+            }
+            val reordered = page.copy(
+                objects = order.mapIndexedNotNull { z, id -> page.objectById(id)?.copy(z = z) },
+            ).normalized()
+            if (reordered != page) ops += replacePage(document, page, reordered)
+        }
+        return commit(move.label, ops)
     }
 
     // --- Object lifecycle ----------------------------------------------------------------------------
@@ -238,6 +353,49 @@ class DocumentSceneController(
         ).normalized()
         val ok = commit("Duplicate", listOf(replacePage(document, page, page.withObject(copy))))
         return if (ok) copy.id else null
+    }
+
+    /**
+     * Duplicates every object in [objectIds] as **one** transaction, returning the new ids in source order.
+     *
+     * Not a loop over [duplicateObject]: that commits per object, so duplicating a three-object selection
+     * would take three Undos to reverse. Copies are accumulated into each owning page before a single commit,
+     * which also means the z values they receive account for the other copies rather than every copy claiming
+     * the same layer.
+     */
+    fun duplicateObjects(
+        objectIds: Collection<String>,
+        offset: Float = DUPLICATE_OFFSET,
+    ): List<String> {
+        val document = document()
+        val byPage = LinkedHashMap<String, MutableList<String>>()
+        for (id in objectIds) {
+            val (page, _) = document.locateObject(id) ?: continue
+            byPage.getOrPut(page.id) { mutableListOf() } += id
+        }
+        if (byPage.isEmpty()) return emptyList()
+        val ops = mutableListOf<EditOperation>()
+        val created = mutableListOf<String>()
+        for ((pageId, ids) in byPage) {
+            val page = document.pageById(pageId) ?: continue
+            var next = page
+            for (id in ids) {
+                val obj = page.objectById(id) ?: continue
+                val copy = obj.copy(
+                    id = com.norfold.app.domain.sceneId("obj"),
+                    // Content keeps its own identity rules: a duplicate must not share block ids with its source.
+                    content = obj.content.withFreshIds(),
+                    geometry = obj.geometry.translatedBy(offset, offset),
+                    z = next.objects.size,
+                ).normalized()
+                next = next.withObject(copy)
+                created += copy.id
+            }
+            if (next != page) ops += replacePage(document, page, next)
+        }
+        if (ops.isEmpty()) return emptyList()
+        val label = if (created.size > 1) "Duplicate objects" else "Duplicate"
+        return if (commit(label, ops)) created else emptyList()
     }
 
     /** Deletes objects as one transaction. Deleting objects never deletes their page. */
@@ -362,6 +520,50 @@ class DocumentSceneController(
             it.copy(structureLocked = locked)
         }
 
+    // --- Document settings ---------------------------------------------------------------------------
+
+    /**
+     * The explicit template new pages inherit, or null while they inherit from the page they follow.
+     *
+     * Read from the document rather than from a field on this controller, so it survives the controller being
+     * rebuilt — which is what a session recreation does. A controller-local copy would look identical for the
+     * length of one session and then silently be gone.
+     */
+    fun newPageTemplate(): PageGeometry? = document().documentSettings()?.newPageTemplate
+
+    /**
+     * Sets the explicit new-page template, as one transaction.
+     *
+     * Committed through History like any other change because it *is* a durable change to the document: it
+     * outlives the session, so it must be undoable and it must be saved. The settings block is created on
+     * first use rather than existing in every document, so a document nobody has set a default on carries no
+     * settings block at all and round-trips exactly as before.
+     */
+    fun setNewPageTemplate(template: PageGeometry?, label: String = "New page default"): Boolean {
+        val document = document()
+        val existing = document.documentSettings()
+        val normalized = template?.normalized()
+        if (existing?.newPageTemplate == normalized) return false
+        val op = if (existing == null) {
+            if (normalized == null) return false
+            // Appended last: the settings block is not content, and putting it first would make it the block
+            // every "first block" fallback in the app lands on.
+            EditOperation.InsertBlock(
+                target,
+                document.blocks.size,
+                DocumentSettingsBlock(newPageTemplate = normalized),
+            )
+        } else {
+            EditOperation.ReplaceBlock(
+                target = target,
+                index = document.blockIndexOfSettings(),
+                before = existing,
+                after = existing.copy(newPageTemplate = normalized).normalized(),
+            )
+        }
+        return commit(label, listOf(op))
+    }
+
     // --- Persistence hand-off (mirrors FlowEditController) --------------------------------------------
 
     override fun dirtyBlockIds(): Set<String> {
@@ -442,6 +644,7 @@ class DocumentSceneController(
         label: String,
         ops: List<EditOperation>,
         origin: TransactionOrigin = TransactionOrigin.LOCAL_USER,
+        coalescingKey: String? = null,
     ): Boolean {
         if (ops.isEmpty()) return false
         history.commit(
@@ -450,6 +653,7 @@ class DocumentSceneController(
                 label = label,
                 operations = ops,
                 origin = origin,
+                coalescingKey = coalescingKey,
             ),
         )
         return true

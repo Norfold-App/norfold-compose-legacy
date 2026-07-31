@@ -69,6 +69,8 @@ fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
         id = freshId(),
         objects = objects.map { it.copy(id = freshId(), content = it.content.withFreshIds()) },
     )
+    // Settings are document-level, so a duplicate keeps the same values under a fresh identity.
+    is DocumentSettingsBlock -> copy(id = freshId())
 }
 
 private fun ListItem.withFreshIds(): ListItem =

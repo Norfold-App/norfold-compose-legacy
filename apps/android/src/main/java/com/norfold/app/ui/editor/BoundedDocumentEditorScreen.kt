@@ -1,5 +1,13 @@
 package com.norfold.app.ui.editor
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -8,8 +16,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.editor.document.DocumentHostRuntime
@@ -143,6 +153,42 @@ private fun DocumentHostRoute(
     }
     val runtime = session.runtime
     val saves = session.saves
+
+    // A refused migration means this runtime has no bounded document. Rendering it anyway would show the
+    // owner a blank page where their content used to be, so the *usable* editor is what they get: the legacy
+    // host opens the original document unchanged. Nothing here sets `allowLossy` — forcing a conversion that
+    // was refused is a decision only the owner of the content can make.
+    if (runtime.requiresLegacyFallback()) {
+        val report = runtime.migrationRefusal
+        var explained by remember(session) { mutableStateOf(false) }
+        Column(modifier) {
+            // Shown above the working editor, dismissible, and never a blocking dialog: the owner came here
+            // to write, and the document they came to write in is already open below.
+            if (!explained && report != null) {
+                Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Page layout was not converted. ${report.refusalDetail()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { explained = true }) { Text("OK") }
+                    }
+                }
+            }
+            StructuredBlockEditorHost(
+                state = state,
+                viewModel = viewModel,
+                modifier = Modifier,
+                onOpenSidebar = onOpenSidebar,
+                surface = EditorSurface.Document,
+            )
+        }
+        return
+    }
 
     // The coordinator holds the authoritative title; this is only the Compose mirror that makes it draw.
     var title by remember(session) { mutableStateOf(saves.title()) }

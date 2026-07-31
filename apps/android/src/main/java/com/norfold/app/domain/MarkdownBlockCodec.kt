@@ -350,6 +350,8 @@ object MarkdownBlockCodec {
         // lost by the format, not by this codec — the structured payload keeps it.
         is DocumentPageBlock -> block.objects.sortedBy { it.z }
             .joinToString("\n\n") { blockMarkdown(it.content) }
+        // Document settings carry no content, so markdown has nothing to say about them.
+        is DocumentSettingsBlock -> ""
     }
 
     /**

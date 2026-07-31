@@ -543,12 +543,15 @@ class DocumentHostRuntimeTest {
 
         assertTrue(result is CommandResult.Success)
         assertEquals("no existing page changed", before, rt.controller.page("p1")!!.geometry)
+        // The default is *durable* — it is stored in the document so it survives the session — and anything
+        // durable goes through the canonical history, which is also what makes it save. That is a deliberate
+        // change from the earlier in-memory version, whose preference silently vanished on recreation.
         assertEquals(
-            "setting a default is not an edit, so it takes no undo step",
-            depthBefore,
+            "a durable default is a document change, so it takes exactly one undo step",
+            depthBefore + 1,
             rt.controller.undoDepth(),
         )
-        assertNotNull("but the user is told, because nothing visibly happened", rt.consumeNotice())
+        assertNotNull("and the user is told, because nothing visibly happened", rt.consumeNotice())
 
         rt.invoke("document.page.insertAfter")
         val added = rt.pages().last()
