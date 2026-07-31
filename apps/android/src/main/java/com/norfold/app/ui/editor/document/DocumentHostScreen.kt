@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,12 +43,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerKeyboardModifiers
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -55,6 +64,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -138,7 +149,7 @@ fun DocumentHostScreen(
     }
 
     // Back unwinds one logical level at a time through the coordinator: surface → multi-select → live gesture
-    // → selection → editor. Only the last of those is navigation.
+    // → content editing → selection → editor. Only the last of those is navigation.
     BackHandler {
         when (presenter.act { back() }) {
             DocumentBackResult.LeftEditor -> onExit()
@@ -146,18 +157,30 @@ fun DocumentHostScreen(
         }
     }
 
+    // Which text field, if any, currently owns keyboard input.
+    //
+    // The root installs a *preview* key handler, so without this the canvas would see Backspace, Delete and
+    // the arrow keys before the focused field did — and the bindings would delete the object the user is
+    // typing in and nudge the frame instead of moving the caret. The title, the inspector and Page Control's
+    // fields report their own focus here; a caret inside a scene object is contributed by the runtime itself,
+    // so object text is protected even before any of them has reported anything.
+    var chromeTextFocus by remember { mutableStateOf(false) }
+    val textEntryActive = chromeTextFocus || state.editingObjectId != null
+
     Column(
         modifier
             .fillMaxSize()
-            // Unbound keys fall through untouched, so typing into an object's text is never intercepted.
+            // Keys a text field owns fall through untouched — see DocumentKeyboardMap.resolve. Unbound keys
+            // fall through too, so ordinary typing is never intercepted.
             .onPreviewKeyEvent { event ->
-                event.toDocumentShortcut()?.let { presenter.act { handleShortcut(it) } } ?: false
+                event.toDocumentShortcut()?.let { presenter.act { handleShortcut(it, textEntryActive) } } ?: false
             },
     ) {
         DocumentTopBar(
             state = state,
             title = title,
             onTitleChange = onTitleChange,
+            onTitleFocusChange = { chromeTextFocus = it },
             onOpenSidebar = onOpenSidebar,
             onUndo = { presenter.act { undo() } },
             onRedo = { presenter.act { redo() } },
@@ -195,7 +218,12 @@ fun DocumentHostScreen(
         state.primaryObject?.let { primary ->
             if (state.intent == WorkingIntent.EDIT) {
                 HorizontalDivider()
-                GeometryInspectorBar(primary, presenter) { notice = it }
+                GeometryInspectorBar(
+                    obj = primary,
+                    presenter = presenter,
+                    onFocusChange = { chromeTextFocus = it },
+                    onNotice = { notice = it },
+                )
             }
         }
 
@@ -487,6 +515,11 @@ private fun SceneObjectBox(
         presenter.runtime.accessibilityItemsFor(obj)
     }
 
+    // Whether the press currently being resolved carried Ctrl/Cmd. Written on the Initial pointer pass and
+    // read by the tap detector, which is how a modifier-click and a plain click become two meanings of one
+    // gesture rather than two gesture detectors competing for the same pointer.
+    var pressWasModified by remember(obj.id) { mutableStateOf(false) }
+
     Box(
         Modifier
             .offset {
@@ -496,13 +529,21 @@ private fun SceneObjectBox(
                 )
             }
             .size(geometry.width.ptToDp(scale), geometry.height.ptToDp(scale))
-            .drawBehind {
-                // Rotation is applied to the *drawing*, about the box's centre, which is the same centre
-                // `containsRotated` rotates a tap about. A bare `Modifier.rotate()` would rotate the layout
-                // node — including its touch area — leaving hit testing and the model to disagree about
-                // where the object is.
-                rotate(geometry.rotation) { drawObjectChrome(obj, selected, isPrimary) }
+            // The **whole object** rotates — content, chrome and selection outline together — about its own
+            // centre, which is the same centre `SceneGeometry.localToPage`/`containsRotated` use. Rotating
+            // only the chrome inside `drawBehind` was the defect: the outline and the hit test agreed with
+            // each other and both disagreed with the visible text, so a rotated frame drew its content
+            // straight inside a slanted box.
+            //
+            // `graphicsLayer` rotates the layout node, so Compose's own hit testing follows the drawing and a
+            // tap on the visibly-rotated content lands on it. Page-level tap routing is unaffected: taps on
+            // empty page area are resolved by the page's own `pointerInput` against stored geometry through
+            // `containsRotated`, which un-rotates about this same centre. Stored geometry is never touched.
+            .graphicsLayer {
+                rotationZ = geometry.rotation
+                transformOrigin = TransformOrigin.Center
             }
+            .drawBehind { drawObjectChrome(obj, selected, isPrimary) }
             .then(
                 if (state.selectionMode) {
                     Modifier.pointerInput(obj.id, state.revision) {
@@ -513,15 +554,47 @@ private fun SceneObjectBox(
                     Modifier
                 } else {
                     Modifier
-                        .pointerInput(obj.id, selected, state.revision) {
+                        .pointerInput(obj.id) {
+                            // Records whether the *current* press carried a toggle modifier, on the Initial
+                            // pass — before any gesture detector on this node has had the event.
+                            //
+                            // Reading modifiers inside the tap detector is not an option (the callback has no
+                            // event), and a competing `pointerInput` that consumed the press itself would be
+                            // racing the tap detector for the same pointer: whichever Compose delivered to
+                            // first would win, which is a coin toss dressed up as a rule. Observing on Initial
+                            // and *not* consuming leaves the tap detector's behaviour intact and merely tells
+                            // it, through `pressWasModified`, which of its two meanings this press has.
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (event.type != PointerEventType.Press) continue
+                                    pressWasModified = event.keyboardModifiers.hasToggleModifier()
+                                }
+                            }
+                        }
+                        .pointerInput(obj.id, selected, editable, state.revision) {
                             detectTapGestures(
                                 onTap = {
+                                    val decision = documentClickDecision(
+                                        modifiers = SelectionModifiers(toggle = pressWasModified),
+                                        alreadySelected = selected,
+                                        editable = editable,
+                                    )
                                     presenter.act {
-                                        // First tap selects; a second, deliberate tap on an already-selected
-                                        // text frame enters its content. Entering on the first tap would make
-                                        // every attempt to move a frame drop a caret into it instead.
-                                        if (selected && editable) beginContentEdit(obj.id)
-                                        else selectObjects(listOf(obj.id))
+                                        when (decision) {
+                                            // Ctrl/Cmd-click adds or removes this object. Resolved before the
+                                            // second-tap rule, so modifier-clicking an already-selected frame
+                                            // toggles it rather than dropping a caret into it.
+                                            DocumentClickAction.TOGGLE_SELECTION ->
+                                                toggleObjectSelection(obj.id)
+                                            // First tap selects; a second, deliberate tap on an
+                                            // already-selected text frame enters its content. Entering on the
+                                            // first tap would make every attempt to move a frame drop a caret
+                                            // into it instead.
+                                            DocumentClickAction.NORMAL ->
+                                                if (selected && editable) beginContentEdit(obj.id)
+                                                else selectObjects(listOf(obj.id))
+                                        }
                                     }
                                 },
                                 // Long-press is the *accelerator* into multi-select, never the only way in —
@@ -552,8 +625,15 @@ private fun SceneObjectBox(
                                 },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
-                                    totalX += dragAmount.x.toPagePoints(scale, this@pointerInput)
-                                    totalY += dragAmount.y.toPagePoints(scale, this@pointerInput)
+                                    // Deltas arrive in the *rotated* layer's own frame, so they are carried
+                                    // back into page space before they become a move. Using them raw would
+                                    // send a rotated object sideways when the finger moved down.
+                                    val (pageDx, pageDy) = geometry.rotateVectorToPage(
+                                        dragAmount.x.toPagePoints(scale, this@pointerInput),
+                                        dragAmount.y.toPagePoints(scale, this@pointerInput),
+                                    )
+                                    totalX += pageDx
+                                    totalY += pageDy
                                     presenter.act { updateMove(totalX, totalY) }
                                 },
                                 onDragEnd = { presenter.act { endManipulation() } },
@@ -578,13 +658,20 @@ private fun SceneObjectBox(
         SceneObjectContent(
             block = obj.content,
             objectId = obj.id,
-            editing = editingThis,
+            // Read mode never renders a live field. The runtime already ends content editing on the way into
+            // Read, so this is a second, independent guarantee rather than the only one: a caret surviving
+            // into a mode whose whole promise is "nothing changes" is the failure worth two locks.
+            editing = editingThis && editable,
             callbacks = remember(obj.id, state.revision) {
                 SceneContentCallbacks(
                     onEdit = { edit ->
-                        presenter.act { editObjectText(edit.objectId, edit.itemId, edit.before, edit.after) }
+                        presenter.act {
+                            editObjectText(edit.objectId, edit.blockId, edit.itemId, edit.before, edit.after)
+                        }
                     },
-                    onToggleTodo = { itemId -> presenter.act { toggleObjectTodo(obj.id, itemId) } },
+                    onToggleTodo = { blockId, itemId ->
+                        presenter.act { toggleObjectTodo(obj.id, blockId, itemId) }
+                    },
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(4.dp),
@@ -595,6 +682,10 @@ private fun SceneObjectBox(
     // an 8pt-tall shape would otherwise have handles a finger cannot land on. Only the primary object gets
     // them: a secondary selected object drawing its own corner targets would promise an individual resize
     // that the group operation does not perform.
+    //
+    // They are positioned from the **rotated** corner/handle points, so they sit on the object as drawn. The
+    // handles themselves are deliberately *not* rotated: a square target reads identically at any angle, and
+    // what matters is that it is where the corner visibly is.
     if (isPrimary && editable && !state.selectionMode && !editingThis) {
         if (obj.canResize) {
             ResizeCorner.entries.forEach { corner ->
@@ -608,12 +699,16 @@ private fun SceneObjectBox(
 }
 
 /**
- * One corner resize handle.
+ * One corner resize handle, drawn where that corner **actually is** once rotation is applied.
  *
  * All four corners exist, and each anchors the corner **opposite** it: dragging the top-left moves x and y as
  * well as width and height, which is what "resize from this corner" means to a human. The one-corner version
  * this replaces could only ever grow an object down and to the right, so re-sizing against a fixed bottom
  * edge required moving the object afterwards and doing the arithmetic by hand.
+ *
+ * Position comes from [SceneGeometry.rotatedCornerOf] — the same forward transform the object's own
+ * `graphicsLayer` applies — so on a rotated object the handle sits on the visible corner instead of hovering
+ * beside it at the unrotated one, which is where the touch target and the drawing used to disagree.
  *
  * The gesture reports an absolute page position rather than accumulated deltas, so a snap can never become the
  * base for the next frame and stick to a guide the user has already dragged away from.
@@ -628,7 +723,7 @@ private fun ResizeHandle(
 ) {
     val density = LocalDensity.current
     val targetPx = with(density) { HANDLE_TARGET.toPx() }
-    val (cornerX, cornerY) = corner.positionIn(geometry)
+    val (cornerX, cornerY) = geometry.rotatedCornerOf(corner)
 
     Box(
         Modifier
@@ -641,8 +736,9 @@ private fun ResizeHandle(
                 )
             }
             .size(HANDLE_TARGET)
-            .pointerInput(obj.id, corner, scale) {
-                // The corner's page position, accumulated across the gesture from where it started.
+            .pointerInput(obj.id, corner, scale, geometry.rotation) {
+                // The corner's page position, accumulated across the gesture from where it started. The
+                // handle is not inside the rotated layer, so its deltas are already page-space directions.
                 var pointerX = cornerX
                 var pointerY = cornerY
                 detectDragGestures(
@@ -673,7 +769,11 @@ private fun ResizeHandle(
 }
 
 /**
- * The rotation handle, above the object's top edge.
+ * The rotation handle, above the object's top edge **as the object is oriented**.
+ *
+ * Its position comes from [SceneGeometry.rotationHandlePoint], so it swings around with the object rather than
+ * staying pinned above the page's north while the frame turns underneath it — which is what made the handle
+ * appear to detach from the thing it rotates.
  *
  * The angle is computed from the pointer's position relative to the object's **centre**, which is the same
  * centre the drawing rotates about and the same centre hit testing un-rotates about — so what the user drags,
@@ -691,36 +791,40 @@ private fun RotationHandle(
 ) {
     val density = LocalDensity.current
     val targetPx = with(density) { HANDLE_TARGET.toPx() }
+    val (handleX, handleY) = geometry.rotationHandlePoint(ROTATION_HANDLE_OFFSET_PT)
 
     Box(
         Modifier
             .offset {
                 IntOffset(
-                    (geometry.centerX.ptToPx(scale, this) - targetPx / 2f).roundToInt(),
-                    ((geometry.y - ROTATION_HANDLE_OFFSET_PT).ptToPx(scale, this) - targetPx / 2f).roundToInt(),
+                    (handleX.ptToPx(scale, this) - targetPx / 2f).roundToInt(),
+                    (handleY.ptToPx(scale, this) - targetPx / 2f).roundToInt(),
                 )
             }
             .size(HANDLE_TARGET)
-            .pointerInput(obj.id, scale) {
-                // Where the handle sits relative to the centre when the gesture begins. The pointer walks from
-                // there, and the angle is read off the vector — so the object does not snap a quarter-turn the
-                // instant the drag starts.
-                var vectorX = 0f
-                var vectorY = -(ROTATION_HANDLE_OFFSET_PT + geometry.height / 2f)
+            .pointerInput(obj.id, scale, geometry.rotation) {
+                // The handle's page-space offset from the centre when the gesture begins. The pointer walks
+                // from there and the angle is read off the vector, so the object does not snap the instant
+                // the drag starts — and because the start vector already includes the current rotation, the
+                // angle read from it *is* the absolute angle rather than a delta to add to itself.
+                val startX = handleX - geometry.centerX
+                val startY = handleY - geometry.centerY
+                var vectorX = startX
+                var vectorY = startY
                 detectDragGestures(
                     onDragStart = {
-                        vectorX = 0f
-                        vectorY = -(ROTATION_HANDLE_OFFSET_PT + geometry.height / 2f)
+                        vectorX = startX
+                        vectorY = startY
                         presenter.act { beginManipulation(ActiveManipulation.Kind.ROTATE) }
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         vectorX += dragAmount.x.toPagePoints(scale, this@pointerInput)
                         vectorY += dragAmount.y.toPagePoints(scale, this@pointerInput)
-                        // atan2 measures from the +x axis; the handle starts on the -y axis, so 90° is added
-                        // to make "no movement" read as the object's current angle rather than a quarter-turn.
+                        // atan2 measures from the +x axis; the handle sits on the object's -y axis, so 90° is
+                        // added to make "no movement" read as the object's current angle.
                         val degrees = Math.toDegrees(atan2(vectorY, vectorX).toDouble()).toFloat() + 90f
-                        presenter.act { updateRotation(geometry.rotation + degrees) }
+                        presenter.act { updateRotation(degrees) }
                     },
                     onDragEnd = { presenter.act { endManipulation() } },
                     onDragCancel = { presenter.act { cancelManipulation() } },
@@ -736,6 +840,50 @@ private fun RotationHandle(
         )
     }
 }
+
+/**
+ * The modifier state a pointer press carried, reduced to the one question selection cares about.
+ *
+ * A tiny toolkit-independent value so the *decision* below is a pure function that can be unit-tested, rather
+ * than something only observable by driving a real pointer on a real device.
+ */
+data class SelectionModifiers(val toggle: Boolean)
+
+/** What a press on an already-drawn object should do. */
+enum class DocumentClickAction {
+    /** Ordinary click: fall through to the tap/second-tap rule (select, or enter content editing). */
+    NORMAL,
+
+    /** Modifier-click: add/remove this object from the multi-selection. */
+    TOGGLE_SELECTION,
+}
+
+/**
+ * Whether this press is a modifier-click that should toggle selection.
+ *
+ * Pure and separate from the pointer plumbing so the rule is testable. Two things it deliberately does **not**
+ * do: it does not toggle when the canvas is not editable (a modifier-click while reading is still just a
+ * click), and it never returns TOGGLE_SELECTION for an unmodified press on a selected object — that case
+ * belongs to the second-tap-enters-text rule, and stealing it would make Ctrl-click the only way to type.
+ */
+fun documentClickDecision(
+    modifiers: SelectionModifiers,
+    alreadySelected: Boolean,
+    editable: Boolean,
+): DocumentClickAction = when {
+    !modifiers.toggle -> DocumentClickAction.NORMAL
+    !editable -> DocumentClickAction.NORMAL
+    else -> DocumentClickAction.TOGGLE_SELECTION
+}
+
+/**
+ * True when Compose's pointer modifier state carries the platform's "toggle this" modifier.
+ *
+ * Ctrl **or** Meta, because the platform convention differs and a user with an external keyboard brings the
+ * habit of whichever platform they learned it on; accepting both costs nothing and refusing one makes the
+ * feature simply absent for half of them.
+ */
+private fun PointerKeyboardModifiers.hasToggleModifier(): Boolean = isCtrlPressed || isMetaPressed
 
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -925,6 +1073,7 @@ private fun DocumentTopBar(
     state: DocumentHostUiState,
     title: String,
     onTitleChange: (String) -> Unit,
+    onTitleFocusChange: (Boolean) -> Unit,
     onOpenSidebar: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
@@ -940,6 +1089,7 @@ private fun DocumentTopBar(
             DocumentTitleField(
                 title = title,
                 onTitleChange = onTitleChange,
+                onFocusChange = onTitleFocusChange,
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
             TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
@@ -990,7 +1140,12 @@ private fun DocumentTopBar(
  * there is exactly one authority for the title rather than a second one here that could disagree with it.
  */
 @Composable
-private fun DocumentTitleField(title: String, onTitleChange: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun DocumentTitleField(
+    title: String,
+    onTitleChange: (String) -> Unit,
+    onFocusChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var value by remember { mutableStateOf(title) }
     var lastOwner by remember { mutableStateOf(title) }
     if (title != lastOwner) {
@@ -1021,7 +1176,9 @@ private fun DocumentTitleField(title: String, onTitleChange: (String) -> Unit, m
                 color = LocalContentColor.current,
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth(),
+            // Backspace in the title must delete a character, not the selected object. Reporting focus is
+            // what tells the root key handler to keep its hands off.
+            modifier = Modifier.fillMaxWidth().onFocusChanged { onFocusChange(it.isFocused) },
         )
     }
 }
@@ -1082,17 +1239,23 @@ private fun SelectionBar(count: Int, onCancel: () -> Unit, onDone: () -> Unit) {
 /**
  * Exact geometry entry for the primary selected object.
  *
- * Each field commits on its own, as one transaction, through the same controller call a drag ends with — so
- * "typed 120" and "dragged to 120" are indistinguishable in history and in the saved document. A field whose
- * lock forbids it is read-only and says which lock, because a number that silently refuses to change is the
- * most confusing possible refusal.
+ * Each field commits as **one** transaction, through the same controller call a drag ends with — so "typed
+ * 120" and "dragged to 120" are indistinguishable in history and in the saved document. A field whose lock
+ * forbids it is read-only and says which lock, because a number that silently refuses to change is the most
+ * confusing possible refusal.
  */
 @Composable
 private fun GeometryInspectorBar(
     obj: SceneObject,
     presenter: DocumentHostPresenter,
+    onFocusChange: (Boolean) -> Unit,
     onNotice: (String) -> Unit,
 ) {
+    // One flag for the whole bar rather than one per field: what the key router needs to know is "does some
+    // number field own the keyboard", and five independent booleans would report false as focus moved between
+    // two of them.
+    val focused = remember { mutableStateOf(setOf<GeometryInspector.Field>()) }
+
     Row(
         Modifier
             .fillMaxWidth()
@@ -1102,28 +1265,71 @@ private fun GeometryInspectorBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         GeometryInspector.Field.entries.forEach { field ->
-            GeometryField(field, obj, presenter, onNotice)
+            GeometryField(
+                field = field,
+                obj = obj,
+                presenter = presenter,
+                onFocusChange = { hasFocus ->
+                    focused.value = if (hasFocus) focused.value + field else focused.value - field
+                    onFocusChange(focused.value.isNotEmpty())
+                },
+                onNotice = onNotice,
+            )
         }
     }
 }
 
+/**
+ * One numeric geometry field: a local draft, committed once.
+ *
+ * **Why a draft and not commit-as-you-type.** The previous version committed every intermediate value that
+ * happened to parse, so typing `120` moved the object to 1, then to 12, then to 120 — three History
+ * transactions for one edit, and three Undos to get back. Worse, the object visibly jumped through positions
+ * the user was only passing through on the way to the number they meant.
+ *
+ * The lifecycle is the one a human already expects from a number field:
+ *
+ *  - typing edits a **local draft** and touches nothing else;
+ *  - **Done/Enter** commits it, as a single transaction;
+ *  - **focus loss** commits it too, because tapping away from a field you have filled in means you meant it;
+ *  - an **invalid draft never commits** — it is dropped and the field re-seeded from the object, so a typo
+ *    cannot leave the geometry somewhere the user did not choose;
+ *  - the field re-seeds from the object when it is **not dirty**, so a drag or an undo is reflected live, and
+ *    an in-progress entry is never overwritten mid-keystroke.
+ *
+ * Keying the draft on the object id is what stops a pending value from being applied to the *next* object: a
+ * selection change rebuilds this state from the newly selected object rather than carrying the draft across.
+ */
 @Composable
 private fun GeometryField(
     field: GeometryInspector.Field,
     obj: SceneObject,
     presenter: DocumentHostPresenter,
+    onFocusChange: (Boolean) -> Unit,
     onNotice: (String) -> Unit,
 ) {
     val stored = GeometryInspector.display(field.valueOf(obj.geometry))
     var text by remember(obj.id, field) { mutableStateOf(stored) }
-    var lastStored by remember(obj.id, field) { mutableStateOf(stored) }
-    // Re-seeded when the *object* changed underneath — a drag, an undo — but not merely because the field
-    // differs from it, which would delete digits as they are typed.
-    if (stored != lastStored) {
-        lastStored = stored
-        text = stored
-    }
+    // Dirty means "the user has typed something not yet committed". It is what makes re-seeding safe: a value
+    // arriving from a drag or an undo refreshes a clean field and is ignored by a dirty one.
+    var dirty by remember(obj.id, field) { mutableStateOf(false) }
+    if (!dirty && text != stored) text = stored
     val locked = field.isLockedFor(obj)
+
+    // Committing is one function because it has three callers — Done, focus loss, and the caller's own
+    // teardown — and three copies of "parse, commit or revert" is how one of them ends up committing an
+    // invalid draft.
+    fun commit() {
+        if (!dirty) return
+        dirty = false
+        if (GeometryInspector.parse(field, text) == null) {
+            // Rejected: the object keeps its value and the field stops showing a number that was never real.
+            onNotice("'$text' is not a valid ${field.label}")
+            text = stored
+            return
+        }
+        presenter.act { applyGeometryField(field, text) }
+    }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -1143,15 +1349,15 @@ private fun GeometryField(
                         return@BasicTextField
                     }
                     text = next
-                    // Committed as it is typed only when the value is genuinely usable. A partial entry
-                    // ("-", "1.") simply does not commit, so the object never jumps somewhere the user was
-                    // only passing through on the way to the number they meant.
-                    if (GeometryInspector.parse(field, next) != null) {
-                        presenter.act { applyGeometryField(field, next) }
-                    }
+                    dirty = true
                 },
                 readOnly = locked,
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(onDone = { commit() }),
                 textStyle = MaterialTheme.typography.labelMedium.copy(
                     color = if (locked) {
                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -1160,7 +1366,14 @@ private fun GeometryField(
                     },
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                modifier = Modifier
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .onFocusChanged { focusState ->
+                        onFocusChange(focusState.isFocused)
+                        // Leaving a field you have filled in means you meant the value; leaving one you have
+                        // not touched must not commit the number that was already there.
+                        if (!focusState.isFocused) commit()
+                    },
             )
         }
     }
@@ -1417,8 +1630,11 @@ private fun PageControlRow(item: DocumentCommandItem, onClick: () -> Unit) {
  *
  * Apply is explicit rather than committing per keystroke, because these are page-*structure* changes: a
  * half-typed width would resize every page in the scope on the way to the number the user meant. The geometry
- * inspector commits as you type for the opposite reason — one object, instantly reversible, and the feedback
- * is the point.
+ * inspector uses the same draft-then-commit shape for the same reason, differing only in that Done and focus
+ * loss stand in for a visible Apply where there is no room for a button.
+ *
+ * These fields are inside the sheet, which is a sibling of the editor column rather than a descendant, so the
+ * root's preview key handler never sees their keystrokes — Backspace here cannot reach the canvas bindings.
  */
 @Composable
 private fun PageValueRow(item: DocumentPageValueItem, onApply: (String) -> Unit) {

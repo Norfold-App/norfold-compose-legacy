@@ -17,6 +17,7 @@ import com.norfold.app.domain.findById
 import com.norfold.app.domain.locateObject
 import com.norfold.app.domain.pageById
 import com.norfold.app.domain.pages
+import com.norfold.app.domain.updateBlock
 import com.norfold.app.domain.withFreshIds
 import com.norfold.app.editor.history.EditOperation
 import com.norfold.app.editor.history.EditTarget
@@ -27,6 +28,41 @@ import com.norfold.app.editor.history.HistoryListener
 import com.norfold.app.editor.history.InMemoryEditWorkspace
 import com.norfold.app.editor.history.PersistableEditController
 import com.norfold.app.editor.history.TransactionOrigin
+
+/**
+ * What a page-geometry operation actually did, page by page.
+ *
+ * A Boolean cannot answer the question Page Control has to ask. "Apply to whole document" over five pages
+ * where two are structure-locked changes three; reporting five is a false success, and reporting a bare
+ * `true` leaves the surface to re-derive what happened from state that has already moved on. Every requested
+ * id lands in exactly one bucket, so the counts always sum back to what was asked for.
+ */
+data class PageEditOutcome(
+    /** Pages whose geometry genuinely changed and are in the committed transaction. */
+    val changedIds: List<String> = emptyList(),
+    /** Pages refused because their structure is locked. */
+    val skippedLockedIds: List<String> = emptyList(),
+    /** Pages that were editable but already in the requested state. */
+    val unchangedIds: List<String> = emptyList(),
+    /** Requested ids that name no page — a stale scope after a delete or an undo. */
+    val missingIds: List<String> = emptyList(),
+) {
+    val changedCount: Int get() = changedIds.size
+    val skippedLockedCount: Int get() = skippedLockedIds.size
+
+    /** True when something was actually committed. */
+    val didChange: Boolean get() = changedIds.isNotEmpty()
+
+    /** True when nothing changed *because* every candidate was locked — a refusal, not a no-op. */
+    val blockedByLock: Boolean get() = changedIds.isEmpty() && skippedLockedIds.isNotEmpty()
+
+    /** The part of a success message that names what was skipped, or null when nothing was. */
+    fun skippedNote(): String? = when (skippedLockedIds.size) {
+        0 -> null
+        1 -> "1 page skipped — its structure is locked"
+        else -> "${skippedLockedIds.size} pages skipped — their structure is locked"
+    }
+}
 
 /**
  * The authoritative edit controller for one bounded document (roadmap Phase 2).
@@ -196,38 +232,76 @@ class DocumentSceneController(
      * A to-do item holds `TodoItem` rather than `ListItem`, so the item type decides which call addresses it;
      * using the list call on a checklist would report a cursor while changing nothing.
      */
-    fun editObjectText(objectId: String, itemId: String?, before: String, after: String): Boolean {
+    /**
+     * Applies a text edit inside an object's content, as a **coalescing** transaction.
+     *
+     * Typing is the one thing that must not be one undo step per keystroke, so this is the only path in this
+     * controller that passes a coalescing key. The key names the *editable field* — the addressed block plus
+     * list item — not the object, because two blocks of one object are separate writing runs and merging them
+     * would make a single undo swallow edits in both.
+     *
+     * [blockId] addresses the block **actually** being edited, which is not always `obj.content`: a quote, a
+     * callout or a container holds children, and each of those children is independently editable. Addressing
+     * the object's root block instead would send every child's keystrokes to the first paragraph — editing the
+     * second paragraph of a quote would rewrite the first. [BlockEditorSession] resolves ids through the whole
+     * nested tree, so a child id works exactly as a root id does.
+     *
+     * Fails closed on an id that is not in this object's content. A stale block id is what a race between a
+     * recomposition and an undo produces, and the alternative to refusing is writing the user's keystrokes
+     * into whatever block the fallback happened to pick.
+     *
+     * The edit itself goes through [BlockEditorSession], the same vocabulary the Flow editor uses, so inline
+     * styling around the changed range survives rather than being flattened by a plain-string replacement.
+     * A to-do item holds `TodoItem` rather than `ListItem`, so the item type decides which call addresses it;
+     * using the list call on a checklist would report a cursor while changing nothing.
+     */
+    fun editObjectText(
+        objectId: String,
+        blockId: String,
+        itemId: String?,
+        before: String,
+        after: String,
+    ): Boolean {
         if (before == after) return false
         val document = document()
         val (page, obj) = document.locateObject(objectId) ?: return false
         if (!obj.canEditContent) return false
 
         val session = BlockEditorSession(BlockDocument(listOf(obj.content)))
-        val blockId = obj.content.id
+        // Fail closed rather than falling back to the root block: an unresolvable address means the caller and
+        // the model disagree about what is on screen, and guessing a target writes into the wrong content.
+        val addressed = session.document.findById(blockId) ?: return false
         when {
             itemId == null -> session.editText(blockId, before, after)
-            session.document.findById(blockId) is TodoListBlock -> session.editTodoItem(blockId, itemId, before, after)
+            addressed is TodoListBlock -> session.editTodoItem(blockId, itemId, before, after)
             else -> session.editListItem(blockId, itemId, before, after)
         }
         val edited = session.document.blocks.firstOrNull() ?: return false
         if (edited == obj.content) return false
 
         val next = page.withObject(obj.copy(content = edited))
-        val key = if (itemId != null) "object:$objectId/item:$itemId" else "object:$objectId"
+        val key = if (itemId != null) "block:$blockId/item:$itemId" else "block:$blockId"
         return commit("Typing", listOf(replacePage(document, page, next)), coalescingKey = key)
     }
 
-    /** Toggles a to-do item inside an object's content. Never coalesces: a tick is a discrete action. */
-    fun toggleObjectTodo(objectId: String, itemId: String): Boolean {
+    /**
+     * Toggles a to-do item inside an object's content. Never coalesces: a tick is a discrete action.
+     *
+     * [blockId] addresses the to-do list itself, which may be nested inside a container, quote or callout —
+     * casting the object's root content would silently do nothing for every nested checklist.
+     */
+    fun toggleObjectTodo(objectId: String, blockId: String, itemId: String): Boolean {
         val document = document()
         val (page, obj) = document.locateObject(objectId) ?: return false
         if (!obj.canEditContent) return false
-        val list = obj.content as? TodoListBlock ?: return false
+        val list = listOf(obj.content).findById(blockId) as? TodoListBlock ?: return false
         val index = list.items.indexOfFirst { it.id == itemId }
         if (index < 0) return false
         val items = list.items.toMutableList()
         items[index] = items[index].copy(checked = !items[index].checked)
-        val next = page.withObject(obj.copy(content = list.copy(items = items)))
+        val content = listOf(obj.content).updateBlock(blockId) { list.copy(items = items) }.firstOrNull()
+            ?: return false
+        val next = page.withObject(obj.copy(content = content))
         return commit("Toggle to-do", listOf(replacePage(document, page, next)))
     }
 
@@ -497,25 +571,55 @@ class DocumentSceneController(
      *
      * Refused for a page whose structure is locked unless [force] — this is where "page structure locked;
      * content editable" is actually enforced, rather than being a convention the UI is trusted to honour.
+     *
+     * Returns a [PageEditOutcome] rather than a bare Boolean because "did anything happen" and "what happened
+     * to the five pages you named" are different questions, and Page Control has to answer the second one.
+     * Reporting the requested count as the affected count is how a scope containing two locked pages came to
+     * claim it had changed all five.
      */
     fun editPageGeometry(
         pageIds: Collection<String>,
         label: String,
         force: Boolean = false,
         change: (PageGeometry) -> PageGeometry,
-    ): Boolean {
+    ): PageEditOutcome {
         val document = document()
-        val ops = pageIds.mapNotNull { pageId ->
-            val page = document.pageById(pageId) ?: return@mapNotNull null
-            if (page.geometry.structureLocked && !force) return@mapNotNull null
+        val changed = mutableListOf<String>()
+        val skippedLocked = mutableListOf<String>()
+        val unchanged = mutableListOf<String>()
+        val missing = mutableListOf<String>()
+        val ops = mutableListOf<EditOperation>()
+        for (pageId in pageIds) {
+            val page = document.pageById(pageId)
+            if (page == null) {
+                missing += pageId
+                continue
+            }
+            if (page.geometry.structureLocked && !force) {
+                skippedLocked += pageId
+                continue
+            }
             val next = page.copy(geometry = change(page.geometry).normalized()).normalized()
-            if (next == page) null else replacePage(document, page, next)
+            if (next == page) {
+                unchanged += pageId
+                continue
+            }
+            changed += pageId
+            ops += replacePage(document, page, next)
         }
-        return commit(label, ops)
+        // A transaction is committed only when something actually changed; committing an empty operation list
+        // would put an entry in history that undoes to the state it already was in.
+        val committed = ops.isNotEmpty() && commit(label, ops)
+        return PageEditOutcome(
+            changedIds = if (committed) changed else emptyList(),
+            skippedLockedIds = skippedLocked,
+            unchangedIds = if (committed) unchanged else unchanged + changed,
+            missingIds = missing,
+        )
     }
 
     /** Locks or unlocks page structure. Always permitted — it is the control that governs the others. */
-    fun setPageStructureLocked(pageIds: Collection<String>, locked: Boolean): Boolean =
+    fun setPageStructureLocked(pageIds: Collection<String>, locked: Boolean): PageEditOutcome =
         editPageGeometry(pageIds, if (locked) "Lock page structure" else "Unlock page structure", force = true) {
             it.copy(structureLocked = locked)
         }

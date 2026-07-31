@@ -216,13 +216,40 @@ class DocumentHostRuntime(
 
     // --- View axes -----------------------------------------------------------------------------------
 
+    /**
+     * Switches the working intent.
+     *
+     * Read mode has to be *actually* read-only, not merely labelled so. Leaving a content edit open would
+     * leave a live text field and a caret on screen in the mode whose entire promise is that nothing can be
+     * changed — and the next keystroke would be committed to the document. Ending the edit here rather than
+     * asking the host to remember is what makes that a property of the runtime instead of a convention.
+     *
+     * A manipulation in flight is **cancelled**, not committed: the user switched away from editing, so a
+     * half-finished drag is something they abandoned rather than something they meant to keep.
+     *
+     * The selection survives. What is selected is a question about attention, not about editing, and dropping
+     * it would make flicking to Read and back lose the user's place.
+     */
     fun setIntent(intent: WorkingIntent) {
+        if (intent != WorkingIntent.EDIT) {
+            editingObjectId = null
+            if (view.manipulation != null) view.cancelManipulation()
+        }
         view.setIntent(intent)
         instrumentation.onViewChanged(view.representation, intent)
         revision++
     }
 
+    /**
+     * Switches the layout representation.
+     *
+     * Content editing ends on the way into Adaptive View for the same reason it ends on the way into Read:
+     * the host only renders a live field in Original View, so a caret left set here would be state pointing at
+     * a text field that is no longer on screen — the keyboard would stay up over an adapted layout, and Back
+     * would spend a press dismissing an edit the user cannot see.
+     */
     fun setRepresentation(representation: LayoutRepresentation) {
+        if (representation != LayoutRepresentation.ORIGINAL) editingObjectId = null
         view.setRepresentation(representation)
         instrumentation.onViewChanged(representation, view.intent)
         revision++
@@ -572,11 +599,15 @@ class DocumentHostRuntime(
     fun activeSurfaceId(): String? = surfaces.active()?.id
 
     /**
-     * One Back/Escape press against the whole hierarchy: surface → multi-select → selection → editor.
+     * One Back/Escape press against the whole hierarchy:
+     * surface → multi-select → live gesture → **content editing** → selection → editor.
      *
-     * Routed through the coordinator so DocumentHost unwinds in exactly the order FlowHost does. Clearing the
-     * selection before leaving is the level that would otherwise be missing: a user with an object selected
-     * pressing Back expects to deselect, not to leave the document.
+     * Routed through the coordinator so DocumentHost unwinds in exactly the order FlowHost does. Two levels
+     * would otherwise be missing. A live gesture owns Back before anything else, because cancelling the drag
+     * is what the user is asking for. And **content editing is resolved before the selection is cleared**: a
+     * user typing in a text frame who presses Back expects the caret to leave, not the object to be
+     * deselected and the caret to be orphaned behind it. Clearing the selection first is how a second Back
+     * ended up leaving the editor while a text field was still focused.
      */
     fun back(): DocumentBackResult {
         val outcome = surfaces.back(hasSelectionMode = selectionMode)
@@ -597,6 +628,12 @@ class DocumentHostRuntime(
                 if (view.manipulation != null) {
                     cancelManipulation()
                     return DocumentBackResult.CancelledManipulation
+                }
+                // Text editing is an *inner* level of the same object's selection, so it unwinds first and
+                // the selection is deliberately kept: the object stays selected, only the caret leaves.
+                if (editingObjectId != null) {
+                    endContentEdit()
+                    return DocumentBackResult.ExitedContentEdit
                 }
                 if (scope.selectedObjectIds().isNotEmpty()) {
                     scope.selectObjects(emptyList())
@@ -625,29 +662,37 @@ class DocumentHostRuntime(
      * keyboard-only behaviour anywhere: a chord whose command is disabled is inert for the same stated reason
      * the dock would give. Undo/redo and Escape are the only exceptions, and only because they are History
      * and surface-hierarchy operations rather than registry commands.
+     *
+     * [textEntryActive] decides who owns the key *before* any binding is consulted — see
+     * [DocumentKeyboardMap.resolve]. The host passes what it knows about focus; the runtime contributes its
+     * own content-editing state, so a caret inside a scene object protects that object's text even if the
+     * host never reported anything.
      */
-    fun handleShortcut(shortcut: FlowShortcut): Boolean {
-        when (shortcut) {
-            DocumentKeyboardMap.UNDO -> return undo()
-            DocumentKeyboardMap.REDO, DocumentKeyboardMap.REDO_ALT -> return redo()
-            DocumentKeyboardMap.ESCAPE -> {
+    fun handleShortcut(shortcut: FlowShortcut, textEntryActive: Boolean = false): Boolean {
+        val owned = textEntryActive || editingObjectId != null
+        return when (val action = DocumentKeyboardMap.resolve(shortcut, owned)) {
+            DocumentKeyAction.Unhandled -> false
+            DocumentKeyAction.Undo -> undo()
+            DocumentKeyAction.Redo -> redo()
+            DocumentKeyAction.Back -> {
                 back()
-                return true
+                true
             }
-            DocumentKeyboardMap.SELECT_MODE -> {
+            DocumentKeyAction.EnterSelectionMode -> {
                 enterSelectionMode(scope.primaryObjectId())
-                return true
+                true
             }
-            DocumentKeyboardMap.SELECT_ALL -> {
+            DocumentKeyAction.SelectAllObjects -> {
                 selectAllOnActivePage()
-                return true
+                true
+            }
+            // Consumed even when the command refuses: the chord *is* bound, and letting it fall through would
+            // send a Delete the editor decided not to act on to whatever is behind it.
+            is DocumentKeyAction.Command -> {
+                invoke(action.id, CommandSurface.KEYBOARD)
+                true
             }
         }
-        val commandId = DocumentKeyboardMap.commandFor(shortcut) ?: return false
-        // Consumed even when the command refuses: the chord *is* bound, and letting it fall through would
-        // send a Delete the editor decided not to act on to whatever is behind it.
-        invoke(commandId, CommandSurface.KEYBOARD)
-        return true
     }
 
     // --- Object content ------------------------------------------------------------------------------
@@ -667,6 +712,11 @@ class DocumentHostRuntime(
      *
      * A content-locked object refuses and says so rather than silently doing nothing — "why can I not type in
      * this" is the question the lock badge exists to answer, and a no-op answers it badly.
+     *
+     * Entering deliberately **transitions to Edit intent** rather than refusing in Read mode: the user tapped
+     * twice on a text frame, which is an unambiguous request to write in it, and bouncing that request while
+     * silently staying in Read would read as the app being broken. What must never happen is the reverse — a
+     * caret surviving *into* Read mode — and [setIntent] is where that is enforced.
      */
     fun beginContentEdit(objectId: String): Boolean {
         val obj = controller.findObject(objectId)?.second ?: return false
@@ -703,10 +753,22 @@ class DocumentHostRuntime(
      * Routed through [DocumentSceneController.editObjectText] so typing inside a scene object produces the
      * same kind of history entry as typing in Flow: consecutive keystrokes in one field merge into one undo
      * step, and moving to a different field starts a new one.
+     *
+     * [blockId] is the block the caret is genuinely in, which for nested content — a paragraph inside a quote,
+     * a callout or a container — is *not* the object's root block. Refused outright in Read mode: a keystroke
+     * arriving while the document is nominally read-only means some field outlived the mode switch, and
+     * committing it would write to a document the user believes is not being changed.
      */
-    fun editObjectText(objectId: String, itemId: String?, before: String, after: String): Boolean {
+    fun editObjectText(
+        objectId: String,
+        blockId: String,
+        itemId: String?,
+        before: String,
+        after: String,
+    ): Boolean {
         if (before == after) return false
-        val edited = controller.editObjectText(objectId, itemId, before, after)
+        if (view.intent != WorkingIntent.EDIT) return false
+        val edited = controller.editObjectText(objectId, blockId, itemId, before, after)
         if (edited) {
             lastFailure = null
             revision++
@@ -714,9 +776,11 @@ class DocumentHostRuntime(
         return edited
     }
 
-    /** Toggles a to-do item inside a scene object's content. */
-    fun toggleObjectTodo(objectId: String, itemId: String): Boolean =
-        controller.toggleObjectTodo(objectId, itemId).also { if (it) revision++ }
+    /** Toggles a to-do item inside a scene object's content, addressed by its own block id. */
+    fun toggleObjectTodo(objectId: String, blockId: String, itemId: String): Boolean {
+        if (view.intent != WorkingIntent.EDIT) return false
+        return controller.toggleObjectTodo(objectId, blockId, itemId).also { if (it) revision++ }
+    }
 
     /** The accessibility actions for [obj], as registered command ids that are invokable right now. */
     fun accessibilityActions(obj: SceneObject): List<Pair<String, String>> =

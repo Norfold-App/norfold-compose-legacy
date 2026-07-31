@@ -399,8 +399,10 @@ class SetPageStructureLockCommand(
         }
         val ids = scopedPageIds(pageScope)
         if (ids.isEmpty()) return CommandResult.Failure("No page selected")
-        val changed = scope.controller.setPageStructureLocked(ids, locked)
-        return if (changed) CommandResult.Success(ids.size) else CommandResult.NoOp
+        val outcome = scope.controller.setPageStructureLocked(ids, locked)
+        // Structure lock is forced, so nothing can be skipped for being locked; only "already in that state"
+        // is possible, and that is a genuine no-op rather than a success over zero pages.
+        return if (outcome.didChange) CommandResult.Success(outcome.changedCount) else CommandResult.NoOp
     }
 }
 
@@ -462,16 +464,8 @@ class ApplyPageGeometryCommand(
         }
         val ids = scopedPageIds(pageScope)
         if (ids.isEmpty()) return CommandResult.Failure("No page selected")
-        val changed = scope.controller.editPageGeometry(ids, label, force = false, change = change)
-        if (!changed) {
-            val locked = ids.mapNotNull { scope.controller.page(it) }.any { it.geometry.structureLocked }
-            return if (locked) {
-                CommandResult.Failure("Page structure is locked — unlock it to change page setup")
-            } else {
-                CommandResult.NoOp
-            }
-        }
-        return CommandResult.Success(ids.count { scope.controller.page(it) != null })
+        val outcome = scope.controller.editPageGeometry(ids, label, force = false, change = change)
+        return outcome.toCommandResult()
     }
 }
 
@@ -548,19 +542,30 @@ class ApplyPageValueCommand(
         }
         val ids = scopedPageIds(pageScope)
         if (ids.isEmpty()) return CommandResult.Failure("No page selected")
-        val changed = scope.controller.editPageGeometry(ids, label, force = false) { geometry ->
+        val outcome = scope.controller.editPageGeometry(ids, label, force = false) { geometry ->
             control.apply(geometry, raw) ?: geometry
         }
-        if (!changed) {
-            val locked = ids.mapNotNull { scope.controller.page(it) }.any { it.geometry.structureLocked }
-            return if (locked) {
-                CommandResult.Failure("Page structure is locked — unlock it to change page setup")
-            } else {
-                CommandResult.NoOp
-            }
-        }
-        return CommandResult.Success(ids.count { scope.controller.page(it) != null })
+        return outcome.toCommandResult()
     }
+}
+
+/**
+ * How a [PageEditOutcome] reads as a [CommandResult].
+ *
+ * One translation, shared by every page-setup route, so a preset and a custom value cannot report the same
+ * outcome differently. Three distinctions are load-bearing:
+ *
+ *  - **success counts only what changed.** Naming five pages and changing three is `Success(3)`, and the
+ *    message says the other two were skipped. Reporting five would tell the user a locked page had been
+ *    reshaped;
+ *  - **all-locked is a failure, not a no-op.** Nothing happened *and* the user was refused, which needs the
+ *    explanation a no-op does not carry;
+ *  - **already-in-that-state is a no-op.** Nothing happened and nothing was refused.
+ */
+private fun PageEditOutcome.toCommandResult(): CommandResult = when {
+    didChange -> CommandResult.Success(changedCount, skippedNote())
+    blockedByLock -> CommandResult.Failure("Page structure is locked — unlock it to change page setup")
+    else -> CommandResult.NoOp
 }
 
 /**

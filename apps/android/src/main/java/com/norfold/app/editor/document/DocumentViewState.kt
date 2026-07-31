@@ -242,6 +242,10 @@ class DocumentViewState(
      * now this big" would have to reconstruct the origin itself — which is exactly where an off-by-one anchor
      * turns a resize into a resize-plus-jump.
      *
+     * Rotation-aware: [SceneGeometry.resizedToRotated] measures the drag along the object's *own* axes and
+     * keeps the opposite corner fixed **on the page**. Resizing a rotated box with raw page coordinates would
+     * grow it diagonally and swing it about its moving centre.
+     *
      * The proposed box is always derived from the geometry the gesture *started* from, so a snap cannot become
      * the base for the next frame's arithmetic and stick.
      */
@@ -255,7 +259,7 @@ class DocumentViewState(
         if (active.kind != ActiveManipulation.Kind.RESIZE) return active
         val objectId = active.objectIds.first()
         val original = active.original[objectId] ?: return active
-        return applyResize(active, objectId, original.resizedTo(corner, px, py), page, corner)
+        return applyResize(active, objectId, original.resizedToRotated(corner, px, py), page, corner)
     }
 
     /**
@@ -279,14 +283,23 @@ class DocumentViewState(
         page: DocumentPageBlock?,
         corner: ResizeCorner,
     ): ActiveManipulation {
-        val snapped = page?.let {
-            SnapGuideEngine.snapResize(
-                proposed,
-                it,
-                movingRight = corner.movingRight,
-                movingBottom = corner.movingBottom,
-                excludeIds = setOf(objectId),
-            )
+        // Snapping is skipped for a rotated box, deliberately. The guides describe axis-aligned page edges,
+        // margins and neighbouring boxes, but a rotated object's stored x/y/right/bottom are not its visible
+        // edges — so snapping them would align something the user cannot see *and* would shift the origin,
+        // dragging the corner they are holding fixed away from their finger. An unsnapped rotated resize is
+        // honest; a snapped one is wrong in two ways at once.
+        val snapped = if (proposed.rotation != 0f) {
+            null
+        } else {
+            page?.let {
+                SnapGuideEngine.snapResize(
+                    proposed,
+                    it,
+                    movingRight = corner.movingRight,
+                    movingBottom = corner.movingBottom,
+                    excludeIds = setOf(objectId),
+                )
+            }
         }
         return active.copy(
             preview = mapOf(objectId to (snapped?.geometry ?: proposed.normalized())),

@@ -436,22 +436,74 @@ data class SceneGeometry(
     fun contains(px: Float, py: Float): Boolean = px >= x && px <= right && py >= y && py <= bottom
 
     /**
+     * A point of this box's **own unrotated frame** mapped to where it is actually drawn on the page.
+     *
+     * This is *the* forward rotation: one function, about [centerX]/[centerY], that the renderer, the resize
+     * handles, the rotation handle and [pageToLocal] all go through. The defect this exists to prevent is the
+     * one where drawing rotates about one centre and hit testing un-rotates about another — the two agree here
+     * by construction rather than by two call sites happening to compute the same thing.
+     */
+    fun localToPage(px: Float, py: Float): Pair<Float, Float> {
+        if (rotation == 0f) return px to py
+        val radians = rotation.toDouble() * PI / 180.0
+        val c = cos(radians).toFloat()
+        val s = sin(radians).toFloat()
+        val dx = px - centerX
+        val dy = py - centerY
+        return (centerX + dx * c - dy * s) to (centerY + dx * s + dy * c)
+    }
+
+    /** The exact inverse of [localToPage]: a page point expressed in this box's own unrotated frame. */
+    fun pageToLocal(px: Float, py: Float): Pair<Float, Float> {
+        if (rotation == 0f) return px to py
+        val radians = -rotation.toDouble() * PI / 180.0
+        val c = cos(radians).toFloat()
+        val s = sin(radians).toFloat()
+        val dx = px - centerX
+        val dy = py - centerY
+        return (centerX + dx * c - dy * s) to (centerY + dx * s + dy * c)
+    }
+
+    /**
+     * A *displacement* measured in this box's rotated frame, expressed in page space.
+     *
+     * Vectors rotate but do not translate, so this is deliberately not [localToPage]: a drag delta reported
+     * inside a rotated layer is a direction, and adding the centre to it would turn a two-point nudge into a
+     * jump to somewhere near the middle of the object.
+     */
+    fun rotateVectorToPage(dx: Float, dy: Float): Pair<Float, Float> {
+        if (rotation == 0f) return dx to dy
+        val radians = rotation.toDouble() * PI / 180.0
+        val c = cos(radians).toFloat()
+        val s = sin(radians).toFloat()
+        return (dx * c - dy * s) to (dx * s + dy * c)
+    }
+
+    /**
      * True when [px], [py] falls inside this box **as drawn**, honouring [rotation].
      *
-     * The point is rotated backwards about the box's centre and then tested against the unrotated box, which
-     * is the exact inverse of how the renderer rotates the box about that same centre. Testing the axis-aligned
-     * box instead would disagree with what the user sees the moment anything is rotated: the corners of a
+     * The point is brought into the box's own frame by [pageToLocal] and then tested against the unrotated
+     * box, so this is the exact inverse of the transform the renderer applies. Testing the axis-aligned box
+     * instead would disagree with what the user sees the moment anything is rotated: the corners of a
      * 45°-rotated frame would be selectable where nothing is drawn, and its visible corners would not respond.
      */
     fun containsRotated(px: Float, py: Float): Boolean {
         if (rotation == 0f) return contains(px, py)
-        val radians = -rotation.toDouble() * PI / 180.0
-        val cos = cos(radians).toFloat()
-        val sin = sin(radians).toFloat()
-        val dx = px - centerX
-        val dy = py - centerY
-        return contains(centerX + dx * cos - dy * sin, centerY + dx * sin + dy * cos)
+        val (lx, ly) = pageToLocal(px, py)
+        return contains(lx, ly)
     }
+
+    /** Where [corner] is actually **drawn**, honouring rotation — the position its handle must sit at. */
+    fun rotatedCornerOf(corner: ResizeCorner): Pair<Float, Float> {
+        val (cx, cy) = corner.positionIn(this)
+        return localToPage(cx, cy)
+    }
+
+    /**
+     * Where the rotation handle is actually **drawn**: [offsetPt] above the top edge's midpoint, carried
+     * around by the object's own rotation so the handle stays at the object's "up" rather than the page's.
+     */
+    fun rotationHandlePoint(offsetPt: Float): Pair<Float, Float> = localToPage(centerX, y - offsetPt)
 
     /**
      * The box produced by dragging one [corner] to ([px], [py]) in page points, with the opposite corner
@@ -479,6 +531,27 @@ data class SceneGeometry(
             width = w,
             height = h,
         )
+    }
+
+    /**
+     * The box produced by dragging [corner] to the **page** point ([px], [py]), honouring rotation.
+     *
+     * Two conversions make a rotated resize behave the way the handle looks. The pointer is brought into the
+     * object's own frame first, because the box's width and height are measured along the object's axes, not
+     * the page's — resizing a 45°-rotated frame with raw page coordinates would grow it diagonally. Then the
+     * result is translated so the anchored corner stays where it is **on the page**: resizing changes the
+     * centre, and since the rotation pivots about the centre, a box that was merely resized in local space
+     * would swing about that moving pivot and drag the "fixed" corner away from the user's other hand.
+     */
+    fun resizedToRotated(corner: ResizeCorner, px: Float, py: Float): SceneGeometry {
+        if (rotation == 0f) return resizedTo(corner, px, py)
+        val (lx, ly) = pageToLocal(px, py)
+        val resized = resizedTo(corner, lx, ly)
+        // The anchored corner is the one *opposite* the handle being dragged, and it must not move on screen.
+        val anchor = corner.opposite()
+        val (beforeX, beforeY) = rotatedCornerOf(anchor)
+        val (afterX, afterY) = resized.rotatedCornerOf(anchor)
+        return resized.copy(x = resized.x + (beforeX - afterX), y = resized.y + (beforeY - afterY))
     }
 
     /**
@@ -528,6 +601,11 @@ enum class ResizeCorner(val movingRight: Boolean, val movingBottom: Boolean) {
     fun positionIn(geometry: SceneGeometry): Pair<Float, Float> =
         (if (movingRight) geometry.right else geometry.x) to
             (if (movingBottom) geometry.bottom else geometry.y)
+
+    /** The corner diagonally across from this one — the one a drag on this handle holds fixed. */
+    fun opposite(): ResizeCorner = entries.first {
+        it.movingRight != movingRight && it.movingBottom != movingBottom
+    }
 }
 
 /**
