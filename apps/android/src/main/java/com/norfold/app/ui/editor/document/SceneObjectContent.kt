@@ -79,9 +79,18 @@ import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 import com.norfold.app.ui.screens.highlightColor
 
-/** A text edit inside a scene object's content, addressed the way the engines address it. */
+/**
+ * A text edit inside a scene object's content, addressed the way the engines address it.
+ *
+ * [blockId] is the block the caret is genuinely in — **not** the object's root block. A scene object's content
+ * is a tree: a quote, a callout and a container each hold children, and each child is independently editable.
+ * Carrying only the object id was the defect: every child's keystrokes were applied to the root block, so
+ * editing the second paragraph of a quote rewrote the first one and typing in a nested container did nothing
+ * at all. [itemId] narrows further, to one row of a list or checklist.
+ */
 data class SceneTextEdit(
     val objectId: String,
+    val blockId: String,
     val itemId: String?,
     val before: String,
     val after: String,
@@ -90,7 +99,7 @@ data class SceneTextEdit(
 /** What a scene object's content reports back to the runtime. */
 class SceneContentCallbacks(
     val onEdit: (SceneTextEdit) -> Unit,
-    val onToggleTodo: (itemId: String) -> Unit,
+    val onToggleTodo: (blockId: String, itemId: String) -> Unit,
 )
 
 /**
@@ -122,6 +131,7 @@ fun SceneObjectContent(
     when (block) {
         is ParagraphBlock -> SceneEditableLine(
             objectId = objectId,
+            blockId = block.id,
             itemId = null,
             nodes = block.content,
             style = MaterialTheme.typography.bodyMedium,
@@ -133,6 +143,7 @@ fun SceneObjectContent(
 
         is HeadingBlock -> SceneEditableLine(
             objectId = objectId,
+            blockId = block.id,
             itemId = null,
             nodes = block.content,
             style = sceneHeadingStyle(block.level),
@@ -147,6 +158,7 @@ fun SceneObjectContent(
                 SceneListRow("•") {
                     SceneEditableLine(
                         objectId = objectId,
+                        blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
                         style = MaterialTheme.typography.bodyMedium,
@@ -163,6 +175,7 @@ fun SceneObjectContent(
                 SceneListRow("${block.start + index}.") {
                     SceneEditableLine(
                         objectId = objectId,
+                        blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
                         style = MaterialTheme.typography.bodyMedium,
@@ -182,10 +195,11 @@ fun SceneObjectContent(
                     Checkbox(
                         checked = item.checked,
                         enabled = editing,
-                        onCheckedChange = { callbacks.onToggleTodo(item.id) },
+                        onCheckedChange = { callbacks.onToggleTodo(block.id, item.id) },
                     )
                     SceneEditableLine(
                         objectId = objectId,
+                        blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
                         style = MaterialTheme.typography.bodyMedium,
@@ -231,21 +245,12 @@ fun SceneObjectContent(
             }
         }
 
-        // A code block holds a plain string, not inline nodes. One unstyled run is the honest description of
-        // that, and it keeps the editing path identical to every other line.
-        is CodeBlock -> SceneEditableLine(
-            objectId = objectId,
-            itemId = null,
-            nodes = listOf(InlineText(block.code)),
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-            placeholder = "Code",
-            editing = editing,
-            callbacks = callbacks,
-            modifier = modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(8.dp),
-        )
+        // Rendered honestly, and **read-only**. A code block stores a plain `code` string, not inline nodes,
+        // so `BlockEditorSession.editText` — which edits `editableInline()` — has no path to it and returns
+        // the block untouched. Presenting a live caret over content no keystroke can reach is worse than
+        // showing it as not-yet-editable: the user would type a line, see it vanish, and reasonably conclude
+        // the document had lost it. Editing arrives with the code-block work, not by faking it here.
+        is CodeBlock -> SceneReadOnlyCode(block, modifier)
 
         is DividerBlock -> Box(modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             HorizontalDivider()
@@ -303,6 +308,7 @@ fun SceneObjectContent(
 @Composable
 private fun SceneEditableLine(
     objectId: String,
+    blockId: String,
     itemId: String?,
     nodes: List<InlineNode>,
     style: TextStyle,
@@ -329,7 +335,10 @@ private fun SceneEditableLine(
         return
     }
 
-    var value by remember(objectId, itemId) { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+    // Keyed on the *addressed field* rather than the object, so the caret and the local text belong to the
+    // exact block being edited. Keying on objectId alone would share one field's state across every child of
+    // a quote or container.
+    var value by remember(blockId, itemId) { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
     // The document is the source of truth. When the text changes underneath the field — an undo, a remote
     // merge — the field is re-seeded and the caret clamped, so a history rewrite is visible immediately
     // instead of being masked by stale local state.
@@ -337,9 +346,9 @@ private fun SceneEditableLine(
         value = value.copy(text = text, selection = TextRange(value.selection.start.coerceIn(0, text.length)))
     }
 
-    val focus = remember(objectId, itemId) { FocusRequester() }
+    val focus = remember(blockId, itemId) { FocusRequester() }
     // Editing was entered deliberately, so the keyboard should be there without a second tap.
-    LaunchedEffect(objectId, itemId) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(blockId, itemId) { runCatching { focus.requestFocus() } }
 
     val transformation = remember(styled) { SceneInlineTransformation(styled) }
 
@@ -357,13 +366,43 @@ private fun SceneEditableLine(
                 val before = value.text
                 value = next
                 if (next.text != before) {
-                    callbacks.onEdit(SceneTextEdit(objectId, itemId, before, next.text))
+                    callbacks.onEdit(SceneTextEdit(objectId, blockId, itemId, before, next.text))
                 }
             },
             visualTransformation = transformation,
             textStyle = style.copy(color = LocalContentColor.current),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
+        )
+    }
+}
+
+/**
+ * A code block on a page: its real code, in its slab, monospaced — and not editable.
+ *
+ * The "not editable" is the point rather than an omission. `code` is a plain string outside the inline-node
+ * vocabulary every other editable line uses, so there is no correct mutation path to wire yet, and a text
+ * field here would accept keystrokes the controller would silently discard.
+ */
+@Composable
+private fun SceneReadOnlyCode(block: CodeBlock, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(8.dp),
+    ) {
+        if (block.language.isNotBlank()) {
+            Text(
+                block.language,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            text = block.code.ifBlank { "Empty code block" },
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
         )
     }
 }

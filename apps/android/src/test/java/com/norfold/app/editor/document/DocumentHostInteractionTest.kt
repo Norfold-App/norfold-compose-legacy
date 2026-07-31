@@ -814,11 +814,11 @@ class DocumentHostInteractionTest {
         val rt = editing(page("p1", obj("a", text = "")))
         val depth = rt.controller.undoDepth()
 
-        rt.editObjectText("a", null, "", "h")
-        rt.editObjectText("a", null, "h", "he")
-        rt.editObjectText("a", null, "he", "hel")
-        rt.editObjectText("a", null, "hel", "hell")
-        rt.editObjectText("a", null, "hell", "hello")
+        rt.editObjectText("a", "c-a", null, "", "h")
+        rt.editObjectText("a", "c-a", null, "h", "he")
+        rt.editObjectText("a", "c-a", null, "he", "hel")
+        rt.editObjectText("a", "c-a", null, "hel", "hell")
+        rt.editObjectText("a", "c-a", null, "hell", "hello")
 
         assertEquals("hello", rt.controller.findObject("a")!!.second.content.plainText())
         assertEquals("a writing run is one undo step", depth + 1, rt.controller.undoDepth())
@@ -849,7 +849,7 @@ class DocumentHostInteractionTest {
     @Test
     fun aContentLockedObjectRefusesTextEditsEvenIfAskedDirectly() {
         val rt = editing(page("p1", obj("a", lock = SceneLock.Content, text = "original")))
-        assertFalse(rt.editObjectText("a", null, "original", "changed"))
+        assertFalse(rt.editObjectText("a", "c-a", null, "original", "changed"))
         assertEquals("original", rt.controller.findObject("a")!!.second.content.plainText())
     }
 

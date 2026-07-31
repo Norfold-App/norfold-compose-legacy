@@ -74,6 +74,64 @@ object DocumentKeyboardMap {
     /** The chord that reaches [commandId], for display in menus and the accessibility tree. */
     fun shortcutFor(commandId: String): FlowShortcut? =
         bindings.entries.firstOrNull { it.value == commandId }?.key
+
+    /**
+     * What [shortcut] should actually do, given whether a text field currently owns input.
+     *
+     * **Why arbitration is a rule and not a list of exceptions.** The host installs a *preview* key handler on
+     * the editor root, so the canvas sees every key before the focused `BasicTextField` does. With a flat
+     * binding table that means Backspace deletes the object you are typing in, and an arrow key nudges the
+     * frame instead of moving the caret. Filtering individual characters would leave the same bug waiting for
+     * whichever key was forgotten, so the decision is made from one property of the chord instead:
+     *
+     *  - **a bare chord belongs to the text field.** No Ctrl and no Alt means it is text input, caret
+     *    movement, or deletion — Backspace, Delete, the four arrows, and Shift+arrow for selection;
+     *  - **a modified chord belongs to the canvas**, because Ctrl/Alt chords are not text input;
+     *  - **except Ctrl+A**, which every text field on every platform reads as "select all text". Handing it to
+     *    the canvas would make select-all-objects fire while the user meant their paragraph;
+     *  - **Escape always resolves the hierarchy**, which is precisely how the caret is meant to leave.
+     *
+     * Pure and total, so every case above is a unit test rather than a device observation.
+     */
+    fun resolve(shortcut: FlowShortcut, textEntryActive: Boolean): DocumentKeyAction {
+        // Escape is the documented way out of content editing, so it is never withheld from the hierarchy.
+        if (shortcut == ESCAPE) return DocumentKeyAction.Back
+
+        if (textEntryActive && !shortcut.ctrl && !shortcut.alt) return DocumentKeyAction.Unhandled
+        // Undo/redo are routed even while typing: they are the history, and a text field's own local undo
+        // would diverge from the document's.
+        if (shortcut == UNDO) return DocumentKeyAction.Undo
+        if (shortcut == REDO || shortcut == REDO_ALT) return DocumentKeyAction.Redo
+        if (textEntryActive && shortcut == SELECT_ALL) return DocumentKeyAction.Unhandled
+        if (shortcut == SELECT_MODE) return DocumentKeyAction.EnterSelectionMode
+        if (shortcut == SELECT_ALL) return DocumentKeyAction.SelectAllObjects
+
+        return bindings[shortcut]?.let { DocumentKeyAction.Command(it) } ?: DocumentKeyAction.Unhandled
+    }
+}
+
+/**
+ * What one chord resolves to once focus ownership has been accounted for.
+ *
+ * A closed set rather than a nullable command id, because four of these are *not* registry commands — they
+ * are History and hierarchy operations — and collapsing them into "some id" is what would let the routing
+ * layer be tested only through the runtime that consumes it.
+ */
+sealed interface DocumentKeyAction {
+    /** Not ours: the event must fall through to the focused field and the IME untouched. */
+    data object Unhandled : DocumentKeyAction
+
+    data object Undo : DocumentKeyAction
+    data object Redo : DocumentKeyAction
+
+    /** One level of the back hierarchy — which, while editing text, is "leave the caret". */
+    data object Back : DocumentKeyAction
+
+    data object EnterSelectionMode : DocumentKeyAction
+    data object SelectAllObjects : DocumentKeyAction
+
+    /** A registered command id, invoked through the one path every other surface uses. */
+    data class Command(val id: String) : DocumentKeyAction
 }
 
 /**
@@ -141,6 +199,12 @@ sealed interface DocumentBackResult {
 
     /** A gesture was in flight and was cancelled, restoring the pre-gesture geometry exactly. */
     data object CancelledManipulation : DocumentBackResult
+
+    /**
+     * Text/content editing ended. The object stays selected and the caret leaves — the inner level unwound
+     * without disturbing the outer one, so a second Back can still clear the selection.
+     */
+    data object ExitedContentEdit : DocumentBackResult
 
     /** Nothing was open, but something was selected; the selection was cleared. */
     data object ClearedSelection : DocumentBackResult

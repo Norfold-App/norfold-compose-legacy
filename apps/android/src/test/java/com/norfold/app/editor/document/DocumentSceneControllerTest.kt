@@ -403,12 +403,18 @@ class DocumentSceneControllerTest {
 
         assertFalse(
             "a locked page refuses geometry changes",
-            ctl.editPageGeometry(listOf("p1"), "Landscape") { it.withOrientation(PageOrientation.Landscape) },
+            ctl.editPageGeometry(listOf("p1"), "Landscape") {
+                it.withOrientation(PageOrientation.Landscape)
+            }.didChange,
         )
         assertEquals(PageOrientation.Portrait, ctl.page("p1")!!.geometry.orientation)
 
         ctl.setPageStructureLocked(listOf("p1"), locked = false)
-        assertTrue(ctl.editPageGeometry(listOf("p1"), "Landscape") { it.withOrientation(PageOrientation.Landscape) })
+        assertTrue(
+            ctl.editPageGeometry(listOf("p1"), "Landscape") {
+                it.withOrientation(PageOrientation.Landscape)
+            }.didChange,
+        )
         assertEquals(PageOrientation.Landscape, ctl.page("p1")!!.geometry.orientation)
     }
 
