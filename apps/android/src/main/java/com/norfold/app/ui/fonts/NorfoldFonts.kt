@@ -2,18 +2,9 @@ package com.norfold.app.ui.fonts
 
 import android.content.Context
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.googlefonts.Font
-import androidx.compose.ui.text.googlefonts.GoogleFont
-import com.norfold.app.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.io.ByteArrayOutputStream
-import java.util.concurrent.ConcurrentHashMap
 
 data class FontCatalogEntry(val family: String, val category: String = "")
 
@@ -26,17 +17,20 @@ data class FontCatalogSnapshot(
 )
 
 /**
- * Device-local font discovery and preference store. Font binaries are delivered and cached by the
- * verified Google Play services provider; only catalog metadata and user preference counters live
- * in Norfold. No authored document text is sent to the catalog endpoint or stored in these stats.
+ * Device-local font discovery and preference store.
+ *
+ * Phase 3 deliberately exposes only fonts whose bytes are already available in Norfold. The earlier
+ * implementation silently contacted a metadata endpoint and delegated rendering to the Play-services font
+ * provider, which could make an "installed" choice fail offline and had none of the required download,
+ * checksum, cancellation, licensing or atomic-install states. A future extended catalogue must arrive as a
+ * separate explicit downloader; this compatibility store must remain offline.
  */
 class FontCatalogStore(context: Context) {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences("norfold_font_catalog", Context.MODE_PRIVATE)
-    private val cacheFile get() = appContext.filesDir.resolve("google-fonts-catalog.json")
 
     suspend fun snapshot(refresh: Boolean = false): FontCatalogSnapshot = withContext(Dispatchers.IO) {
-        val entries = loadEntries(refresh)
+        val entries = loadEntries()
         val hidden = preferences.getStringSet(KEY_HIDDEN, emptySet()).orEmpty().toSet()
         val visibleNames = entries.asSequence().map(FontCatalogEntry::family).filterNot(hidden::contains).toSet()
         val recent = preferences.getString(KEY_RECENT, "").orEmpty().lineSequence()
@@ -86,63 +80,19 @@ class FontCatalogStore(context: Context) {
         buildMap { json.keys().forEach { family -> put(family, json.optLong(family, 0L)) } }
     }.getOrDefault(emptyMap())
 
-    private fun loadEntries(refresh: Boolean): List<FontCatalogEntry> {
-        if (!refresh && cacheFile.isFile) parseCatalog(cacheFile.readText())?.let { return it }
-        val downloaded = runCatching {
-            val connection = (URL(CATALOG_URL).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 12_000
-                readTimeout = 20_000
-                requestMethod = "GET"
-                setRequestProperty("Accept", "application/json")
-            }
-            try {
-                require(connection.responseCode in 200..299) { "Font catalog HTTP ${connection.responseCode}" }
-                connection.inputStream.use { input ->
-                    val output = ByteArrayOutputStream()
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var total = 0
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        total += read
-                        require(total <= MAX_CATALOG_BYTES) { "Font catalog response is too large" }
-                        output.write(buffer, 0, read)
-                    }
-                    output.toString(Charsets.UTF_8.name())
-                }
-            } finally {
-                connection.disconnect()
-            }
-        }.getOrNull()
-        if (downloaded != null) {
-            parseCatalog(downloaded)?.let { parsed ->
-                runCatching { cacheFile.writeText(downloaded) }
-                return parsed
-            }
-        }
-        if (cacheFile.isFile) parseCatalog(cacheFile.readText())?.let { return it }
-        return FALLBACK_FONTS.map { FontCatalogEntry(it) }
-    }
-
-    private fun parseCatalog(source: String): List<FontCatalogEntry>? = runCatching {
-        val items = JSONObject(source).getJSONArray("familyMetadataList")
-        buildList(items.length()) {
-            repeat(items.length()) { index ->
-                val item = items.getJSONObject(index)
-                val family = item.optString("family").trim()
-                if (family.isNotEmpty()) add(FontCatalogEntry(family, item.optString("category")))
-            }
-        }.distinctBy { it.family }.sortedBy { it.family.lowercase() }
-    }.getOrNull()?.takeIf(List<FontCatalogEntry>::isNotEmpty)
+    private fun loadEntries(): List<FontCatalogEntry> =
+        OfflineFontLibrary.registry.all
+            .map { FontCatalogEntry(it.name, it.category.label) }
+            .distinctBy { it.family.lowercase() }
+            .sortedBy { it.family.lowercase() }
+            .ifEmpty { FALLBACK_FONTS.map(::FontCatalogEntry) }
 
     private companion object {
-        const val CATALOG_URL = "https://fonts.google.com/metadata/fonts"
         const val KEY_HIDDEN = "hidden"
         const val KEY_RECENT = "recent"
         const val KEY_USAGE = "usage"
         const val KEY_FIRST_EDIT = "first_edit_at"
         const val WEEK_MILLIS = 7L * 24L * 60L * 60L * 1000L
-        const val MAX_CATALOG_BYTES = 4 * 1024 * 1024
         val FALLBACK_FONTS = listOf(
             "Roboto", "Open Sans", "Noto Sans", "Noto Serif", "Lato", "Montserrat", "Inter",
             "Source Sans 3", "Source Serif 4", "Merriweather", "Nunito", "Poppins", "Playfair Display",
@@ -151,28 +101,22 @@ class FontCatalogStore(context: Context) {
     }
 }
 
+/**
+ * Resolves a family *name* to a renderable [FontFamily].
+ *
+ * Name-keyed because that is what pre-Phase-3 documents stored; new writes carry a
+ * [com.norfold.app.domain.style.FontIdentity] and should go through [OfflineFontLibrary] directly.
+ *
+ * The resolver is offline by construction. Unknown legacy names use a system generic and the stored name
+ * remains untouched, so the editor can label the substitution instead of triggering an invisible download.
+ */
 object NorfoldFontFamilies {
-    private val provider = GoogleFont.Provider(
-        providerAuthority = "com.google.android.gms.fonts",
-        providerPackage = "com.google.android.gms",
-        certificates = R.array.com_google_android_gms_fonts_certs,
-    )
-    private val cache = ConcurrentHashMap<String, FontFamily>()
-
     fun resolve(name: String?): FontFamily = when (name?.trim()?.lowercase()) {
         null, "", "sans", "sans serif", "sans-serif" -> FontFamily.SansSerif
         "default", "system" -> FontFamily.Default
         "serif" -> FontFamily.Serif
         "mono", "monospace" -> FontFamily.Monospace
         "cursive" -> FontFamily.Cursive
-        else -> cache.getOrPut(name.trim()) {
-            val google = GoogleFont(name.trim())
-            FontFamily(
-                Font(googleFont = google, fontProvider = provider, weight = FontWeight.Normal),
-                Font(googleFont = google, fontProvider = provider, weight = FontWeight.Bold),
-                Font(googleFont = google, fontProvider = provider, weight = FontWeight.Normal, style = FontStyle.Italic),
-                Font(googleFont = google, fontProvider = provider, weight = FontWeight.Bold, style = FontStyle.Italic),
-            )
-        }
+        else -> OfflineFontLibrary.fontForLegacyName(name) ?: FontFamily.SansSerif
     }
 }

@@ -6,6 +6,8 @@ import com.norfold.app.domain.ResizeCorner
 import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneObject
 import com.norfold.app.domain.SceneObjectKind
+import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.domain.supportsStyle
 import com.norfold.app.domain.pageNumberLabels
 import com.norfold.app.domain.pages
 import com.norfold.app.editor.command.CommandContext
@@ -28,6 +30,13 @@ import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.surface.SurfaceCoordinator
 import com.norfold.app.editor.surface.ToolSurface
 import com.norfold.app.editor.selection.SelectionEngine
+import com.norfold.app.editor.style.EditorStyleRuntime
+import com.norfold.app.editor.style.EditorStyleSelection
+import com.norfold.app.editor.style.EditorStyleUiState
+import com.norfold.app.editor.style.StyleController
+import com.norfold.app.editor.style.EditorStyleCommands
+import com.norfold.app.domain.style.FontRegistry
+import com.norfold.app.domain.style.ColorRole
 
 /** One command as a Document surface should render it: the same status behind every route (§4.1, §4.2). */
 data class DocumentCommandItem(
@@ -106,6 +115,7 @@ data class DocumentHostUiState(
     val canRedo: Boolean,
     val notice: String?,
     val lastFailure: String?,
+    val editorStyle: EditorStyleUiState,
 ) {
     /** The primary selected object, which is the only one that exposes individual manipulation handles. */
     val primaryObject: SceneObject?
@@ -130,6 +140,7 @@ class DocumentHostRuntime(
     val controller: DocumentSceneController,
     initialFormFactor: FormFactor,
     val instrumentation: DocumentHostInstrumentation = DocumentHostInstrumentation.None,
+    fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
 ) {
     val selection = SelectionEngine()
     val scope = DocumentCommandScope(controller, selection)
@@ -138,6 +149,61 @@ class DocumentHostRuntime(
     val presentation = AdaptivePresentationRuntime(initialFormFactor)
     val memory = InteractionMemory()
     val view = DocumentViewState()
+    val styleController = StyleController(
+        mutate = controller::mutateDocument,
+        documentProvider = controller::document,
+    )
+    val editorStyle = EditorStyleRuntime(
+        host = "document",
+        controller = styleController,
+        registry = fontRegistry,
+        selection = {
+            val objects = scope.selectedObjectIds().mapNotNull(controller::findObject).map { it.second }
+            val pageIds = scope.selectedPageIds.ifEmpty { listOfNotNull(scope.activePage()?.id) }
+            EditorStyleSelection(
+                textBlockIds = objects.map { it.content }.filter { it.supportsStyle() && it !is ShapeBlock }.map { it.id },
+                shapeBlockIds = objects.mapNotNull { (it.content as? ShapeBlock)?.id },
+                pageIds = pageIds,
+                selectedText = objects.joinToString("\n") { it.content.plainText() }.take(256),
+            )
+        },
+        onChanged = { revision++ },
+    )
+
+    init {
+        EditorStyleCommands.register(
+            registry = commands,
+            textColor = { openStyleColor(ColorRole.TEXT) },
+            highlight = { openStyleColor(ColorRole.HIGHLIGHT) },
+            fill = { openStyleColor(ColorRole.FILL) },
+            stroke = { openStyleColor(ColorRole.STROKE) },
+            pageBackground = { openStyleColor(ColorRole.PAGE_BACKGROUND) },
+            fontBrowser = { openStyleFont() },
+            namedStyles = { openNamedStyles() },
+            clearFormatting = {
+                val count = editorStyle.clearFormatting()
+                if (count > 0) CommandResult.Success(count) else CommandResult.NoOp
+            },
+        )
+    }
+
+    private fun openStyleColor(role: ColorRole): CommandResult {
+        if (!editorStyle.openColor(role)) return CommandResult.Failure("Select compatible content first")
+        openSurface(DocumentSurfaces.COLOR_STUDIO, SurfaceClass.CONTINUOUS_TOOL)
+        return CommandResult.Success(scope.selectedObjectIds().size.coerceAtLeast(1))
+    }
+
+    private fun openStyleFont(): CommandResult {
+        if (!editorStyle.openFont()) return CommandResult.Failure("Select text first")
+        openSurface(DocumentSurfaces.FONT_BROWSER, SurfaceClass.PICKER_BROWSER)
+        return CommandResult.Success(scope.selectedObjectIds().size.coerceAtLeast(1))
+    }
+
+    private fun openNamedStyles(): CommandResult {
+        if (scope.selectedObjectIds().isEmpty()) return CommandResult.Failure("Select content first")
+        openSurface(DocumentSurfaces.NAMED_STYLES, SurfaceClass.PICKER_BROWSER)
+        return CommandResult.Success(scope.selectedObjectIds().size)
+    }
 
     /**
      * Bumped for anything that changes what should be drawn.
@@ -591,6 +657,7 @@ class DocumentHostRuntime(
         val result = surfaces.dispatch(trigger)
         if (result is DispatchResult.Dismissed) {
             presentation.close(result.closed.id)
+            if (result.closed.id == DocumentSurfaces.COLOR_STUDIO) editorStyle.closeColor(cancelAdjustment = true)
             revision++
         }
         return result
@@ -615,6 +682,7 @@ class DocumentHostRuntime(
         return when (outcome) {
             is BackOutcome.ClosedSurface -> {
                 presentation.close(outcome.closed.id)
+                if (outcome.closed.id == DocumentSurfaces.COLOR_STUDIO) editorStyle.closeColor(cancelAdjustment = true)
                 DocumentBackResult.ClosedSurface(outcome.closed.id, outcome.nowActive?.id)
             }
             is BackOutcome.Consumed -> DocumentBackResult.Consumed(outcome.surface.id)
@@ -650,6 +718,8 @@ class DocumentHostRuntime(
             // Page Control is a browsable catalogue of dozens of controls; on a phone it needs a sheet, not
             // a popover it would overflow.
             DocumentSurfaces.PAGE_CONTROL -> com.norfold.app.editor.presentation.CompactPreference.SHEET
+            DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES ->
+                com.norfold.app.editor.presentation.CompactPreference.SHEET
             else -> com.norfold.app.editor.presentation.CompactPreference.POPOVER
         }
 
@@ -1088,6 +1158,7 @@ class DocumentHostRuntime(
             canRedo = canRedo(),
             notice = notice,
             lastFailure = lastFailure,
+            editorStyle = editorStyle.uiState(),
         )
     }
 

@@ -47,6 +47,12 @@ private fun List<DocumentBlock>.pathOf(id: String, prefix: List<String>): BlockP
     for (block in this) {
         val here = prefix + block.id
         if (block.id == id) return BlockPath(here)
+        if (block is DocumentPageBlock) {
+            for (sceneObject in block.objects) {
+                val nested = listOf(sceneObject.content).pathOf(id, here)
+                if (nested != null) return nested
+            }
+        }
         val nested = block.containerChildren()?.pathOf(id, here)
         if (nested != null) return nested
     }
@@ -61,6 +67,7 @@ fun BlockDocument.allIds(): List<String> = buildList { blocks.forEach { it.colle
 
 private fun DocumentBlock.collectIds(sink: MutableList<String>) {
     sink += id
+    if (this is DocumentPageBlock) objects.forEach { it.content.collectIds(sink) }
     containerChildren()?.forEach { it.collectIds(sink) }
 }
 
@@ -69,6 +76,7 @@ fun BlockDocument.walk(visit: (DocumentBlock) -> Unit) = blocks.forEach { it.wal
 
 private fun DocumentBlock.walkTree(visit: (DocumentBlock) -> Unit) {
     visit(this)
+    if (this is DocumentPageBlock) objects.forEach { it.content.walkTree(visit) }
     containerChildren()?.forEach { it.walkTree(visit) }
 }
 
@@ -78,6 +86,11 @@ fun BlockDocument.findById(id: String): DocumentBlock? = blocks.findById(id)
 fun List<DocumentBlock>.findById(id: String): DocumentBlock? {
     for (block in this) {
         if (block.id == id) return block
+        if (block is DocumentPageBlock) {
+            block.objects.forEach { sceneObject ->
+                listOf(sceneObject.content).findById(id)?.let { return it }
+            }
+        }
         val nested = block.containerChildren()?.findById(id)
         if (nested != null) return nested
     }
@@ -89,6 +102,12 @@ fun List<DocumentBlock>.updateBlock(id: String, transform: (DocumentBlock) -> Do
     map { block ->
         when {
             block.id == id -> transform(block)
+            block is DocumentPageBlock -> block.copy(
+                objects = block.objects.map { sceneObject ->
+                    val updated = listOf(sceneObject.content).updateBlock(id, transform).single()
+                    if (updated == sceneObject.content) sceneObject else sceneObject.copy(content = updated)
+                },
+            ).normalized()
             else -> block.containerChildren()
                 ?.let { block.withChildren(it.updateBlock(id, transform)) }
                 ?: block

@@ -103,6 +103,7 @@ private fun FlowHostRoute(
             val runtime = FlowHostRuntime(
                 controller = FlowEditController(EditTarget(owner.documentId), active.document),
                 initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
+                fontRegistry = com.norfold.app.ui.fonts.OfflineFontLibrary.registry,
             )
             FlowDocumentSession(
                 runtime = runtime,

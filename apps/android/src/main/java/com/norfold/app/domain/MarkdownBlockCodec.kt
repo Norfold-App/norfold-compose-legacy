@@ -352,6 +352,8 @@ object MarkdownBlockCodec {
             .joinToString("\n\n") { blockMarkdown(it.content) }
         // Document settings carry no content, so markdown has nothing to say about them.
         is DocumentSettingsBlock -> ""
+        // Styles are not prose: exporting them as markdown would emit configuration into the document body.
+        is StylesheetBlock -> ""
     }
 
     /**

@@ -271,6 +271,8 @@ data class PageGeometry(
     val margins: PageMargins = PageMargins(),
     val columns: PageColumns = PageColumns(),
     val background: Long? = null,
+    /** Rich page paint. Null preserves the legacy flat [background] value exactly. */
+    val backgroundPaint: com.norfold.app.domain.style.ColorPaint? = null,
     val border: PageBorder = PageBorder(),
     val grid: PageGrid = PageGrid(),
     val bleed: PageBleed = PageBleed(),
@@ -349,6 +351,12 @@ data class PageGeometry(
         }
     }
 }
+
+/** Page paint used by renderers; old documents resolve their legacy ARGB word without migration. */
+fun PageGeometry.effectiveBackgroundPaint(): com.norfold.app.domain.style.ColorPaint =
+    backgroundPaint ?: com.norfold.app.domain.style.ColorPaint.Flat(
+        com.norfold.app.domain.style.ColorValue.fromArgb(background ?: 0xFFFFFFFF),
+    )
 
 /** What a scene object may have done to it. Drives capability mapping and the lock rules. */
 @Serializable

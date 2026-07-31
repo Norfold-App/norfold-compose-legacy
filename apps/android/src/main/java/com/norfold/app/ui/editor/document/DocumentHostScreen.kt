@@ -90,6 +90,16 @@ import com.norfold.app.editor.document.SnapGuideEngine
 import com.norfold.app.editor.document.WorkingIntent
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.surface.DismissTrigger
+import com.norfold.app.editor.style.EditorStyleCommandIds
+import com.norfold.app.ui.editor.style.EditorStyleSurface
+import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
+import com.norfold.app.ui.editor.style.rememberFontImportLauncher
+import com.norfold.app.ui.editor.style.rememberImportedFontRemover
+import com.norfold.app.ui.fonts.OfflineFontLibrary
+import com.norfold.app.domain.stylesheet
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.norfold.app.domain.effectiveBackgroundPaint
+import com.norfold.app.ui.editor.style.backgroundPaint
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
@@ -237,6 +247,17 @@ fun DocumentHostScreen(
                 }
             }
         }
+        if (state.editorStyle.textTargetCount > 0 || state.editorStyle.shapeTargetCount > 0 ||
+            state.editorStyle.pageTargetCount > 0
+        ) {
+            HorizontalDivider()
+            DocumentStyleDock(state) { id ->
+                when (val result = presenter.act { invoke(id, CommandSurface.DOCK) }) {
+                    is com.norfold.app.editor.command.CommandResult.Failure -> notice = result.reason
+                    else -> Unit
+                }
+            }
+        }
     }
 
     when (state.activeSurfaceId) {
@@ -255,6 +276,8 @@ fun DocumentHostScreen(
             onClear = { presenter.act { clearPageSelection() } },
             onSelect = { id -> presenter.act { selectPage(id) } },
         )
+        DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES ->
+            DocumentEditorStyleSurface(state.activeSurfaceId, state, presenter) { notice = it }
     }
 }
 
@@ -387,7 +410,12 @@ private fun PageSheet(
                 )
             }
             .size(page.geometry.width.ptToDp(scale), page.geometry.height.ptToDp(scale))
-            .background(page.geometry.background?.let { Color(it.toInt()) } ?: Color.White)
+            .backgroundPaint(
+                state.editorStyle.previewPaint.takeIf {
+                    state.editorStyle.colorStudio.target?.role == com.norfold.app.domain.style.ColorRole.PAGE_BACKGROUND &&
+                        page.id in state.editorStyle.colorStudio.target?.targetIds.orEmpty()
+                } ?: page.geometry.effectiveBackgroundPaint(),
+            )
             .drawBehind {
                 drawPageStructure(page, scale, editing, isActive, isSelected)
                 // Guides belong to the page being manipulated, not to every page on screen: the positions are
@@ -675,6 +703,10 @@ private fun SceneObjectBox(
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(4.dp),
+            stylesheet = state.document.stylesheet(),
+            previewRole = state.editorStyle.colorStudio.target?.role,
+            previewPaint = state.editorStyle.previewPaint,
+            previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
         )
     }
 
@@ -1420,6 +1452,119 @@ private fun DocumentDock(items: List<DocumentCommandItem>, onInvoke: (DocumentCo
                 enabled = item.enabled,
                 label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
             )
+        }
+    }
+}
+
+@Composable
+private fun DocumentStyleDock(state: DocumentHostUiState, invoke: (String) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (state.editorStyle.textTargetCount > 0) {
+            AssistChip({ invoke(EditorStyleCommandIds.NAMED_STYLES) }, label = { Text("Style") })
+            AssistChip({ invoke(EditorStyleCommandIds.FONT_BROWSER) }, label = { Text("Font") })
+            AssistChip({ invoke(EditorStyleCommandIds.TEXT_COLOR) }, label = { Text("Color") })
+            AssistChip({ invoke(EditorStyleCommandIds.HIGHLIGHT) }, label = { Text("Highlight") })
+        }
+        if (state.editorStyle.shapeTargetCount > 0) {
+            AssistChip({ invoke(EditorStyleCommandIds.FILL) }, label = { Text("Fill") })
+            AssistChip({ invoke(EditorStyleCommandIds.STROKE) }, label = { Text("Stroke") })
+            AssistChip({ invoke(EditorStyleCommandIds.NAMED_STYLES) }, label = { Text("Object style") })
+        }
+        if (state.editorStyle.textTargetCount == 0 && state.editorStyle.shapeTargetCount == 0 &&
+            state.editorStyle.pageTargetCount > 0
+        ) {
+            AssistChip({ invoke(EditorStyleCommandIds.PAGE_BACKGROUND) }, label = { Text("Page color") })
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DocumentEditorStyleSurface(
+    surfaceId: String,
+    state: DocumentHostUiState,
+    presenter: DocumentHostPresenter,
+    onNotice: (String) -> Unit,
+) {
+    val styleRuntime = presenter.runtime.editorStyle
+    val rows = styleRuntime.fontBrowser.results(state.editorStyle.documentFontIds)
+        .map(styleRuntime.fontBrowser::rowState)
+    val sections = styleRuntime.fontBrowser.sections(state.editorStyle.documentFontIds)
+    val launchImport = rememberFontImportLauncher { result ->
+        presenter.act { editorStyle.updateFontRegistry(OfflineFontLibrary.registry) }
+        onNotice(
+            when (result) {
+                is com.norfold.app.data.FontImportResult.Imported -> "Imported ${result.entry.family}."
+                is com.norfold.app.data.FontImportResult.AlreadyImported -> "${result.entry.family} is already imported."
+                is com.norfold.app.data.FontImportResult.Rejected -> result.reason
+            },
+        )
+    }
+    val removeImport = rememberImportedFontRemover { identity, removed ->
+        presenter.act { editorStyle.updateFontRegistry(OfflineFontLibrary.registry) }
+        onNotice(if (removed) "Removed ${identity.displayName}. Existing text will use a labeled fallback." else "That font could not be removed.")
+    }
+    val actions = EditorStyleSurfaceActions(
+        dismiss = { commit ->
+            presenter.act {
+                if (commit) editorStyle.colorStudio.commit()
+                closeSurface(surfaceId, DismissTrigger.CANCEL)
+            }
+        },
+        setColorView = { presenter.act { editorStyle.colorStudio.setView(it) } },
+        draftColor = { field, value -> presenter.act { editorStyle.colorStudio.draft(field, value) } },
+        commitColorDraft = { presenter.act { editorStyle.colorStudio.commitDraft() } },
+        chooseColor = { presenter.act { editorStyle.colorStudio.previewColor(it) } },
+        toggleGradient = { presenter.act { editorStyle.colorStudio.setGradientEnabled(it) } },
+        addGradientStop = { presenter.act { editorStyle.colorStudio.addStopAt(0.5f) } },
+        selectGradientStop = { presenter.act { editorStyle.colorStudio.selectStop(it) } },
+        removeGradientStop = { presenter.act { editorStyle.colorStudio.removeActiveStop() } },
+        setGradientKind = { presenter.act { editorStyle.colorStudio.setGradientKind(it) } },
+        moveGradientStop = { presenter.act { editorStyle.colorStudio.moveActiveStop(it) } },
+        setGradientStopOpacity = { presenter.act { editorStyle.colorStudio.previewAlpha(it) } },
+        setGradientAngle = { presenter.act { editorStyle.colorStudio.setGradientAngle(it) } },
+        reverseGradient = { presenter.act { editorStyle.colorStudio.reverseGradient() } },
+        reorderGradientStop = { presenter.act { editorStyle.colorStudio.reorderActiveStop(it) } },
+        setFontQuery = { presenter.act { editorStyle.fontBrowser.setQuery(it) } },
+        setFontTab = { presenter.act { editorStyle.fontBrowser.setTab(it) } },
+        setFontCategory = { presenter.act { editorStyle.fontBrowser.setCategory(it) } },
+        setFontRole = { presenter.act { editorStyle.fontBrowser.setRole(it) } },
+        setFontScript = { presenter.act { editorStyle.fontBrowser.setScript(it) } },
+        setVariableOnly = { presenter.act { editorStyle.fontBrowser.setVariableOnly(it) } },
+        selectFont = { identity -> presenter.act { editorStyle.applyFont(identity) } },
+        toggleFavorite = { presenter.act { editorStyle.fontBrowser.toggleFavorite(it) } },
+        importFont = launchImport,
+        removeImportedFont = removeImport,
+        applyStyle = { presenter.act { editorStyle.applyNamedStyle(it) } },
+        setStyleNameDraft = { presenter.act { editorStyle.setStyleNameDraft(it) } },
+        createStyle = { presenter.act { editorStyle.createStyleFromDraft() } },
+        updateStyle = { presenter.act { editorStyle.updateStyleFromSelection(it) } },
+        detachStyle = { presenter.act { editorStyle.detachStyle() } },
+        clearFormatting = { presenter.act { editorStyle.clearFormatting() } },
+        setTokenNameDraft = { presenter.act { editorStyle.setTokenNameDraft(it) } },
+        createColorToken = { presenter.act { editorStyle.createColorTokenFromDraft() } },
+        updateColorToken = { presenter.act { editorStyle.updateColorToken(it) } },
+        applyColorToken = { presenter.act { editorStyle.applyColorToken(it) } },
+    )
+    val dismiss = { presenter.act { closeSurface(surfaceId, DismissTrigger.OUTSIDE_TAP) } }
+    when (state.presentationMode) {
+        com.norfold.app.editor.presentation.PresentationMode.PHONE_SHEET,
+        com.norfold.app.editor.presentation.PresentationMode.PHONE_POPOVER -> {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+            ModalBottomSheet(onDismissRequest = dismiss, sheetState = sheetState) {
+                EditorStyleSurface(surfaceId, state.editorStyle, rows, sections, actions)
+            }
+        }
+        com.norfold.app.editor.presentation.PresentationMode.TABLET_PANE,
+        com.norfold.app.editor.presentation.PresentationMode.EXPANDED_THREE_PANEL -> Box(Modifier.fillMaxSize()) {
+            Surface(
+                Modifier.align(Alignment.CenterEnd).width(420.dp).padding(16.dp),
+                shape = RoundedCornerShape(24.dp),
+                tonalElevation = 8.dp,
+            ) { EditorStyleSurface(surfaceId, state.editorStyle, rows, sections, actions) }
         }
     }
 }

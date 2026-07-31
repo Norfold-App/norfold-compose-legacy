@@ -9,11 +9,17 @@ import coil.decode.ImageDecoderDecoder
 import coil.decode.SvgDecoder
 import coil.decode.VideoFrameDecoder
 import com.norfold.app.data.DiagnosticsStore
+import com.norfold.app.ui.fonts.OfflineFontLibrary
+import com.norfold.app.data.FontImportStore
 
 class NorfoldApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         DiagnosticsStore.install(this)
+        // Reads the packaged font manifest (a single small asset, no font binaries) so the first paragraph
+        // rendered already has the bundled catalogue available and does not fall back to a generic.
+        OfflineFontLibrary.initialize(this)
+        FontImportStore(this).records().forEach(OfflineFontLibrary::install)
     }
 
     /**

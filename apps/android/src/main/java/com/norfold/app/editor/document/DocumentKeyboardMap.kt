@@ -177,6 +177,9 @@ object DocumentIds {
 /** Ids of DocumentHost's own tool surfaces, and the retarget domain they share. */
 object DocumentSurfaces {
     const val DOMAIN = "document"
+    const val COLOR_STUDIO = "editor.surface.colorStudio"
+    const val FONT_BROWSER = "editor.surface.fontBrowser"
+    const val NAMED_STYLES = "editor.surface.namedStyles"
 
     /** Page setup at a chosen scope. */
     const val PAGE_CONTROL = "document.surface.pageControl"

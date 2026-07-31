@@ -71,6 +71,7 @@ fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
     )
     // Settings are document-level, so a duplicate keeps the same values under a fresh identity.
     is DocumentSettingsBlock -> copy(id = freshId())
+    is StylesheetBlock -> copy(id = freshId())
 }
 
 private fun ListItem.withFreshIds(): ListItem =

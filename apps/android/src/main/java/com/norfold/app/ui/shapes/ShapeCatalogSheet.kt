@@ -127,7 +127,7 @@ fun ShapeCatalogSheet(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, bottom = 32.dp),
         ) {
             if (query.isBlank()) {
-                item("featured-label") { NorfoldPopupSectionLabel("Featured • Phosphor • MIT") }
+                item("featured-label") { NorfoldPopupSectionLabel("Available offline • Norfold Core • CC0") }
                 items(ShapeCatalog.featured, key = { "featured-${it.id}" }) { item ->
                     ShapeCatalogRow(item, item.id == selectedAssetId, downloadingId == item.id, tint) { select(item) }
                 }
@@ -172,18 +172,26 @@ private fun ShapeCatalogRow(
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(52.dp)) {
                 Box(Modifier.fillMaxSize().padding(9.dp), contentAlignment = Alignment.Center) {
-                    AsyncImage(
-                        model = item.svgUrl,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit,
-                        colorFilter = ColorFilter.tint(tint),
-                    )
+                    if (item.isOffline) {
+                        Icon(Icons.Outlined.Category, item.title, tint = tint, modifier = Modifier.fillMaxSize())
+                    } else {
+                        AsyncImage(
+                            model = item.svgUrl,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit,
+                            colorFilter = ColorFilter.tint(tint),
+                        )
+                    }
                 }
             }
             Column(Modifier.weight(1f)) {
                 Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${item.collection} • ${item.spdxLicense}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "${item.collection} • ${item.spdxLicense} • ${if (item.isOffline) "Offline" else "Download"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             when {
                 downloading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)

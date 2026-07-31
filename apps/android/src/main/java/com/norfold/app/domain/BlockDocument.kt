@@ -1,5 +1,7 @@
 package com.norfold.app.domain
 
+import com.norfold.app.domain.style.ColorPaint
+import com.norfold.app.domain.style.StyleAssignment
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -52,12 +54,23 @@ enum class BlockAlign {
 }
 
 @Serializable @SerialName("paragraph")
-data class ParagraphBlock(override val id: String = blockId(), val content: List<InlineNode> = emptyList(), val align: BlockAlign = BlockAlign.Start) : DocumentBlock {
+data class ParagraphBlock(
+    override val id: String = blockId(),
+    val content: List<InlineNode> = emptyList(),
+    val align: BlockAlign = BlockAlign.Start,
+    val style: StyleAssignment = StyleAssignment.NONE,
+) : DocumentBlock {
     override fun plainText() = content.plainText()
 }
 
 @Serializable @SerialName("heading")
-data class HeadingBlock(override val id: String = blockId(), val level: Int = 1, val content: List<InlineNode> = emptyList(), val align: BlockAlign = BlockAlign.Start) : DocumentBlock {
+data class HeadingBlock(
+    override val id: String = blockId(),
+    val level: Int = 1,
+    val content: List<InlineNode> = emptyList(),
+    val align: BlockAlign = BlockAlign.Start,
+    val style: StyleAssignment = StyleAssignment.NONE,
+) : DocumentBlock {
     override fun plainText() = content.plainText()
 }
 
@@ -70,12 +83,21 @@ data class ListItem(val id: String = blockId(), val content: List<InlineNode> = 
 }
 
 @Serializable @SerialName("bullet_list")
-data class BulletListBlock(override val id: String = blockId(), val items: List<ListItem> = emptyList()) : DocumentBlock {
+data class BulletListBlock(
+    override val id: String = blockId(),
+    val items: List<ListItem> = emptyList(),
+    val style: StyleAssignment = StyleAssignment.NONE,
+) : DocumentBlock {
     override fun plainText() = items.joinToString("\n") { it.plainText() }
 }
 
 @Serializable @SerialName("numbered_list")
-data class NumberedListBlock(override val id: String = blockId(), val start: Int = 1, val items: List<ListItem> = emptyList()) : DocumentBlock {
+data class NumberedListBlock(
+    override val id: String = blockId(),
+    val start: Int = 1,
+    val items: List<ListItem> = emptyList(),
+    val style: StyleAssignment = StyleAssignment.NONE,
+) : DocumentBlock {
     override fun plainText() = items.joinToString("\n") { it.plainText() }
 }
 
@@ -83,12 +105,20 @@ data class NumberedListBlock(override val id: String = blockId(), val start: Int
 data class TodoItem(val id: String = blockId(), val checked: Boolean = false, val content: List<InlineNode> = emptyList())
 
 @Serializable @SerialName("todo_list")
-data class TodoListBlock(override val id: String = blockId(), val items: List<TodoItem> = emptyList()) : DocumentBlock {
+data class TodoListBlock(
+    override val id: String = blockId(),
+    val items: List<TodoItem> = emptyList(),
+    val style: StyleAssignment = StyleAssignment.NONE,
+) : DocumentBlock {
     override fun plainText() = items.joinToString("\n") { it.content.plainText() }
 }
 
 @Serializable @SerialName("quote")
-data class QuoteBlock(override val id: String = blockId(), val children: List<DocumentBlock> = emptyList()) : DocumentBlock {
+data class QuoteBlock(
+    override val id: String = blockId(),
+    val children: List<DocumentBlock> = emptyList(),
+    val style: StyleAssignment = StyleAssignment.NONE,
+) : DocumentBlock {
     override fun plainText() = children.joinToString("\n") { it.plainText() }
 }
 
@@ -101,6 +131,7 @@ data class CalloutBlock(
     // every existing document expanded, so old payloads decode unchanged.
     val collapsed: Boolean = false,
     val children: List<DocumentBlock> = emptyList(),
+    val style: StyleAssignment = StyleAssignment.NONE,
 ) : DocumentBlock {
     override fun plainText() = listOf(title, children.joinToString("\n") { it.plainText() }).filter(String::isNotBlank).joinToString("\n")
 }
@@ -133,6 +164,7 @@ data class CodeBlock(
     val language: String = "",
     val code: String = "",
     val editorHeightDp: Float = 180f,
+    val style: StyleAssignment = StyleAssignment.NONE,
 ) : DocumentBlock {
     override fun plainText() = code
 }
@@ -238,6 +270,15 @@ data class ShapeBlock(
     val displayHeightDp: Float = 180f,
     val rotationDegrees: Float = 0f,
     val vectorAsset: VectorShapeAsset? = null,
+    /**
+     * Phase-3 paints. Null means "use the legacy [fillColor]/[strokeColor] word", which is what every
+     * pre-Phase-3 shape stores — so an existing document keeps its exact colours with no migration, and a
+     * shape only gains the richer field once someone actually edits it. [com.norfold.app.domain.effectiveFill]
+     * is the single accessor that resolves the pair, so no renderer has to know both forms.
+     */
+    val fillPaint: ColorPaint? = null,
+    val strokePaint: ColorPaint? = null,
+    val style: StyleAssignment = StyleAssignment.NONE,
 ) : DocumentBlock {
     override fun plainText() = text
 }

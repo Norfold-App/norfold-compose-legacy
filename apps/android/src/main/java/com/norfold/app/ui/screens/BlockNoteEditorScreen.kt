@@ -262,6 +262,7 @@ import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.DocumentPageBlock
 import com.norfold.app.domain.DocumentSettingsBlock
+import com.norfold.app.domain.StylesheetBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.Edge
 import com.norfold.app.domain.EmbedBlock
@@ -3784,6 +3785,8 @@ private fun RenderBlock(
         // Document-level settings carry no content and are not a thing to look at. Rendering nothing keeps
         // them saved verbatim without putting an empty card in the middle of the user's writing.
         is DocumentSettingsBlock -> Unit
+        // The stylesheet is configuration, not content: the legacy host renders nothing and saves it verbatim.
+        is StylesheetBlock -> Unit
         is ParagraphBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurface, textAlign = block.align.toTextAlign()))
         is HeadingBlock -> InlineTextBlock(block.content, block.id, mode, focus, onFocusConsumed, onEditText, onReplaceInline, onSplit, onMerge, onInsert, onSelectionChange, TextStyle(fontSize = when (block.level) { 1 -> 30.sp; 2 -> 24.sp; else -> 20.sp }, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, textAlign = block.align.toTextAlign()))
         is BulletListBlock -> if (mode == BlockSurfaceMode.View) ListBlock(block.items.map { it.content }, "•") else EditableList(
@@ -5444,6 +5447,10 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is ShapeBlock -> block.copy(id = java.util.UUID.randomUUID().toString())
     is DocumentPageBlock -> block.withFreshIds()
     is DocumentSettingsBlock -> block.withFreshIds()
+    // A document has exactly one stylesheet, at a fixed id. Duplicating it would create a second one
+    // that the History Engine would reject as a duplicate block id, so the copy is the same record —
+    // which is also the honest answer: there is nothing to duplicate.
+    is StylesheetBlock -> block
     is UnknownBlock -> BlockDocumentJson.reidentify(block)
 }
 
@@ -5468,6 +5475,7 @@ private fun DocumentBlock.withBlockId(id: String): DocumentBlock = when (this) {
     is ShapeBlock -> copy(id = id)
     is DocumentPageBlock -> copy(id = id)
     is DocumentSettingsBlock -> copy(id = id)
+    is StylesheetBlock -> copy(id = id)
     is UnknownBlock -> BlockDocumentJson.reidentify(this, id)
 }
 

@@ -84,6 +84,10 @@ import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.editor.flow.FlowTableCursor
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 import com.norfold.app.ui.screens.highlightColor
+import com.norfold.app.domain.style.Stylesheet
+import com.norfold.app.domain.style.ColorPaint
+import com.norfold.app.domain.style.ColorRole
+import com.norfold.app.ui.editor.style.resolvedTextStyle
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -142,6 +146,10 @@ data class FlowBlockContext(
      * a highlighted cell always means the command system genuinely has a table cursor (correction item 7).
      */
     val tableCursor: FlowTableCursor? = null,
+    val stylesheet: Stylesheet = Stylesheet.defaults(),
+    val previewRole: ColorRole? = null,
+    val previewPaint: ColorPaint? = null,
+    val previewTargetIds: Set<String> = emptySet(),
 )
 
 /**
@@ -164,7 +172,7 @@ fun FlowBlockContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp),
+            style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp)),
             placeholder = "Write something…",
             callbacks = callbacks,
             context = context,
@@ -175,7 +183,7 @@ fun FlowBlockContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = headingStyle(block.level),
+            style = resolvedFlowTextStyle(block, context, headingStyle(block.level)),
             placeholder = "Heading ${block.level}",
             callbacks = callbacks,
             context = context,
@@ -189,7 +197,7 @@ fun FlowBlockContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
                         placeholder = "List item",
                         callbacks = callbacks,
                         context = context,
@@ -205,7 +213,7 @@ fun FlowBlockContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
                         placeholder = "List item",
                         callbacks = callbacks,
                         context = context,
@@ -228,7 +236,7 @@ fun FlowBlockContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
                         placeholder = "To-do",
                         callbacks = callbacks,
                         context = context,
@@ -291,7 +299,11 @@ fun FlowBlockContent(
             blockId = block.id,
             itemId = null,
             nodes = listOf(InlineText(block.code)),
-            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+            style = resolvedFlowTextStyle(
+                block,
+                context,
+                MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+            ),
             placeholder = "Code",
             callbacks = callbacks,
             context = context,
@@ -642,6 +654,20 @@ private class FlowInlineTransformation(private val styled: AnnotatedString) : Vi
         return TransformedText(AnnotatedString(text.text, spans), OffsetMapping.Identity)
     }
 }
+
+@Composable
+private fun resolvedFlowTextStyle(
+    block: DocumentBlock,
+    context: FlowBlockContext,
+    base: TextStyle,
+): TextStyle = resolvedTextStyle(
+    block = block,
+    sheet = context.stylesheet,
+    base = base,
+    previewRole = context.previewRole,
+    previewPaint = context.previewPaint,
+    previewTargetIds = context.previewTargetIds,
+)
 
 @Composable
 private fun headingStyle(level: Int): TextStyle = when (level) {

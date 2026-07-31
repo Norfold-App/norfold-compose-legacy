@@ -16,9 +16,12 @@ data class ShapeCatalogItem(
     val title: String,
     val collection: String,
     val spdxLicense: String,
+    /** Sanitized SVG bundled in the APK/code path; null means extended on-demand catalogue. */
+    val offlineSvg: String? = null,
 ) {
-    val sourceUrl: String get() = "https://icon-sets.iconify.design/$prefix/$name/"
+    val sourceUrl: String get() = if (offlineSvg != null) "builtin://shapes/$id" else "https://icon-sets.iconify.design/$prefix/$name/"
     val svgUrl: String get() = "https://api.iconify.design/$prefix/$name.svg?height=256"
+    val isOffline: Boolean get() = offlineSvg != null
 }
 
 class ShapeCatalogException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -34,21 +37,22 @@ object ShapeCatalog {
         "material-symbols" to "Apache-2.0",
         "lucide" to "ISC",
         "tabler" to "MIT",
+        "norfold-core" to "CC0-1.0",
     )
 
     val featured: List<ShapeCatalogItem> = listOf(
-        featured("ph:star-four", "Sparkle"),
-        featured("ph:arrow-right", "Arrow right"),
-        featured("ph:heart", "Heart"),
-        featured("ph:cloud", "Cloud"),
-        featured("ph:lightbulb", "Idea"),
-        featured("ph:flag-banner", "Banner"),
-        featured("ph:flow-arrow", "Flow arrow"),
-        featured("ph:chat-circle-dots", "Conversation"),
-        featured("ph:seal-check", "Verified badge"),
-        featured("ph:map-pin", "Map pin"),
-        featured("ph:tree-structure", "Hierarchy"),
-        featured("ph:shapes", "Shapes"),
+        offline("sparkle", "Sparkle", "<path d='M128 12l22 82 82 22-82 22-22 82-22-82-82-22 82-22z'/>") ,
+        offline("arrow-right", "Arrow right", "<path d='M24 116h160l-52-52 16-16 80 80-80 80-16-16 52-52H24z'/>") ,
+        offline("heart", "Heart", "<path d='M128 222L30 128C-28 66 58 0 128 62 198 0 284 66 226 128z'/>") ,
+        offline("cloud", "Cloud", "<path d='M62 202h132c74 0 78-102 14-116C183 18 82 26 68 96 6 100 0 192 62 202z'/>") ,
+        offline("lightbulb", "Idea", "<path d='M88 184h80v20H88zm8 32h64v20H96zM128 20c-60 0-92 70-54 116 14 16 22 24 22 36h64c0-12 8-20 22-36 38-46 6-116-54-116z'/>") ,
+        offline("flag", "Flag", "<path d='M48 20h18v216H48zm18 12h142l-34 44 34 44H66z'/>") ,
+        offline("flow-arrow", "Flow arrow", "<path d='M24 48h86v18H42v62h148V96l42 42-42 42v-34H24z'/>") ,
+        offline("conversation", "Conversation", "<path d='M24 32h208v150H96l-52 42v-42H24zm48 58h112v18H72zm0 40h80v18H72z'/>") ,
+        offline("badge-check", "Verified badge", "<path d='M128 14l28 22 36-2 10 34 30 20-14 34 14 34-30 20-10 34-36-2-28 22-28-22-36 2-10-34-30-20 14-34-14-34 30-20 10-34 36 2zm-18 144l66-66-16-16-50 50-24-24-16 16z'/>") ,
+        offline("map-pin", "Map pin", "<path d='M128 14c-52 0-94 42-94 94 0 68 94 134 94 134s94-66 94-134c0-52-42-94-94-94zm0 132a38 38 0 110-76 38 38 0 010 76z'/>") ,
+        offline("hierarchy", "Hierarchy", "<path d='M104 18h48v48h-48zM24 190h48v48H24zm80 0h48v48h-48zm80 0h48v48h-48zM120 66h16v46h72v62h-16v-46h-56v46h-16v-46H64v46H48v-62h72z'/>") ,
+        offline("shapes", "Shapes", "<path d='M20 20h88v88H20zm136 0l76 88h-152zm-90 122a46 46 0 110 92 46 46 0 010-92zm90 0h76v76h-76z'/>") ,
     )
 
     suspend fun search(query: String): List<ShapeCatalogItem> = withContext(Dispatchers.IO) {
@@ -91,7 +95,7 @@ object ShapeCatalog {
         if (expected != item.spdxLicense || !safeName.matches(item.name)) {
             throw ShapeCatalogException("The shape license could not be verified.")
         }
-        val svg = readUrl(item.svgUrl, MaxSvgBytes)
+        val svg = item.offlineSvg?.let(::svgDocument) ?: readUrl(item.svgUrl, MaxSvgBytes)
         validateSvg(svg)
         VectorShapeAsset(
             id = item.id,
@@ -103,11 +107,18 @@ object ShapeCatalog {
         )
     }
 
-    private fun featured(id: String, title: String): ShapeCatalogItem {
-        val prefix = id.substringBefore(':')
-        val name = id.substringAfter(':')
-        return ShapeCatalogItem(id, prefix, name, title, "Phosphor", approvedCollections.getValue(prefix))
-    }
+    private fun offline(name: String, title: String, body: String): ShapeCatalogItem = ShapeCatalogItem(
+        id = "norfold-core:$name",
+        prefix = "norfold-core",
+        name = name,
+        title = title,
+        collection = "Norfold Core",
+        spdxLicense = approvedCollections.getValue("norfold-core"),
+        offlineSvg = body,
+    )
+
+    private fun svgDocument(body: String): String =
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'>$body</svg>"
 
     private fun readUrl(url: String, maxBytes: Int): String {
         val uri = runCatching { URI(url) }.getOrElse { throw ShapeCatalogException("Invalid catalog address.", it) }
@@ -146,7 +157,7 @@ object ShapeCatalog {
         }
     }
 
-    private fun validateSvg(svg: String) {
+    internal fun validateSvg(svg: String) {
         val trimmed = svg.trimStart()
         if (!trimmed.startsWith("<svg", ignoreCase = true) || !trimmed.trimEnd().endsWith("</svg>", ignoreCase = true)) {
             throw ShapeCatalogException("The downloaded asset was not a valid SVG.")

@@ -4,6 +4,7 @@ import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.editor.history.EditOperation
 import com.norfold.app.editor.history.EditTarget
+import com.norfold.app.editor.history.BlockDocumentDiff
 
 /**
  * Turns a `before → after` change in one target's **top-level** block list into a deterministic,
@@ -35,67 +36,7 @@ object FlowDocumentDiff {
      * produces exactly [after], and each op carries enough recorded state for a deterministic inverse.
      */
     fun diff(target: EditTarget, before: BlockDocument, after: BlockDocument): List<EditOperation> {
-        val beforeBlocks = before.blocks
-        val afterBlocks = after.blocks
-        if (beforeBlocks == afterBlocks) return emptyList()
-
-        val afterIds = afterBlocks.mapTo(HashSet()) { it.id }
-        val beforeIds = beforeBlocks.mapTo(HashSet()) { it.id }
-
-        val ops = mutableListOf<EditOperation>()
-
-        // A working list of blocks that mirrors the live document as each op is (conceptually) applied,
-        // so every emitted index is valid against the state the History Engine will actually see.
-        val working = beforeBlocks.toMutableList()
-
-        // --- Phase A: remove blocks that are gone in `after` (highest index first keeps indices valid).
-        run {
-            var i = working.lastIndex
-            while (i >= 0) {
-                val block = working[i]
-                if (block.id !in afterIds) {
-                    ops += EditOperation.RemoveBlock(target, i, block)
-                    working.removeAt(i)
-                }
-                i--
-            }
-        }
-
-        // --- Phase B: walk target positions left to right, fixing id-at-position then content.
-        for (i in afterBlocks.indices) {
-            val targetBlock = afterBlocks[i]
-            val currentAtI = working.getOrNull(i)
-
-            if (currentAtI != null && currentAtI.id == targetBlock.id) {
-                // Right block already at the right slot; only content may differ.
-                if (currentAtI != targetBlock) {
-                    ops += EditOperation.ReplaceBlock(target, i, before = currentAtI, after = targetBlock)
-                    working[i] = targetBlock
-                }
-                continue
-            }
-
-            if (targetBlock.id !in beforeIds) {
-                // A brand-new block: insert it at its final position.
-                ops += EditOperation.InsertBlock(target, i, targetBlock)
-                working.add(i, targetBlock)
-                continue
-            }
-
-            // A kept block that is out of place: it must live at some j > i (everything < i already
-            // matches `after`). Move it into position, then reconcile its content.
-            val j = working.indexOfFirst { it.id == targetBlock.id }
-            check(j > i) { "diff invariant: kept block ${targetBlock.id} expected after index $i but found at $j" }
-            ops += EditOperation.MoveBlock(target, fromIndex = j, toIndex = i)
-            val moved = working.removeAt(j)
-            working.add(i, moved)
-            if (moved != targetBlock) {
-                ops += EditOperation.ReplaceBlock(target, i, before = moved, after = targetBlock)
-                working[i] = targetBlock
-            }
-        }
-
-        return ops
+        return BlockDocumentDiff.diff(target, before, after)
     }
 
     /**
@@ -105,10 +46,6 @@ object FlowDocumentDiff {
      * that vanished, so removals need not be listed here.
      */
     fun dirtyTopLevelIds(saved: BlockDocument, current: BlockDocument): Set<String> {
-        val savedById = saved.blocks.associateBy(DocumentBlock::id)
-        return current.blocks.mapNotNullTo(linkedSetOf()) { block ->
-            val old = savedById[block.id]
-            if (old == null || old != block) block.id else null
-        }
+        return BlockDocumentDiff.dirtyTopLevelIds(saved, current)
     }
 }

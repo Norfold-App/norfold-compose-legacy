@@ -20,6 +20,7 @@ import com.norfold.app.domain.pages
 import com.norfold.app.domain.updateBlock
 import com.norfold.app.domain.withFreshIds
 import com.norfold.app.editor.history.EditOperation
+import com.norfold.app.editor.history.BlockDocumentDiff
 import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.history.EditTransaction
 import com.norfold.app.editor.history.EditWorkspace
@@ -721,6 +722,21 @@ class DocumentSceneController(
             }
         }
         return commit(label, ops, TransactionOrigin.MIGRATION)
+    }
+
+    /**
+     * Runs a block mutation as one ordinary user transaction.
+     *
+     * Document styling changes block content, not scene geometry. This seam gives shared editor features
+     * the same BlockEditorSession vocabulary Flow uses while still committing through this controller's
+     * canonical History Engine. A no-op creates no undo entry.
+     */
+    fun mutateDocument(label: String, mutation: (BlockEditorSession) -> Unit): Boolean {
+        val before = document()
+        val session = BlockEditorSession(before)
+        mutation(session)
+        val after = session.document
+        return commit(label, BlockDocumentDiff.diff(target, before, after))
     }
 
     // --- Internals -----------------------------------------------------------------------------------

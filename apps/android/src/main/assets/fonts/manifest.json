@@ -1,0 +1,1275 @@
+{
+ "version": 1,
+ "families": [
+  {
+   "id": "arimo",
+   "name": "Arimo",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/arimo",
+   "licenseFile": "licenses/arimo.txt",
+   "faces": [
+    {
+     "asset": "arimo-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "f75c879fff9dd9d48f9df65b555d7ba89aa8d84b1b68a89c1656f74da9ba5142",
+     "bytes": 158516,
+     "upstreamFile": "Arimo[wght].ttf"
+    },
+    {
+     "asset": "arimo-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "b7b1282570fcf4598e4114d29cb4583be1e626e958270322f65ae2c4dd5a7eb8",
+     "bytes": 175116,
+     "upstreamFile": "Arimo-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "hebrew",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 1224
+  },
+  {
+   "id": "atkinson-hyperlegible-next",
+   "name": "Atkinson Hyperlegible Next",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/atkinsonhyperlegiblenext",
+   "licenseFile": "licenses/atkinson-hyperlegible-next.txt",
+   "faces": [
+    {
+     "asset": "atkinson-hyperlegible-next-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "b4a9a96dbcb2cb1f8b291738b6c811742c967a773ad6921290c33516806b567e",
+     "bytes": 106500,
+     "upstreamFile": "AtkinsonHyperlegibleNext[wght].ttf"
+    },
+    {
+     "asset": "atkinson-hyperlegible-next-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "2d3241119add253b0f01488e000086e4b67ee803b4a20b6659742e1e686c280f",
+     "bytes": 115140,
+     "upstreamFile": "AtkinsonHyperlegibleNext-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "latin",
+    "latin-ext",
+    "menu"
+   ],
+   "glyphCoverage": 338
+  },
+  {
+   "id": "carlito",
+   "name": "Carlito",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/carlito",
+   "licenseFile": "licenses/carlito.txt",
+   "faces": [
+    {
+     "asset": "carlito-regular.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": false,
+     "sha256": "1c924f5272952212f587b3555abc75072fbb3192721150dd858556707bb22dc0",
+     "bytes": 249900,
+     "upstreamFile": "Carlito-Regular.ttf"
+    },
+    {
+     "asset": "carlito-bold.ttf",
+     "weight": 700,
+     "style": "normal",
+     "variable": false,
+     "sha256": "58c1501dba58788eba93a5f6223046672a7fc33a92a33ab2ac9c2df3892815ae",
+     "bytes": 273708,
+     "upstreamFile": "Carlito-Bold.ttf"
+    },
+    {
+     "asset": "carlito-italic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": false,
+     "sha256": "0f22893acfc1ac29c3b468ba1ccf0d1a7aa784b1b9f81d11145109a143666ef4",
+     "bytes": 243784,
+     "upstreamFile": "Carlito-Italic.ttf"
+    },
+    {
+     "asset": "carlito-bolditalic.ttf",
+     "weight": 700,
+     "style": "italic",
+     "variable": false,
+     "sha256": "007391870d34eeee495dc6f8e55db92f91d647e54b3c5961cb5eeb7ddbdc0be1",
+     "bytes": 316248,
+     "upstreamFile": "Carlito-BoldItalic.ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 918
+  },
+  {
+   "id": "cousine",
+   "name": "Cousine",
+   "license": "OFL",
+   "category": "MONOSPACE",
+   "upstreamDir": "ofl/cousine",
+   "licenseFile": "licenses/cousine.txt",
+   "faces": [
+    {
+     "asset": "cousine-regular.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": false,
+     "sha256": "b28abb942be5e22f965cc4f762cead1a6498838ac160fe4923f32b1f7140ff1f",
+     "bytes": 106264,
+     "upstreamFile": "Cousine-Regular.ttf"
+    },
+    {
+     "asset": "cousine-bold.ttf",
+     "weight": 700,
+     "style": "normal",
+     "variable": false,
+     "sha256": "5ac5e4faf41d7203a7e2a639d07f9d826983b5e90111bc9c0c453785c2a16391",
+     "bytes": 106276,
+     "upstreamFile": "Cousine-Bold.ttf"
+    },
+    {
+     "asset": "cousine-italic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": false,
+     "sha256": "af07cf7870832f8c39af140ed504c5014f95af742888e7024ea6825198bb60bf",
+     "bytes": 108520,
+     "upstreamFile": "Cousine-Italic.ttf"
+    },
+    {
+     "asset": "cousine-bolditalic.ttf",
+     "weight": 700,
+     "style": "italic",
+     "variable": false,
+     "sha256": "c14f41f4108ec5c91687326fbd34680e936ce6457fa2c5372f2c1d5d1c0d5614",
+     "bytes": 108824,
+     "upstreamFile": "Cousine-BoldItalic.ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "hebrew",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 973
+  },
+  {
+   "id": "eb-garamond",
+   "name": "EB Garamond",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/ebgaramond",
+   "licenseFile": "licenses/eb-garamond.txt",
+   "faces": [
+    {
+     "asset": "eb-garamond-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "aba877d14da50818d33ddfc3a535b14cd4c059803db83090a4214566a91abf3c",
+     "bytes": 337764,
+     "upstreamFile": "EBGaramond[wght].ttf"
+    },
+    {
+     "asset": "eb-garamond-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "f0419270f036909448729965feb979556f1b3cd858df82601167aa2efa21e965",
+     "bytes": 318440,
+     "upstreamFile": "EBGaramond-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 1006
+  },
+  {
+   "id": "fira-code",
+   "name": "Fira Code",
+   "license": "OFL",
+   "category": "MONOSPACE",
+   "upstreamDir": "ofl/firacode",
+   "licenseFile": "licenses/fira-code.txt",
+   "faces": [
+    {
+     "asset": "fira-code-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "cf00adc27717cc4a624a11f88614b2a9b7464276190f2c171fc95cd61f46e46b",
+     "bytes": 115292,
+     "upstreamFile": "FiraCode[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "symbols2",
+    "menu"
+   ],
+   "glyphCoverage": 665
+  },
+  {
+   "id": "fraunces",
+   "name": "Fraunces",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/fraunces",
+   "licenseFile": "licenses/fraunces.txt",
+   "faces": [
+    {
+     "asset": "fraunces-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "dd2b3e881e59c541cdcaaa1d3d208a3812fac202305d07c4fb117e809c79451d",
+     "bytes": 120968,
+     "upstreamFile": "Fraunces[SOFT,WONK,opsz,wght].ttf"
+    },
+    {
+     "asset": "fraunces-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "6968c52998fedafc57c6477a6bfa93a5a1869985cf7c2a3b593e3184bc425063",
+     "bytes": 146204,
+     "upstreamFile": "Fraunces-Italic[SOFT,WONK,opsz,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 586
+  },
+  {
+   "id": "hind-siliguri",
+   "name": "Hind Siliguri",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/hindsiliguri",
+   "licenseFile": "licenses/hind-siliguri.txt",
+   "faces": [
+    {
+     "asset": "hind-siliguri-regular.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": false,
+     "sha256": "0d992765345d3961c0daf7735c429fbf2f23364d3857fb40955abe9c4b49578a",
+     "bytes": 239684,
+     "upstreamFile": "HindSiliguri-Regular.ttf"
+    },
+    {
+     "asset": "hind-siliguri-bold.ttf",
+     "weight": 700,
+     "style": "normal",
+     "variable": false,
+     "sha256": "d648c577a4244b371ddec4a1edf47b8c8f9127257c2655d53a1bc80f930e727c",
+     "bytes": 277160,
+     "upstreamFile": "HindSiliguri-Bold.ttf"
+    },
+    {
+     "asset": "hind-siliguri-semibold.ttf",
+     "weight": 600,
+     "style": "normal",
+     "variable": false,
+     "sha256": "85bb9f45f63a74ff075655dbc2b9a144d44ccd5ca3b43c7cee52272794255295",
+     "bytes": 262232,
+     "upstreamFile": "HindSiliguri-SemiBold.ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin",
+    "bengali"
+   ],
+   "upstreamSubsets": [
+    "bengali",
+    "latin",
+    "latin-ext",
+    "menu"
+   ],
+   "glyphCoverage": 417
+  },
+  {
+   "id": "ibm-plex-sans",
+   "name": "IBM Plex Sans",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/ibmplexsans",
+   "licenseFile": "licenses/ibm-plex-sans.txt",
+   "faces": [
+    {
+     "asset": "ibm-plex-sans-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "39b45b7d1e38f841e4da48232ad008e130ad3c129ccf36bc797dc703b29049ec",
+     "bytes": 198012,
+     "upstreamFile": "IBMPlexSans[wdth,wght].ttf"
+    },
+    {
+     "asset": "ibm-plex-sans-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "18cae1aabad127225cea52d05570e798afe16e35fef9a78357194901875939c2",
+     "bytes": 209000,
+     "upstreamFile": "IBMPlexSans-Italic[wdth,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 556
+  },
+  {
+   "id": "inter",
+   "name": "Inter",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/inter",
+   "licenseFile": "licenses/inter.txt",
+   "faces": [
+    {
+     "asset": "inter-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "dfa0163f27c35001dae2cb672cc1ab5d2c8eaead6bda6529f5bed4196728416d",
+     "bytes": 256088,
+     "upstreamFile": "Inter[opsz,wght].ttf"
+    },
+    {
+     "asset": "inter-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "c641a742da327908f5b01cad9ef9dd3aaa83a47e260bf89182faa15e7e9153ff",
+     "bytes": 263324,
+     "upstreamFile": "Inter-Italic[opsz,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 967
+  },
+  {
+   "id": "jetbrains-mono",
+   "name": "JetBrains Mono",
+   "license": "OFL",
+   "category": "MONOSPACE",
+   "upstreamDir": "ofl/jetbrainsmono",
+   "licenseFile": "licenses/jetbrains-mono.txt",
+   "faces": [
+    {
+     "asset": "jetbrains-mono-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "73b418b32699169c1913ae06d15f5f48704103523408202db82d861a212bd96a",
+     "bytes": 134796,
+     "upstreamFile": "JetBrainsMono[wght].ttf"
+    },
+    {
+     "asset": "jetbrains-mono-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "9b56e4cd61c2174ec0d36bfc7c1cdbbaf361f37229f66697e475e4d7f5020b08",
+     "bytes": 137740,
+     "upstreamFile": "JetBrainsMono-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 688
+  },
+  {
+   "id": "lato",
+   "name": "Lato",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/lato",
+   "licenseFile": "licenses/lato.txt",
+   "faces": [
+    {
+     "asset": "lato-regular.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": false,
+     "sha256": "6f319130bd3649b4439d0065176634de78587d430ef051d5747ce2946b66acaf",
+     "bytes": 272944,
+     "upstreamFile": "Lato-Regular.ttf"
+    },
+    {
+     "asset": "lato-bold.ttf",
+     "weight": 700,
+     "style": "normal",
+     "variable": false,
+     "sha256": "93a81e473f508cb7b6693ce54f7c9d975e8bfd3ff4314d6ea8ca082a5b011642",
+     "bytes": 262748,
+     "upstreamFile": "Lato-Bold.ttf"
+    },
+    {
+     "asset": "lato-italic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": false,
+     "sha256": "8892b58d3b0b8d8593526746070ec4f1683f3e5b69bc3ba0ee6fc9e8e0ce1d61",
+     "bytes": 291272,
+     "upstreamFile": "Lato-Italic.ttf"
+    },
+    {
+     "asset": "lato-bolditalic.ttf",
+     "weight": 700,
+     "style": "italic",
+     "variable": false,
+     "sha256": "9ccaec8254c4e9dda72475af9c75efafbc3aad568005cfda1f9f235f1cee6049",
+     "bytes": 276688,
+     "upstreamFile": "Lato-BoldItalic.ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 923
+  },
+  {
+   "id": "lexend",
+   "name": "Lexend",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/lexend",
+   "licenseFile": "licenses/lexend.txt",
+   "faces": [
+    {
+     "asset": "lexend-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "d3cb26988c0a2567b0ee37984717ecd9953ed60cbee4b75e78346f22e20f3d41",
+     "bytes": 149984,
+     "upstreamFile": "Lexend[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 623
+  },
+  {
+   "id": "literata",
+   "name": "Literata",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/literata",
+   "licenseFile": "licenses/literata.txt",
+   "faces": [
+    {
+     "asset": "literata-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "dc343110c238c19e35d7ba799b4f77688eba33a37eb645a4166447338c3bd769",
+     "bytes": 226944,
+     "upstreamFile": "Literata[opsz,wght].ttf"
+    },
+    {
+     "asset": "literata-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "c22cdbc483251ee3923e5ffaca5be71b63fc11364dc203e483ce9176e6a822f6",
+     "bytes": 226408,
+     "upstreamFile": "Literata-Italic[opsz,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 652
+  },
+  {
+   "id": "lora",
+   "name": "Lora",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/lora",
+   "licenseFile": "licenses/lora.txt",
+   "faces": [
+    {
+     "asset": "lora-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "8c5dbbe028dba2017b0c0def1b59c51b8749c97e1dde1c761e3eaa2e1012e95a",
+     "bytes": 118200,
+     "upstreamFile": "Lora[wght].ttf"
+    },
+    {
+     "asset": "lora-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "4b67bd474702051101dcd3a8d6ffcb227271f9c8a0f5ce59be5aec2b5f333098",
+     "bytes": 119984,
+     "upstreamFile": "Lora-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "latin",
+    "latin-ext",
+    "math",
+    "menu",
+    "symbols",
+    "vietnamese"
+   ],
+   "glyphCoverage": 494
+  },
+  {
+   "id": "manrope",
+   "name": "Manrope",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/manrope",
+   "licenseFile": "licenses/manrope.txt",
+   "faces": [
+    {
+     "asset": "manrope-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "e8ef2776f8446fac719ca13e81cfb23d4988ca8c37374929b7f8551bb49551b6",
+     "bytes": 125204,
+     "upstreamFile": "Manrope[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 468
+  },
+  {
+   "id": "merriweather",
+   "name": "Merriweather",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/merriweather",
+   "licenseFile": "licenses/merriweather.txt",
+   "faces": [
+    {
+     "asset": "merriweather-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "c9e16b723daa6b4c5a788fcc7377a3fb985a85ae5547091efaeb423841a62a52",
+     "bytes": 626156,
+     "upstreamFile": "Merriweather[opsz,wdth,wght].ttf"
+    },
+    {
+     "asset": "merriweather-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "3fee8caeae1509a0b2ceadca1bcd95bf1f75e49cb49cde780c1e95057292546b",
+     "bytes": 627176,
+     "upstreamFile": "Merriweather-Italic[opsz,wdth,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 929
+  },
+  {
+   "id": "montserrat",
+   "name": "Montserrat",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/montserrat",
+   "licenseFile": "licenses/montserrat.txt",
+   "faces": [
+    {
+     "asset": "montserrat-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "81d585bd8987c6a32a08743fecd1cc702e08d9a34a0309127f678c711a466460",
+     "bytes": 320992,
+     "upstreamFile": "Montserrat[wght].ttf"
+    },
+    {
+     "asset": "montserrat-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "9ad6dba20aa9683a9b10794a7c051eb1b31d1798602774dba1faf8f313a46be9",
+     "bytes": 328760,
+     "upstreamFile": "Montserrat-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 890
+  },
+  {
+   "id": "noto-sans",
+   "name": "Noto Sans",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/notosans",
+   "licenseFile": "licenses/noto-sans.txt",
+   "faces": [
+    {
+     "asset": "noto-sans-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "fc33a7186bd962c060541cafb4865b391a6301c4d0da46a7b9935d8e5ec24486",
+     "bytes": 310536,
+     "upstreamFile": "NotoSans[wdth,wght].ttf"
+    },
+    {
+     "asset": "noto-sans-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "91dc04d7f7f079b3f6f4ff3275f192c372fa3e25ed6747fd90078c07c7535d46",
+     "bytes": 351856,
+     "upstreamFile": "NotoSans-Italic[wdth,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "devanagari",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 1169
+  },
+  {
+   "id": "noto-sans-bengali",
+   "name": "Noto Sans Bengali",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/notosansbengali",
+   "licenseFile": "licenses/noto-sans-bengali.txt",
+   "faces": [
+    {
+     "asset": "noto-sans-bengali-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "4c3b64d485f017f9f0706bf555ee581cf1da74809ab2feb39f0a924882820c34",
+     "bytes": 271544,
+     "upstreamFile": "NotoSansBengali[wdth,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin",
+    "bengali"
+   ],
+   "upstreamSubsets": [
+    "bengali",
+    "latin",
+    "latin-ext",
+    "menu"
+   ],
+   "glyphCoverage": 423
+  },
+  {
+   "id": "noto-serif",
+   "name": "Noto Serif",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/notoserif",
+   "licenseFile": "licenses/noto-serif.txt",
+   "faces": [
+    {
+     "asset": "noto-serif-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "6ee26717e20e109ebbfcf7177bb31b856b46587b4dd18fa238a639b1edccffc6",
+     "bytes": 362712,
+     "upstreamFile": "NotoSerif[wdth,wght].ttf"
+    },
+    {
+     "asset": "noto-serif-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "33bc0e0b1f2635c8ada02fab0cf82aa1d431f7c151f588904019ac4a17a2f6c6",
+     "bytes": 455888,
+     "upstreamFile": "NotoSerif-Italic[wdth,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "math",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 1169
+  },
+  {
+   "id": "noto-serif-bengali",
+   "name": "Noto Serif Bengali",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/notoserifbengali",
+   "licenseFile": "licenses/noto-serif-bengali.txt",
+   "faces": [
+    {
+     "asset": "noto-serif-bengali-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "6adcbde8a86f894b02b9926aa4e90b28accf6040312866d4008f461db9418880",
+     "bytes": 559916,
+     "upstreamFile": "NotoSerifBengali[wdth,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin",
+    "bengali"
+   ],
+   "upstreamSubsets": [
+    "bengali",
+    "latin",
+    "latin-ext",
+    "menu"
+   ],
+   "glyphCoverage": 424
+  },
+  {
+   "id": "playfair-display",
+   "name": "Playfair Display",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/playfairdisplay",
+   "licenseFile": "licenses/playfair-display.txt",
+   "faces": [
+    {
+     "asset": "playfair-display-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "89eceb0139addc34b9113a7a1c21212a1a5b50dc9753430c8896f4d7343cc9d9",
+     "bytes": 138440,
+     "upstreamFile": "PlayfairDisplay[wght].ttf"
+    },
+    {
+     "asset": "playfair-display-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "495692b6e8c3f8419f4aaf5363e5b40d93b14a075ec784f2b2f3f9d9c338ff60",
+     "bytes": 117772,
+     "upstreamFile": "PlayfairDisplay-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 502
+  },
+  {
+   "id": "poppins",
+   "name": "Poppins",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/poppins",
+   "licenseFile": "licenses/poppins.txt",
+   "faces": [
+    {
+     "asset": "poppins-regular.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": false,
+     "sha256": "fe35839b514899d163b98880116b2dc77b453b99f540ddfa56f3ed603c3de1ca",
+     "bytes": 27180,
+     "upstreamFile": "Poppins-Regular.ttf"
+    },
+    {
+     "asset": "poppins-bold.ttf",
+     "weight": 700,
+     "style": "normal",
+     "variable": false,
+     "sha256": "f932012611efff62ea6650cb93df1bfbc1df276fc715786d629ff2d62cabd3d2",
+     "bytes": 26828,
+     "upstreamFile": "Poppins-Bold.ttf"
+    },
+    {
+     "asset": "poppins-italic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": false,
+     "sha256": "6d348c1926cbcf3fe37ef1537a42fd774e2b65b6d55ab0940adad0ee4d61033b",
+     "bytes": 29352,
+     "upstreamFile": "Poppins-Italic.ttf"
+    },
+    {
+     "asset": "poppins-bolditalic.ttf",
+     "weight": 700,
+     "style": "italic",
+     "variable": false,
+     "sha256": "08f10c1c80262de414555a8a48b1823aab3d7db718a47aa5af494cabf313ebbf",
+     "bytes": 29028,
+     "upstreamFile": "Poppins-BoldItalic.ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "devanagari",
+    "latin",
+    "latin-ext",
+    "menu"
+   ],
+   "glyphCoverage": 366
+  },
+  {
+   "id": "roboto-slab",
+   "name": "Roboto Slab",
+   "license": "APACHE2",
+   "category": "SERIF",
+   "upstreamDir": "apache/robotoslab",
+   "licenseFile": "licenses/roboto-slab.txt",
+   "faces": [
+    {
+     "asset": "roboto-slab-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "96a6cbff53031768705acbb8d2d63e5c321698e2d1d683be680e1f7c8c11d4f3",
+     "bytes": 92088,
+     "upstreamFile": "RobotoSlab[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 503
+  },
+  {
+   "id": "source-code-pro",
+   "name": "Source Code Pro",
+   "license": "OFL",
+   "category": "MONOSPACE",
+   "upstreamDir": "ofl/sourcecodepro",
+   "licenseFile": "licenses/source-code-pro.txt",
+   "faces": [
+    {
+     "asset": "source-code-pro-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "577017ee91fa7655777f7675fe893b34fa664ff327b645362f2bd4433d9f3e1c",
+     "bytes": 101372,
+     "upstreamFile": "SourceCodePro[wght].ttf"
+    },
+    {
+     "asset": "source-code-pro-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "19e3b8692dc6c35774560e3c56a16018f7de1501d7604751fa32deef1d9df5ba",
+     "bytes": 103328,
+     "upstreamFile": "SourceCodePro-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 807
+  },
+  {
+   "id": "source-sans-3",
+   "name": "Source Sans 3",
+   "license": "OFL",
+   "category": "SANS_SERIF",
+   "upstreamDir": "ofl/sourcesans3",
+   "licenseFile": "licenses/source-sans-3.txt",
+   "faces": [
+    {
+     "asset": "source-sans-3-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "8755346f22c56d3c147649a3bf1582716a33dc910ad63b887cc98c7868a90e8f",
+     "bytes": 166316,
+     "upstreamFile": "SourceSans3[wght].ttf"
+    },
+    {
+     "asset": "source-sans-3-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "3f1dfa53b17d3f94b78cf5728c98a24705a7a1bcf34561e49028206616c9530a",
+     "bytes": 161272,
+     "upstreamFile": "SourceSans3-Italic[wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 797
+  },
+  {
+   "id": "source-serif-4",
+   "name": "Source Serif 4",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/sourceserif4",
+   "licenseFile": "licenses/source-serif-4.txt",
+   "faces": [
+    {
+     "asset": "source-serif-4-variable.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": true,
+     "sha256": "9c6ad80850f3c553bf2b69fb64babf3eef1c0f0da41346f797171af15a613825",
+     "bytes": 201676,
+     "upstreamFile": "SourceSerif4[opsz,wght].ttf"
+    },
+    {
+     "asset": "source-serif-4-variableitalic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": true,
+     "sha256": "98968c08e21e4a408af7f9638b3b316752ca115e04fcff5f2ce472d6cbe61288",
+     "bytes": 194148,
+     "upstreamFile": "SourceSerif4-Italic[opsz,wght].ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 588
+  },
+  {
+   "id": "tinos",
+   "name": "Tinos",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/tinos",
+   "licenseFile": "licenses/tinos.txt",
+   "faces": [
+    {
+     "asset": "tinos-regular.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": false,
+     "sha256": "7e348c37d73881872b08ac9f51804d4ab712618fa917a2ed42d1b39dd206312a",
+     "bytes": 165768,
+     "upstreamFile": "Tinos-Regular.ttf"
+    },
+    {
+     "asset": "tinos-bold.ttf",
+     "weight": 700,
+     "style": "normal",
+     "variable": false,
+     "sha256": "6e0783088f657e61414b4db23863091bf20dc6a7d93b23265e84258b021332a1",
+     "bytes": 187008,
+     "upstreamFile": "Tinos-Bold.ttf"
+    },
+    {
+     "asset": "tinos-italic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": false,
+     "sha256": "df3dd23c89d24506239fe1c625fdce8e33b1b35593e79cbc9f1624d86134008d",
+     "bytes": 177252,
+     "upstreamFile": "Tinos-Italic.ttf"
+    },
+    {
+     "asset": "tinos-bolditalic.ttf",
+     "weight": 700,
+     "style": "italic",
+     "variable": false,
+     "sha256": "38512fc2f489f018e505b7f92c6c13201a818192543700252ba448d8d77932eb",
+     "bytes": 176780,
+     "upstreamFile": "Tinos-BoldItalic.ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin"
+   ],
+   "upstreamSubsets": [
+    "cyrillic",
+    "cyrillic-ext",
+    "greek",
+    "greek-ext",
+    "hebrew",
+    "latin",
+    "latin-ext",
+    "menu",
+    "vietnamese"
+   ],
+   "glyphCoverage": 1224
+  },
+  {
+   "id": "tiro-bangla",
+   "name": "Tiro Bangla",
+   "license": "OFL",
+   "category": "SERIF",
+   "upstreamDir": "ofl/tirobangla",
+   "licenseFile": "licenses/tiro-bangla.txt",
+   "faces": [
+    {
+     "asset": "tiro-bangla-regular.ttf",
+     "weight": 400,
+     "style": "normal",
+     "variable": false,
+     "sha256": "1db6aca307010ec80bfa250ff505814513dbe16ef5ad299ead71955881adcfc9",
+     "bytes": 291168,
+     "upstreamFile": "TiroBangla-Regular.ttf"
+    },
+    {
+     "asset": "tiro-bangla-italic.ttf",
+     "weight": 400,
+     "style": "italic",
+     "variable": false,
+     "sha256": "15b21f18abd498186f6a6aeab8eaa54c84466140617777d9c15da2c1a82d5588",
+     "bytes": 297176,
+     "upstreamFile": "TiroBangla-Italic.ttf"
+    }
+   ],
+   "packagedScripts": [
+    "latin",
+    "bengali"
+   ],
+   "upstreamSubsets": [
+    "bengali",
+    "latin",
+    "latin-ext",
+    "menu"
+   ],
+   "glyphCoverage": 459
+  }
+ ]
+}

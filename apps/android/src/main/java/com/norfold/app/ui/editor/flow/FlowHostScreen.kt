@@ -97,6 +97,14 @@ import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.presentation.PresentationMode
 import com.norfold.app.editor.surface.DismissTrigger
 import com.norfold.app.editor.surface.SurfaceClass
+import com.norfold.app.editor.style.EditorStyleCommandIds
+import com.norfold.app.ui.editor.style.EditorStyleSurface
+import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
+import com.norfold.app.ui.editor.style.rememberFontImportLauncher
+import com.norfold.app.ui.editor.style.rememberImportedFontRemover
+import com.norfold.app.ui.fonts.OfflineFontLibrary
+import com.norfold.app.domain.stylesheet
+import com.norfold.app.domain.StylesheetBlock
 
 /**
  * FlowHost — the writing-first Notes host (roadmap Phase 1 deliverables 1, 5, 6, 10).
@@ -121,6 +129,7 @@ fun FlowHostScreen(
     modifier: Modifier = Modifier,
 ) {
     val state = presenter.state
+    val visibleBlocks = remember(state.document) { state.document.blocks.filterNot { it is StylesheetBlock } }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = presenter.runtime.restoredScrollIndex())
     var notice by remember { mutableStateOf<String?>(null) }
 
@@ -198,7 +207,7 @@ fun FlowHostScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    itemsIndexed(state.document.blocks, key = { _, block -> block.id }) { index, block ->
+                    itemsIndexed(visibleBlocks, key = { _, block -> block.id }) { index, block ->
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -256,7 +265,7 @@ fun FlowHostScreen(
                 withFrameNanos { }
                 val amount = FlowDragGeometry.edgeScroll(drag.pointerY, drag.viewportHeight)
                 if (amount != 0f) listState.scrollBy(amount)
-                val order = state.document.blocks.map { it.id }
+                val order = visibleBlocks.map { it.id }
                 val crossed = drag.refresh(order)
                 if (crossed && drag.placement?.isNoOp == false) {
                     dragHaptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -299,6 +308,12 @@ fun FlowHostScreen(
                 onOpenConvert = {
                     presenter.act { openSurface(FlowSurfaces.CONVERT_MENU, SurfaceClass.COMMAND_MENU) }
                 },
+                onStyleCommand = { id ->
+                    when (val result = presenter.act { invoke(id, CommandSurface.DOCK) }) {
+                        is com.norfold.app.editor.command.CommandResult.Failure -> notice = result.reason
+                        else -> Unit
+                    }
+                },
             )
         }
 
@@ -314,7 +329,7 @@ fun FlowHostScreen(
     val caretRequest = state.caretRequest
     LaunchedEffect(caretRequest?.stamp, lowerSurfaceHeight, imeBottom) {
         val target = caretRequest ?: return@LaunchedEffect
-        val index = state.document.blocks.indexOfFirst { it.id == target.blockId }
+        val index = visibleBlocks.indexOfFirst { it.id == target.blockId }
         if (index < 0) return@LaunchedEffect
         val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
         val limit = listState.layoutInfo.viewportEndOffset - lowerSurfaceHeight
@@ -521,7 +536,7 @@ private fun FlowBlockRow(
             enabled = !rowSelectable,
             modifier = Modifier
                 .width(36.dp)
-                .pointerInput(block.id, state.document.blocks.size, rowSelectable) {
+                .pointerInput(block.id, state.document.blocks.count { it !is StylesheetBlock }, rowSelectable) {
                     if (rowSelectable) return@pointerInput
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
@@ -532,7 +547,7 @@ private fun FlowBlockRow(
                         onDrag = { change, amount ->
                             change.consume()
                             drag.pointerY += amount.y
-                            val order = state.document.blocks.map { it.id }
+                            val order = state.document.blocks.filterNot { it is StylesheetBlock }.map { it.id }
                             val crossed = drag.refresh(order)
                             if (crossed && drag.placement?.isNoOp == false) {
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -574,6 +589,10 @@ private fun FlowBlockRow(
                     caretRequest = state.caretRequest,
                     selectionMode = state.selectionMode,
                     tableCursor = state.tableCursor,
+                    stylesheet = state.document.stylesheet(),
+                    previewRole = state.editorStyle.colorStudio.target?.role,
+                    previewPaint = state.editorStyle.previewPaint,
+                    previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
                 ),
             )
         }
@@ -727,6 +746,7 @@ private fun FlowContextDock(
     onCommand: (FlowCommandItem) -> Unit,
     onOpenInsert: () -> Unit,
     onOpenConvert: () -> Unit,
+    onStyleCommand: (String) -> Unit,
 ) {
     Surface(
         tonalElevation = 2.dp,
@@ -745,6 +765,16 @@ private fun FlowContextDock(
             AssistChip(onClick = onOpenInsert, label = { Text("Insert") })
             if (state.convertPalette.isNotEmpty()) {
                 AssistChip(onClick = onOpenConvert, label = { Text("Turn into") })
+            }
+            if (state.editorStyle.textTargetCount > 0) {
+                AssistChip({ onStyleCommand(EditorStyleCommandIds.NAMED_STYLES) }, label = { Text("Style") })
+                AssistChip({ onStyleCommand(EditorStyleCommandIds.FONT_BROWSER) }, label = { Text("Font") })
+                AssistChip({ onStyleCommand(EditorStyleCommandIds.TEXT_COLOR) }, label = { Text("Color") })
+                AssistChip({ onStyleCommand(EditorStyleCommandIds.HIGHLIGHT) }, label = { Text("Highlight") })
+            }
+            if (state.editorStyle.shapeTargetCount > 0) {
+                AssistChip({ onStyleCommand(EditorStyleCommandIds.FILL) }, label = { Text("Fill") })
+                AssistChip({ onStyleCommand(EditorStyleCommandIds.STROKE) }, label = { Text("Stroke") })
             }
             (state.dock + state.tableActions).forEach { item ->
                 FlowCommandChip(item, onCommand)
@@ -839,6 +869,12 @@ private fun FlowPaletteSurface(
     onNotice: (String) -> Unit,
 ) {
     val surfaceId = state.activeSurfaceId ?: return
+    if (surfaceId == FlowSurfaces.COLOR_STUDIO || surfaceId == FlowSurfaces.FONT_BROWSER ||
+        surfaceId == FlowSurfaces.NAMED_STYLES
+    ) {
+        FlowEditorStyleSurface(surfaceId, state, presenter, onNotice)
+        return
+    }
     val items = when (surfaceId) {
         FlowSurfaces.INSERT_PALETTE -> state.insertPalette
         FlowSurfaces.CONVERT_MENU -> state.convertPalette
@@ -872,6 +908,90 @@ private fun FlowPaletteSurface(
                         .padding(16.dp),
                 ) { body() }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FlowEditorStyleSurface(
+    surfaceId: String,
+    state: FlowHostUiState,
+    presenter: FlowHostPresenter,
+    onNotice: (String) -> Unit,
+) {
+    val styleRuntime = presenter.runtime.editorStyle
+    val rows = styleRuntime.fontBrowser.results(state.editorStyle.documentFontIds)
+        .map(styleRuntime.fontBrowser::rowState)
+    val sections = styleRuntime.fontBrowser.sections(state.editorStyle.documentFontIds)
+    val launchImport = rememberFontImportLauncher { result ->
+        presenter.act { editorStyle.updateFontRegistry(OfflineFontLibrary.registry) }
+        onNotice(
+            when (result) {
+                is com.norfold.app.data.FontImportResult.Imported -> "Imported ${result.entry.family}."
+                is com.norfold.app.data.FontImportResult.AlreadyImported -> "${result.entry.family} is already imported."
+                is com.norfold.app.data.FontImportResult.Rejected -> result.reason
+            },
+        )
+    }
+    val removeImport = rememberImportedFontRemover { identity, removed ->
+        presenter.act { editorStyle.updateFontRegistry(OfflineFontLibrary.registry) }
+        onNotice(if (removed) "Removed ${identity.displayName}. Existing text will use a labeled fallback." else "That font could not be removed.")
+    }
+    val actions = EditorStyleSurfaceActions(
+        dismiss = { commit ->
+            presenter.act {
+                if (commit) editorStyle.colorStudio.commit()
+                closeSurface(surfaceId, DismissTrigger.CANCEL)
+            }
+        },
+        setColorView = { presenter.act { editorStyle.colorStudio.setView(it) } },
+        draftColor = { field, value -> presenter.act { editorStyle.colorStudio.draft(field, value) } },
+        commitColorDraft = { presenter.act { editorStyle.colorStudio.commitDraft() } },
+        chooseColor = { presenter.act { editorStyle.colorStudio.previewColor(it) } },
+        toggleGradient = { presenter.act { editorStyle.colorStudio.setGradientEnabled(it) } },
+        addGradientStop = { presenter.act { editorStyle.colorStudio.addStopAt(0.5f) } },
+        selectGradientStop = { presenter.act { editorStyle.colorStudio.selectStop(it) } },
+        removeGradientStop = { presenter.act { editorStyle.colorStudio.removeActiveStop() } },
+        setGradientKind = { presenter.act { editorStyle.colorStudio.setGradientKind(it) } },
+        moveGradientStop = { presenter.act { editorStyle.colorStudio.moveActiveStop(it) } },
+        setGradientStopOpacity = { presenter.act { editorStyle.colorStudio.previewAlpha(it) } },
+        setGradientAngle = { presenter.act { editorStyle.colorStudio.setGradientAngle(it) } },
+        reverseGradient = { presenter.act { editorStyle.colorStudio.reverseGradient() } },
+        reorderGradientStop = { presenter.act { editorStyle.colorStudio.reorderActiveStop(it) } },
+        setFontQuery = { presenter.act { editorStyle.fontBrowser.setQuery(it) } },
+        setFontTab = { presenter.act { editorStyle.fontBrowser.setTab(it) } },
+        setFontCategory = { presenter.act { editorStyle.fontBrowser.setCategory(it) } },
+        setFontRole = { presenter.act { editorStyle.fontBrowser.setRole(it) } },
+        setFontScript = { presenter.act { editorStyle.fontBrowser.setScript(it) } },
+        setVariableOnly = { presenter.act { editorStyle.fontBrowser.setVariableOnly(it) } },
+        selectFont = { identity -> presenter.act { editorStyle.applyFont(identity) } },
+        toggleFavorite = { presenter.act { editorStyle.fontBrowser.toggleFavorite(it) } },
+        importFont = launchImport,
+        removeImportedFont = removeImport,
+        applyStyle = { presenter.act { editorStyle.applyNamedStyle(it) } },
+        setStyleNameDraft = { presenter.act { editorStyle.setStyleNameDraft(it) } },
+        createStyle = { presenter.act { editorStyle.createStyleFromDraft() } },
+        updateStyle = { presenter.act { editorStyle.updateStyleFromSelection(it) } },
+        detachStyle = { presenter.act { editorStyle.detachStyle() } },
+        clearFormatting = { presenter.act { editorStyle.clearFormatting() } },
+        setTokenNameDraft = { presenter.act { editorStyle.setTokenNameDraft(it) } },
+        createColorToken = { presenter.act { editorStyle.createColorTokenFromDraft() } },
+        updateColorToken = { presenter.act { editorStyle.updateColorToken(it) } },
+        applyColorToken = { presenter.act { editorStyle.applyColorToken(it) } },
+    )
+    val dismiss = { presenter.act { closeSurface(surfaceId, DismissTrigger.OUTSIDE_TAP) } }
+    when (state.presentationMode) {
+        PresentationMode.PHONE_SHEET, PresentationMode.PHONE_POPOVER -> {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+            ModalBottomSheet(onDismissRequest = dismiss, sheetState = sheetState) {
+                EditorStyleSurface(surfaceId, state.editorStyle, rows, sections, actions)
+            }
+        }
+        PresentationMode.TABLET_PANE, PresentationMode.EXPANDED_THREE_PANEL -> Box(Modifier.fillMaxSize()) {
+            ElevatedCard(
+                Modifier.align(Alignment.CenterEnd).width(FLOW_PANE_WIDTH).padding(16.dp),
+            ) { EditorStyleSurface(surfaceId, state.editorStyle, rows, sections, actions) }
         }
     }
 }

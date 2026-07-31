@@ -6,6 +6,8 @@ import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.TodoListBlock
+import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.domain.supportsStyle
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.plainText
 import com.norfold.app.editor.command.CommandRegistry
@@ -29,6 +31,13 @@ import com.norfold.app.editor.surface.DispatchResult
 import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.surface.SurfaceCoordinator
 import com.norfold.app.editor.surface.ToolSurface
+import com.norfold.app.editor.style.EditorStyleRuntime
+import com.norfold.app.editor.style.EditorStyleSelection
+import com.norfold.app.editor.style.EditorStyleUiState
+import com.norfold.app.editor.style.StyleController
+import com.norfold.app.editor.style.EditorStyleCommands
+import com.norfold.app.domain.style.FontRegistry
+import com.norfold.app.domain.style.ColorRole
 
 /** Ids of the tool surfaces FlowHost opens on the [SurfaceCoordinator] stack. */
 object FlowSurfaces {
@@ -40,6 +49,9 @@ object FlowSurfaces {
 
     /** The "Turn into" child surface opened from the dock or block menu. */
     const val CONVERT_MENU = "flow.surface.convert"
+    const val COLOR_STUDIO = "editor.surface.colorStudio"
+    const val FONT_BROWSER = "editor.surface.fontBrowser"
+    const val NAMED_STYLES = "editor.surface.namedStyles"
 
     /** The retarget domain every Flow surface is compatible with (§5.6). */
     const val DOMAIN = "flow"
@@ -147,6 +159,7 @@ data class FlowHostUiState(
     val canRedo: Boolean,
     val showMultiSelectHint: Boolean,
     val lastFailure: String?,
+    val editorStyle: EditorStyleUiState,
 )
 
 /**
@@ -175,6 +188,7 @@ class FlowHostRuntime(
     initialFormFactor: FormFactor,
     val memory: InteractionMemory = InteractionMemory(),
     private val instrumentation: FlowHostInstrumentation = FlowHostInstrumentation.None,
+    fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
 ) {
 
     val scope: FlowCommandScope = FlowCommandScope(controller)
@@ -182,6 +196,71 @@ class FlowHostRuntime(
     val slashResolver: FlowSlashResolver = FlowSlashResolver(scope, registry)
     val surfaces: SurfaceCoordinator = SurfaceCoordinator()
     val presentation: AdaptivePresentationRuntime = AdaptivePresentationRuntime(initialFormFactor)
+    val styleController = StyleController(
+        mutate = { label, mutation ->
+            controller.mutate(label) { session ->
+                mutation(session)
+                val id = scope.primaryBlockId()
+                    ?.takeIf { session.document.findById(it) != null }
+                    ?: session.document.blocks.first().id
+                BlockCursor(id, 0)
+            } != null
+        },
+        documentProvider = controller::document,
+    )
+    val editorStyle = EditorStyleRuntime(
+        host = "flow",
+        controller = styleController,
+        registry = fontRegistry,
+        selection = {
+            val document = controller.document()
+            val selected = scope.selectedBlockIds().ifEmpty { listOfNotNull(scope.primaryBlockId()) }
+            EditorStyleSelection(
+                textBlockIds = selected.filter { id ->
+                    document.findById(id)?.let { it.supportsStyle() && it !is ShapeBlock } == true
+                },
+                shapeBlockIds = selected.filter { document.findById(it) is ShapeBlock },
+                selectedText = selected.mapNotNull { document.findById(it)?.plainText() }
+                    .joinToString("\n").take(256),
+            )
+        },
+        onChanged = { revision++ },
+    )
+
+    init {
+        EditorStyleCommands.register(
+            registry = registry,
+            textColor = { openStyleColor(ColorRole.TEXT) },
+            highlight = { openStyleColor(ColorRole.HIGHLIGHT) },
+            fill = { openStyleColor(ColorRole.FILL) },
+            stroke = { openStyleColor(ColorRole.STROKE) },
+            pageBackground = { CommandResult.Failure("Page backgrounds are available in Document mode") },
+            fontBrowser = { openStyleFont() },
+            namedStyles = { openNamedStyles() },
+            clearFormatting = {
+                val count = editorStyle.clearFormatting()
+                if (count > 0) CommandResult.Success(count) else CommandResult.NoOp
+            },
+        )
+    }
+
+    private fun openStyleColor(role: ColorRole): CommandResult {
+        if (!editorStyle.openColor(role)) return CommandResult.Failure("Select compatible content first")
+        openSurface(FlowSurfaces.COLOR_STUDIO, SurfaceClass.CONTINUOUS_TOOL, scope.primaryBlockId())
+        return CommandResult.Success(scope.selectedBlockIds().size.coerceAtLeast(1))
+    }
+
+    private fun openStyleFont(): CommandResult {
+        if (!editorStyle.openFont()) return CommandResult.Failure("Select text first")
+        openSurface(FlowSurfaces.FONT_BROWSER, SurfaceClass.PICKER_BROWSER, scope.primaryBlockId())
+        return CommandResult.Success(scope.selectedBlockIds().size.coerceAtLeast(1))
+    }
+
+    private fun openNamedStyles(): CommandResult {
+        if (scope.selectedBlockIds().isEmpty()) return CommandResult.Failure("Select content first")
+        openSurface(FlowSurfaces.NAMED_STYLES, SurfaceClass.PICKER_BROWSER, scope.primaryBlockId())
+        return CommandResult.Success(scope.selectedBlockIds().size)
+    }
 
     /** This note, for [MemoryScope.ARTIFACT_UI] keying. */
     val artifactId: String get() = controller.target.id
@@ -885,6 +964,7 @@ class FlowHostRuntime(
         // A closed tool's session state is finished; its presentation state is not "reflowed away" but done.
         memory.endToolSession(surfaceId)
         presentation.close(surfaceId)
+        if (surfaceId == FlowSurfaces.COLOR_STUDIO) editorStyle.closeColor(cancelAdjustment = true)
     }
 
     // ── Adaptive presentation (deliverable 7) ─────────────────────────────────────────────────────────
@@ -911,6 +991,7 @@ class FlowHostRuntime(
     private fun compactPreferenceFor(surfaceId: String?): CompactPreference = when (surfaceId) {
         // The palette is a browsable catalogue; on a phone it deserves a sheet, not a cramped popover (§2.8).
         FlowSurfaces.INSERT_PALETTE, FlowSurfaces.CONVERT_MENU -> CompactPreference.SHEET
+        FlowSurfaces.COLOR_STUDIO, FlowSurfaces.FONT_BROWSER, FlowSurfaces.NAMED_STYLES -> CompactPreference.SHEET
         else -> CompactPreference.POPOVER
     }
 
@@ -979,6 +1060,7 @@ class FlowHostRuntime(
             canRedo = controller.canRedo(),
             showMultiSelectHint = showMultiSelectHint(),
             lastFailure = lastFailure,
+            editorStyle = editorStyle.uiState(),
         )
     }
 
