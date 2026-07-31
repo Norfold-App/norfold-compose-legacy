@@ -1,7 +1,7 @@
-# D9 — Font-Delivery Benchmark (Phase 0)
+# D9 — Font-Delivery Benchmark (Phase 3 measured result)
 
 **Class:** `BENCHMARK` (Roadmap R7) — measured, not assumed.
-**Status:** Decision recorded. **Delivery is NOT implemented in Phase 0.**
+**Status:** **Implemented and measured from the Phase-3 debug APK.**
 **Spec basis:** §9.6 (the 30 guaranteed-offline families), §9.8–§9.9 (import + package-size
 targets), §20.7 (resolution: variable builds, script subsetting, asset delivery, measured
 packaging), §18.16, revision #10.
@@ -38,28 +38,38 @@ These thresholds are for the **whole base download**, not for fonts alone. The f
 must fit *within* the app's total budget, so the smaller it is, the more headroom the rest of the
 app keeps.
 
-## 3. Measurement method and honesty caveat
+## 3. Measurement method
 
-This is a **measure-only** deliverable and the local environment has **no font-optimization
-toolchain** (`fontTools` / `pyftsubset` absent; no font binaries vendored in the repo). Therefore
-the numbers below are a **grounded estimate**, not a produced-artifact measurement:
+The Phase-3 measurement is taken from the produced artifact, not from a projection:
 
-- **One direct local anchor** was taken: the system copy of `NotoSans[wght].ttf` (a `wght`
-  variable font, full unsubsetted glyph coverage) measures **712,460 bytes (≈ 696 KB)**. This
-  calibrates the "full variable, unsubset" end of the range for a large-coverage family.
-- The remaining 29 families are estimated from **published upstream release file sizes** for their
-  variable builds (Latin/Latin-ext subset) and, where no official variable build ships, the
-  necessary static faces. Each is labelled as an estimate.
-- The estimate deliberately reports **two columns**: a *naive* worst case (all static weights,
-  unsubset, full Unicode coverage) and the *optimized* case the spec actually mandates
-  (§20.7: variable builds + script subsetting + only-necessary static faces).
+- artifact: `apps/android/build/outputs/apk/debug/android-debug.apk`;
+- APK SHA-256: `7f57f4599e87c47eca32a224ff2809e27be76478d5fb03bc345aa3d9706cb7a4`;
+- family and face counts come from `assets/fonts/manifest.json` and are cross-checked against the
+  ZIP entries actually present in the APK;
+- raw and compressed contributions come from `zipinfo -t` over
+  `assets/fonts/faces/*`;
+- the 30 license files and the packaged manifest are measured separately from the face payload.
 
-Before implementation (Phase 8+, when font delivery is actually built), these estimates **must be
-re-measured** with `pyftsubset` against the exact chosen faces and axes, and this artifact updated.
-The **decision** recorded in §6 is robust across the whole estimate range (see §7 sensitivity), so
-it does not depend on the estimate being exact.
+The debug APK includes debug/runtime overhead and is therefore a conservative package-size proof.
+A store-delivered AAB split may be smaller, but this benchmark does not claim a value that was not
+produced and inspected.
 
-## 4. Per-family estimate (30 guaranteed families, §9.6)
+## 4. Produced package measurement and historical estimate (30 guaranteed families, §9.6)
+
+| Produced artifact metric | Result |
+|---|---:|
+| Guaranteed families in manifest | **30** |
+| Font faces in manifest | **65** |
+| Font face files present in APK | **65** |
+| License files present in APK | **30** |
+| Face payload, raw | **14,055,364 bytes (13.40 MiB)** |
+| Face payload, APK-compressed | **7,811,558 bytes (7.45 MiB)** |
+| Full font asset tree, raw (faces + licenses + manifest) | **14,224,564 bytes (13.57 MiB)** |
+| Full font asset tree, APK-compressed | **7,881,690 bytes (7.52 MiB)** |
+| Total debug APK | **53,668,253 bytes (51.18 MiB)** |
+
+The table below is retained as the Phase-0 planning estimate for traceability. The produced totals
+above are authoritative for Phase 3.
 
 Optimized = variable build where one ships (axes limited to `wght`, plus `ital`/`opsz` only where
 the design needs it), subset to the scripts the family is bundled for (Latin/Latin-ext for the
@@ -101,20 +111,22 @@ Latin families; Bengali + Latin for the Bangla families). Naive = every static w
 
 ## 5. Findings
 
-- **Optimized bundle ≈ 8.5 MB** for all 30 guaranteed families (variable builds + script
-  subsetting + necessary statics, per §20.7). Add a conservative **+30 % margin** for hinting
-  tables, packaging overhead, and families that need an extra italic/opsz axis → **≈ 11 MB**.
-- **Naive worst case ≈ 37.5 MB** (every static weight, unsubset, full Unicode). Even this
-  never-do-this figure sits **far below the 120 MB preferred threshold**.
-- Font contribution therefore consumes **< 10 %** of the *preferred* base-download band even at
-  the realistic estimate, and **≈ 31 %** at the absurd naive extreme.
-- No band boundary (120 / 150 / 180 MB) is approached by the font payload alone under any column.
+- The real 65-face payload is **13.40 MiB raw / 7.45 MiB compressed**. Compression reduces the
+  face contribution by 44.4%.
+- The complete debug APK is **51.18 MiB**, safely below the preferred ~120 MB boundary and far
+  below the mandatory-review and hard-stop boundaries.
+- Font faces account for about **14.6% of the compressed debug APK**. Licenses plus manifest add
+  only about 70 KiB compressed.
+- All 30 guaranteed identities enumerate and resolve from packaged assets. The former Android
+  Google Fonts provider dependency, certificate resource, and runtime-fetch catalogue have been
+  removed from the guaranteed path.
+- The two Bangla sans/serif families plus Hind Siliguri and Tiro Bangla are locally packaged and
+  advertise Bengali script coverage in the registry.
 
-## 6. Decision (recorded, not implemented)
+## 6. Decision (implemented)
 
-> **Bundle the 30 guaranteed families directly in the Android App Bundle (AAB), as optimized
-> variable builds with script subsetting (§20.7). Do NOT introduce an install-time asset pack for
-> the guaranteed set.**
+> **Bundle the 30 guaranteed families directly in the Android package. Do NOT introduce an
+> install-time asset pack or provider request for the guaranteed set.**
 
 Rationale:
 
@@ -132,25 +144,28 @@ Rationale:
 4. **The hard constraint is honoured.** Nothing is removed from the professional library to hit a
    size target (§9.9, §20.7).
 
-**Contingency (recorded for later phases, not now):** if the *extended catalogue* (§9.7) or
+**Contingency:** if the *extended catalogue* (§9.7) or
 additional bundled scripts later push the total base download toward the 150 MB review band, the
 install-time asset pack is the correct tool **at that point** — applied to the extended/optional
-tiers, never to the guaranteed 30. Re-run this benchmark with a real `pyftsubset` pass when font
-delivery is implemented (Phase 8+) and update §4–§5 with produced measurements.
+tiers, never to the guaranteed 30. Re-run this produced-artifact measurement after any material
+font-set or packaging change.
 
-## 7. Sensitivity (why the decision is safe despite estimated inputs)
+## 7. Sensitivity
 
-The decision "bundle in AAB, no asset pack" only flips if the guaranteed-30 payload could plausibly
-approach the 120 MB preferred ceiling. To get there from the optimized estimate would require the
-true size to be **~14×** the estimate; from the naive worst case, **~3.2×**. Neither is physically
-possible for 30 subsetted font families — a single unsubset full-Unicode variable font of the
-largest coverage measured here is < 0.7 MB (§3 anchor). The conclusion is therefore stable across
-the entire credible error range of the estimate, which is why it is recorded now and the exact
-`pyftsubset` measurement is deferred to implementation time without risk to the decision.
+The produced debug APK has roughly 68.8 MiB of headroom before the preferred ~120 MB boundary.
+The packaged face payload would have to grow by more than nine times its current compressed size
+before fonts alone consumed that headroom. The decision remains safe, while the explicit 150 MB
+review gate protects future script/catalogue expansion.
 
 ## 8. Scope boundaries honoured
 
-- No font binaries were added to the repository.
-- `NorfoldFonts.kt`, `FontCatalogPicker.kt`, `font_certs.xml`, and the assets directory were **not
-  modified**. Delivery-model replacement is a later-phase task; Phase 0 records the decision only.
-- No user-visible behavior changed.
+- The guaranteed registry uses only app-private packaged assets and performs no network/provider
+  request during enumeration or resolution.
+- Each bundled family has explicit license metadata and a packaged license file: 29 OFL families
+  and one Apache-2.0 family (Roboto Slab).
+- The optional extended catalogue is not shipped in Phase 3; no incomplete download path is hidden
+  behind the Font Browser.
+- Imported fonts are validated before being atomically copied into controlled private storage and
+  remain `PRIVATE_LOCAL`; their source URI is not the durable reference.
+- Physical airplane-mode rendering remains a separate device certification and is not inferred
+  from these unit/package checks.
