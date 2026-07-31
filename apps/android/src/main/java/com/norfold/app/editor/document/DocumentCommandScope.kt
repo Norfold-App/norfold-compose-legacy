@@ -47,12 +47,16 @@ class DocumentCommandScope(
     /**
      * An explicit template for new pages, or null while new pages inherit from the page they follow.
      *
+     * Read from the **document** rather than held here, so it survives a session being recreated. A field on
+     * this scope would behave identically for the length of one session and then be silently gone — which is
+     * the precise difference between a preference the user set and a preference the app remembered.
+     *
      * Null rather than a pre-filled default so the two behaviours stay distinguishable: until the user says
      * otherwise, inserting a page into a Letter document should produce a Letter page, and a stored default
      * would quietly override that with whatever it was seeded from.
      */
-    var newPageTemplateOverride: PageGeometry? = null
-        private set
+    val newPageTemplateOverride: PageGeometry?
+        get() = controller.newPageTemplate()
 
     /**
      * The geometry a page inserted right now would get: the explicit template if the user set one, else the
@@ -65,11 +69,19 @@ class DocumentCommandScope(
         newPageTemplateOverride ?: activePage()?.geometry ?: PageGeometry.a4()
 
     /**
-     * Sets the new-page template. Deliberately not a history transaction: nothing in the document changed,
-     * and an undo step that visibly does nothing is worse than no undo step at all.
+     * Sets the new-page template, durably.
+     *
+     * This *is* a history transaction, unlike the earlier in-memory version: the preference outlives the
+     * session, so it has to be saved, and anything saved through this controller is undoable. The undo step
+     * is not "visibly does nothing" — it restores a default the user deliberately changed.
      */
     fun applyToNewPageTemplate(change: (PageGeometry) -> PageGeometry) {
-        newPageTemplateOverride = change(newPageTemplate()).normalized()
+        controller.setNewPageTemplate(change(newPageTemplate()))
+    }
+
+    /** Clears the explicit template, returning new pages to inheriting from the page they follow. */
+    fun clearNewPageTemplate() {
+        controller.setNewPageTemplate(null, "Clear new page default")
     }
 
     fun document(): BlockDocument = controller.document()

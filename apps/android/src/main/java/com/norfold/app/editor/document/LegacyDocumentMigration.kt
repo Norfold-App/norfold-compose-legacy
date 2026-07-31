@@ -84,6 +84,26 @@ object LegacyDocumentMigration {
             if (preserved.isNotEmpty()) append(" · ${preserved.size} preserved as-is")
             if (orphanedPlacements.isNotEmpty()) append(" · ${orphanedPlacements.size} stale position(s) ignored")
         }
+
+        /**
+         * What a refusal is actually refusing over, in terms the owner can act on.
+         *
+         * Names the first few orphaned placements rather than only counting them: "3 stale positions" tells
+         * the owner nothing they can check, whereas the ids are something they can look for. The full list
+         * stays available in [orphanedPlacements] — this is the readable projection of it, not a replacement.
+         */
+        fun refusalDetail(): String {
+            if (isLossless) return ""
+            val shown = orphanedPlacements.take(3).joinToString(", ")
+            val rest = orphanedPlacements.size - 3
+            return buildString {
+                append("${orphanedPlacements.size} stored position")
+                append(if (orphanedPlacements.size == 1) "" else "s")
+                append(" no longer matches any content ($shown")
+                if (rest > 0) append(", +$rest more")
+                append("). Your document is unchanged and open in the classic editor.")
+            }
+        }
     }
 
     /** True when [document] is already a bounded scene and needs no migration. */

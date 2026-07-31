@@ -1,13 +1,20 @@
 package com.norfold.app.editor.document
 
 import com.norfold.app.domain.DocPagePreset
+import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DocumentPageBlock
 import com.norfold.app.domain.PageColumns
 import com.norfold.app.domain.PageGeometry
 import com.norfold.app.domain.PageMargins
+import com.norfold.app.domain.PageNumberFormat
 import com.norfold.app.domain.PageOrientation
+import com.norfold.app.domain.POINTS_PER_MM
+import com.norfold.app.domain.ParagraphBlock
+import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneLock
 import com.norfold.app.domain.SceneObject
+import com.norfold.app.domain.SceneObjectKind
+import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.sectionIndices
 import com.norfold.app.editor.command.ApplicabilityPolicy
 import com.norfold.app.editor.command.Capability
@@ -128,14 +135,10 @@ class ReorderObjectCommand(
 
     override fun runOn(targetIds: List<String>): CommandResult {
         if (targetIds.isEmpty()) return CommandResult.Failure(unavailableReason())
-        // Front-ward moves are applied back-to-front (and vice versa) so a multi-object reorder preserves
-        // the objects' relative order instead of inverting it as each one leapfrogs the last.
-        val ordered = when (move) {
-            LayerMove.FORWARD, LayerMove.TO_FRONT -> targetIds
-            LayerMove.BACKWARD, LayerMove.TO_BACK -> targetIds.reversed()
-        }
-        val affected = ordered.count { scope.controller.reorderObject(it, move) }
-        return if (affected > 0) CommandResult.Success(affected) else CommandResult.NoOp
+        // One transaction for the whole selection. Reordering each target separately would put four Undos
+        // behind one "bring to front", and the controller already preserves the selection's relative order.
+        val moved = scope.controller.reorderObjects(targetIds, move)
+        return if (moved) CommandResult.Success(targetIds.size) else CommandResult.NoOp
     }
 }
 
@@ -148,7 +151,8 @@ class DuplicateObjectsCommand(scope: DocumentCommandScope) : SceneObjectCommand(
 
     override fun runOn(targetIds: List<String>): CommandResult {
         if (targetIds.isEmpty()) return CommandResult.Failure(unavailableReason())
-        val created = targetIds.mapNotNull { scope.controller.duplicateObject(it) }
+        // One transaction for the whole selection: duplicating per object would put N Undos behind one action.
+        val created = scope.controller.duplicateObjects(targetIds)
         if (created.isEmpty()) return CommandResult.NoOp
         // §4.14: the produced results become the selection, so the user manipulates the copy they just made.
         scope.applyOutcome(scope.selectResult(created))
@@ -205,6 +209,64 @@ class SetObjectLockCommand(
         if (targetIds.isEmpty()) return CommandResult.Failure(unavailableReason())
         val changed = scope.controller.setLock(targetIds, lock)
         return if (changed) CommandResult.Success(targetIds.size) else CommandResult.NoOp
+    }
+}
+
+/**
+ * Inserts a new object on the active page (roadmap Phase 2 §7).
+ *
+ * Three things this deliberately does, because each one is a way insertion usually goes wrong:
+ *
+ *  - it names the page **explicitly** (the active page), rather than inferring one from a scroll position.
+ *    "The page you can mostly see" is ambiguous exactly when two are half-visible, and landing content on
+ *    the wrong page is a silent misplacement the user finds much later;
+ *  - the object and its content both get fresh ids, so inserting twice can never produce two objects that
+ *    anything resolving by id would confuse for each other;
+ *  - the new object becomes the selection (§4.14), so the very next gesture manipulates the thing that was
+ *    just created instead of whatever was selected before.
+ *
+ * Placement is the page's content origin plus a per-object cascade, so repeated inserts stair-step instead of
+ * stacking invisibly at one point.
+ */
+class InsertSceneObjectCommand(
+    scope: DocumentCommandScope,
+    private val kind: SceneObjectKind,
+    override val id: String,
+    override val label: String,
+    private val size: SceneGeometry,
+    private val content: () -> DocumentBlock,
+) : DocumentCommand(scope) {
+    override val category = "Insert"
+    override val granularity = SelectionGranularity.DOC_PAGE
+    override val requiredCapabilities: Set<Capability> = emptySet()
+    override val applicability = ApplicabilityPolicy.PRIMARY_TARGET
+    override val aliases = listOf("insert", "add", "new")
+
+    override fun refine(resolution: ApplicabilityResolution?): CommandStatus =
+        if (scope.activePage() == null) CommandStatus.disabled("No page to insert onto")
+        else CommandStatus.Available
+
+    override fun runOn(targetIds: List<String>): CommandResult {
+        val page = scope.activePage() ?: return CommandResult.Failure("No page to insert onto")
+        val geometry = size.copy(
+            x = page.geometry.contentLeft + cascade(page.objects.size),
+            y = page.geometry.contentTop + cascade(page.objects.size),
+        ).normalized()
+        val obj = SceneObject(kind = kind, geometry = geometry, content = content())
+        if (!scope.controller.addObject(page.id, obj, "Insert ${label.lowercase()}")) {
+            return CommandResult.Failure("Could not insert")
+        }
+        scope.applyOutcome(scope.selectResult(listOf(obj.id)))
+        return CommandResult.Success(1)
+    }
+
+    private fun cascade(index: Int): Float = (index % CASCADE_WRAP) * CASCADE_STEP
+
+    private companion object {
+        const val CASCADE_STEP = 18f
+
+        /** After this many, the cascade restarts rather than walking off the sheet. */
+        const val CASCADE_WRAP = 8
     }
 }
 
@@ -414,6 +476,94 @@ class ApplyPageGeometryCommand(
 }
 
 /**
+ * A page-setup control whose change needs a **value the user supplies** — a custom width in millimetres, a
+ * background colour, a numbering restart, a guide position.
+ *
+ * Separate from [DocumentCommands.PageSetupControl] because the two answer different questions. A fixed
+ * control ("A4", "Two columns") is fully described by its change function and can be a catalogue entry
+ * outright. A value control cannot: "custom width" is not a command until there is a width. Modelling them as
+ * one type would mean every fixed control carrying an unused value slot, and every value control pretending
+ * to have a default that the ACTIVE/MIXED logic would then report on.
+ *
+ * The value arrives as a string because that is what a text field holds, and [parse] is the single place it
+ * becomes a number. A control that took a `Float` would push parsing — and therefore the `NaN`/blank/overflow
+ * decisions — out to each call site.
+ */
+data class PageValueControl(
+    val key: String,
+    val label: String,
+    val group: String,
+    val kind: Kind,
+    /** The value to show in the field for a page currently in this state. */
+    val valueOf: (PageGeometry) -> String,
+    /** The geometry [raw] produces, or null when [raw] is not a usable value for this control. */
+    val apply: (PageGeometry, String) -> PageGeometry?,
+) {
+    /** What kind of input the surface should present. Presentation only — parsing lives in [apply]. */
+    enum class Kind { LENGTH_MM, LENGTH_PT, COLOR, INTEGER, TEXT, GUIDES, NUMBER_FORMAT }
+
+    val id: String get() = "document.page.$key"
+}
+
+/**
+ * One page-setup control driven by a user-supplied value, at a chosen [PageScope].
+ *
+ * Shares every rule with [ApplyPageGeometryCommand] — the same scope resolution, the same structure-lock
+ * refusal, one canonical transaction — because they are the same operation differing only in where the new
+ * geometry comes from. Duplicating those three rules for value controls is precisely how the structure lock
+ * would end up enforced for presets and forgotten for custom sizes.
+ */
+class ApplyPageValueCommand(
+    scope: DocumentCommandScope,
+    private val control: PageValueControl,
+    private val pageScope: PageScope,
+    private val raw: String,
+) : PageCommand(scope) {
+    override val id = control.id
+    override val label = control.label
+    override val aliases = listOf("page setup", "page settings")
+
+    override fun refine(resolution: ApplicabilityResolution?): CommandStatus {
+        if (pageScope == PageScope.NewPagesByDefault) return CommandStatus.Available
+        val pages = scopedPageIds(pageScope).mapNotNull { scope.controller.page(it) }
+        if (pages.isEmpty()) return CommandStatus.disabled("No page selected")
+        if (pages.all { it.geometry.structureLocked }) {
+            return CommandStatus.disabled("Page structure is locked — unlock it to change page setup")
+        }
+        // MIXED is a real answer here: with a multi-page scope the honest report for "what is the width" is
+        // often "different on different pages", and picking one of them would be a lie the field then shows.
+        val values = pages.mapTo(LinkedHashSet()) { control.valueOf(it.geometry) }
+        return if (values.size > 1) CommandStatus.Mixed else CommandStatus.Available
+    }
+
+    override fun runOn(targetIds: List<String>): CommandResult {
+        // Rejected before anything is touched: a value that does not parse must leave the document exactly as
+        // it was, not clamp itself to a default the user never asked for.
+        if (control.apply(scope.newPageTemplate(), raw) == null) {
+            return CommandResult.Failure("'$raw' is not a valid ${control.label.lowercase()}")
+        }
+        if (pageScope == PageScope.NewPagesByDefault) {
+            scope.applyToNewPageTemplate { geometry -> control.apply(geometry, raw) ?: geometry }
+            return CommandResult.Success(0, PageScope.NEW_PAGE_CONFIRMATION)
+        }
+        val ids = scopedPageIds(pageScope)
+        if (ids.isEmpty()) return CommandResult.Failure("No page selected")
+        val changed = scope.controller.editPageGeometry(ids, label, force = false) { geometry ->
+            control.apply(geometry, raw) ?: geometry
+        }
+        if (!changed) {
+            val locked = ids.mapNotNull { scope.controller.page(it) }.any { it.geometry.structureLocked }
+            return if (locked) {
+                CommandResult.Failure("Page structure is locked — unlock it to change page setup")
+            } else {
+                CommandResult.NoOp
+            }
+        }
+        return CommandResult.Success(ids.count { scope.controller.page(it) != null })
+    }
+}
+
+/**
  * Which pages a Page Control change applies to (roadmap Phase 2 §5).
  *
  * "Apply settings to…" is a real scope selector rather than a checkbox, because the same change means
@@ -531,6 +681,24 @@ object DocumentCommands {
             SetObjectLockCommand(scope, SceneLock.Full, "document.object.lock", "Lock"),
             SetObjectLockCommand(scope, SceneLock.None, "document.object.unlock", "Unlock"),
 
+            // Insertion
+            InsertSceneObjectCommand(
+                scope = scope,
+                kind = SceneObjectKind.TextFrame,
+                id = DocumentIds.INSERT_TEXT,
+                label = "Text frame",
+                size = SceneGeometry(width = 240f, height = 96f),
+                content = { ParagraphBlock() },
+            ),
+            InsertSceneObjectCommand(
+                scope = scope,
+                kind = SceneObjectKind.Shape,
+                id = DocumentIds.INSERT_SHAPE,
+                label = "Shape",
+                size = SceneGeometry(width = 160f, height = 160f),
+                content = { ShapeBlock() },
+            ),
+
             // Pages
             InsertPageCommand(scope, after = true),
             InsertPageCommand(scope, after = false),
@@ -607,6 +775,21 @@ object DocumentCommands {
         PageSetupControl("oneColumn", "One column", "Columns") { it.copy(columns = PageColumns(1)) },
         PageSetupControl("twoColumns", "Two columns", "Columns") { it.copy(columns = PageColumns(2)) },
         PageSetupControl("threeColumns", "Three columns", "Columns") { it.copy(columns = PageColumns(3)) },
+        PageSetupControl("noMargins", "No margins", "Margins") { it.copy(margins = PageMargins.NONE) },
+        // Background and border are presented as clear/set pairs rather than only as value fields, because
+        // "remove the background" is a distinct intent from "type a colour" and a field cannot express it.
+        PageSetupControl(
+            "clearBackground", "No background", "Background",
+            activeWhen = { it.background == null },
+        ) { it.copy(background = null) },
+        PageSetupControl(
+            "clearBorder", "No border", "Border",
+            activeWhen = { !it.border.isVisible },
+        ) { it.copy(border = it.border.copy(color = null)) },
+        PageSetupControl(
+            "showBorder", "Show border", "Border",
+            activeWhen = { it.border.isVisible },
+        ) { it.copy(border = it.border.copy(color = it.border.color ?: DEFAULT_BORDER_COLOR)) },
         // Toggles need an explicit predicate: a toggle's change is never a no-op, so the derived answer
         // would report every one of them as inactive and the sheet would never show what is switched on.
         PageSetupControl("toggleGrid", "Show grid", "Grid", activeWhen = { it.grid.visible }) {
@@ -614,6 +797,15 @@ object DocumentCommands {
         },
         PageSetupControl("toggleSnapGrid", "Snap to grid", "Grid", activeWhen = { it.grid.snapToGrid }) {
             it.copy(grid = it.grid.copy(snapToGrid = !it.grid.snapToGrid))
+        },
+        PageSetupControl("clearGuides", "Clear custom guides", "Grid") {
+            it.copy(grid = it.grid.copy(verticalGuides = emptyList(), horizontalGuides = emptyList()))
+        },
+        PageSetupControl(
+            "differentFirstPage", "Different first page", "Header & footer",
+            activeWhen = { it.headerFooter.differentFirstPage },
+        ) {
+            it.copy(headerFooter = it.headerFooter.copy(differentFirstPage = !it.headerFooter.differentFirstPage))
         },
         PageSetupControl(
             "startSection", "Start section here", "Sections",
@@ -623,12 +815,221 @@ object DocumentCommands {
             "showNumbers", "Show page numbers", "Sections",
             activeWhen = { it.numbering.showNumber },
         ) { it.copy(numbering = it.numbering.copy(showNumber = !it.numbering.showNumber)) },
+        PageSetupControl(
+            "continueNumbering", "Continue numbering", "Sections",
+            activeWhen = { it.numbering.restartAt == null },
+        ) { it.copy(numbering = it.numbering.copy(restartAt = null)) },
         // Restoring defaults deliberately keeps the lock state: it resets the page's setup, not the
         // user's decision about whether that setup may be changed at all.
         PageSetupControl("restoreDefaults", "Restore page defaults", "Reset") {
             PageGeometry.ofPreset(DocPagePreset.A4).copy(structureLocked = it.structureLocked)
         },
+    ) + PageNumberFormat.entries.map { format ->
+        // One control per format rather than a cycling toggle: a cycle makes "set Roman numerals" take an
+        // unpredictable number of taps and gives the sheet no way to show which format is actually on.
+        PageSetupControl(
+            key = "numberFormat${format.name}",
+            label = format.displayLabel(),
+            group = "Numbering format",
+            activeWhen = { it.numbering.format == format },
+        ) { it.copy(numbering = it.numbering.copy(format = format)) }
+    }
+
+    /** Used when the user asks for a border without naming a colour. */
+    private const val DEFAULT_BORDER_COLOR: Long = 0xFF9E9E9E
+
+    /**
+     * The value-driven Page Control catalogue: everything that needs a number, a colour or a word from the
+     * user rather than a preset.
+     *
+     * Each entry parses its own input and returns null for anything unusable, so a blank field or a typo
+     * leaves the page exactly as it was instead of clamping to a default the user never chose.
+     */
+    val PAGE_VALUE_CONTROLS: List<PageValueControl> = listOf(
+        PageValueControl(
+            key = "customWidthMm",
+            label = "Width (mm)",
+            group = "Size",
+            kind = PageValueControl.Kind.LENGTH_MM,
+            valueOf = { millimetres(it.width) },
+        ) { geometry, raw ->
+            val mm = raw.toLengthOrNull() ?: return@PageValueControl null
+            // Through `withSizeMm`, so both canonical limits — 2000 mm per side *and* 2 m² of area — are
+            // applied by the one function that composes them in the right order.
+            geometry.withSizeMm(mm, geometry.height / POINTS_PER_MM)
+        },
+        PageValueControl(
+            key = "customHeightMm",
+            label = "Height (mm)",
+            group = "Size",
+            kind = PageValueControl.Kind.LENGTH_MM,
+            valueOf = { millimetres(it.height) },
+        ) { geometry, raw ->
+            val mm = raw.toLengthOrNull() ?: return@PageValueControl null
+            geometry.withSizeMm(geometry.width / POINTS_PER_MM, mm)
+        },
+        PageValueControl(
+            key = "marginTop", label = "Top margin (pt)", group = "Margins",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.margins.top) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(margins = g.margins.copy(top = it)) } },
+        PageValueControl(
+            key = "marginRight", label = "Right margin (pt)", group = "Margins",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.margins.right) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(margins = g.margins.copy(right = it)) } },
+        PageValueControl(
+            key = "marginBottom", label = "Bottom margin (pt)", group = "Margins",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.margins.bottom) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(margins = g.margins.copy(bottom = it)) } },
+        PageValueControl(
+            key = "marginLeft", label = "Left margin (pt)", group = "Margins",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.margins.left) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(margins = g.margins.copy(left = it)) } },
+        PageValueControl(
+            key = "columnCount", label = "Columns", group = "Columns",
+            kind = PageValueControl.Kind.INTEGER,
+            valueOf = { it.columns.count.toString() },
+        ) { g, raw -> raw.toCountOrNull()?.let { g.copy(columns = g.columns.copy(count = it)) } },
+        PageValueControl(
+            key = "columnGutter", label = "Gutter (pt)", group = "Columns",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.columns.gutter) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(columns = g.columns.copy(gutter = it)) } },
+        PageValueControl(
+            key = "backgroundColor", label = "Background colour", group = "Background",
+            kind = PageValueControl.Kind.COLOR,
+            valueOf = { it.background?.toColorHex() ?: "" },
+        ) { g, raw -> raw.toColorOrNull()?.let { g.copy(background = it) } },
+        PageValueControl(
+            key = "borderColor", label = "Border colour", group = "Border",
+            kind = PageValueControl.Kind.COLOR,
+            valueOf = { it.border.color?.toColorHex() ?: "" },
+        ) { g, raw -> raw.toColorOrNull()?.let { g.copy(border = g.border.copy(color = it)) } },
+        PageValueControl(
+            key = "borderWidth", label = "Border width (pt)", group = "Border",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.border.width) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(border = g.border.copy(width = it)) } },
+        PageValueControl(
+            key = "borderInset", label = "Border inset (pt)", group = "Border",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.border.inset) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(border = g.border.copy(inset = it)) } },
+        PageValueControl(
+            key = "gridSpacing", label = "Grid spacing (pt)", group = "Grid",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.grid.spacing) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(grid = g.grid.copy(spacing = it)) } },
+        PageValueControl(
+            key = "verticalGuides", label = "Vertical guides (pt)", group = "Grid",
+            kind = PageValueControl.Kind.GUIDES,
+            valueOf = { it.grid.verticalGuides.joinToString(", ") { g -> points(g) } },
+        ) { g, raw -> raw.toGuidesOrNull()?.let { g.copy(grid = g.grid.copy(verticalGuides = it)) } },
+        PageValueControl(
+            key = "horizontalGuides", label = "Horizontal guides (pt)", group = "Grid",
+            kind = PageValueControl.Kind.GUIDES,
+            valueOf = { it.grid.horizontalGuides.joinToString(", ") { g -> points(g) } },
+        ) { g, raw -> raw.toGuidesOrNull()?.let { g.copy(grid = g.grid.copy(horizontalGuides = it)) } },
+        PageValueControl(
+            key = "bleed", label = "Bleed (pt)", group = "Print",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.bleed.bleed) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(bleed = g.bleed.copy(bleed = it)) } },
+        PageValueControl(
+            key = "safeArea", label = "Safe area (pt)", group = "Print",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.bleed.safeArea) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(bleed = g.bleed.copy(safeArea = it)) } },
+        PageValueControl(
+            key = "headerHeight", label = "Header height (pt)", group = "Header & footer",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.headerFooter.headerHeight) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(headerFooter = g.headerFooter.copy(headerHeight = it)) } },
+        PageValueControl(
+            key = "footerHeight", label = "Footer height (pt)", group = "Header & footer",
+            kind = PageValueControl.Kind.LENGTH_PT,
+            valueOf = { points(it.headerFooter.footerHeight) },
+        ) { g, raw -> raw.toLengthOrNull()?.let { g.copy(headerFooter = g.headerFooter.copy(footerHeight = it)) } },
+        PageValueControl(
+            key = "headerText", label = "Header text", group = "Header & footer",
+            kind = PageValueControl.Kind.TEXT,
+            valueOf = { it.headerFooter.headerText },
+            // Text has no invalid value — blank means "no running head", which is a legitimate choice and
+            // must not be rejected the way a blank number would be.
+        ) { g, raw -> g.copy(headerFooter = g.headerFooter.copy(headerText = raw.trim())) },
+        PageValueControl(
+            key = "footerText", label = "Footer text", group = "Header & footer",
+            kind = PageValueControl.Kind.TEXT,
+            valueOf = { it.headerFooter.footerText },
+        ) { g, raw -> g.copy(headerFooter = g.headerFooter.copy(footerText = raw.trim())) },
+        PageValueControl(
+            key = "sectionName", label = "Section name", group = "Sections",
+            kind = PageValueControl.Kind.TEXT,
+            valueOf = { it.numbering.sectionName },
+        ) { g, raw -> g.copy(numbering = g.numbering.copy(sectionName = raw.trim())) },
+        PageValueControl(
+            key = "restartAt", label = "Restart numbering at", group = "Sections",
+            kind = PageValueControl.Kind.INTEGER,
+            valueOf = { it.numbering.restartAt?.toString() ?: "" },
+        ) { g, raw ->
+            val start = raw.trim().toIntOrNull() ?: return@PageValueControl null
+            g.copy(numbering = g.numbering.copy(restartAt = start.coerceIn(0, 100_000), startsSection = true))
+        },
     )
+
+    /** Builds [control] aimed at [pageScope] with the value the user supplied. */
+    fun pageValueCommand(
+        scope: DocumentCommandScope,
+        control: PageValueControl,
+        pageScope: PageScope,
+        raw: String,
+    ): EditorCommand = ApplyPageValueCommand(scope, control, pageScope, raw)
+
+    private fun millimetres(points: Float): String = points(points / POINTS_PER_MM)
+
+    private fun points(value: Float): String {
+        val rounded = Math.round(value * 10f) / 10f
+        return if (rounded == rounded.toInt().toFloat()) rounded.toInt().toString() else rounded.toString()
+    }
+
+    /**
+     * A length the user typed, or null.
+     *
+     * Non-finite and negative values are rejected rather than clamped: `"-40"` for a margin is a mistake, and
+     * silently reading it as 0 would apply a change the user did not ask for while appearing to accept what
+     * they typed.
+     */
+    private fun String.toLengthOrNull(): Float? =
+        trim().replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() && it >= 0f }
+
+    private fun String.toCountOrNull(): Int? = trim().toIntOrNull()?.takeIf { it > 0 }
+
+    /**
+     * A colour as `#RRGGBB` or `#AARRGGBB`, or null.
+     *
+     * A six-digit value gains full opacity, because a page background the user cannot see is indistinguishable
+     * from the control not having worked.
+     */
+    private fun String.toColorOrNull(): Long? {
+        val hex = trim().removePrefix("#")
+        if (hex.length != 6 && hex.length != 8) return null
+        val value = hex.toLongOrNull(16) ?: return null
+        return if (hex.length == 6) value or 0xFF000000L else value
+    }
+
+    private fun Long.toColorHex(): String = "#%08X".format(this)
+
+    /** A comma- or space-separated guide list. An empty string clears the guides, which is a real intent. */
+    private fun String.toGuidesOrNull(): List<Float>? {
+        val trimmed = trim()
+        if (trimmed.isEmpty()) return emptyList()
+        return trimmed.split(',', ' ', ';')
+            .filter { it.isNotBlank() }
+            .map { it.trim().replace(',', '.').toFloatOrNull()?.takeIf(Float::isFinite) ?: return null }
+    }
 
     /** Builds [control] aimed at [pageScope] — how the Page Control surface applies a chosen scope. */
     fun pageSetupCommand(

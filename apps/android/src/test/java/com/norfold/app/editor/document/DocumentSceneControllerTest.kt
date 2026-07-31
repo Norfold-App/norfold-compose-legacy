@@ -209,6 +209,57 @@ class DocumentSceneControllerTest {
     }
 
     @Test
+    fun multiObjectLayerMoveIsOneTransaction() {
+        val ctl = controller(page("p1", obj("a"), obj("b"), obj("c"), obj("d")))
+        val depth = ctl.undoDepth()
+
+        assertTrue(ctl.reorderObjects(listOf("a", "b"), LayerMove.TO_FRONT))
+
+        assertEquals("one action is one undo step", depth + 1, ctl.undoDepth())
+        assertEquals(listOf("c", "d", "a", "b"), ctl.page("p1")!!.objects.map { it.id })
+        assertEquals(listOf(0, 1, 2, 3), ctl.page("p1")!!.objects.map { it.z })
+
+        assertTrue(ctl.undo())
+        assertEquals("one undo reverses the whole action", listOf("a", "b", "c", "d"), ctl.page("p1")!!.objects.map { it.id })
+    }
+
+    @Test
+    fun oneStepLayerMoveKeepsTheSelectionTogetherRatherThanInvertingIt() {
+        val ctl = controller(page("p1", obj("a"), obj("b"), obj("c"), obj("d")))
+
+        // "a" and "b" are adjacent and both selected: the pair must advance as a block past "c", and must not
+        // trade places with each other on the way.
+        assertTrue(ctl.reorderObjects(listOf("a", "b"), LayerMove.FORWARD))
+        assertEquals(listOf("c", "a", "b", "d"), ctl.page("p1")!!.objects.map { it.id })
+
+        assertTrue(ctl.reorderObjects(listOf("a", "b"), LayerMove.BACKWARD))
+        assertEquals(listOf("a", "b", "c", "d"), ctl.page("p1")!!.objects.map { it.id })
+    }
+
+    @Test
+    fun layerMoveOfTheWholeSelectionAtTheEdgeIsANoOp() {
+        val ctl = controller(page("p1", obj("a"), obj("b")))
+        assertFalse(ctl.reorderObjects(listOf("a", "b"), LayerMove.FORWARD))
+        assertFalse("a no-op must not pollute history", ctl.canUndo())
+    }
+
+    @Test
+    fun multiObjectLayerMoveAcrossTwoPagesIsStillOneTransaction() {
+        val ctl = controller(page("p1", obj("a"), obj("b")), page("p2", obj("c"), obj("d")))
+        val depth = ctl.undoDepth()
+
+        assertTrue(ctl.reorderObjects(listOf("a", "c"), LayerMove.TO_FRONT))
+
+        assertEquals(depth + 1, ctl.undoDepth())
+        assertEquals(listOf("b", "a"), ctl.page("p1")!!.objects.map { it.id })
+        assertEquals(listOf("d", "c"), ctl.page("p2")!!.objects.map { it.id })
+
+        assertTrue(ctl.undo())
+        assertEquals(listOf("a", "b"), ctl.page("p1")!!.objects.map { it.id })
+        assertEquals(listOf("c", "d"), ctl.page("p2")!!.objects.map { it.id })
+    }
+
+    @Test
     fun overlappingObjectsHitTestFrontMostFirst() {
         val ctl = controller(
             page(
