@@ -148,6 +148,7 @@ fun SceneObjectContent(
     previewPaint: ColorPaint? = null,
     previewTargetIds: Set<String> = emptySet(),
     wrapperStyles: List<WrapperStyleSource> = emptyList(),
+    contentScale: DocumentContentScale = DocumentContentScale.One,
 ) {
     when (block) {
         is ParagraphBlock -> SceneEditableLine(
@@ -155,10 +156,11 @@ fun SceneObjectContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
+            style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds, contentScale),
             placeholder = "Text",
             editing = editing,
             callbacks = callbacks,
+            contentScale = contentScale,
             modifier = modifier,
         )
 
@@ -167,48 +169,51 @@ fun SceneObjectContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = resolvedSceneTextStyle(block, stylesheet, sceneHeadingStyle(block.level), wrapperStyles, previewRole, previewPaint, previewTargetIds),
+            style = resolvedSceneTextStyle(block, stylesheet, sceneHeadingStyle(block.level), wrapperStyles, previewRole, previewPaint, previewTargetIds, contentScale),
             placeholder = "Heading ${block.level}",
             editing = editing,
             callbacks = callbacks,
+            contentScale = contentScale,
             modifier = modifier,
         )
 
-        is BulletListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        is BulletListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(contentScale.dp(1f))) {
             block.items.forEach { item ->
-                SceneListRow("•") {
+                SceneListRow("•", contentScale) {
                     SceneEditableLine(
                         objectId = objectId,
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
+                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds, contentScale),
                         placeholder = "List item",
                         editing = editing,
                         callbacks = callbacks,
+                        contentScale = contentScale,
                     )
                 }
             }
         }
 
-        is NumberedListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        is NumberedListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(contentScale.dp(1f))) {
             block.items.forEachIndexed { index, item ->
-                SceneListRow("${block.start + index}.") {
+                SceneListRow("${block.start + index}.", contentScale) {
                     SceneEditableLine(
                         objectId = objectId,
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
+                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds, contentScale),
                         placeholder = "List item",
                         editing = editing,
                         callbacks = callbacks,
+                        contentScale = contentScale,
                     )
                 }
             }
         }
 
-        is TodoListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        is TodoListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(contentScale.dp(1f))) {
             block.items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Live only while editing: outside content editing the object owns every gesture inside
@@ -223,10 +228,11 @@ fun SceneObjectContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
+                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds, contentScale),
                         placeholder = "To-do",
                         editing = editing,
                         callbacks = callbacks,
+                        contentScale = contentScale,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -237,35 +243,35 @@ fun SceneObjectContent(
             val childStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + wrapperStyles
             Box(
                 Modifier
-                    .width(3.dp)
+                    .width(contentScale.dp(3f))
                     .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
+                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(contentScale.dp(2f))),
             )
-            Column(Modifier.padding(start = 8.dp)) {
+            Column(Modifier.padding(start = contentScale.dp(8f))) {
                 SceneStyledChildren(
                     block.children, objectId, editing, callbacks, stylesheet,
-                    previewRole, previewPaint, previewTargetIds, childStyles,
+                    previewRole, previewPaint, previewTargetIds, childStyles, contentScale,
                 )
             }
         }
 
         is CalloutBlock -> Column(
             modifier
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(contentScale.dp(8f)))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(8.dp),
+                .padding(contentScale.dp(8f)),
         ) {
             val childStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + wrapperStyles
             Text(
                 block.title.ifBlank { "Callout" },
-                style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.labelLarge, wrapperStyles, previewRole, previewPaint, previewTargetIds),
+                style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.labelLarge, wrapperStyles, previewRole, previewPaint, previewTargetIds, contentScale),
             )
             // A collapsed callout on a page shows only its title, exactly as it does in Flow. Expanding is a
             // content edit, so it belongs to the content-editing pass rather than to placement.
             if (!block.collapsed) {
                 SceneStyledChildren(
                     block.children, objectId, editing, callbacks, stylesheet,
-                    previewRole, previewPaint, previewTargetIds, childStyles,
+                    previewRole, previewPaint, previewTargetIds, childStyles, contentScale,
                 )
             }
         }
@@ -276,15 +282,15 @@ fun SceneObjectContent(
         // showing it as not-yet-editable: the user would type a line, see it vanish, and reasonably conclude
         // the document had lost it. Editing arrives with the code-block work, not by faking it here.
         is CodeBlock -> SceneReadOnlyCode(
-            block, stylesheet, wrapperStyles, previewRole, previewPaint, previewTargetIds, modifier,
+            block, stylesheet, wrapperStyles, previewRole, previewPaint, previewTargetIds, contentScale, modifier,
         )
 
-        is DividerBlock -> Box(modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            HorizontalDivider()
+        is DividerBlock -> Box(modifier.fillMaxWidth().padding(vertical = contentScale.dp(6f))) {
+            HorizontalDivider(thickness = contentScale.dp(1f))
         }
 
         is ContainerBlock -> if (block.axis == ContainerAxis.Row) {
-            Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier, horizontalArrangement = Arrangement.spacedBy(contentScale.dp(8f))) {
                 block.children.forEach { child ->
                     Box(Modifier.weight(1f)) {
                         SceneObjectContent(
@@ -294,6 +300,7 @@ fun SceneObjectContent(
                             previewPaint = previewPaint,
                             previewTargetIds = previewTargetIds,
                             wrapperStyles = wrapperStyles,
+                            contentScale = contentScale,
                         )
                     }
                 }
@@ -302,12 +309,12 @@ fun SceneObjectContent(
             Column(modifier) {
                 SceneStyledChildren(
                     block.children, objectId, editing, callbacks, stylesheet,
-                    previewRole, previewPaint, previewTargetIds, wrapperStyles,
+                    previewRole, previewPaint, previewTargetIds, wrapperStyles, contentScale,
                 )
             }
         }
 
-        is TableBlock -> SceneTable(block, modifier)
+        is TableBlock -> SceneTable(block, contentScale, modifier)
 
         is ShapeBlock -> SceneShape(
             block,
@@ -316,27 +323,30 @@ fun SceneObjectContent(
             previewRole,
             previewPaint,
             previewTargetIds,
+            contentScale,
         )
 
         // Blocks a later phase owns render as an honest, labelled placeholder rather than a half-working
         // editor. Silently showing nothing would make placed content look lost and invite the user to
         // "fix" it by overwriting what is actually preserved intact.
-        is ImageBlock -> ScenePlaceholder("Image", block.caption.ifBlank { block.source }, modifier)
-        is ChartBlock -> ScenePlaceholder("Chart", "Chart Studio arrives in a later phase.", modifier)
-        is MathBlock -> ScenePlaceholder("Equation", block.tex.ifBlank { "empty" }, modifier)
-        is MermaidBlock -> ScenePlaceholder("Diagram", block.code.ifBlank { "empty" }, modifier)
-        is EmbedBlock -> ScenePlaceholder("Embed", block.url.ifBlank { "empty" }, modifier)
-        is FileBlock -> ScenePlaceholder("File", block.name.ifBlank { "attachment" }, modifier)
+        is ImageBlock -> ScenePlaceholder("Image", block.caption.ifBlank { block.source }, contentScale, modifier)
+        is ChartBlock -> ScenePlaceholder("Chart", "Chart Studio arrives in a later phase.", contentScale, modifier)
+        is MathBlock -> ScenePlaceholder("Equation", block.tex.ifBlank { "empty" }, contentScale, modifier)
+        is MermaidBlock -> ScenePlaceholder("Diagram", block.code.ifBlank { "empty" }, contentScale, modifier)
+        is EmbedBlock -> ScenePlaceholder("Embed", block.url.ifBlank { "empty" }, contentScale, modifier)
+        is FileBlock -> ScenePlaceholder("File", block.name.ifBlank { "attachment" }, contentScale, modifier)
 
         is UnknownBlock -> ScenePlaceholder(
             title = "Preserved content",
             detail = "Saved by another version. Kept exactly as stored.",
+            contentScale = contentScale,
             modifier = modifier,
         )
 
         else -> ScenePlaceholder(
             title = block::class.simpleName?.removeSuffix("Block") ?: "Block",
             detail = block.plainText().take(80).ifBlank { "Editing arrives with a later phase." },
+            contentScale = contentScale,
             modifier = modifier,
         )
     }
@@ -353,9 +363,10 @@ private fun SceneStyledChildren(
     previewPaint: ColorPaint?,
     previewTargetIds: Set<String>,
     wrapperStyles: List<WrapperStyleSource>,
+    contentScale: DocumentContentScale,
 ) {
-    val metrics = remember(children, stylesheet, wrapperStyles) {
-        children.map { resolvedBlockMetrics(it, stylesheet, wrapperStyles) }
+    val metrics = remember(children, stylesheet, wrapperStyles, contentScale) {
+        children.map { contentScale.blockMetrics(resolvedBlockMetrics(it, stylesheet, wrapperStyles)) }
     }
     children.forEachIndexed { index, child ->
         val current = metrics[index]
@@ -373,6 +384,7 @@ private fun SceneStyledChildren(
             previewPaint,
             previewTargetIds,
             wrapperStyles,
+            contentScale,
         )
     }
 }
@@ -394,10 +406,11 @@ private fun SceneEditableLine(
     placeholder: String,
     editing: Boolean,
     callbacks: SceneContentCallbacks,
+    contentScale: DocumentContentScale,
     modifier: Modifier = Modifier,
 ) {
     val text = nodes.plainText()
-    val styled = sceneInlineSpans(nodes)
+    val styled = sceneInlineSpans(nodes, contentScale)
 
     if (!editing) {
         Text(
@@ -473,19 +486,20 @@ private fun SceneReadOnlyCode(
     previewRole: ColorRole?,
     previewPaint: ColorPaint?,
     previewTargetIds: Set<String>,
+    contentScale: DocumentContentScale,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(contentScale.dp(6f)))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(8.dp),
+            .padding(contentScale.dp(8f)),
     ) {
         if (block.language.isNotBlank()) {
             Text(
                 block.language,
-                style = MaterialTheme.typography.labelSmall,
+                style = contentScale.textStyle(MaterialTheme.typography.labelSmall),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -499,6 +513,7 @@ private fun SceneReadOnlyCode(
                 previewRole,
                 previewPaint,
                 previewTargetIds,
+                contentScale,
             ),
         )
     }
@@ -506,22 +521,26 @@ private fun SceneReadOnlyCode(
 
 /** A table placed on a page: readable at its real content. Cell editing belongs to the Phase-4 table work. */
 @Composable
-private fun SceneTable(block: TableBlock, modifier: Modifier = Modifier) {
+private fun SceneTable(
+    block: TableBlock,
+    contentScale: DocumentContentScale,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(contentScale.dp(6f)))
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Row(Modifier.fillMaxWidth()) {
             block.headers.forEach { cell ->
-                SceneTableCell(cell.content.plainText(), header = true, modifier = Modifier.weight(1f))
+                SceneTableCell(cell.content.plainText(), true, contentScale, Modifier.weight(1f))
             }
         }
         block.rows.forEach { row ->
-            HorizontalDivider()
+            HorizontalDivider(thickness = contentScale.dp(1f))
             Row(Modifier.fillMaxWidth()) {
                 row.forEach { cell ->
-                    SceneTableCell(cell.content.plainText(), header = false, modifier = Modifier.weight(1f))
+                    SceneTableCell(cell.content.plainText(), false, contentScale, Modifier.weight(1f))
                 }
             }
         }
@@ -529,11 +548,18 @@ private fun SceneTable(block: TableBlock, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SceneTableCell(text: String, header: Boolean, modifier: Modifier = Modifier) {
+private fun SceneTableCell(
+    text: String,
+    header: Boolean,
+    contentScale: DocumentContentScale = DocumentContentScale.One,
+    modifier: Modifier = Modifier,
+) {
     Text(
         text = text.ifBlank { " " },
-        style = if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
-        modifier = modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+        style = contentScale.textStyle(
+            if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
+        ),
+        modifier = modifier.padding(horizontal = contentScale.dp(6f), vertical = contentScale.dp(4f)),
     )
 }
 
@@ -546,9 +572,10 @@ private fun SceneShape(
     previewRole: ColorRole? = null,
     previewPaint: ColorPaint? = null,
     previewTargetIds: Set<String> = emptySet(),
+    contentScale: DocumentContentScale,
 ) {
     val metrics = resolvedShapeMetrics(block, stylesheet)
-    val shape = RoundedCornerShape(metrics.cornerRadiusDp.dp)
+    val shape = RoundedCornerShape(contentScale.dp(metrics.cornerRadiusDp))
     val previewApplies = block.id in previewTargetIds
     val fill = previewPaint.takeIf { previewApplies && previewRole == ColorRole.FILL }
         ?: resolvedShapeFill(block, stylesheet)
@@ -559,10 +586,10 @@ private fun SceneShape(
             .fillMaxWidth()
             .fillMaxHeight()
             .graphicsLayer { alpha = metrics.opacity }
-            .then(if (metrics.shadowDp > 0f) Modifier.shadow(metrics.shadowDp.dp, shape) else Modifier)
+            .then(if (metrics.shadowDp > 0f) Modifier.shadow(contentScale.dp(metrics.shadowDp), shape) else Modifier)
             .clip(shape)
             .backgroundPaint(fill)
-            .border(metrics.strokeWidthDp.dp, Color(stroke.representative().toArgb()), shape),
+            .border(contentScale.dp(metrics.strokeWidthDp), Color(stroke.representative().toArgb()), shape),
         contentAlignment = Alignment.Center,
     ) {
         if (block.text.isNotBlank()) {
@@ -570,39 +597,48 @@ private fun SceneShape(
                 block.text,
                 style = resolvedSceneTextStyle(
                     block, stylesheet, MaterialTheme.typography.bodyMedium,
-                    emptyList(), previewRole, previewPaint, previewTargetIds,
+                    emptyList(), previewRole, previewPaint, previewTargetIds, contentScale,
                 ),
-                modifier = Modifier.padding(metrics.paddingDp.dp),
+                modifier = Modifier.padding(contentScale.dp(metrics.paddingDp)),
             )
         }
     }
 }
 
 @Composable
-private fun SceneListRow(marker: String, content: @Composable () -> Unit) {
+private fun SceneListRow(
+    marker: String,
+    contentScale: DocumentContentScale,
+    content: @Composable () -> Unit,
+) {
     Row(verticalAlignment = Alignment.Top) {
         Text(
             marker,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(20.dp),
+            style = contentScale.textStyle(MaterialTheme.typography.bodyMedium),
+            modifier = Modifier.width(contentScale.dp(20f)),
         )
         Box(Modifier.weight(1f)) { content() }
     }
 }
 
 @Composable
-private fun ScenePlaceholder(title: String, detail: String, modifier: Modifier = Modifier) {
+private fun ScenePlaceholder(
+    title: String,
+    detail: String,
+    contentScale: DocumentContentScale,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(contentScale.dp(6f)))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(8.dp),
+            .padding(contentScale.dp(8f)),
     ) {
-        Text(title, style = MaterialTheme.typography.labelMedium)
+        Text(title, style = contentScale.textStyle(MaterialTheme.typography.labelMedium))
         Text(
             detail,
-            style = MaterialTheme.typography.labelSmall,
+            style = contentScale.textStyle(MaterialTheme.typography.labelSmall),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -616,25 +652,31 @@ private fun ScenePlaceholder(title: String, detail: String, modifier: Modifier =
  * one of them show a link as plain text.
  */
 @Composable
-private fun sceneInlineSpans(nodes: List<InlineNode>): AnnotatedString {
+private fun sceneInlineSpans(
+    nodes: List<InlineNode>,
+    contentScale: DocumentContentScale,
+): AnnotatedString {
     val colors = MaterialTheme.colorScheme
-    return remember(nodes, colors) {
+    return remember(nodes, colors, contentScale) {
         val text = nodes.plainText()
         val spans = FlowInlineText.runsOf(nodes).mapNotNull { run ->
             if (run.style.isPlain) return@mapNotNull null
             val start = run.start.coerceIn(0, text.length)
             val end = run.end.coerceIn(start, text.length)
             if (start == end) return@mapNotNull null
-            AnnotatedString.Range(run.style.toSceneSpanStyle(colors), start, end)
+            AnnotatedString.Range(run.style.toSceneSpanStyle(colors, contentScale), start, end)
         }
         AnnotatedString(text, spans)
     }
 }
 
-private fun FlowInlineStyle.toSceneSpanStyle(colors: ColorScheme): SpanStyle = SpanStyle(
+private fun FlowInlineStyle.toSceneSpanStyle(
+    colors: ColorScheme,
+    contentScale: DocumentContentScale,
+): SpanStyle = SpanStyle(
     fontWeight = if (bold) FontWeight.Bold else null,
     fontStyle = if (italic) FontStyle.Italic else null,
-    fontSize = fontSizeSp?.coerceIn(6f, 144f)?.sp ?: TextUnit.Unspecified,
+    fontSize = fontSizeSp?.coerceIn(6f, 144f)?.let { contentScale.scalar(it).sp } ?: TextUnit.Unspecified,
     fontFamily = when {
         code || math -> FontFamily.Monospace
         fontFamily != null -> NorfoldFontFamilies.resolve(fontFamily)
@@ -683,7 +725,8 @@ private fun resolvedSceneTextStyle(
     previewRole: ColorRole?,
     previewPaint: ColorPaint?,
     previewTargetIds: Set<String>,
-): TextStyle = resolvedTextStyle(
+    contentScale: DocumentContentScale,
+): TextStyle = contentScale.textStyle(resolvedTextStyle(
     block = block,
     sheet = sheet,
     base = base,
@@ -691,7 +734,7 @@ private fun resolvedSceneTextStyle(
     previewRole = previewRole,
     previewPaint = previewPaint,
     previewTargetIds = previewTargetIds,
-)
+))
 
 @Composable
 private fun sceneHeadingStyle(level: Int): TextStyle = when (level) {

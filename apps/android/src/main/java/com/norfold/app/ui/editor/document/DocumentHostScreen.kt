@@ -466,6 +466,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
 ) {
     val geometry = page.geometry
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val contentScale = remember(scale) { DocumentContentScale.of(scale) }
 
     val header = geometry.headerFooter
     // A section's first page commonly suppresses the running head, and honouring that here is what makes the
@@ -479,7 +480,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
                 .fillMaxWidth()
                 .padding(horizontal = geometry.margins.left.ptToDp(scale)),
         ) {
-            Text(header.headerText, style = MaterialTheme.typography.labelSmall, color = muted)
+            Text(header.headerText, style = contentScale.textStyle(MaterialTheme.typography.labelSmall), color = muted)
         }
     }
 
@@ -491,7 +492,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
                 .fillMaxWidth()
                 .padding(horizontal = geometry.margins.left.ptToDp(scale)),
         ) {
-            Text(header.footerText, style = MaterialTheme.typography.labelSmall, color = muted)
+            Text(header.footerText, style = contentScale.textStyle(MaterialTheme.typography.labelSmall), color = muted)
         }
     }
 
@@ -501,7 +502,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
                 .align(Alignment.BottomCenter)
                 .offset { IntOffset(0, -(geometry.margins.bottom / 2f).ptToPx(scale, this).roundToInt()) },
         ) {
-            Text(numberLabel, style = MaterialTheme.typography.labelSmall, color = muted)
+            Text(numberLabel, style = contentScale.textStyle(MaterialTheme.typography.labelSmall), color = muted)
         }
     }
 }
@@ -685,7 +686,10 @@ private fun SceneObjectBox(
             },
     ) {
         val objectSheet = state.document.stylesheet()
-        val objectMetrics = remember(obj.content, objectSheet) { resolvedBlockMetrics(obj.content, objectSheet) }
+        val contentScale = remember(scale) { DocumentContentScale.of(scale) }
+        val objectMetrics = remember(obj.content, objectSheet, contentScale) {
+            contentScale.blockMetrics(resolvedBlockMetrics(obj.content, objectSheet))
+        }
         SceneObjectContent(
             block = obj.content,
             objectId = obj.id,
@@ -706,8 +710,8 @@ private fun SceneObjectBox(
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(
-                start = 4.dp,
-                end = 4.dp,
+                start = contentScale.dp(4f),
+                end = contentScale.dp(4f),
                 top = objectMetrics.beforeDp.dp,
                 bottom = objectMetrics.afterDp.dp,
             ),
@@ -715,6 +719,7 @@ private fun SceneObjectBox(
             previewRole = state.editorStyle.colorStudio.target?.role,
             previewPaint = state.editorStyle.previewPaint,
             previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
+            contentScale = contentScale,
         )
     }
 

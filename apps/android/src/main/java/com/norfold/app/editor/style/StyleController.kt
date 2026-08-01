@@ -4,6 +4,7 @@ import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockEditorSession
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DocumentPageBlock
+import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.StylesheetBlock
 import com.norfold.app.domain.effectiveStyleAssignment
@@ -27,6 +28,8 @@ import com.norfold.app.domain.style.StyleResolver
 import com.norfold.app.domain.style.StyleValue
 import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.domain.style.TokenKind
+import com.norfold.app.domain.style.resolvedShapeFill
+import com.norfold.app.domain.style.resolvedShapeStroke
 import com.norfold.app.domain.supportsStyle
 import com.norfold.app.domain.updateBlock
 import com.norfold.app.domain.walk
@@ -138,7 +141,7 @@ class StyleController(
             return StyleApplicationStatus(false, "Selection contains incompatible content")
         }
         definition.semanticRole?.let { required ->
-            val incompatible = blocks.filter { it.semanticStyleRole() != required }
+            val incompatible = blocks.filterNot { semanticStyleCompatible(it, required) }
             if (incompatible.isNotEmpty()) {
                 return StyleApplicationStatus(
                     false,
@@ -227,8 +230,8 @@ class StyleController(
         val changed = mutate(label) { session ->
             session.replaceBlocksInTree(eligible) { block ->
                 val assignment = block.effectiveStyleAssignment()
-                val resolved = StyleResolver.rawAll(sheet, assignment, categoryOf(block))
-                block.withStyleAssignment(assignment.detached(resolved))
+                val resolved = detachmentValues(block, assignment, sheet)
+                detachPreservingAppearance(block, assignment, resolved, sheet)
             }
         }
         return if (changed) eligible.size else 0
@@ -368,8 +371,11 @@ class StyleController(
             when (policy) {
                 DeleteStylePolicy.PRESERVE_APPEARANCE -> session.replaceBlocksInTree(consumers) { block ->
                     val assignment = block.effectiveStyleAssignment()
-                    block.withStyleAssignment(
-                        assignment.detached(StyleResolver.rawAll(sheet, assignment, categoryOf(block))),
+                    detachPreservingAppearance(
+                        block,
+                        assignment,
+                        detachmentValues(block, assignment, sheet),
+                        sheet,
                     )
                 }
                 DeleteStylePolicy.REASSIGN -> session.replaceBlocksInTree(consumers) { block ->
@@ -644,12 +650,61 @@ class StyleController(
     private fun categoryOf(block: DocumentBlock): StyleCategory =
         if (block is ShapeBlock) StyleCategory.OBJECT else StyleCategory.TEXT
 
+    /**
+     * Shape paints have a rich stored representation beside their StyleAssignment. Flattening only the
+     * assignment can therefore reveal stale paint. Materialize the exact currently rendered paints inside
+     * the same transaction; undo restores both the association and the original rich storage verbatim.
+     */
+    private fun detachPreservingAppearance(
+        block: DocumentBlock,
+        assignment: StyleAssignment,
+        resolved: Map<StyleProperty, StyleValue>,
+        sheet: Stylesheet,
+    ): DocumentBlock {
+        val detached = assignment.detached(resolved)
+        if (block !is ShapeBlock) return block.withStyleAssignment(detached)
+        val fill = resolvedShapeFill(block, sheet)
+        val stroke = resolvedShapeStroke(block, sheet)
+        return block.copy(
+            fillPaint = fill,
+            fillColor = fill.representative().toArgb(),
+            strokePaint = stroke,
+            strokeColor = stroke.representative().toArgb(),
+            style = detached,
+        )
+    }
+
+    /** A detached style is a snapshot: token-backed assertions become their current literal value. */
+    private fun detachmentValues(
+        block: DocumentBlock,
+        assignment: StyleAssignment,
+        sheet: Stylesheet,
+    ): Map<StyleProperty, StyleValue> = StyleResolver
+        .rawAll(sheet, assignment, categoryOf(block))
+        .mapValues { (_, value) ->
+            if (value is StyleValue.TokenRef) {
+                StyleResolver.literalOf(sheet, value)?.let(StyleValue::Literal) ?: value
+            } else {
+                value
+            }
+        }
+
     private fun semanticRoleLabel(role: String): String = when {
         role == "paragraph" -> "paragraph"
+        role in PRESENTATIONAL_PARAGRAPH_ROLES -> "paragraph"
         role == "quote" -> "quote"
         role == "code" -> "code block"
         role.startsWith("heading:") -> "heading ${role.substringAfter(':')}"
         else -> role
+    }
+
+    private fun semanticStyleCompatible(block: DocumentBlock, requiredRole: String): Boolean = when {
+        requiredRole in PRESENTATIONAL_PARAGRAPH_ROLES -> block is ParagraphBlock
+        else -> block.semanticStyleRole() == requiredRole
+    }
+
+    private companion object {
+        val PRESENTATIONAL_PARAGRAPH_ROLES = setOf("title", "subtitle", "caption")
     }
 }
 
