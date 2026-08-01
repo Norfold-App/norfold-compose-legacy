@@ -861,15 +861,16 @@ class DocumentHostRuntime(
     // --- Presentation --------------------------------------------------------------------------------
 
     /**
-     * Applies a form-factor change. Open tools keep their exact state; only their presentation mode moves.
+     * Applies a form-factor change. Open tools retain durable state; only their presentation mode moves.
      *
      * Nothing here rebuilds the session, the selection, the history, the representation/intent axes or an
-     * in-flight gesture. A rotation is a change of *window*, so treating it as a reason to reset editor state
-     * is what makes a device rotation feel like having the document closed and reopened — and re-presenting a
-     * surface must carry its state forward verbatim rather than rebuilding it (§2.6, §5.1).
+     * scene gesture. Color Studio is intentionally stricter: an unfinished preview is exact-cancelled before
+     * re-presentation, preventing a partial pointer gesture from being committed or committed twice while the
+     * selected view, target, stop and previously committed History remain intact (§2.6, §5.1).
      */
     fun onFormFactorChanged(next: FormFactor) {
         if (presentation.formFactor == next) return
+        editorStyle.onFormFactorChanged()
         presentation.onFormFactorChanged(next) { compactPreferenceFor(it) }
         instrumentation.onPresentationChanged(presentation.modeFor("document"), next)
         revision++

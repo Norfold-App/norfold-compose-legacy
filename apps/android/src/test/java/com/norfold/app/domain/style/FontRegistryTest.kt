@@ -313,6 +313,8 @@ class FontRegistryTest {
             FontIdentity.imported("user-x", "X"),
             FontIdentity.decode("imported:user-x", "X"),
         )
+        val imported = FontIdentity.imported("user-lato", "Lato Display & বাংলা")
+        assertEquals(imported, FontIdentity.decode(imported.encode()))
         assertNull(FontIdentity.decode(null))
         assertNull(FontIdentity.decode("   "))
     }

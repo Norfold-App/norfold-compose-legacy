@@ -1,5 +1,8 @@
 package com.norfold.app.domain.style
 
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -75,7 +78,15 @@ data class FontIdentity(
     val isGuaranteedOffline: Boolean get() = source == FontSource.BUILT_IN || source == FontSource.SYSTEM
 
     /** A stable string form for persistence in places that only hold a string (e.g. an inline node). */
-    fun encode(): String = "${source.persistenceKey}:$id"
+    fun encode(): String {
+        val stable = "${source.persistenceKey}:$id"
+        // Imported/downloadable families can disappear. Persist their last-known human name so Missing and
+        // Substituted states remain intelligible after reconstruction. Existing built-in/system wire values
+        // stay byte-for-byte unchanged, and the decoder below still accepts every pre-correction value.
+        if (source != FontSource.IMPORTED && source != FontSource.DOWNLOADABLE) return stable
+        if (displayName == id) return stable
+        return "$stable|${URLEncoder.encode(displayName, StandardCharsets.UTF_8.name())}"
+    }
 
     companion object {
         val SYSTEM_SANS = FontIdentity(FontSource.SYSTEM, "sans-serif", "Sans Serif")
@@ -96,8 +107,12 @@ data class FontIdentity(
             val separator = text.indexOf(':')
             if (separator < 0) return FontIdentity(FontSource.SYSTEM, text, displayName ?: text)
             val source = FontSource.fromPersistenceKey(text.substring(0, separator)) ?: return null
-            val id = text.substringAfter(':').takeIf(String::isNotEmpty) ?: return null
-            return FontIdentity(source, id, displayName ?: id)
+            val payload = text.substringAfter(':')
+            val id = payload.substringBefore('|').takeIf(String::isNotEmpty) ?: return null
+            val persistedName = payload.substringAfter('|', "")
+                .takeIf(String::isNotEmpty)
+                ?.let { encoded -> runCatching { URLDecoder.decode(encoded, StandardCharsets.UTF_8.name()) }.getOrNull() }
+            return FontIdentity(source, id, displayName ?: persistedName ?: id)
         }
     }
 }

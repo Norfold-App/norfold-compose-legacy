@@ -970,10 +970,15 @@ class FlowHostRuntime(
     // ── Adaptive presentation (deliverable 7) ─────────────────────────────────────────────────────────
 
     /**
-     * Applies a window change. Open tools are re-presented with their state carried forward **verbatim** —
-     * a rotation must never reset a palette's scroll or an in-progress query (§2.6, §5.1).
+     * Applies a window change. Open tools retain durable presentation-independent state such as the selected
+     * view and query. Color Studio uses the stricter pointer policy: an unfinished preview is restored to its
+     * exact baseline before re-presentation, so rotation cannot silently commit or double-commit a drag.
      */
     fun onFormFactorChanged(next: FormFactor): Map<String, PresentedTool> {
+        if (presentation.formFactor == next) {
+            return presentation.onFormFactorChanged(next) { compactPreferenceFor(it) }
+        }
+        editorStyle.onFormFactorChanged()
         val presented = presentation.onFormFactorChanged(next) { compactPreferenceFor(it) }
         instrumentation.onPresentationChanged(currentPresentationMode(), next)
         revision++

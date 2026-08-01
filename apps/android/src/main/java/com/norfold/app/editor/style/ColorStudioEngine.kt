@@ -54,6 +54,9 @@ class ColorStudioEngine(
 
     val isOpen: Boolean get() = state.target != null
 
+    /** True only while one preview-only adjustment owns an exact cancel baseline. */
+    val hasActiveAdjustment: Boolean get() = adjustmentBaseline != null
+
     // ── Lifecycle ────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -171,18 +174,30 @@ class ColorStudioEngine(
      * A commit with no adjustment in flight is a no-op rather than an empty transaction, so tapping a
      * swatch that is already selected does not occupy an undo step.
      */
-    fun commit(label: String = "Change color"): Boolean {
+    fun commitActiveAdjustment(label: String = "Change color"): Boolean {
         val target = state.target ?: return false
         // No adjustment in flight means nothing was edited: every editing path (preview, gradient toggle,
         // draft) captures a baseline first, so a null baseline here is a commit with no gesture behind it.
         // Committing anyway would write an "empty" transaction that occupies an undo step and undoes nothing.
         val baseline = adjustmentBaseline ?: return false
-        adjustmentBaseline = null
-        if (baseline == state.paint) return false
+        if (baseline == state.paint) {
+            adjustmentBaseline = null
+            return false
+        }
         val committed = host.commit(target, state.paint, label)
-        if (committed) state.paint.colors().forEach(::rememberRecent)
+        adjustmentBaseline = null
+        if (committed) {
+            state.paint.colors().forEach(::rememberRecent)
+        } else {
+            // A refused canonical commit must not leave a preview painted with no way to cancel it.
+            state = state.copy(paint = baseline, draft = null)
+            host.preview(target, baseline)
+        }
         return committed
     }
+
+    /** Compatibility alias for pre-correction callers; new presentation code names the boundary explicitly. */
+    fun commit(label: String = "Change color"): Boolean = commitActiveAdjustment(label)
 
     /**
      * Abandons the current adjustment, restoring the exact pre-adjustment paint (§29).
@@ -191,7 +206,7 @@ class ColorStudioEngine(
      * target would give back whatever the target *now* holds, which after a preview is the previewed value —
      * so cancel would confirm the change it was asked to discard.
      */
-    fun cancel(): ColorStudioState {
+    fun cancelActiveAdjustment(): ColorStudioState {
         val baseline = adjustmentBaseline ?: return state
         adjustmentBaseline = null
         state = state.copy(paint = baseline, draft = null)
@@ -199,8 +214,14 @@ class ColorStudioEngine(
         return state
     }
 
-    private fun beginAdjustment() {
-        if (adjustmentBaseline == null) adjustmentBaseline = state.paint
+    /** Compatibility alias for pre-correction callers. */
+    fun cancel(): ColorStudioState = cancelActiveAdjustment()
+
+    /** Captures exactly one baseline for a pointer/slider gesture. Repeated starts are harmless. */
+    fun beginAdjustment(): Boolean {
+        if (state.target == null || adjustmentBaseline != null) return false
+        adjustmentBaseline = state.paint
+        return true
     }
 
     // ── Text-field drafts ────────────────────────────────────────────────────────────────────────
@@ -224,16 +245,18 @@ class ColorStudioEngine(
      * An unparseable draft is *discarded*, not clamped: the fields re-read from the canonical colour, so the
      * user sees their invalid entry replaced by the real value rather than by a number the app invented.
      */
-    fun commitDraft(): DraftOutcome {
+    fun commitDraft(field: ColorField? = null): DraftOutcome {
         val draft = state.draft ?: return DraftOutcome.NOTHING_TO_COMMIT
+        if (field != null && draft.field != field) return DraftOutcome.NOTHING_TO_COMMIT
         val parsed = draft.parse(state.color())
         state = state.copy(draft = null)
         if (parsed == null) return DraftOutcome.REJECTED
         if (draft.field == ColorField.ALPHA) previewAlpha(parsed.alphaFraction) else previewColor(parsed)
-        return if (commit("Set color")) DraftOutcome.COMMITTED else DraftOutcome.UNCHANGED
+        return if (commitActiveAdjustment("Set color")) DraftOutcome.COMMITTED else DraftOutcome.UNCHANGED
     }
 
-    fun discardDraft(): ColorStudioState {
+    fun discardDraft(field: ColorField? = null): ColorStudioState {
+        if (field != null && state.draft?.field != field) return state
         state = state.copy(draft = null)
         return state
     }
@@ -256,7 +279,6 @@ class ColorStudioEngine(
      */
     fun setGradientEnabled(enabled: Boolean): ColorStudioState {
         val target = state.target ?: return state
-        beginAdjustment()
         val next = when {
             enabled && state.paint is ColorPaint.Flat -> {
                 if (!target.supportsGradient) return state
@@ -268,6 +290,7 @@ class ColorStudioEngine(
                 ColorPaint.Flat((state.paint as ColorPaint.Ramp).gradient.sortedStops.first().color)
             else -> return state
         }
+        beginAdjustment()
         state = state.copy(
             paint = next,
             activeStopId = (next as? ColorPaint.Ramp)?.gradient?.stops?.firstOrNull()?.id,
@@ -390,6 +413,41 @@ class ColorStudioEngine(
 
     private fun requireTarget(): ColorTarget =
         state.target ?: error("Color Studio has no target; open() first")
+}
+
+/**
+ * The presentation-to-engine lifecycle seam shared by phone sheets and tablet panes in both editor hosts.
+ * Compose reports pointer/slider boundaries here; the controller never owns a second baseline or History.
+ */
+class ColorStudioInteractionController(
+    private val engine: ColorStudioEngine,
+) {
+    fun beginContinuousAdjustment(): Boolean = engine.beginAdjustment()
+
+    fun finishContinuousAdjustment(label: String): Boolean = engine.commitActiveAdjustment(label)
+
+    fun cancelContinuousAdjustment(): Boolean {
+        val active = engine.hasActiveAdjustment
+        engine.cancelActiveAdjustment()
+        return active
+    }
+
+    /** A tap/button action is immediately its own undo unit while the Studio remains open. */
+    fun oneShot(label: String, update: ColorStudioEngine.() -> Unit): Boolean {
+        // Defensive separation: a missed gesture-end can never merge this tap into the older adjustment.
+        engine.commitActiveAdjustment()
+        engine.update()
+        return engine.commitActiveAdjustment(label)
+    }
+
+    /** Done resolves only the adjustment still in flight; earlier actions were already committed. */
+    fun done(): Boolean = engine.commitActiveAdjustment()
+
+    /** Cancel/Back abandons only the unfinished adjustment. */
+    fun cancel(): Boolean = cancelContinuousAdjustment()
+
+    /** Re-presentation uses exact cancel; it never commits a partial pointer gesture. */
+    fun onFormFactorChanged(): Boolean = cancelContinuousAdjustment()
 }
 
 /**

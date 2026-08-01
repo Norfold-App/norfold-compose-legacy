@@ -1510,24 +1510,30 @@ private fun DocumentEditorStyleSurface(
     val actions = EditorStyleSurfaceActions(
         dismiss = { commit ->
             presenter.act {
-                if (commit) editorStyle.colorStudio.commit()
+                if (commit) editorStyle.colorInteractions.done()
                 closeSurface(surfaceId, DismissTrigger.CANCEL)
             }
         },
-        setColorView = { presenter.act { editorStyle.colorStudio.setView(it) } },
+        setColorView = { presenter.act { editorStyle.colorInteractions.cancel(); editorStyle.colorStudio.setView(it) } },
         draftColor = { field, value -> presenter.act { editorStyle.colorStudio.draft(field, value) } },
-        commitColorDraft = { presenter.act { editorStyle.colorStudio.commitDraft() } },
-        chooseColor = { presenter.act { editorStyle.colorStudio.previewColor(it) } },
-        toggleGradient = { presenter.act { editorStyle.colorStudio.setGradientEnabled(it) } },
-        addGradientStop = { presenter.act { editorStyle.colorStudio.addStopAt(0.5f) } },
+        commitColorDraft = { presenter.act { editorStyle.colorStudio.commitDraft(it) } },
+        discardColorDraft = { presenter.act { editorStyle.colorStudio.discardDraft(it) } },
+        beginColorAdjustment = { presenter.act { editorStyle.colorInteractions.beginContinuousAdjustment() } },
+        previewColor = { presenter.act { editorStyle.colorStudio.previewColor(it) } },
+        previewAlpha = { presenter.act { editorStyle.colorStudio.previewAlpha(it) } },
+        finishColorAdjustment = { presenter.act { editorStyle.colorInteractions.finishContinuousAdjustment(it) } },
+        cancelColorAdjustment = { presenter.act { editorStyle.colorInteractions.cancelContinuousAdjustment() } },
+        chooseColor = { color -> presenter.act { editorStyle.colorInteractions.oneShot("Choose color") { previewColor(color) } } },
+        toggleGradient = { enabled -> presenter.act { editorStyle.colorInteractions.oneShot("Toggle gradient") { setGradientEnabled(enabled) } } },
+        addGradientStop = { presenter.act { editorStyle.colorInteractions.oneShot("Add gradient stop") { addStopAt(0.5f) } } },
         selectGradientStop = { presenter.act { editorStyle.colorStudio.selectStop(it) } },
-        removeGradientStop = { presenter.act { editorStyle.colorStudio.removeActiveStop() } },
-        setGradientKind = { presenter.act { editorStyle.colorStudio.setGradientKind(it) } },
+        removeGradientStop = { presenter.act { editorStyle.colorInteractions.oneShot("Remove gradient stop") { removeActiveStop() } } },
+        setGradientKind = { kind -> presenter.act { editorStyle.colorInteractions.oneShot("Change gradient kind") { setGradientKind(kind) } } },
         moveGradientStop = { presenter.act { editorStyle.colorStudio.moveActiveStop(it) } },
         setGradientStopOpacity = { presenter.act { editorStyle.colorStudio.previewAlpha(it) } },
         setGradientAngle = { presenter.act { editorStyle.colorStudio.setGradientAngle(it) } },
-        reverseGradient = { presenter.act { editorStyle.colorStudio.reverseGradient() } },
-        reorderGradientStop = { presenter.act { editorStyle.colorStudio.reorderActiveStop(it) } },
+        reverseGradient = { presenter.act { editorStyle.colorInteractions.oneShot("Reverse gradient") { reverseGradient() } } },
+        reorderGradientStop = { delta -> presenter.act { editorStyle.colorInteractions.oneShot("Reorder gradient stop") { reorderActiveStop(delta) } } },
         setFontQuery = { presenter.act { editorStyle.fontBrowser.setQuery(it) } },
         setFontTab = { presenter.act { editorStyle.fontBrowser.setTab(it) } },
         setFontCategory = { presenter.act { editorStyle.fontBrowser.setCategory(it) } },

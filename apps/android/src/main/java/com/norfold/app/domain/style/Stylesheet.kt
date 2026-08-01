@@ -76,6 +76,9 @@ data class Stylesheet(
     // ── Token editing ────────────────────────────────────────────────────────────────────────────
 
     fun withToken(token: DocumentToken): Stylesheet {
+        // Ordinary document variables may own authored content/data-visualization colors only. Keeping
+        // this guard at the stylesheet boundary also rejects callers that bypass Color Studio helpers.
+        if (token.kind == TokenKind.COLOR && !token.domain.tokenizable) return this
         val index = tokens.indexOfFirst { it.id == token.id }
         return if (index < 0) copy(tokens = tokens + token)
         else copy(tokens = tokens.toMutableList().apply { set(index, token) })

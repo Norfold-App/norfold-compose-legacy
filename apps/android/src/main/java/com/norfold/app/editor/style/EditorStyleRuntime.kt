@@ -95,6 +95,9 @@ class EditorStyleRuntime(
         }
     })
 
+    /** Shared action-boundary adapter used by Flow and Document presentation code. */
+    val colorInteractions = ColorStudioInteractionController(colorStudio)
+
     var fontBrowser = FontBrowserEngine(registry)
         private set
 
@@ -116,10 +119,18 @@ class EditorStyleRuntime(
     }
 
     fun closeColor(cancelAdjustment: Boolean = true) {
-        if (cancelAdjustment) colorStudio.cancel()
+        if (cancelAdjustment) colorInteractions.cancel()
         colorStudio.close()
         previewPaint = null
         onChanged()
+    }
+
+    /**
+     * A sheet-to-pane re-presentation cancels only an unfinished preview and preserves the Studio's
+     * selected view, target, active stop, and every action already committed to canonical History.
+     */
+    fun onFormFactorChanged() {
+        colorInteractions.onFormFactorChanged()
     }
 
     fun openFont(): Boolean {

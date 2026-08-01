@@ -24,6 +24,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -34,8 +36,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -44,7 +51,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.style.ColorHarmony
 import com.norfold.app.domain.style.ColorPaint
@@ -71,7 +84,13 @@ class EditorStyleSurfaceActions(
     val dismiss: (commit: Boolean) -> Unit,
     val setColorView: (ColorStudioView) -> Unit,
     val draftColor: (ColorField, String) -> Unit,
-    val commitColorDraft: () -> Unit,
+    val commitColorDraft: (ColorField) -> Unit,
+    val discardColorDraft: (ColorField) -> Unit,
+    val beginColorAdjustment: () -> Unit,
+    val previewColor: (ColorValue) -> Unit,
+    val previewAlpha: (Float) -> Unit,
+    val finishColorAdjustment: (String) -> Unit,
+    val cancelColorAdjustment: () -> Unit,
     val chooseColor: (ColorValue) -> Unit,
     val toggleGradient: (Boolean) -> Unit,
     val addGradientStop: () -> Unit,
@@ -171,11 +190,25 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
             }
             ColorStudioView.SLIDERS -> ColorFields(studio, actions)
             ColorStudioView.SPECTRUM -> {
-                SpectrumPicker(studio.color(), actions.chooseColor)
+                SpectrumPicker(
+                    current = studio.color(),
+                    onTap = actions.chooseColor,
+                    onBegin = actions.beginColorAdjustment,
+                    onPreview = actions.previewColor,
+                    onFinish = { actions.finishColorAdjustment("Change color") },
+                    onCancel = actions.cancelColorAdjustment,
+                )
                 ColorFields(studio, actions)
             }
             ColorStudioView.WHEEL -> {
-                HuePicker(studio.color(), actions.chooseColor)
+                HuePicker(
+                    current = studio.color(),
+                    onTap = actions.chooseColor,
+                    onBegin = actions.beginColorAdjustment,
+                    onPreview = actions.previewColor,
+                    onFinish = { actions.finishColorAdjustment("Change hue") },
+                    onCancel = actions.cancelColorAdjustment,
+                )
                 ColorFields(studio, actions)
             }
             ColorStudioView.GRADIENT -> GradientEditor(studio, actions)
@@ -238,7 +271,7 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = { actions.dismiss(false) }) { Text("Cancel") }
-            Button(onClick = { actions.dismiss(true) }) { Text("Apply") }
+            Button(onClick = { actions.dismiss(true) }) { Text("Done") }
         }
     }
 }
@@ -247,16 +280,42 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
 private fun ColorFields(studio: ColorStudioState, actions: EditorStyleSurfaceActions) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ColorField.entries.forEach { field ->
+            var wasFocused by remember(field) { mutableStateOf(false) }
             OutlinedTextField(
                 value = studio.fieldText(field),
                 onValueChange = { actions.draftColor(field, it) },
                 label = { Text(field.label) },
                 singleLine = true,
-                modifier = Modifier.size(width = if (field == ColorField.HEX) 152.dp else 92.dp, height = 64.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { actions.commitColorDraft(field) }),
+                modifier = Modifier
+                    .size(width = if (field == ColorField.HEX) 152.dp else 92.dp, height = 64.dp)
+                    .onFocusChanged { focus ->
+                        if (wasFocused && !focus.isFocused) actions.commitColorDraft(field)
+                        wasFocused = focus.isFocused
+                    }
+                    .onPreviewKeyEvent { event ->
+                        if (event.key == Key.Escape && event.type == KeyEventType.KeyUp) {
+                            actions.discardColorDraft(field)
+                            true
+                        } else {
+                            false
+                        }
+                    },
             )
         }
     }
-    TextButton(onClick = actions.commitColorDraft) { Text("Use entered value") }
+    if (!studio.isGradient) {
+        Text("Opacity ${kotlin.math.round(studio.color().alphaFraction * 100)}%")
+        androidx.compose.material3.Slider(
+            value = studio.color().alphaFraction,
+            onValueChange = actions.previewAlpha,
+            onValueChangeFinished = { actions.finishColorAdjustment("Change opacity") },
+            valueRange = 0f..1f,
+            modifier = Modifier.semantics { contentDescription = "Color opacity" },
+        )
+    }
+    TextButton(onClick = { studio.draft?.field?.let(actions.commitColorDraft) }) { Text("Use entered value") }
 }
 
 @Composable
@@ -299,11 +358,13 @@ private fun GradientEditor(studio: ColorStudioState, actions: EditorStyleSurface
             androidx.compose.material3.Slider(
                 value = stop.position,
                 onValueChange = actions.moveGradientStop,
+                onValueChangeFinished = { actions.finishColorAdjustment("Move gradient stop") },
                 valueRange = 0f..1f,
             )
             androidx.compose.material3.Slider(
                 value = stop.opacity,
                 onValueChange = actions.setGradientStopOpacity,
+                onValueChangeFinished = { actions.finishColorAdjustment("Change gradient stop opacity") },
                 valueRange = 0f..1f,
                 modifier = Modifier.semantics { contentDescription = "Gradient stop opacity" },
             )
@@ -313,6 +374,7 @@ private fun GradientEditor(studio: ColorStudioState, actions: EditorStyleSurface
             androidx.compose.material3.Slider(
                 value = ramp.angle,
                 onValueChange = actions.setGradientAngle,
+                onValueChangeFinished = { actions.finishColorAdjustment("Change gradient angle") },
                 valueRange = 0f..360f,
             )
         }
@@ -343,7 +405,14 @@ private fun Swatch(color: ColorValue, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SpectrumPicker(current: ColorValue, onChoose: (ColorValue) -> Unit) {
+private fun SpectrumPicker(
+    current: ColorValue,
+    onTap: (ColorValue) -> Unit,
+    onBegin: () -> Unit,
+    onPreview: (ColorValue) -> Unit,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+) {
     val hue = current.toHsv().hue
     Canvas(
         Modifier
@@ -352,14 +421,18 @@ private fun SpectrumPicker(current: ColorValue, onChoose: (ColorValue) -> Unit) 
             .clip(RoundedCornerShape(16.dp))
             .pointerInput(hue, current.alpha) {
                 detectTapGestures { point ->
-                    onChoose(ColorValue.fromHsv(hue, point.x / size.width, 1f - point.y / size.height, current.alphaFraction))
+                    onTap(ColorValue.fromHsv(hue, point.x / size.width, 1f - point.y / size.height, current.alphaFraction))
                 }
             }
             .pointerInput(hue) {
                 fun pick(point: Offset) {
-                    onChoose(ColorValue.fromHsv(hue, point.x / size.width, 1f - point.y / size.height, current.alphaFraction))
+                    onPreview(ColorValue.fromHsv(hue, point.x / size.width, 1f - point.y / size.height, current.alphaFraction))
                 }
-                detectDragGestures(onDragStart = ::pick) { change, _ -> pick(change.position) }
+                detectDragGestures(
+                    onDragStart = { point -> onBegin(); pick(point) },
+                    onDragEnd = onFinish,
+                    onDragCancel = onCancel,
+                ) { change, _ -> pick(change.position) }
             },
     ) {
         drawRect(Brush.horizontalGradient(listOf(Color.White, Color(ColorValue.fromHsv(hue, 1f, 1f).toArgb()))))
@@ -368,7 +441,14 @@ private fun SpectrumPicker(current: ColorValue, onChoose: (ColorValue) -> Unit) 
 }
 
 @Composable
-private fun HuePicker(current: ColorValue, onChoose: (ColorValue) -> Unit) {
+private fun HuePicker(
+    current: ColorValue,
+    onTap: (ColorValue) -> Unit,
+    onBegin: () -> Unit,
+    onPreview: (ColorValue) -> Unit,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+) {
     val hsl = current.toHsl()
     val hueColors = (0..6).map { Color(ColorValue.fromHsl(it * 60f, 1f, .5f).toArgb()) }
     Canvas(
@@ -378,14 +458,18 @@ private fun HuePicker(current: ColorValue, onChoose: (ColorValue) -> Unit) {
             .clip(RoundedCornerShape(16.dp))
             .pointerInput(current) {
                 detectTapGestures { point ->
-                    onChoose(ColorValue.fromHsl(point.x / size.width * 360f, hsl.saturation, hsl.lightness, current.alphaFraction))
+                    onTap(ColorValue.fromHsl(point.x / size.width * 360f, hsl.saturation, hsl.lightness, current.alphaFraction))
                 }
             }
             .pointerInput(current) {
                 fun pick(point: Offset) {
-                    onChoose(ColorValue.fromHsl(point.x / size.width * 360f, hsl.saturation, hsl.lightness, current.alphaFraction))
+                    onPreview(ColorValue.fromHsl(point.x / size.width * 360f, hsl.saturation, hsl.lightness, current.alphaFraction))
                 }
-                detectDragGestures(onDragStart = ::pick) { change, _ -> pick(change.position) }
+                detectDragGestures(
+                    onDragStart = { point -> onBegin(); pick(point) },
+                    onDragEnd = onFinish,
+                    onDragCancel = onCancel,
+                ) { change, _ -> pick(change.position) }
             },
     ) { drawRect(Brush.horizontalGradient(hueColors)) }
 }

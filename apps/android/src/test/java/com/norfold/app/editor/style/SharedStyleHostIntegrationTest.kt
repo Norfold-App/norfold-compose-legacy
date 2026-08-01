@@ -20,6 +20,9 @@ import com.norfold.app.domain.style.FontLicense
 import com.norfold.app.domain.style.FontPortability
 import com.norfold.app.domain.style.FontRegistry
 import com.norfold.app.domain.style.FontSource
+import com.norfold.app.domain.style.FontFileValidator
+import com.norfold.app.domain.style.FontRequest
+import com.norfold.app.domain.style.FontValidation
 import com.norfold.app.domain.style.StyleProperty
 import com.norfold.app.domain.style.StyleCategory
 import com.norfold.app.domain.style.Stylesheet
@@ -31,6 +34,11 @@ import com.norfold.app.editor.flow.FlowEditController
 import com.norfold.app.editor.flow.FlowHostRuntime
 import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.presentation.FormFactor
+import com.norfold.app.data.PrivateFontStorage
+import com.norfold.app.ui.fonts.OfflineFontLibrary
+import java.io.File
+import java.nio.file.Files
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -155,5 +163,83 @@ class SharedStyleHostIntegrationTest {
         assertEquals("#19324B", runtime.styleController.resolved(shape.id, StyleCategory.OBJECT)[StyleProperty.FILL])
         assertTrue(controller.undo())
         assertTrue(runtime.styleController.sharedStyle(listOf(shape.id)).styleId != styleId)
+    }
+
+    @Test
+    fun `imported font reinstalls renders and resolves in both hosts after reconstruction`() {
+        val source = File("src/main/assets/fonts/faces").listFiles().orEmpty().first { it.extension == "ttf" }
+        val bytes = source.readBytes()
+        val accepted = FontFileValidator.validate(bytes, source.name) as FontValidation.Accepted
+        val root = Files.createTempDirectory("norfold-imported-font-reconstruction").toFile()
+        var identity: FontIdentity? = null
+        try {
+            val firstStore = PrivateFontStorage(root)
+            val installed = firstStore.install(bytes, accepted, 1L).entryOrNull!!
+            val importedIdentity = installed.identity
+            identity = importedIdentity
+
+            // A new storage object is the application-startup reconstruction boundary.
+            val reconstructedRecords = PrivateFontStorage(root).records()
+            val record = reconstructedRecords.single()
+            assertTrue(record.faces.single().asset.startsWith('/'))
+            OfflineFontLibrary.install(record)
+            val loadedResolution = OfflineFontLibrary.registry.resolve(FontRequest(importedIdentity))
+            assertEquals(importedIdentity, loadedResolution.resolved)
+            assertEquals(record.faces.map { it.asset }, loadedResolution.assets)
+
+            val browser = FontBrowserEngine(OfflineFontLibrary.registry)
+            browser.open(importedIdentity, "Imported preview")
+            val importedRow = browser.results().first { it.identity == importedIdentity }
+            assertEquals(com.norfold.app.domain.style.FontAvailability.OFFLINE_READY, browser.rowState(importedRow).availability)
+            assertEquals(importedIdentity, importedRow.identity)
+
+            val flowParagraph = ParagraphBlock(id = "import-flow", content = listOf(InlineText("Flow")))
+            val flow = FlowHostRuntime(
+                FlowEditController(EditTarget("import-flow"), BlockDocument(listOf(flowParagraph))),
+                FormFactor(390, 840),
+                fontRegistry = FontRegistry(reconstructedRecords),
+            )
+            flow.scope.selectBlocks(listOf(flowParagraph.id))
+            assertEquals(1, flow.editorStyle.applyFont(importedIdentity))
+            val flowReopened = BlockDocumentJson.decodeDocumentPayload(BlockDocumentJson.encodeDocumentPayload(flow.controller.document()))
+            assertEquals(
+                importedIdentity,
+                StyleController({ _, _ -> false }, { flowReopened }).resolvedFont(flowParagraph.id),
+            )
+
+            val documentParagraph = ParagraphBlock(id = "import-document", content = listOf(InlineText("Document")))
+            val object1 = SceneObject(id = "import-object", kind = SceneObjectKind.TextFrame, content = documentParagraph)
+            val page = DocumentPageBlock(id = "import-page", geometry = PageGeometry.a4(), objects = listOf(object1))
+            val document = DocumentHostRuntime(
+                DocumentSceneController(EditTarget("import-document"), BlockDocument(listOf(page))),
+                FormFactor(1280, 800),
+                fontRegistry = FontRegistry(reconstructedRecords),
+            )
+            document.selectObjects(listOf(object1.id))
+            assertEquals(1, document.editorStyle.applyFont(importedIdentity))
+            val documentReopened = BlockDocumentJson.decodeDocumentPayload(
+                BlockDocumentJson.encodeDocumentPayload(document.controller.document()),
+            )
+            assertEquals(
+                importedIdentity,
+                StyleController({ _, _ -> false }, { documentReopened }).resolvedFont(documentParagraph.id),
+            )
+
+            // Removing only the bytes retains the requested identity in content and becomes explicit missing/substituted state.
+            assertTrue(firstStore.fileFor(installed).delete())
+            assertTrue(PrivateFontStorage(root).records().isEmpty())
+            assertEquals(listOf(installed.id), PrivateFontStorage(root).missingEntries().map { it.id })
+            OfflineFontLibrary.uninstall(importedIdentity)
+            val missingBrowser = FontBrowserEngine(OfflineFontLibrary.registry)
+            missingBrowser.open(importedIdentity, "Still requested")
+            val missing = missingBrowser.rowState(missingBrowser.results().first { it.identity == importedIdentity })
+            assertEquals(importedIdentity, missing.record.identity)
+            assertEquals(com.norfold.app.domain.style.FontAvailability.MISSING, missing.availability)
+            assertEquals("Missing", missing.stateLabel())
+            assertFalse(documentReopened.blocks.isEmpty())
+        } finally {
+            identity?.let(OfflineFontLibrary::uninstall)
+            root.deleteRecursively()
+        }
     }
 }
