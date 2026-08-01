@@ -5,7 +5,7 @@
 **Date:** 28 July 2026.
 **Scope:** Maps the current Norfold Android repository against the canonical spec; classifies every editor-relevant system as retain / refactor / replace / missing; identifies migration risks and architectural conflicts; defines large implementation phases with validation gates, PR/merge gates, and stop conditions.
 
-> This is the "next package" required by spec §22 before autonomous implementation begins: repository mapping, architecture boundaries, migration mapping, domain acceptance matrices, test strategy, large implementation phases, agent handoff/stop conditions, and validation gates.
+> This is the implementation package required by spec §22: repository mapping, architecture boundaries, migration mapping, domain acceptance matrices, test strategy, large implementation phases, handoff/stop conditions, and validation gates.
 
 ---
 
@@ -489,7 +489,7 @@ Phase 11 is **certification and hardening** of these properties, not their first
 
 ---
 
-## 6. Agent handoff & stop conditions
+## 6. Implementation handoff & stop conditions
 
 **Universal stop conditions (any phase halts if):**
 - A migration is about to run without a functioning, restorable recovery snapshot (recovery-protection rule).
@@ -501,9 +501,9 @@ Phase 11 is **certification and hardening** of these properties, not their first
 
 **Handoff contract between phases:**
 - A phase is "done" only when its validation gate passes and its integration branch has merged to `main` with flags default-off.
-- The next phase's entry condition names the exact predecessor merges it requires; an agent must verify those merges before starting.
+- The next phase's entry condition names the exact predecessor merges it requires; the implementer must verify those merges before starting.
 - Each phase leaves its `BENCHMARK` measurements recorded (not converted to constants) for downstream phases and Phase 11 certification.
-- Where this roadmap and the canonical spec disagree, the spec wins; the agent stops and flags the conflict rather than reinterpreting product design.
+- Where this roadmap and the canonical spec disagree, the spec wins; implementation stops until the conflict is resolved rather than reinterpreting product design.
 
 **Authority order (highest first):** spec v1.0 locked decisions → acceptance criteria → contradiction resolutions → migration boundaries → current repository behavior → superseded planning drafts.
 
@@ -534,7 +534,7 @@ Every domain phase (1–9) additionally gates on its in-scope accessibility, inc
 
 ## 8. What this roadmap does not decide
 
-This roadmap maps the repository and sequences the work. It deliberately does **not** decide, and no agent should invent:
+This roadmap maps the repository and sequences the work. It deliberately does **not** decide, and implementation must not invent:
 
 - **The final editor domain schemas** — each is finalized inside its owning phase, then frozen for Phase 12.
 - **CRDT/merge engine selection or room partitioning** — deferred to Phase 12 against final schemas (§14.7, §20.16).

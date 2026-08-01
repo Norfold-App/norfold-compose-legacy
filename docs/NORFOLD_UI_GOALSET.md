@@ -61,7 +61,7 @@ This goalset is complete only after every visible acceptance item above is imple
 
 ## Active Side Tasks (July 12 Emulator Notes)
 
-These remain subordinate to the ordered hard gates in `local planning notes`, but must be completed alongside the related destination work.
+These remain subordinate to the ordered stabilization gates in this goalset, but must be completed alongside the related destination work.
 
 - [x] Rename the current compact Tasks "Table" presentation to `List`; reserve `Table` for the AppFlowy spreadsheet implementation from `Table view of tasks (2).png`.
 - [ ] Add positional, animated drag feedback before drop for note blocks, table rows/columns, task rows, Kanban cards/columns, checklist rows, sidebar nodes, and every other reorderable surface.
@@ -70,7 +70,7 @@ These remain subordinate to the ordered hard gates in `local planning notes`, bu
 - [x] Provide Day, Week, and Month modes: Day is a vertically scrollable timestamp schedule; Week scrolls timed items across days; Month shows compact colored event blocks.
 - [x] Tapping any month cell opens Day mode for that date, whether or not the date already contains an item.
 - [ ] Unify tasks, notes, countdowns, reminders, and later external events in the workspace calendar while retaining source-specific editing.
-- [ ] Match the AppFlowy note-table screenshots in `Downloads/Update/Screenshot (144).png` through `(148).png`, including adaptive cells, persisted resizing, row/column selection, and row/column action menus.
+- [ ] Match the approved AppFlowy note-table reference captures, including adaptive cells, persisted resizing, row/column selection, and row/column action menus.
 - [ ] Keep code, embed, chart, math, Mermaid, image, file, and table blocks compact by default, editable in Edit mode, horizontally scrollable when wide, and user-resizable where content needs a larger viewport.
 - [ ] Add a visible drag-corner resize affordance to code, embed, chart, math, Mermaid, image, file, and other viewport blocks; persist the chosen size and keep initial height content-adaptive rather than oversized.
 - [ ] Verify Code, Embed, Chart, Math, and Mermaid blocks each open their type-specific editor from both the block action menu and direct Edit-mode affordance.
@@ -79,10 +79,10 @@ These remain subordinate to the ordered hard gates in `local planning notes`, bu
 - [x] Preserve the pasted source losslessly when a construct is not recognized, keep one undo step for the complete paste transaction, and restore a valid caret after insertion.
 - [x] Cover structure-aware paste with unit and Compose tests for mixed multi-paragraph content, engine blocks, replacement of a cross-block selection, undo/redo, and save/reload persistence.
 - [x] Support rich inline Markdown and LaTeX inside ordinary text and every compatible block, not only dedicated engine blocks. View mode must render inline emphasis, links, code, tags, mentions, emoji, and math while Edit mode preserves editable source offsets and round-trips without dropping syntax.
-- [x] Give every block type a long-press/context menu with actions specific to that block instead of one generic menu for everything; match the latest popup screenshot in [reference capture required].
+- [x] Give every block type a long-press/context menu with actions specific to that block instead of one generic menu for everything; match the approved popup reference.
 - [ ] Restore a compact phone/tablet formatting bar for text-compatible blocks alongside slash insertion, with keyboard-safe positioning and no duplicate commands.
 - [ ] Add Editor & Markdown settings that let users enable or disable individual block types, slash suggestions, the compact formatting bar, automatic rich inline rendering, and other per-block editing affordances.
-- [ ] Treat the rich-inline menus, formatting bar, and per-block settings as follow-up work after the ordered `local planning notes` gates; they remain mandatory and must not interrupt Area 0 stabilization.
+- [ ] Treat the rich-inline menus, formatting bar, and per-block settings as follow-up work after the ordered stabilization gates; they remain mandatory and must not interrupt Area 0 stabilization.
 - [x] Replace plain Material three-dot menus with a polished, adaptive pill treatment by default. Menus must use system light/dark surfaces and restrained borders/shadows, without adding decorative page backgrounds.
 - [x] Add organized Editor & Markdown appearance controls for contextual menus and toolbars: `Pill` (default), `Block`, and `Minimal`, plus color behavior `App accent` or `Follow theme`.
 - [ ] Apply the selected contextual-menu treatment consistently to editor blocks, task cells/cards, checklist rows, sidebar nodes, files, comments, and other three-dot/long-press surfaces so the premium interaction language is shared across the app.

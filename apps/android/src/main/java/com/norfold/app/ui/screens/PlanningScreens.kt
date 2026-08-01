@@ -304,8 +304,8 @@ private fun ContinuousDayCalendar(
 private val WeekHourRailWidth = 46.dp
 
 /**
- * Week view rebuild (step 6): pager of week panels — swipe = prev/next
- * week. Each panel = sticky 7-day header (tap selects) + sticky all-day/
+ * Week view pager: swipe between adjacent week panels.
+ * Each panel = sticky 7-day header (tap selects) + sticky all-day/
  * multi-day capsule band + vertically scrolling adaptive timed grid whose
  * hour rail collapses empty stretches ([WeekHourBands]).
  */

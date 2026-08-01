@@ -58,7 +58,7 @@ Deleting an owner deletes its document transactionally. Workspace deletion clear
 
 ## Retired implementation
 
-The following paths were removed from the Android build and preserved under `local planning notes`:
+The following components were removed from the Android build. Historical copies are intentionally excluded from the published source tree:
 
 - WebView Markdown/MathJax/Mermaid/Vega preview
 - render cache and rerender controls

@@ -2414,13 +2414,13 @@ private fun AppInfoSettings() {
         SettingsGroup {
             SettingsRow("Changelog", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { showChangelog = true })
             RowDivider()
-            SettingsRow("Help & Support", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/sheikhti1205/Norfold/issues") })
+            SettingsRow("Help & Support", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/Norfold-App/Norfold/issues") })
             RowDivider()
             SettingsRow("Privacy policy", icon = Icons.Outlined.Lock, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://sheikhti1205.github.io/Norfold/privacy.html") })
             RowDivider()
             SettingsRow("Terms of service", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://sheikhti1205.github.io/Norfold/terms.html") })
             RowDivider()
-            SettingsRow("Open source licenses", icon = Icons.Outlined.Code, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/sheikhti1205/Norfold") })
+            SettingsRow("Open source licenses", icon = Icons.Outlined.Code, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/Norfold-App/Norfold") })
         }
         Text("Application ID com.norfold.app · Open-source, Android-first.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
     }

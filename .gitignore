@@ -29,10 +29,6 @@ scripts/local/
 apps/android/build/
 apps/android/.gradle/
 
-# Local agent/tool indexes
-
-# Parallel mission runtime state
-
 # Legacy Flutter prototype
 .dart_tool/
 .flutter-plugins
@@ -53,5 +49,3 @@ apps/android/google-services.json
 # Windows-download metadata: NTFS alternate-data-stream files that appear beside
 # any file fetched through a browser on the Windows side of WSL.
 *:Zone.Identifier
-
-# Local AI/agent tooling. Editor-side scaffolding, not part of the product.

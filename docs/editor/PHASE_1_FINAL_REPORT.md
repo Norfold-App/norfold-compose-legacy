@@ -648,7 +648,7 @@ New:
 
 ## Scope confirmations
 
-- **No unrelated collaboration, website, Telegram, Supabase, infrastructure, provider or local tooling files
+- **No unrelated collaboration, website, Telegram, Supabase, infrastructure, or provider-tooling files
   were changed.** The frozen collaboration foundation was not modified. Pre-existing unrelated working-tree
   changes were left untouched and out of these commits.
 - **Phase 2 was not started.** No `DocumentHost`, no Scene model, no CRDT selection, no collaboration
