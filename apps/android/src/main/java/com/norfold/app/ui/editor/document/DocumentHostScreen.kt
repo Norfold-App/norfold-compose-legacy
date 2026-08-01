@@ -92,13 +92,14 @@ import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.surface.DismissTrigger
 import com.norfold.app.editor.style.EditorStyleCommandIds
 import com.norfold.app.ui.editor.style.EditorStyleSurface
+import com.norfold.app.ui.editor.style.resolvedBlockMetrics
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import com.norfold.app.ui.editor.style.rememberFontImportLauncher
 import com.norfold.app.ui.editor.style.rememberImportedFontRemover
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 import com.norfold.app.domain.stylesheet
 import androidx.compose.foundation.shape.RoundedCornerShape
-import com.norfold.app.domain.effectiveBackgroundPaint
+import com.norfold.app.domain.style.resolvedPageBackground
 import com.norfold.app.ui.editor.style.backgroundPaint
 import kotlin.math.atan2
 import kotlin.math.roundToInt
@@ -414,7 +415,7 @@ private fun PageSheet(
                 state.editorStyle.previewPaint.takeIf {
                     state.editorStyle.colorStudio.target?.role == com.norfold.app.domain.style.ColorRole.PAGE_BACKGROUND &&
                         page.id in state.editorStyle.colorStudio.target?.targetIds.orEmpty()
-                } ?: page.geometry.effectiveBackgroundPaint(),
+                } ?: resolvedPageBackground(page, state.document.stylesheet()),
             )
             .drawBehind {
                 drawPageStructure(page, scale, editing, isActive, isSelected)
@@ -683,6 +684,8 @@ private fun SceneObjectBox(
                 }
             },
     ) {
+        val objectSheet = state.document.stylesheet()
+        val objectMetrics = remember(obj.content, objectSheet) { resolvedBlockMetrics(obj.content, objectSheet) }
         SceneObjectContent(
             block = obj.content,
             objectId = obj.id,
@@ -702,8 +705,13 @@ private fun SceneObjectBox(
                     },
                 )
             },
-            modifier = Modifier.fillMaxWidth().padding(4.dp),
-            stylesheet = state.document.stylesheet(),
+            modifier = Modifier.fillMaxWidth().padding(
+                start = 4.dp,
+                end = 4.dp,
+                top = objectMetrics.beforeDp.dp,
+                bottom = objectMetrics.afterDp.dp,
+            ),
+            stylesheet = objectSheet,
             previewRole = state.editorStyle.colorStudio.target?.role,
             previewPaint = state.editorStyle.previewPaint,
             previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
@@ -1523,7 +1531,7 @@ private fun DocumentEditorStyleSurface(
         previewAlpha = { presenter.act { editorStyle.colorStudio.previewAlpha(it) } },
         finishColorAdjustment = { presenter.act { editorStyle.colorInteractions.finishContinuousAdjustment(it) } },
         cancelColorAdjustment = { presenter.act { editorStyle.colorInteractions.cancelContinuousAdjustment() } },
-        chooseColor = { color -> presenter.act { editorStyle.colorInteractions.oneShot("Choose color") { previewColor(color) } } },
+        chooseColor = { color -> presenter.act { editorStyle.colorInteractions.chooseExplicitColor(color) } },
         toggleGradient = { enabled -> presenter.act { editorStyle.colorInteractions.oneShot("Toggle gradient") { setGradientEnabled(enabled) } } },
         addGradientStop = { presenter.act { editorStyle.colorInteractions.oneShot("Add gradient stop") { addStopAt(0.5f) } } },
         selectGradientStop = { presenter.act { editorStyle.colorStudio.selectStop(it) } },

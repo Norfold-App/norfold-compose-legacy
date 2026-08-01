@@ -50,9 +50,10 @@ class FontBrowserEngine(
      * SELECTED TEXT where possible" — the point being that "Aa Bb" tells you nothing about how a font sets
      * *your* sentence, and choosing a font is a judgement about your sentence.
      */
-    fun open(current: FontIdentity?, selectedText: String = ""): FontBrowserState {
+    fun open(current: FontIdentity?, selectedText: String = "", mixed: Boolean = false): FontBrowserState {
         state = state.copy(
-            selected = current,
+            selected = current.takeUnless { mixed },
+            mixedFonts = mixed,
             previewText = previewFor(selectedText),
             usingSelectedText = previewSourceIsSelection(selectedText),
         )
@@ -120,7 +121,7 @@ class FontBrowserEngine(
      * reopenings — the §40 defect "Color Studio closes after every slider change", in its typographic form.
      */
     fun select(identity: FontIdentity): FontBrowserState {
-        state = state.copy(selected = identity)
+        state = state.copy(selected = identity, mixedFonts = false)
         rememberRecent(identity)
         return state
     }
@@ -283,6 +284,7 @@ data class FontBrowserState(
     val script: FontScript? = null,
     val variableOnly: Boolean = false,
     val selected: FontIdentity? = null,
+    val mixedFonts: Boolean = false,
     val previewText: String = FontBrowserEngine.DEFAULT_PREVIEW,
     /** True when [previewText] came from the user's selection rather than the default pangram. */
     val usingSelectedText: Boolean = false,

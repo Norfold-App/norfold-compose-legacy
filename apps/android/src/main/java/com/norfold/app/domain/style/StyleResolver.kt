@@ -75,6 +75,56 @@ object StyleResolver {
         return null
     }
 
+    /**
+     * Resolves a text property through a structural wrapper cascade.
+     *
+     * Precedence is deliberately property-by-property:
+     * child local override > child explicit style > nearest wrapper > outer wrapper > child's implicit
+     * semantic default. Wrapper values are not copied into descendants, so editing a wrapper definition
+     * remains one stylesheet transaction and child overrides continue to win dynamically.
+     */
+    fun rawValueCascaded(
+        sheet: Stylesheet,
+        child: StyleAssignment,
+        implicitStyleId: String?,
+        wrappersNearestFirst: List<StyleAssignment>,
+        property: StyleProperty,
+    ): StyleValue? {
+        child.overrides[property.key]?.let { return it }
+        if (child.styleId != null) {
+            for (definition in chainOf(sheet, child.styleId)) {
+                definition.get(property)?.let { return it }
+            }
+        }
+        for (wrapper in wrappersNearestFirst) {
+            wrapper.overrides[property.key]?.let { return it }
+            for (definition in chainOf(sheet, wrapper.styleId)) {
+                definition.get(property)?.let { return it }
+            }
+        }
+        if (child.styleId == null) {
+            for (definition in chainOf(sheet, implicitStyleId)) {
+                definition.get(property)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    fun resolveAllCascaded(
+        sheet: Stylesheet,
+        child: StyleAssignment,
+        implicitStyleId: String?,
+        wrappersNearestFirst: List<StyleAssignment>,
+        category: StyleCategory = StyleCategory.TEXT,
+    ): Map<StyleProperty, String> = buildMap {
+        for (property in StyleProperty.of(category)) {
+            literalOf(
+                sheet,
+                rawValueCascaded(sheet, child, implicitStyleId, wrappersNearestFirst, property),
+            )?.let { put(property, it) }
+        }
+    }
+
     /** Resolves a raw value through the token table to a literal string, or null if unresolvable. */
     fun literalOf(sheet: Stylesheet, value: StyleValue?): String? = when (value) {
         null -> null

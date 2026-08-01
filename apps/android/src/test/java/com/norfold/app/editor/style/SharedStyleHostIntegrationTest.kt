@@ -77,8 +77,12 @@ class SharedStyleHostIntegrationTest {
         assertTrue(runtime.styleController.resolvedFont(paragraph.id)?.encode() != font.identity.encode())
         assertTrue(runtime.controller.redo())
         assertEquals(font.identity.encode(), runtime.styleController.resolvedFont(paragraph.id)?.encode())
-        assertEquals(1, runtime.editorStyle.applyNamedStyle(Stylesheet.TITLE))
-        assertEquals(Stylesheet.TITLE, runtime.styleController.sharedStyle(listOf(paragraph.id)).styleId)
+        assertEquals(0, runtime.editorStyle.applyNamedStyle(Stylesheet.TITLE))
+        assertEquals(
+            "A semantic title style must not turn a paragraph into a visual-only title",
+            Stylesheet.BODY,
+            runtime.styleController.sharedStyle(listOf(paragraph.id)).styleId,
+        )
     }
 
     @Test

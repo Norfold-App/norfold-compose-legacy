@@ -67,14 +67,15 @@ class ColorStudioEngine(
      * different target resets the view selection but keeps recents, which are a user-history concept and
      * belong to the person, not the target.
      */
-    fun open(target: ColorTarget, initial: ColorPaint): ColorStudioState {
+    fun open(target: ColorTarget, initial: ColorPaint, mixed: Boolean = false): ColorStudioState {
         val sameTarget = state.target?.let { it.role == target.role && it.targetIds == target.targetIds } == true
         state = if (sameTarget) {
-            state.copy(target = target, paint = initial, draft = null)
+            state.copy(target = target, paint = initial, draft = null, isMixed = mixed)
         } else {
             ColorStudioState(
                 target = target,
                 paint = initial,
+                isMixed = mixed,
                 view = defaultViewFor(target),
                 activeStopId = (initial as? ColorPaint.Ramp)?.gradient?.stops?.firstOrNull()?.id,
             )
@@ -136,6 +137,7 @@ class ColorStudioEngine(
      * transaction and one exact cancel target.
      */
     fun previewColor(color: ColorValue): ColorStudioState {
+        if (state.isMixed) return state
         return when (val paint = state.paint) {
             is ColorPaint.Flat -> {
                 beginAdjustment()
@@ -162,6 +164,7 @@ class ColorStudioEngine(
     }
 
     fun previewGradient(gradient: Gradient): ColorStudioState {
+        if (state.isMixed) return state
         beginAdjustment()
         state = state.copy(paint = ColorPaint.Ramp(gradient.normalized()), draft = null)
         host.preview(requireTarget(), state.paint)
@@ -219,7 +222,7 @@ class ColorStudioEngine(
 
     /** Captures exactly one baseline for a pointer/slider gesture. Repeated starts are harmless. */
     fun beginAdjustment(): Boolean {
-        if (state.target == null || adjustmentBaseline != null) return false
+        if (state.target == null || state.isMixed || adjustmentBaseline != null) return false
         adjustmentBaseline = state.paint
         return true
     }
@@ -235,6 +238,7 @@ class ColorStudioEngine(
      * the same single canonical parse as everything else.
      */
     fun draft(field: ColorField, text: String): ColorStudioState {
+        if (state.isMixed && field != ColorField.HEX) return state
         state = state.copy(draft = ColorDraft(field, text))
         return state
     }
@@ -251,6 +255,14 @@ class ColorStudioEngine(
         val parsed = draft.parse(state.color())
         state = state.copy(draft = null)
         if (parsed == null) return DraftOutcome.REJECTED
+        if (state.isMixed) {
+            if (draft.field != ColorField.HEX) return DraftOutcome.REJECTED
+            return if (commitExplicitPaint(ColorPaint.Flat(parsed), "Set color")) {
+                DraftOutcome.COMMITTED
+            } else {
+                DraftOutcome.UNCHANGED
+            }
+        }
         if (draft.field == ColorField.ALPHA) previewAlpha(parsed.alphaFraction) else previewColor(parsed)
         return if (commitActiveAdjustment("Set color")) DraftOutcome.COMMITTED else DraftOutcome.UNCHANGED
     }
@@ -259,6 +271,34 @@ class ColorStudioEngine(
         if (field != null && state.draft?.field != field) return state
         state = state.copy(draft = null)
         return state
+    }
+
+    /** Establishes one explicit common paint for a mixed target without inventing a preview baseline. */
+    fun commitExplicitPaint(paint: ColorPaint, label: String): Boolean {
+        val target = state.target ?: return false
+        if (!state.isMixed) return false
+        val committed = host.commit(target, paint, label)
+        if (committed) {
+            state = state.copy(
+                paint = paint,
+                isMixed = false,
+                draft = null,
+                activeStopId = (paint as? ColorPaint.Ramp)?.gradient?.stops?.firstOrNull()?.id,
+            )
+            paint.colors().forEach(::rememberRecent)
+        }
+        return committed
+    }
+
+    /** Mirrors a token action that already committed through StyleController; never adds History itself. */
+    fun adoptCommittedPaint(paint: ColorPaint) {
+        if (state.target == null) return
+        state = state.copy(
+            paint = paint,
+            isMixed = false,
+            draft = null,
+            activeStopId = (paint as? ColorPaint.Ramp)?.gradient?.stops?.firstOrNull()?.id,
+        )
     }
 
     // ── Gradient stop editing ────────────────────────────────────────────────────────────────────
@@ -278,6 +318,7 @@ class ColorStudioEngine(
      * stop's colour, which is the one the user sees at the ramp's origin.
      */
     fun setGradientEnabled(enabled: Boolean): ColorStudioState {
+        if (state.isMixed) return state
         val target = state.target ?: return state
         val next = when {
             enabled && state.paint is ColorPaint.Flat -> {
@@ -440,6 +481,13 @@ class ColorStudioInteractionController(
         return engine.commitActiveAdjustment(label)
     }
 
+    fun chooseExplicitColor(color: ColorValue, label: String = "Choose color"): Boolean =
+        if (engine.state().isMixed) {
+            engine.commitExplicitPaint(ColorPaint.Flat(color), label)
+        } else {
+            oneShot(label) { previewColor(color) }
+        }
+
     /** Done resolves only the adjustment still in flight; earlier actions were already committed. */
     fun done(): Boolean = engine.commitActiveAdjustment()
 
@@ -480,6 +528,8 @@ data class ColorStudioState(
     val activeStopId: String? = null,
     /** In-progress text entry, if any. At most one field drafts at a time. */
     val draft: ColorDraft? = null,
+    /** Selected targets disagree; relative controls cannot use [paint] as an invented common baseline. */
+    val isMixed: Boolean = false,
 ) {
     val isGradient: Boolean get() = paint is ColorPaint.Ramp
 
@@ -498,12 +548,12 @@ data class ColorStudioState(
 
     /** Text a field should display: the draft while typing, else the canonical value formatted. */
     fun fieldText(field: ColorField): String =
-        draft?.takeIf { it.field == field }?.text ?: field.format(color())
+        draft?.takeIf { it.field == field }?.text ?: if (isMixed) "" else field.format(color())
 
     fun accessibleLabel(): String = buildString {
         append(target?.describe() ?: "Color")
         append(": ")
-        append(paint.describe())
+        append(if (isMixed) "Mixed" else paint.describe())
     }
 
     companion object {

@@ -99,6 +99,8 @@ import com.norfold.app.editor.surface.DismissTrigger
 import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.style.EditorStyleCommandIds
 import com.norfold.app.ui.editor.style.EditorStyleSurface
+import com.norfold.app.ui.editor.style.collapsedBlockSpacing
+import com.norfold.app.ui.editor.style.resolvedBlockMetrics
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import com.norfold.app.ui.editor.style.rememberFontImportLauncher
 import com.norfold.app.ui.editor.style.rememberImportedFontRemover
@@ -191,6 +193,10 @@ fun FlowHostScreen(
             )
             HorizontalDivider()
             Box(Modifier.weight(1f)) {
+                val flowSheet = state.document.stylesheet()
+                val flowMetrics = remember(visibleBlocks, flowSheet) {
+                    visibleBlocks.map { resolvedBlockMetrics(it, flowSheet) }
+                }
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -205,12 +211,19 @@ fun FlowHostScreen(
                         // caret can always be scrolled clear of it instead of sitting under it.
                         bottom = 16.dp + lowerSurfaceDp,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     itemsIndexed(visibleBlocks, key = { _, block -> block.id }) { index, block ->
+                        val metrics = flowMetrics[index]
+                        val topSpacing = if (index == 0) {
+                            metrics.beforeDp
+                        } else {
+                            collapsedBlockSpacing(flowMetrics[index - 1].afterDp, metrics.beforeDp)
+                        }
+                        val bottomSpacing = if (index == visibleBlocks.lastIndex) metrics.afterDp else 0f
                         Box(
                             Modifier
                                 .fillMaxWidth()
+                                .padding(top = topSpacing.dp, bottom = bottomSpacing.dp)
                                 // Writing-first measure: the *row* fills the list so the centering works, and
                                 // the content inside it stops at a comfortable line length. Putting the
                                 // width cap on a fillMaxWidth() row would have been defeated by the fill.
@@ -954,7 +967,7 @@ private fun FlowEditorStyleSurface(
         previewAlpha = { presenter.act { editorStyle.colorStudio.previewAlpha(it) } },
         finishColorAdjustment = { presenter.act { editorStyle.colorInteractions.finishContinuousAdjustment(it) } },
         cancelColorAdjustment = { presenter.act { editorStyle.colorInteractions.cancelContinuousAdjustment() } },
-        chooseColor = { color -> presenter.act { editorStyle.colorInteractions.oneShot("Choose color") { previewColor(color) } } },
+        chooseColor = { color -> presenter.act { editorStyle.colorInteractions.chooseExplicitColor(color) } },
         toggleGradient = { enabled -> presenter.act { editorStyle.colorInteractions.oneShot("Toggle gradient") { setGradientEnabled(enabled) } } },
         addGradientStop = { presenter.act { editorStyle.colorInteractions.oneShot("Add gradient stop") { addStopAt(0.5f) } } },
         selectGradientStop = { presenter.act { editorStyle.colorStudio.selectStop(it) } },

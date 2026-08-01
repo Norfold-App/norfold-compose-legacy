@@ -5,9 +5,6 @@ import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.documentFontIds
 import com.norfold.app.domain.documentPalette
-import com.norfold.app.domain.effectiveBackgroundPaint
-import com.norfold.app.domain.effectiveFill
-import com.norfold.app.domain.effectiveStroke
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
@@ -16,11 +13,15 @@ import com.norfold.app.domain.style.ColorValue
 import com.norfold.app.domain.style.FontIdentity
 import com.norfold.app.domain.style.FontRegistry
 import com.norfold.app.domain.style.FontSource
+import com.norfold.app.domain.style.MixedState
 import com.norfold.app.domain.style.StyleCategory
 import com.norfold.app.domain.style.StyleDefinition
 import com.norfold.app.domain.style.StyleProperty
 import com.norfold.app.domain.style.DocumentToken
 import com.norfold.app.domain.style.TokenKind
+import com.norfold.app.domain.style.resolvedPageBackground
+import com.norfold.app.domain.style.resolvedShapeFill
+import com.norfold.app.domain.style.resolvedShapeStroke
 
 /** Selection facts the shared styling runtime needs; host geometry and presentation remain outside it. */
 data class EditorStyleSelection(
@@ -35,7 +36,7 @@ data class EditorStyleUiState(
     val colorStudio: ColorStudioState = ColorStudioState.CLOSED,
     val fontBrowser: FontBrowserState = FontBrowserState(),
     val previewPaint: ColorPaint? = null,
-    val styleNames: List<Pair<String, String>> = emptyList(),
+    val styleNames: List<NamedStyleUiState> = emptyList(),
     val documentColors: List<ColorValue> = emptyList(),
     val documentFontIds: List<String> = emptyList(),
     val recentColors: List<ColorValue> = emptyList(),
@@ -52,6 +53,7 @@ data class EditorStyleUiState(
 )
 
 data class ColorTokenUiState(val id: String, val name: String, val color: ColorValue, val description: String)
+data class NamedStyleUiState(val id: String, val name: String, val enabled: Boolean, val reason: String? = null)
 
 /**
  * One presentation-independent styling session mounted by both editor hosts.
@@ -113,7 +115,7 @@ class EditorStyleRuntime(
         val target = target(role, ids)
         val initial = initialPaint(role, ids)
         previewPaint = null
-        colorStudio.open(target, initial)
+        colorStudio.open(target, initial.paint, mixed = initial.mixed)
         onChanged()
         return true
     }
@@ -135,8 +137,10 @@ class EditorStyleRuntime(
 
     fun openFont(): Boolean {
         val selected = selection()
-        val first = selected.textBlockIds.firstOrNull() ?: return false
-        fontBrowser.open(controller.resolvedFont(first), selected.selectedText)
+        if (selected.textBlockIds.isEmpty()) return false
+        val fonts = selected.textBlockIds.map(controller::resolvedFont)
+        val mixed = fonts.distinct().size > 1
+        fontBrowser.open(fonts.distinct().singleOrNull(), selected.selectedText, mixed)
         onChanged()
         return true
     }
@@ -165,7 +169,7 @@ class EditorStyleRuntime(
         fontBrowser = FontBrowserEngine(registry).also { next ->
             next.restoreFavorites(previous.favoriteKeys())
             next.restoreRecent(previous.recentKeys())
-            next.open(state.selected, state.previewText.takeIf { state.usingSelectedText }.orEmpty())
+            next.open(state.selected, state.previewText.takeIf { state.usingSelectedText }.orEmpty(), state.mixedFonts)
             next.setTab(state.tab)
             next.setQuery(state.query)
             next.setCategory(state.category)
@@ -230,15 +234,20 @@ class EditorStyleRuntime(
         controller.setTokenColor(tokenId, colorStudio.state().color()).also { onChanged() }
 
     fun applyColorToken(tokenId: String): Int {
-        val selected = selection()
-        val (ids, property) = when (colorStudio.state().target?.role) {
-            ColorRole.TEXT -> selected.textBlockIds to StyleProperty.TEXT_COLOR
-            ColorRole.HIGHLIGHT -> selected.textBlockIds to StyleProperty.HIGHLIGHT
-            ColorRole.FILL -> selected.shapeBlockIds to StyleProperty.FILL
-            ColorRole.STROKE -> selected.shapeBlockIds to StyleProperty.STROKE_COLOR
-            else -> return 0
+        val target = colorStudio.state().target ?: return 0
+        val token = controller.stylesheet().token(tokenId) ?: return 0
+        val color = token.colorValue() ?: return 0
+        val changed = when (target.role) {
+            ColorRole.TEXT -> controller.bindToToken(target.targetIds, StyleProperty.TEXT_COLOR, tokenId)
+            ColorRole.HIGHLIGHT -> controller.bindToToken(target.targetIds, StyleProperty.HIGHLIGHT, tokenId)
+            ColorRole.FILL -> controller.bindToToken(target.targetIds, StyleProperty.FILL, tokenId)
+            ColorRole.STROKE -> controller.bindToToken(target.targetIds, StyleProperty.STROKE_COLOR, tokenId)
+            ColorRole.PAGE_BACKGROUND -> controller.bindPageBackgroundToToken(target.targetIds, tokenId)
+            else -> 0
         }
-        return controller.bindToToken(ids, property, tokenId).also { onChanged() }
+        if (changed > 0) colorStudio.adoptCommittedPaint(ColorPaint.Flat(color))
+        onChanged()
+        return changed
     }
 
     fun uiState(): EditorStyleUiState {
@@ -256,9 +265,11 @@ class EditorStyleRuntime(
             colorStudio = colorStudio.state(),
             fontBrowser = fontBrowser.state(),
             previewPaint = previewPaint,
-            styleNames = controller.stylesheet().styles.map(StyleDefinition::id).zip(
-                controller.stylesheet().styles.map(StyleDefinition::name),
-            ),
+            styleNames = controller.stylesheet().styles.map { style ->
+                val ids = if (style.category == StyleCategory.TEXT) selected.textBlockIds else selected.shapeBlockIds
+                val status = controller.styleApplicationStatus(ids, style.id)
+                NamedStyleUiState(style.id, style.name, status.enabled, status.reason)
+            },
             documentColors = cachedPalette,
             documentFontIds = cachedFontIds,
             recentColors = colorStudio.recentColors(),
@@ -296,22 +307,35 @@ class EditorStyleRuntime(
         else -> error("Unsupported editor color role $role")
     }
 
-    private fun initialPaint(role: ColorRole, ids: List<String>): ColorPaint {
+    private fun initialPaint(role: ColorRole, ids: List<String>): PaintSelection {
         val document = controller.document()
+        val sheet = controller.stylesheet()
         return when (role) {
-            ColorRole.TEXT -> controller.propertyStateAcross(ids, StyleProperty.TEXT_COLOR).value
-                ?.let(ColorValue::parse)?.let(ColorPaint::Flat) ?: ColorPaint.Flat(ColorValue.BLACK)
-            ColorRole.HIGHLIGHT -> controller.propertyStateAcross(ids, StyleProperty.HIGHLIGHT).value
-                ?.let(ColorValue::parse)?.let(ColorPaint::Flat) ?: ColorPaint.Flat(ColorValue.TRANSPARENT)
-            ColorRole.FILL -> (document.findById(ids.first()) as? ShapeBlock)?.effectiveFill()
-                ?: ColorPaint.Flat(ColorValue.BLACK)
-            ColorRole.STROKE -> (document.findById(ids.first()) as? ShapeBlock)?.effectiveStroke()
-                ?: ColorPaint.Flat(ColorValue.BLACK)
-            ColorRole.PAGE_BACKGROUND -> (document.findById(ids.first()) as? DocumentPageBlock)
-                ?.geometry?.effectiveBackgroundPaint() ?: ColorPaint.Flat(ColorValue.WHITE)
-            else -> ColorPaint.Flat(ColorValue.BLACK)
+            ColorRole.TEXT, ColorRole.HIGHLIGHT -> {
+                val property = if (role == ColorRole.TEXT) StyleProperty.TEXT_COLOR else StyleProperty.HIGHLIGHT
+                val state = controller.propertyStateAcross(ids, property)
+                val fallback = if (role == ColorRole.TEXT) ColorValue.BLACK else ColorValue.TRANSPARENT
+                PaintSelection(
+                    state.value?.let(ColorValue::parse)?.let(ColorPaint::Flat) ?: ColorPaint.Flat(fallback),
+                    mixed = state.state == MixedState.MIXED,
+                )
+            }
+            ColorRole.FILL -> paintSelection(ids.mapNotNull { (document.findById(it) as? ShapeBlock)?.let { shape -> resolvedShapeFill(shape, sheet) } })
+            ColorRole.STROKE -> paintSelection(ids.mapNotNull { (document.findById(it) as? ShapeBlock)?.let { shape -> resolvedShapeStroke(shape, sheet) } })
+            ColorRole.PAGE_BACKGROUND -> paintSelection(ids.mapNotNull { (document.findById(it) as? DocumentPageBlock)?.let { page -> resolvedPageBackground(page, sheet) } })
+            else -> PaintSelection(ColorPaint.Flat(ColorValue.BLACK), mixed = false)
         }
     }
+
+    private fun paintSelection(paints: List<ColorPaint>): PaintSelection {
+        val distinct = paints.distinct()
+        return PaintSelection(
+            paint = distinct.singleOrNull() ?: ColorPaint.Flat(ColorValue.TRANSPARENT),
+            mixed = distinct.size > 1,
+        )
+    }
+
+    private data class PaintSelection(val paint: ColorPaint, val mixed: Boolean)
 
     companion object {
         val EMPTY_REGISTRY = FontRegistry(

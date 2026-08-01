@@ -273,6 +273,8 @@ data class PageGeometry(
     val background: Long? = null,
     /** Rich page paint. Null preserves the legacy flat [background] value exactly. */
     val backgroundPaint: com.norfold.app.domain.style.ColorPaint? = null,
+    /** Stable document-token binding. Null keeps every pre-Phase-3 payload backward compatible. */
+    val backgroundTokenId: String? = null,
     val border: PageBorder = PageBorder(),
     val grid: PageGrid = PageGrid(),
     val bleed: PageBleed = PageBleed(),

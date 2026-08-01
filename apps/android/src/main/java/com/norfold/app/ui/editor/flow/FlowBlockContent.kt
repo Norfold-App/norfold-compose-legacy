@@ -74,6 +74,7 @@ import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.NumberedListBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
+import com.norfold.app.domain.effectiveStyleAssignment
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.UnknownBlock
@@ -88,6 +89,10 @@ import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
 import com.norfold.app.ui.editor.style.resolvedTextStyle
+import com.norfold.app.ui.editor.style.WrapperStyleSource
+import com.norfold.app.ui.editor.style.collapsedBlockSpacing
+import com.norfold.app.ui.editor.style.resolvedBlockMetrics
+import com.norfold.app.ui.editor.style.resolvedContentColor
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -150,6 +155,7 @@ data class FlowBlockContext(
     val previewRole: ColorRole? = null,
     val previewPaint: ColorPaint? = null,
     val previewTargetIds: Set<String> = emptySet(),
+    val wrapperStyles: List<WrapperStyleSource> = emptyList(),
 )
 
 /**
@@ -247,6 +253,9 @@ fun FlowBlockContent(
         }
 
         is QuoteBlock -> Row(modifier.height(IntrinsicSize.Min)) {
+            val childContext = context.copy(
+                wrapperStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + context.wrapperStyles,
+            )
             Box(
                 Modifier
                     .width(3.dp)
@@ -254,9 +263,7 @@ fun FlowBlockContent(
                     .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
             )
             Column(Modifier.padding(start = 12.dp)) {
-                block.children.forEach { child ->
-                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth(), context)
-                }
+                FlowStyledChildren(block.children, callbacks, childContext)
             }
         }
 
@@ -266,6 +273,9 @@ fun FlowBlockContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(12.dp),
         ) {
+            val childContext = context.copy(
+                wrapperStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + context.wrapperStyles,
+            )
             // A collapsed callout with no control is content the user cannot reach at all, and structural
             // commands would still operate on children nobody can see (correction item 16).
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -282,14 +292,12 @@ fun FlowBlockContent(
                 }
                 Text(
                     block.title.ifBlank { "Callout" },
-                    style = MaterialTheme.typography.titleSmall,
+                    style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.titleSmall),
                     modifier = Modifier.weight(1f),
                 )
             }
             if (!block.collapsed) {
-                block.children.forEach { child ->
-                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth(), context)
-                }
+                FlowStyledChildren(block.children, callbacks, childContext)
             }
         }
 
@@ -322,10 +330,8 @@ fun FlowBlockContent(
                 }
             }
         } else {
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                block.children.forEach { child ->
-                    FlowBlockContent(child, callbacks, Modifier.fillMaxWidth(), context)
-                }
+            Column(modifier) {
+                FlowStyledChildren(block.children, callbacks, context)
             }
         }
 
@@ -344,6 +350,29 @@ fun FlowBlockContent(
             title = block::class.simpleName?.removeSuffix("Block") ?: "Block",
             detail = block.plainText().take(120).ifBlank { "Editing arrives with a later phase." },
             modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun FlowStyledChildren(
+    children: List<DocumentBlock>,
+    callbacks: FlowBlockCallbacks,
+    context: FlowBlockContext,
+) {
+    val metrics = remember(children, context.stylesheet, context.wrapperStyles) {
+        children.map { resolvedBlockMetrics(it, context.stylesheet, context.wrapperStyles) }
+    }
+    children.forEachIndexed { index, child ->
+        val current = metrics[index]
+        val top = if (index == 0) current.beforeDp
+        else collapsedBlockSpacing(metrics[index - 1].afterDp, current.beforeDp)
+        val bottom = if (index == children.lastIndex) current.afterDp else 0f
+        FlowBlockContent(
+            child,
+            callbacks,
+            Modifier.fillMaxWidth().padding(top = top.dp, bottom = bottom.dp),
+            context,
         )
     }
 }
@@ -501,7 +530,7 @@ private fun FlowEditableLine(
                     color = if (text.isEmpty()) {
                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     } else {
-                        LocalContentColor.current
+                        resolvedContentColor(style.color, LocalContentColor.current)
                     },
                 ),
                 modifier = Modifier.fillMaxWidth(),
@@ -563,7 +592,9 @@ private fun FlowEditableLine(
                 }
             },
             visualTransformation = transformation,
-            textStyle = style.copy(color = LocalContentColor.current),
+            textStyle = style.copy(
+                color = resolvedContentColor(style.color, LocalContentColor.current),
+            ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             modifier = Modifier
                 .fillMaxWidth()
@@ -664,6 +695,7 @@ private fun resolvedFlowTextStyle(
     block = block,
     sheet = context.stylesheet,
     base = base,
+    wrappersNearestFirst = context.wrapperStyles,
     previewRole = context.previewRole,
     previewPaint = context.previewPaint,
     previewTargetIds = context.previewTargetIds,

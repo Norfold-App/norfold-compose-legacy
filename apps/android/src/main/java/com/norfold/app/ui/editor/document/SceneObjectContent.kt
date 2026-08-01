@@ -71,6 +71,7 @@ import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.NumberedListBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
+import com.norfold.app.domain.effectiveStyleAssignment
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
@@ -84,8 +85,12 @@ import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
 import com.norfold.app.ui.editor.style.resolvedTextStyle
-import com.norfold.app.ui.editor.style.resolvedShapeFill
-import com.norfold.app.ui.editor.style.resolvedShapeStroke
+import com.norfold.app.ui.editor.style.WrapperStyleSource
+import com.norfold.app.ui.editor.style.collapsedBlockSpacing
+import com.norfold.app.ui.editor.style.resolvedBlockMetrics
+import com.norfold.app.ui.editor.style.resolvedContentColor
+import com.norfold.app.domain.style.resolvedShapeFill
+import com.norfold.app.domain.style.resolvedShapeStroke
 import com.norfold.app.ui.editor.style.resolvedShapeMetrics
 import com.norfold.app.ui.editor.style.backgroundPaint
 import androidx.compose.foundation.border
@@ -142,6 +147,7 @@ fun SceneObjectContent(
     previewRole: ColorRole? = null,
     previewPaint: ColorPaint? = null,
     previewTargetIds: Set<String> = emptySet(),
+    wrapperStyles: List<WrapperStyleSource> = emptyList(),
 ) {
     when (block) {
         is ParagraphBlock -> SceneEditableLine(
@@ -149,7 +155,7 @@ fun SceneObjectContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, previewRole, previewPaint, previewTargetIds),
+            style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
             placeholder = "Text",
             editing = editing,
             callbacks = callbacks,
@@ -161,7 +167,7 @@ fun SceneObjectContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = resolvedSceneTextStyle(block, stylesheet, sceneHeadingStyle(block.level), previewRole, previewPaint, previewTargetIds),
+            style = resolvedSceneTextStyle(block, stylesheet, sceneHeadingStyle(block.level), wrapperStyles, previewRole, previewPaint, previewTargetIds),
             placeholder = "Heading ${block.level}",
             editing = editing,
             callbacks = callbacks,
@@ -176,7 +182,7 @@ fun SceneObjectContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, previewRole, previewPaint, previewTargetIds),
+                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
                         placeholder = "List item",
                         editing = editing,
                         callbacks = callbacks,
@@ -193,7 +199,7 @@ fun SceneObjectContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, previewRole, previewPaint, previewTargetIds),
+                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
                         placeholder = "List item",
                         editing = editing,
                         callbacks = callbacks,
@@ -217,7 +223,7 @@ fun SceneObjectContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, previewRole, previewPaint, previewTargetIds),
+                        style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, wrapperStyles, previewRole, previewPaint, previewTargetIds),
                         placeholder = "To-do",
                         editing = editing,
                         callbacks = callbacks,
@@ -228,6 +234,7 @@ fun SceneObjectContent(
         }
 
         is QuoteBlock -> Row(modifier.height(IntrinsicSize.Min)) {
+            val childStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + wrapperStyles
             Box(
                 Modifier
                     .width(3.dp)
@@ -235,9 +242,10 @@ fun SceneObjectContent(
                     .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
             )
             Column(Modifier.padding(start = 8.dp)) {
-                block.children.forEach { child ->
-                    SceneObjectContent(child, objectId, editing, callbacks, Modifier.fillMaxWidth(), stylesheet, previewRole, previewPaint, previewTargetIds)
-                }
+                SceneStyledChildren(
+                    block.children, objectId, editing, callbacks, stylesheet,
+                    previewRole, previewPaint, previewTargetIds, childStyles,
+                )
             }
         }
 
@@ -247,16 +255,18 @@ fun SceneObjectContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(8.dp),
         ) {
+            val childStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + wrapperStyles
             Text(
                 block.title.ifBlank { "Callout" },
-                style = MaterialTheme.typography.labelLarge,
+                style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.labelLarge, wrapperStyles, previewRole, previewPaint, previewTargetIds),
             )
             // A collapsed callout on a page shows only its title, exactly as it does in Flow. Expanding is a
             // content edit, so it belongs to the content-editing pass rather than to placement.
             if (!block.collapsed) {
-                block.children.forEach { child ->
-                    SceneObjectContent(child, objectId, editing, callbacks, Modifier.fillMaxWidth(), stylesheet, previewRole, previewPaint, previewTargetIds)
-                }
+                SceneStyledChildren(
+                    block.children, objectId, editing, callbacks, stylesheet,
+                    previewRole, previewPaint, previewTargetIds, childStyles,
+                )
             }
         }
 
@@ -265,7 +275,9 @@ fun SceneObjectContent(
         // the block untouched. Presenting a live caret over content no keystroke can reach is worse than
         // showing it as not-yet-editable: the user would type a line, see it vanish, and reasonably conclude
         // the document had lost it. Editing arrives with the code-block work, not by faking it here.
-        is CodeBlock -> SceneReadOnlyCode(block, modifier)
+        is CodeBlock -> SceneReadOnlyCode(
+            block, stylesheet, wrapperStyles, previewRole, previewPaint, previewTargetIds, modifier,
+        )
 
         is DividerBlock -> Box(modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             HorizontalDivider()
@@ -281,15 +293,17 @@ fun SceneObjectContent(
                             previewRole = previewRole,
                             previewPaint = previewPaint,
                             previewTargetIds = previewTargetIds,
+                            wrapperStyles = wrapperStyles,
                         )
                     }
                 }
             }
         } else {
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                block.children.forEach { child ->
-                    SceneObjectContent(child, objectId, editing, callbacks, Modifier.fillMaxWidth(), stylesheet, previewRole, previewPaint, previewTargetIds)
-                }
+            Column(modifier) {
+                SceneStyledChildren(
+                    block.children, objectId, editing, callbacks, stylesheet,
+                    previewRole, previewPaint, previewTargetIds, wrapperStyles,
+                )
             }
         }
 
@@ -328,6 +342,41 @@ fun SceneObjectContent(
     }
 }
 
+@Composable
+private fun SceneStyledChildren(
+    children: List<DocumentBlock>,
+    objectId: String,
+    editing: Boolean,
+    callbacks: SceneContentCallbacks,
+    stylesheet: Stylesheet,
+    previewRole: ColorRole?,
+    previewPaint: ColorPaint?,
+    previewTargetIds: Set<String>,
+    wrapperStyles: List<WrapperStyleSource>,
+) {
+    val metrics = remember(children, stylesheet, wrapperStyles) {
+        children.map { resolvedBlockMetrics(it, stylesheet, wrapperStyles) }
+    }
+    children.forEachIndexed { index, child ->
+        val current = metrics[index]
+        val top = if (index == 0) current.beforeDp
+        else collapsedBlockSpacing(metrics[index - 1].afterDp, current.beforeDp)
+        val bottom = if (index == children.lastIndex) current.afterDp else 0f
+        SceneObjectContent(
+            child,
+            objectId,
+            editing,
+            callbacks,
+            Modifier.fillMaxWidth().padding(top = top.dp, bottom = bottom.dp),
+            stylesheet,
+            previewRole,
+            previewPaint,
+            previewTargetIds,
+            wrapperStyles,
+        )
+    }
+}
+
 /**
  * One line of a scene object's text.
  *
@@ -357,7 +406,7 @@ private fun SceneEditableLine(
                 color = if (text.isEmpty()) {
                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 } else {
-                    LocalContentColor.current
+                    resolvedContentColor(style.color, LocalContentColor.current)
                 },
             ),
             modifier = modifier.fillMaxWidth(),
@@ -400,7 +449,9 @@ private fun SceneEditableLine(
                 }
             },
             visualTransformation = transformation,
-            textStyle = style.copy(color = LocalContentColor.current),
+            textStyle = style.copy(
+                color = resolvedContentColor(style.color, LocalContentColor.current),
+            ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
         )
@@ -415,7 +466,15 @@ private fun SceneEditableLine(
  * field here would accept keystrokes the controller would silently discard.
  */
 @Composable
-private fun SceneReadOnlyCode(block: CodeBlock, modifier: Modifier = Modifier) {
+private fun SceneReadOnlyCode(
+    block: CodeBlock,
+    stylesheet: Stylesheet,
+    wrapperStyles: List<WrapperStyleSource>,
+    previewRole: ColorRole?,
+    previewPaint: ColorPaint?,
+    previewTargetIds: Set<String>,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier
             .fillMaxWidth()
@@ -432,7 +491,15 @@ private fun SceneReadOnlyCode(block: CodeBlock, modifier: Modifier = Modifier) {
         }
         Text(
             text = block.code.ifBlank { "Empty code block" },
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            style = resolvedSceneTextStyle(
+                block,
+                stylesheet,
+                MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                wrapperStyles,
+                previewRole,
+                previewPaint,
+                previewTargetIds,
+            ),
         )
     }
 }
@@ -501,8 +568,10 @@ private fun SceneShape(
         if (block.text.isNotBlank()) {
             Text(
                 block.text,
-                style = resolvedSceneTextStyle(block, stylesheet, MaterialTheme.typography.bodyMedium, previewRole, previewPaint, previewTargetIds),
-                color = MaterialTheme.colorScheme.onPrimary,
+                style = resolvedSceneTextStyle(
+                    block, stylesheet, MaterialTheme.typography.bodyMedium,
+                    emptyList(), previewRole, previewPaint, previewTargetIds,
+                ),
                 modifier = Modifier.padding(metrics.paddingDp.dp),
             )
         }
@@ -610,6 +679,7 @@ private fun resolvedSceneTextStyle(
     block: DocumentBlock,
     sheet: Stylesheet,
     base: TextStyle,
+    wrapperStyles: List<WrapperStyleSource>,
     previewRole: ColorRole?,
     previewPaint: ColorPaint?,
     previewTargetIds: Set<String>,
@@ -617,6 +687,7 @@ private fun resolvedSceneTextStyle(
     block = block,
     sheet = sheet,
     base = base,
+    wrappersNearestFirst = wrapperStyles,
     previewRole = previewRole,
     previewPaint = previewPaint,
     previewTargetIds = previewTargetIds,

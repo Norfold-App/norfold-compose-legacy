@@ -8,6 +8,7 @@ import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.StylesheetBlock
 import com.norfold.app.domain.effectiveStyleAssignment
 import com.norfold.app.domain.findById
+import com.norfold.app.domain.semanticStyleRole
 import com.norfold.app.domain.stylesheet
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorValue
@@ -115,11 +116,9 @@ class StyleController(
         val sheet = stylesheet()
         val definition = sheet.style(styleId) ?: return 0
         val doc = document()
-        val eligible = blockIds.filter { id ->
-            val block = doc.findById(id) ?: return@filter false
-            block.supportsStyle() && categoryOf(block) == definition.category &&
-                block.effectiveStyleAssignment().styleId != styleId
-        }
+        val status = styleApplicationStatus(blockIds, styleId)
+        if (!status.enabled) return 0
+        val eligible = blockIds.filter { id -> doc.findById(id)?.effectiveStyleAssignment()?.styleId != styleId }
         if (eligible.isEmpty()) return 0
         val changed = mutate(label) { session ->
             session.replaceBlocksInTree(eligible) { block ->
@@ -127,6 +126,30 @@ class StyleController(
             }
         }
         return if (changed) eligible.size else 0
+    }
+
+    /** Semantic built-ins are never allowed to contradict the selected block structure. */
+    fun styleApplicationStatus(blockIds: List<String>, styleId: String): StyleApplicationStatus {
+        val definition = stylesheet().style(styleId)
+            ?: return StyleApplicationStatus(false, "Style is unavailable")
+        if (blockIds.isEmpty()) return StyleApplicationStatus(false, "Select compatible content first")
+        val blocks = blockIds.mapNotNull(document()::findById)
+        if (blocks.size != blockIds.size || blocks.any { !it.supportsStyle() || categoryOf(it) != definition.category }) {
+            return StyleApplicationStatus(false, "Selection contains incompatible content")
+        }
+        definition.semanticRole?.let { required ->
+            val incompatible = blocks.filter { it.semanticStyleRole() != required }
+            if (incompatible.isNotEmpty()) {
+                return StyleApplicationStatus(
+                    false,
+                    "Requires ${semanticRoleLabel(required)} structure",
+                )
+            }
+        }
+        if (blocks.all { it.effectiveStyleAssignment().styleId == styleId }) {
+            return StyleApplicationStatus(false, "Already applied")
+        }
+        return StyleApplicationStatus(true, null)
     }
 
     /**
@@ -413,19 +436,50 @@ class StyleController(
         // Content-level references must be flattened too, or a paragraph bound to the token would render
         // from a dangling id after the stylesheet forgot it.
         val flattenTo: String? = sheet.token(tokenId)?.value?.takeIf { detach }
-        val consumers = if (flattenTo != null) contentReferencing(tokenId) else emptyList()
+        val consumers = contentReferencing(tokenId)
         return mutate(label) { session ->
-            if (flattenTo != null && consumers.isNotEmpty()) {
+            if (consumers.isNotEmpty()) {
                 session.replaceBlocksInTree(consumers) { block ->
-                    val assignment = block.effectiveStyleAssignment()
-                    val rewritten = assignment.overrides.mapValues { (_, value) ->
-                        if (value is StyleValue.TokenRef && value.tokenId == tokenId) {
-                            StyleValue.Literal(flattenTo)
+                    if (block is DocumentPageBlock && block.geometry.backgroundTokenId == tokenId) {
+                        val geometry = when {
+                            flattenTo != null -> block.geometry.copy(
+                                backgroundTokenId = null,
+                                backgroundPaint = ColorValue.parse(flattenTo)?.let(ColorPaint::Flat)
+                                    ?: block.geometry.backgroundPaint,
+                                background = ColorValue.parse(flattenTo)?.toArgb() ?: block.geometry.background,
+                            )
+                            replacementId != null -> block.geometry.copy(backgroundTokenId = replacementId)
+                            else -> block.geometry
+                        }
+                        block.copy(geometry = geometry)
+                    } else {
+                        val assignment = block.effectiveStyleAssignment()
+                        val detachedColor = flattenTo?.let(ColorValue::parse)
+                        val fillWasBound = assignment.overrides[StyleProperty.FILL.key]
+                            ?.let { it is StyleValue.TokenRef && it.tokenId == tokenId } == true
+                        val strokeWasBound = assignment.overrides[StyleProperty.STROKE_COLOR.key]
+                            ?.let { it is StyleValue.TokenRef && it.tokenId == tokenId } == true
+                        val rewritten = assignment.overrides.mapValues { (_, value) ->
+                            if (value is StyleValue.TokenRef && value.tokenId == tokenId) {
+                                if (flattenTo != null) StyleValue.Literal(flattenTo)
+                                else StyleValue.TokenRef(replacementId!!)
+                            } else {
+                                value
+                            }
+                        }
+                        val rewrittenAssignment = assignment.copy(overrides = rewritten)
+                        if (block is ShapeBlock && detachedColor != null && (fillWasBound || strokeWasBound)) {
+                            block.copy(
+                                fillPaint = if (fillWasBound) ColorPaint.Flat(detachedColor) else block.fillPaint,
+                                fillColor = if (fillWasBound) detachedColor.toArgb() else block.fillColor,
+                                strokePaint = if (strokeWasBound) ColorPaint.Flat(detachedColor) else block.strokePaint,
+                                strokeColor = if (strokeWasBound) detachedColor.toArgb() else block.strokeColor,
+                                style = rewrittenAssignment,
+                            )
                         } else {
-                            value
+                            block.withStyleAssignment(rewrittenAssignment)
                         }
                     }
-                    block.withStyleAssignment(assignment.copy(overrides = rewritten))
                 }
             }
             session.writeStylesheet(next)
@@ -434,8 +488,9 @@ class StyleController(
 
     private fun contentReferencing(tokenId: String): List<String> = buildList {
         document().walk { block ->
-            val binds = block.effectiveStyleAssignment().overrides.values
-                .any { it is StyleValue.TokenRef && it.tokenId == tokenId }
+            val binds = (block is DocumentPageBlock && block.geometry.backgroundTokenId == tokenId) ||
+                block.effectiveStyleAssignment().overrides.values
+                    .any { it is StyleValue.TokenRef && it.tokenId == tokenId }
             if (binds) add(block.id)
         }
     }
@@ -451,6 +506,26 @@ class StyleController(
     ): Int {
         if (stylesheet().token(tokenId) == null) return 0
         return setOverride(blockIds, property, StyleValue.token(tokenId), label)
+    }
+
+    fun bindPageBackgroundToToken(
+        pageIds: List<String>,
+        tokenId: String,
+        label: String = "Use page background variable",
+    ): Int {
+        val token = stylesheet().token(tokenId)?.takeIf { it.kind == TokenKind.COLOR } ?: return 0
+        if (!token.domain.tokenizable) return 0
+        val doc = document()
+        val eligible = pageIds.filter { (doc.findById(it) as? DocumentPageBlock)?.geometry?.backgroundTokenId != tokenId }
+        if (eligible.isEmpty()) return 0
+        val changed = mutate(label) { session ->
+            session.replaceBlocksInTree(eligible) { block ->
+                (block as? DocumentPageBlock)?.copy(
+                    geometry = block.geometry.copy(backgroundTokenId = tokenId),
+                ) ?: block
+            }
+        }
+        return if (changed) eligible.size else 0
     }
 
     // ── Colour and font application ──────────────────────────────────────────────────────────────
@@ -472,7 +547,11 @@ class StyleController(
      */
     fun applyShapeFill(blockIds: List<String>, paint: ColorPaint, label: String = "Change fill"): Int {
         val doc = document()
-        val eligible = blockIds.filter { (doc.findById(it) as? ShapeBlock)?.fillPaint != paint }
+        val eligible = blockIds.filter { id ->
+            val shape = doc.findById(id) as? ShapeBlock ?: return@filter false
+            shape.fillPaint != paint ||
+                (shape.effectiveStyleAssignment().overrides[StyleProperty.FILL.key] !is StyleValue.Literal)
+        }
             .filter { doc.findById(it) is ShapeBlock }
         if (eligible.isEmpty()) return 0
         val changed = mutate(label) { session ->
@@ -496,8 +575,11 @@ class StyleController(
     fun applyShapeStroke(blockIds: List<String>, color: ColorValue, label: String = "Change stroke"): Int {
         val doc = document()
         val paint = ColorPaint.Flat(color)
-        val eligible = blockIds.filter { doc.findById(it) is ShapeBlock }
-            .filter { (doc.findById(it) as ShapeBlock).strokePaint != paint }
+        val eligible = blockIds.filter { id ->
+            val shape = doc.findById(id) as? ShapeBlock ?: return@filter false
+            shape.strokePaint != paint ||
+                (shape.effectiveStyleAssignment().overrides[StyleProperty.STROKE_COLOR.key] !is StyleValue.Literal)
+        }
         if (eligible.isEmpty()) return 0
         val changed = mutate(label) { session ->
             session.replaceBlocksInTree(eligible) { block ->
@@ -521,7 +603,7 @@ class StyleController(
         val doc = document()
         val eligible = pageIds.filter { id ->
             val page = doc.findById(id) as? DocumentPageBlock
-            page != null && page.geometry.backgroundPaint != paint
+            page != null && (page.geometry.backgroundPaint != paint || page.geometry.backgroundTokenId != null)
         }
         if (eligible.isEmpty()) return 0
         val changed = mutate(label) { session ->
@@ -530,6 +612,7 @@ class StyleController(
                     geometry = block.geometry.copy(
                         backgroundPaint = paint,
                         background = paint.representative().toArgb(),
+                        backgroundTokenId = null,
                     ),
                 ) ?: block
             }
@@ -560,7 +643,17 @@ class StyleController(
 
     private fun categoryOf(block: DocumentBlock): StyleCategory =
         if (block is ShapeBlock) StyleCategory.OBJECT else StyleCategory.TEXT
+
+    private fun semanticRoleLabel(role: String): String = when {
+        role == "paragraph" -> "paragraph"
+        role == "quote" -> "quote"
+        role == "code" -> "code block"
+        role.startsWith("heading:") -> "heading ${role.substringAfter(':')}"
+        else -> role
+    }
 }
+
+data class StyleApplicationStatus(val enabled: Boolean, val reason: String?)
 
 /**
  * Writes [sheet] into the session's document, creating the stylesheet block if it is missing.

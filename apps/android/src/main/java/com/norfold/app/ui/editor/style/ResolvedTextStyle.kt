@@ -10,9 +10,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.ShapeBlock
-import com.norfold.app.domain.effectiveFill
-import com.norfold.app.domain.effectiveStroke
 import com.norfold.app.domain.effectiveStyleAssignment
+import com.norfold.app.domain.semanticStyleRole
+import com.norfold.app.domain.styleAssignment
 import com.norfold.app.domain.style.ColorValue
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
@@ -22,6 +22,61 @@ import com.norfold.app.domain.style.StyleProperty
 import com.norfold.app.domain.style.StyleResolver
 import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.ui.fonts.OfflineFontLibrary
+import kotlin.math.max
+
+data class WrapperStyleSource(val blockId: String, val assignment: com.norfold.app.domain.style.StyleAssignment)
+
+data class ResolvedBlockMetrics(val beforeDp: Float = 0f, val afterDp: Float = 0f)
+
+/** Values in 0.5..4 are ratios; larger valid values retain the legacy absolute-sp interpretation. */
+fun resolvedLineHeightSp(stored: Float?, resolvedFontSizeSp: Float): Float? = when {
+    stored == null || !stored.isFinite() || !resolvedFontSizeSp.isFinite() || resolvedFontSizeSp <= 0f -> null
+    stored in 0.5f..4f -> stored * resolvedFontSizeSp
+    stored in 4f..1024f -> stored
+    else -> null
+}
+
+fun resolvedTextValues(
+    block: DocumentBlock,
+    sheet: Stylesheet,
+    wrappersNearestFirst: List<WrapperStyleSource> = emptyList(),
+): Map<StyleProperty, String> = StyleResolver.resolveAllCascaded(
+    sheet = sheet,
+    child = block.styleAssignment(),
+    implicitStyleId = block.semanticStyleRole()?.let(Stylesheet::defaultStyleIdFor),
+    wrappersNearestFirst = wrappersNearestFirst.map(WrapperStyleSource::assignment),
+    category = StyleCategory.TEXT,
+)
+
+fun resolvedBlockMetrics(
+    block: DocumentBlock,
+    sheet: Stylesheet,
+    wrappersNearestFirst: List<WrapperStyleSource> = emptyList(),
+): ResolvedBlockMetrics {
+    val values = resolvedTextValues(block, sheet, wrappersNearestFirst)
+    fun metric(property: StyleProperty): Float = values[property]
+        ?.toFloatOrNull()
+        ?.takeIf { it.isFinite() && it in 0f..4096f }
+        ?: 0f
+    return ResolvedBlockMetrics(
+        beforeDp = metric(StyleProperty.SPACE_BEFORE),
+        afterDp = metric(StyleProperty.SPACE_AFTER),
+    )
+}
+
+/** Adjacent block margins collapse to the larger value; they are never summed. */
+fun collapsedBlockSpacing(previousAfterDp: Float, nextBeforeDp: Float): Float =
+    max(previousAfterDp.coerceAtLeast(0f), nextBeforeDp.coerceAtLeast(0f))
+
+/** Read-only Text and BasicTextField both call this, so neither can replace an explicit resolved color. */
+fun resolvedContentColor(resolved: Color, fallback: Color): Color =
+    resolved.takeUnless { it == Color.Unspecified } ?: fallback
+
+fun previewAffectsTextBlock(
+    blockId: String,
+    wrappersNearestFirst: List<WrapperStyleSource>,
+    previewTargetIds: Set<String>,
+): Boolean = blockId in previewTargetIds || wrappersNearestFirst.any { it.blockId in previewTargetIds }
 
 /** Resolves the stored style reference + local overrides into Compose presentation. */
 @Composable
@@ -29,37 +84,44 @@ fun resolvedTextStyle(
     block: DocumentBlock,
     sheet: Stylesheet,
     base: TextStyle,
+    wrappersNearestFirst: List<WrapperStyleSource> = emptyList(),
     previewRole: ColorRole? = null,
     previewPaint: ColorPaint? = null,
     previewTargetIds: Set<String> = emptySet(),
 ): TextStyle {
-    val values = StyleResolver.resolveAll(sheet, block.effectiveStyleAssignment(), StyleCategory.TEXT)
+    val values = resolvedTextValues(block, sheet, wrappersNearestFirst)
     val weight = values[StyleProperty.FONT_WEIGHT]?.toIntOrNull()?.coerceIn(100, 900)
     val identity = values[StyleProperty.FONT_FAMILY]?.let(FontIdentity::decode)
+    val resolvedFontSize = values[StyleProperty.FONT_SIZE]?.toFloatOrNull()?.takeIf { it in 4f..512f }?.sp
+        ?: base.fontSize
+    val fontSizeValue = resolvedFontSize.value.takeIf { it.isFinite() && it > 0f }
+    val resolvedLineHeight = resolvedLineHeightSp(
+        values[StyleProperty.LINE_HEIGHT]?.toFloatOrNull(),
+        fontSizeValue ?: Float.NaN,
+    )?.sp ?: base.lineHeight
+    val previewApplies = previewAffectsTextBlock(block.id, wrappersNearestFirst, previewTargetIds)
     val decorations = buildList {
         if (values[StyleProperty.UNDERLINE].toBoolean()) add(TextDecoration.Underline)
         if (values[StyleProperty.STRIKETHROUGH].toBoolean()) add(TextDecoration.LineThrough)
     }
     return base.copy(
         color = previewPaint?.representative()
-            ?.takeIf { block.id in previewTargetIds && previewRole == ColorRole.TEXT }
+            ?.takeIf { previewApplies && previewRole == ColorRole.TEXT }
             ?.let { Color(it.toArgb()) }
             ?: values[StyleProperty.TEXT_COLOR]?.let(ColorValue::parse)?.let { Color(it.toArgb()) }
             ?: base.color,
         background = previewPaint?.representative()
-            ?.takeIf { block.id in previewTargetIds && previewRole == ColorRole.HIGHLIGHT }
+            ?.takeIf { previewApplies && previewRole == ColorRole.HIGHLIGHT }
             ?.let { Color(it.toArgb()) }
             ?: values[StyleProperty.HIGHLIGHT]?.let(ColorValue::parse)?.let { Color(it.toArgb()) }
             ?: base.background,
         fontFamily = identity?.let(OfflineFontLibrary::fontFor) ?: base.fontFamily,
-        fontSize = values[StyleProperty.FONT_SIZE]?.toFloatOrNull()?.takeIf { it in 4f..512f }?.sp
-            ?: base.fontSize,
+        fontSize = resolvedFontSize,
         fontWeight = weight?.let(::FontWeight) ?: base.fontWeight,
         fontStyle = if (values[StyleProperty.ITALIC].toBoolean()) FontStyle.Italic else base.fontStyle,
         textDecoration = decorations.takeIf { it.isNotEmpty() }?.let(TextDecoration::combine)
             ?: base.textDecoration,
-        lineHeight = values[StyleProperty.LINE_HEIGHT]?.toFloatOrNull()?.takeIf { it in 4f..1024f }?.sp
-            ?: base.lineHeight,
+        lineHeight = resolvedLineHeight,
         letterSpacing = values[StyleProperty.LETTER_SPACING]?.toFloatOrNull()?.takeIf { it in -20f..100f }?.sp
             ?: base.letterSpacing,
         textAlign = when (values[StyleProperty.TEXT_ALIGN]?.lowercase()) {
@@ -70,21 +132,6 @@ fun resolvedTextStyle(
             else -> base.textAlign
         },
     )
-}
-
-/** Named object styles resolve through the same stylesheet/token chain as text styles. */
-fun resolvedShapeFill(block: ShapeBlock, sheet: Stylesheet): ColorPaint {
-    val assignment = block.effectiveStyleAssignment()
-    if (assignment.overrides(StyleProperty.FILL)) return block.effectiveFill()
-    val value = StyleResolver.resolve(sheet, assignment, StyleProperty.FILL)
-    return value?.let(ColorValue::parse)?.let(ColorPaint::Flat) ?: block.effectiveFill()
-}
-
-fun resolvedShapeStroke(block: ShapeBlock, sheet: Stylesheet): ColorPaint {
-    val assignment = block.effectiveStyleAssignment()
-    if (assignment.overrides(StyleProperty.STROKE_COLOR)) return block.effectiveStroke()
-    val value = StyleResolver.resolve(sheet, assignment, StyleProperty.STROKE_COLOR)
-    return value?.let(ColorValue::parse)?.let(ColorPaint::Flat) ?: block.effectiveStroke()
 }
 
 data class ResolvedShapeMetrics(

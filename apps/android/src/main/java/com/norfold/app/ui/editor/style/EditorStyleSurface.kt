@@ -145,6 +145,16 @@ fun EditorStyleSurface(
 @Composable
 private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurfaceActions) {
     val studio = state.colorStudio
+    val requiresCommonPaint = setOf(
+        ColorStudioView.CURRENT,
+        ColorStudioView.SPECTRUM,
+        ColorStudioView.WHEEL,
+        ColorStudioView.SLIDERS,
+        ColorStudioView.GRADIENT,
+        ColorStudioView.HARMONIES,
+        ColorStudioView.CONTRAST,
+        ColorStudioView.VISION,
+    )
     val scheme = MaterialTheme.colorScheme
     val themeColors = listOf(
         scheme.primary, scheme.secondary, scheme.tertiary, scheme.error,
@@ -161,22 +171,42 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
                     selected = studio.view == view,
                     onClick = { actions.setColorView(view) },
                     label = { Text(view.label) },
+                    enabled = !studio.isMixed || view !in requiresCommonPaint,
                 )
             }
         }
-        Surface(
-            Modifier.fillMaxWidth(),
-            color = Color(studio.color().toArgb()),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Text(
-                studio.color().accessibleLabel(),
-                modifier = Modifier.padding(18.dp),
-                color = if (studio.color().relativeLuminance() > 0.45) Color.Black else Color.White,
-            )
+        if (studio.isMixed) {
+            Surface(Modifier.fillMaxWidth(), color = scheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Mixed", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Choose a swatch, document color, theme color, variable, or enter a complete HEX value to establish one common color.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        } else {
+            Surface(
+                Modifier.fillMaxWidth(),
+                color = Color(studio.color().toArgb()),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Text(
+                    studio.color().accessibleLabel(),
+                    modifier = Modifier.padding(18.dp),
+                    color = if (studio.color().relativeLuminance() > 0.45) Color.Black else Color.White,
+                )
+            }
         }
 
-        when (studio.view) {
+        if (studio.isMixed && studio.view in requiresCommonPaint) {
+            Text(
+                "This relative control is unavailable while the selection is mixed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ColorFields(studio, actions)
+        } else when (studio.view) {
             ColorStudioView.SWATCHES, ColorStudioView.RECENT, ColorStudioView.DOCUMENT,
             ColorStudioView.THEME, ColorStudioView.CURRENT -> {
                 val colors = when (studio.view) {
@@ -186,7 +216,7 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
                     ColorStudioView.CURRENT -> listOf(studio.color())
                     else -> DEFAULT_SWATCHES
                 }.ifEmpty { DEFAULT_SWATCHES }
-                Swatches(colors, actions.chooseColor, studio.color())
+                Swatches(colors, actions.chooseColor, studio.color().takeUnless { studio.isMixed })
             }
             ColorStudioView.SLIDERS -> ColorFields(studio, actions)
             ColorStudioView.SPECTRUM -> {
@@ -247,13 +277,13 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
                 Text("Document variables", style = MaterialTheme.typography.titleSmall)
                 state.colorTokens.forEach { token ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Swatch(token.color, selected = token.color == studio.color()) { actions.chooseColor(token.color) }
+                        Swatch(token.color, selected = !studio.isMixed && token.color == studio.color()) { actions.chooseColor(token.color) }
                         Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                             Text(token.name, fontWeight = FontWeight.SemiBold)
                             Text(token.description, style = MaterialTheme.typography.labelSmall)
                         }
                         TextButton(onClick = { actions.applyColorToken(token.id) }) { Text("Use") }
-                        TextButton(onClick = { actions.updateColorToken(token.id) }) { Text("Update") }
+                        TextButton(onClick = { actions.updateColorToken(token.id) }, enabled = !studio.isMixed) { Text("Update") }
                     }
                 }
                 OutlinedTextField(
@@ -265,7 +295,7 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
                 )
                 TextButton(onClick = {
                     if (state.tokenNameDraft.isNotBlank()) actions.createColorToken()
-                }) { Text("Create from current color") }
+                }, enabled = !studio.isMixed) { Text("Create from current color") }
             }
         }
 
@@ -284,8 +314,9 @@ private fun ColorFields(studio: ColorStudioState, actions: EditorStyleSurfaceAct
             OutlinedTextField(
                 value = studio.fieldText(field),
                 onValueChange = { actions.draftColor(field, it) },
-                label = { Text(field.label) },
+                label = { Text(if (studio.isMixed && field == ColorField.HEX) "Common HEX" else field.label) },
                 singleLine = true,
+                enabled = !studio.isMixed || field == ColorField.HEX,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { actions.commitColorDraft(field) }),
                 modifier = Modifier
@@ -305,7 +336,7 @@ private fun ColorFields(studio: ColorStudioState, actions: EditorStyleSurfaceAct
             )
         }
     }
-    if (!studio.isGradient) {
+    if (!studio.isGradient && !studio.isMixed) {
         Text("Opacity ${kotlin.math.round(studio.color().alphaFraction * 100)}%")
         androidx.compose.material3.Slider(
             value = studio.color().alphaFraction,
@@ -315,7 +346,10 @@ private fun ColorFields(studio: ColorStudioState, actions: EditorStyleSurfaceAct
             modifier = Modifier.semantics { contentDescription = "Color opacity" },
         )
     }
-    TextButton(onClick = { studio.draft?.field?.let(actions.commitColorDraft) }) { Text("Use entered value") }
+    TextButton(
+        onClick = { studio.draft?.field?.let(actions.commitColorDraft) },
+        enabled = studio.draft != null,
+    ) { Text("Use entered value") }
 }
 
 @Composable
@@ -482,7 +516,11 @@ private fun FontBrowserPanel(
     actions: EditorStyleSurfaceActions,
 ) {
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        ToolHeader("Font Browser", "${rows.size} matching families", { actions.dismiss(false) })
+        ToolHeader(
+            "Font Browser",
+            if (state.mixedFonts) "Mixed fonts · ${rows.size} matching families" else "${rows.size} matching families",
+            { actions.dismiss(false) },
+        )
         sections.forEach { section ->
             Text(section.title, style = MaterialTheme.typography.labelMedium)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -585,11 +623,14 @@ private fun NamedStylesPanel(state: EditorStyleUiState, actions: EditorStyleSurf
             }
         }
         LazyColumn(Modifier.heightIn(max = 360.dp)) {
-            items(state.styleNames, key = { it.first }) { (id, label) ->
+            items(state.styleNames, key = { it.id }) { item ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                    TextButton(onClick = { actions.applyStyle(id) }) { Text("Apply") }
-                    TextButton(onClick = { actions.updateStyle(id) }) { Text("Update") }
+                    Column(Modifier.weight(1f)) {
+                        Text(item.name, style = MaterialTheme.typography.bodyLarge)
+                        item.reason?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                    }
+                    TextButton(onClick = { actions.applyStyle(item.id) }, enabled = item.enabled) { Text("Apply") }
+                    TextButton(onClick = { actions.updateStyle(item.id) }) { Text("Update") }
                 }
             }
         }
