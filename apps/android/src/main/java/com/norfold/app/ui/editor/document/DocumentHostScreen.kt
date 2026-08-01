@@ -104,12 +104,6 @@ import com.norfold.app.ui.editor.style.backgroundPaint
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
-/**
- * How many dp one page point occupies at 100% zoom. A point is 1/72", a dp is 1/160", so a page drawn at this
- * factor is physically the size it will print.
- */
-private const val DP_PER_POINT = 160f / 72f
-
 /** Visual size of a manipulation handle, and the invisible target around it that a finger can actually hit. */
 private val HANDLE_VISUAL = 14.dp
 private val HANDLE_TARGET = 44.dp
@@ -466,7 +460,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
 ) {
     val geometry = page.geometry
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val contentScale = remember(scale) { DocumentContentScale.of(scale) }
+    val renderScale = remember(scale) { DocumentRenderScale.atZoom(scale) }
 
     val header = geometry.headerFooter
     // A section's first page commonly suppresses the running head, and honouring that here is what makes the
@@ -480,7 +474,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
                 .fillMaxWidth()
                 .padding(horizontal = geometry.margins.left.ptToDp(scale)),
         ) {
-            Text(header.headerText, style = contentScale.textStyle(MaterialTheme.typography.labelSmall), color = muted)
+            Text(header.headerText, style = renderScale.pointTextStyle(MaterialTheme.typography.labelSmall), color = muted)
         }
     }
 
@@ -492,7 +486,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
                 .fillMaxWidth()
                 .padding(horizontal = geometry.margins.left.ptToDp(scale)),
         ) {
-            Text(header.footerText, style = contentScale.textStyle(MaterialTheme.typography.labelSmall), color = muted)
+            Text(header.footerText, style = renderScale.pointTextStyle(MaterialTheme.typography.labelSmall), color = muted)
         }
     }
 
@@ -502,7 +496,7 @@ private fun androidx.compose.foundation.layout.BoxScope.PageMetadata(
                 .align(Alignment.BottomCenter)
                 .offset { IntOffset(0, -(geometry.margins.bottom / 2f).ptToPx(scale, this).roundToInt()) },
         ) {
-            Text(numberLabel, style = contentScale.textStyle(MaterialTheme.typography.labelSmall), color = muted)
+            Text(numberLabel, style = renderScale.pointTextStyle(MaterialTheme.typography.labelSmall), color = muted)
         }
     }
 }
@@ -686,9 +680,9 @@ private fun SceneObjectBox(
             },
     ) {
         val objectSheet = state.document.stylesheet()
-        val contentScale = remember(scale) { DocumentContentScale.of(scale) }
-        val objectMetrics = remember(obj.content, objectSheet, contentScale) {
-            contentScale.blockMetrics(resolvedBlockMetrics(obj.content, objectSheet))
+        val renderScale = remember(scale) { DocumentRenderScale.atZoom(scale) }
+        val objectMetrics = remember(obj.content, objectSheet, renderScale) {
+            renderScale.pointBlockMetrics(resolvedBlockMetrics(obj.content, objectSheet))
         }
         SceneObjectContent(
             block = obj.content,
@@ -710,8 +704,8 @@ private fun SceneObjectBox(
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(
-                start = contentScale.dp(4f),
-                end = contentScale.dp(4f),
+                start = renderScale.pointToDp(4f),
+                end = renderScale.pointToDp(4f),
                 top = objectMetrics.beforeDp.dp,
                 bottom = objectMetrics.afterDp.dp,
             ),
@@ -719,7 +713,7 @@ private fun SceneObjectBox(
             previewRole = state.editorStyle.colorStudio.target?.role,
             previewPaint = state.editorStyle.previewPaint,
             previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
-            contentScale = contentScale,
+            renderScale = renderScale,
         )
     }
 

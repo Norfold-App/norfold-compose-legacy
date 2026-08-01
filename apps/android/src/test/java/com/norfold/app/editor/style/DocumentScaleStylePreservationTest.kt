@@ -26,7 +26,8 @@ import com.norfold.app.editor.flow.FlowEditController
 import com.norfold.app.editor.flow.FlowHostRuntime
 import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.presentation.FormFactor
-import com.norfold.app.ui.editor.document.DocumentContentScale
+import com.norfold.app.ui.editor.document.DP_PER_POINT
+import com.norfold.app.ui.editor.document.DocumentRenderScale
 import com.norfold.app.ui.editor.style.ResolvedBlockMetrics
 import com.norfold.app.ui.editor.style.resolvedBlockMetrics
 import com.norfold.app.ui.editor.style.resolvedShapeMetrics
@@ -41,47 +42,72 @@ class DocumentScaleStylePreservationTest {
         FormFactor(390, 840),
     )
 
-    @Test fun `Document font line height and letter spacing scale proportionally once`() {
-        val base = TextStyle(fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 1.5.sp)
-        listOf(0.5f, 1f, 2f).forEach { factor ->
-            val scaled = DocumentContentScale.of(factor).textStyle(base)
-            assertEquals(12f * factor, scaled.fontSize.value, 0.001f)
-            assertEquals(18f * factor, scaled.lineHeight.value, 0.001f)
-            assertEquals(1.5f * factor, scaled.letterSpacing.value, 0.001f)
+    @Test fun `page point conversion is 160 over 72 at every zoom`() {
+        assertEquals(160f / 72f, DP_PER_POINT, 0.0001f)
+        listOf(0.5f, 1f, 2f).forEach { zoom ->
+            val scale = DocumentRenderScale.atZoom(zoom)
+            assertEquals(DP_PER_POINT * zoom, scale.pointToDp(1f).value, 0.001f)
+            assertEquals(DP_PER_POINT * zoom, scale.pointTextSize(1f).value, 0.001f)
         }
     }
 
-    @Test fun `Document spacing and nested wrapper dimensions scale once`() {
-        val half = DocumentContentScale.of(0.5f)
-        val one = DocumentContentScale.of(1f)
-        val double = DocumentContentScale.of(2f)
+    @Test fun `Document point typography and spacing convert exactly once`() {
+        val base = TextStyle(fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 1.5.sp)
         val metrics = ResolvedBlockMetrics(beforeDp = 6f, afterDp = 10f)
-        assertEquals(ResolvedBlockMetrics(3f, 5f), half.blockMetrics(metrics))
-        assertEquals(metrics, one.blockMetrics(metrics))
-        assertEquals(ResolvedBlockMetrics(12f, 20f), double.blockMetrics(metrics))
-        assertEquals(4f, half.dp(8f).value, 0.001f)
-        assertEquals(8f, one.dp(8f).value, 0.001f)
-        assertEquals(16f, double.dp(8f).value, 0.001f)
+        listOf(0.5f, 1f, 2f).forEach { zoom ->
+            val factor = DP_PER_POINT * zoom
+            val scale = DocumentRenderScale.atZoom(zoom)
+            val rendered = scale.pointTextStyle(base)
+            assertEquals(12f * factor, rendered.fontSize.value, 0.001f)
+            assertEquals(18f * factor, rendered.lineHeight.value, 0.001f)
+            assertEquals(1.5f * factor, rendered.letterSpacing.value, 0.001f)
+            assertEquals(11f * factor, scale.pointTextSize(11f).value, 0.001f)
+            assertEquals(12f * factor, scale.pointTextSize(12f).value, 0.001f)
+            assertEquals(ResolvedBlockMetrics(6f * factor, 10f * factor), scale.pointBlockMetrics(metrics))
+            assertEquals(8f * factor, scale.pointToDp(8f).value, 0.001f)
+        }
+    }
+
+    @Test fun `font and frame preserve their model ratio in Original and Adaptive`() {
+        val pageWidthPoints = 595f
+        val fontPoints = 11f
+        listOf(0.37f, 1f, 2f).forEach { zoom ->
+            val scale = DocumentRenderScale.atZoom(zoom)
+            val renderedRatio = scale.pointTextSize(fontPoints).value / scale.pointToDp(pageWidthPoints).value
+            assertEquals(fontPoints / pageWidthPoints, renderedRatio, 0.00001f)
+        }
     }
 
     @Test fun `Document content scale never mutates object model geometry or Flow metrics`() {
         val geometry = SceneGeometry(x = 10f, y = 20f, width = 300f, height = 120f, rotation = 17f)
         val paragraph = ParagraphBlock(id = "p")
         val flowMetrics = resolvedBlockMetrics(paragraph, Stylesheet.defaults())
-        DocumentContentScale.of(0.5f).textStyle(TextStyle(fontSize = 12.sp))
-        DocumentContentScale.of(2f).blockMetrics(flowMetrics)
+        DocumentRenderScale.atZoom(0.5f).pointTextStyle(TextStyle(fontSize = 12.sp))
+        DocumentRenderScale.atZoom(2f).pointBlockMetrics(flowMetrics)
         assertEquals(SceneGeometry(x = 10f, y = 20f, width = 300f, height = 120f, rotation = 17f), geometry)
         assertEquals(flowMetrics, resolvedBlockMetrics(paragraph, Stylesheet.defaults()))
     }
 
     @Test fun `read and edit consume the identical scaled text metrics`() {
-        val scale = DocumentContentScale.of(1.75f)
+        val scale = DocumentRenderScale.atZoom(1.75f)
         val resolved = TextStyle(fontSize = 10.sp, lineHeight = 15.sp, letterSpacing = 0.5.sp)
-        val read = scale.textStyle(resolved)
-        val edit = scale.textStyle(resolved)
+        val read = scale.pointTextStyle(resolved)
+        val edit = scale.pointTextStyle(resolved)
         assertEquals(read.fontSize, edit.fontSize)
         assertEquals(read.lineHeight, edit.lineHeight)
         assertEquals(read.letterSpacing, edit.letterSpacing)
+        assertEquals(scale.pointTextSize(12f), scale.pointTextStyle(TextStyle(fontSize = 12.sp)).fontSize)
+    }
+
+    @Test fun `Document Todo visual scales without inflating content footprint`() {
+        listOf(0.5f, 1f, 2f).forEach { zoom ->
+            val scale = DocumentRenderScale.atZoom(zoom)
+            val metrics = scale.todoMetrics()
+            val expected = DocumentRenderScale.DEFAULT_TODO_VISUAL_POINTS * DP_PER_POINT * zoom
+            assertEquals(expected, metrics.visualDp, 0.001f)
+            assertEquals(metrics.visualDp, metrics.contentFootprintDp, 0.001f)
+            assertEquals(DocumentRenderScale.MINIMUM_TODO_TOUCH_TARGET_DP, metrics.minimumTouchTargetDp, 0.001f)
+        }
     }
 
     @Test fun `shape style detach preserves fill stroke and exact undo redo representation`() {
