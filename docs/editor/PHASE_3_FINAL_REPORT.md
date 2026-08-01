@@ -1,34 +1,33 @@
 # Norfold editor Phase 3 final report
 
-Phase 3 rendering, token, mixed-state, semantic-style, typography, and spacing closure is complete at Android commit `3422a99f64c7d46b1a8b30258100e87eedcd9f22`.
+Phase 3 document-scale and style-preservation closure is complete at Android implementation commit `594a6456e40b22a90663a282e0bd0209c075a8f1`.
 
 | Item | Status | Implementation | Automated evidence | Remaining limitation |
 |---|---|---|---|---|
-| Flow text-color rendering | Pass | Read and edit paths preserve specified resolved color and fall back only when unspecified. | `ResolvedRenderingClosureTest` | Physical visual certification deferred. |
-| Document text-color rendering | Pass | Scene read/edit paths use the same resolved-color rule. | `ResolvedRenderingClosureTest` | Physical visual certification deferred. |
-| Text Color Studio preview | Pass | Preview targets reach selected blocks and wrapper descendants through the shared resolver. | `ResolvedRenderingClosureTest` and full suite | Physical gesture certification deferred. |
-| Quote/Callout cascade | Pass | Shared cascade precedence is child local, child explicit style, nearest wrapper, outer wrapper, semantic default, host base. | `ResolvedRenderingClosureTest` | Physical nested-layout certification deferred. |
-| Document CodeBlock typography | Pass | Read-only code uses shared font, color, size, weight, italic, and line-height truth. | `ResolvedRenderingClosureTest` | Physical glyph certification deferred. |
-| Shape token binding | Pass | Fill/stroke `TokenRef` resolves dynamically without rewriting shape content; direct gradients remain stored. | `TokenMixedSemanticMetricsTest` | Physical rendering deferred. |
-| Page-background token binding | Pass | Stable page token ID binds, renames, updates, and codec-round-trips. | `TokenMixedSemanticMetricsTest` | Physical rendering deferred. |
-| Token delete/detach/replacement | Pass | Referenced delete refuses; detach materializes resolved page/shape paint; replacement repoints IDs. | `TokenMixedSemanticMetricsTest` | None known. |
-| Mixed color state | Pass | Text, shape, page, flat/gradient disagreements expose Mixed; relative controls cannot use invented baselines. | `TokenMixedSemanticMetricsTest` | Physical interaction deferred. |
-| Mixed font state | Pass | Mixed fonts clear selected family; explicit selection remains atomic. | `TokenMixedSemanticMetricsTest` | Physical list interaction deferred. |
-| Semantic style compatibility | Pass | Built-in semantic roles require structurally matching blocks; UI exposes disabled reason; mixed application is all-or-nothing. | `TokenMixedSemanticMetricsTest`, `SharedStyleHostIntegrationTest` | Structural conversion is intentionally not introduced. |
-| Line-height semantics | Pass | `0.5..4` is a font-size multiplier; `4..1024` retains legacy absolute-sp behavior. | `TokenMixedSemanticMetricsTest` | None known. |
-| Before/after spacing | Pass | Flow rows and Document/nested children consume shared metrics with `max(previousAfter, nextBefore)` collapse. | `TokenMixedSemanticMetricsTest` and compile gate | Physical layout certification deferred. |
-| History atomicity | Pass | Common mixed choices, multi-page binding, style application, and token resolution remain one logical transaction. | `TokenMixedSemanticMetricsTest` and existing History tests | None known. |
+| Document font scaling | Pass | `DocumentContentScale` applies the page scale to resolved document font sizes exactly once, including explicit inline span sizes. | `DocumentScaleStylePreservationTest.Document font line height and letter spacing scale proportionally once` | Physical visual certification deferred. |
+| Document line-height scaling | Pass | Resolved line heights use the same page content scale as their font size without changing the stored style value. | `DocumentScaleStylePreservationTest.Document font line height and letter spacing scale proportionally once` | Physical visual certification deferred. |
+| Document spacing/internal-layout scaling | Pass | Block before/after spacing, nested gaps, padding, rules, strokes, corners, shadows, table cells, list markers, and document placeholders scale proportionally inside the already-scaled object frame. | `DocumentScaleStylePreservationTest.Document spacing and nested wrapper dimensions scale once` | Physical visual certification deferred. |
+| Read/edit scale consistency | Pass | Document read and edit rendering consume the identical scaled `TextStyle`; page headers, footers, and page numbers use the same content-scale rule. | `DocumentScaleStylePreservationTest.read and edit consume the identical scaled text metrics` | Physical cursor and glyph certification deferred. |
+| Shape style detach preservation | Pass | Detaching a shape style materializes its currently resolved fill and stroke while preserving stroke width, corner radius, padding, shadow, opacity, and exact undo/redo representation. | `DocumentScaleStylePreservationTest.shape style detach preserves fill stroke and exact undo redo representation` | Physical rendering deferred. |
+| Shape style delete-preserve behavior | Pass | Delete with preserve-appearance uses the same materialization path as explicit detach, so the rendered shape survives style deletion and undo/redo exactly. | `DocumentScaleStylePreservationTest.style delete preserve keeps visible shape fill and stroke` | Physical rendering deferred. |
+| Gradient preservation | Pass | Direct gradients survive unrelated style detachment, while token-backed paints are frozen to their resolved literal at detach time and no longer track later token changes. | `DocumentScaleStylePreservationTest.direct gradient survives unrelated style detachment`; `token backed object style materializes current fill on detach` | Physical rendering deferred. |
+| Title style reachability | Pass | Title is reachable for paragraph structure, is atomic over multiple selected paragraphs, and remains unavailable for semantic heading, quote, and code blocks. | `DocumentScaleStylePreservationTest.Title Subtitle and Caption apply atomically to paragraphs`; `presentational paragraph styles reject Heading Quote and Code` | Structural conversion is intentionally not introduced. |
+| Subtitle style reachability | Pass | Subtitle follows the same paragraph-only eligibility, mixed-selection all-or-nothing rule, and one-transaction history behavior. | `DocumentScaleStylePreservationTest.Title Subtitle and Caption apply atomically to paragraphs`; `Named Styles UI status matches controller eligibility` | Structural conversion is intentionally not introduced. |
+| Caption style reachability | Pass | Caption follows the same paragraph-only eligibility and UI/controller truth as Title and Subtitle. | `DocumentScaleStylePreservationTest.Title Subtitle and Caption apply atomically to paragraphs`; `Named Styles UI status matches controller eligibility` | Structural conversion is intentionally not introduced. |
+| Semantic heading/quote/code protection | Pass | Heading roles still require the matching heading level; quote and code styles still require their exact structures; incompatible mixed selections remain disabled and unchanged. | `DocumentScaleStylePreservationTest.presentational paragraph styles reject Heading Quote and Code`; existing semantic-style tests | Structural conversion is intentionally not introduced. |
+| History atomicity | Pass | Multi-paragraph style application, shape detach, and delete-preserve each remain one canonical transaction with exact undo/redo. | `DocumentScaleStylePreservationTest`; existing history tests in the full suite | None known. |
 
 ## Validation evidence
 
-- `:apps:android:testDebugUnitTest`: **PASS — 1,034 tests, 0 failures, 0 errors, 0 skipped**.
-- `:apps:android:compileDebugKotlin`: **PASS**.
-- `:apps:android:assembleDebug`: **PASS**.
-- `:apps:android:compileDebugAndroidTestKotlin`: **PASS**.
+- `./gradlew :apps:android:testDebugUnitTest`: **PASS — 1,045 tests, 0 failures, 0 errors, 0 skipped**.
+- `./gradlew :apps:android:compileDebugKotlin`: **PASS**.
+- `./gradlew :apps:android:assembleDebug`: **PASS**.
+- `./gradlew :apps:android:compileDebugAndroidTestKotlin`: **PASS**.
 - APK: `apps/android/build/outputs/apk/debug/android-debug.apk`.
 - APK size: **56,014,631 bytes**.
-- APK SHA-256: `af1cf44c3bc99447d5dfff075ebcf2e849ffbe705578e475df55821f243d5874`.
+- APK SHA-256: `2b97d05ea5754e50b05c6ed67df0a22956007a3b23c429c5b5810ec85e622f45`.
 - `FLOW_HOST` and `DOCUMENT_HOST` production defaults: **unchanged**.
+- Document object model geometry and Flow metrics: **unchanged**, covered by `Document content scale never mutates object model geometry or Flow metrics`.
 - Device, emulator, screenshot, TalkBack, and airplane-mode testing: **not run by explicit instruction**.
 - Phase 4: **not started**.
 - Supabase, collaboration/CRDT, `apps/web`, infrastructure, chat, font binaries, packaged font manifest, and ShapeCatalog: **untouched**.
