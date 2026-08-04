@@ -54,9 +54,9 @@ deferred rather than claiming it passed.
   downloads folders, local APK paths.
 - Private planning or agent material: handoff directories, agent transcripts,
   session logs, scratch files, local tooling state directories.
-- Third-party attribution markers of any kind. Commits carry the owner's
-  identity and nothing else — no additional author or co-author trailers, no
-  tooling provenance markers, no mention of what was used to write the change.
+- Third-party attribution markers of any kind. Commits carry the owner's identity and
+  nothing else — no additional author or co-author trailers, no tooling provenance
+  markers, no mention of what was used to write the change.
 - Generated build output (`apps/android/build/`, `dist/`, `node_modules/`).
 - Personal screenshots, unrelated downloads, `*:Zone.Identifier` files.
 
@@ -82,9 +82,8 @@ application source changes, and do not push unrelated changes together.
 - Do not change Supabase, chat, infrastructure, or `apps/web` unless the current task
   explicitly owns them.
 - Collaboration and CRDT integration are frozen until Phase 12.
-- **Phase 4 is complete and must not be modified** — its code, tests, report, and
-  commit boundaries are fixed. See
-  [docs/archive/COMMIT_HISTORY_INDEX.md](docs/archive/COMMIT_HISTORY_INDEX.md).
+- **Phase 4 is complete and must not be modified** — its code, tests, and report are
+  fixed. See [docs/editor/PHASE_4_FINAL_REPORT.md](docs/editor/PHASE_4_FINAL_REPORT.md).
 - **Every editor feature flag defaults to `false`** in
   `apps/android/src/main/java/com/norfold/app/editor/flags/EditorFeatureFlags.kt`.
   `FLOW_HOST`, `DOCUMENT_HOST`, and `SPREADSHEET_HOST` defaults do not change without

@@ -50,10 +50,14 @@ apps/android/google-services.json
 # any file fetched through a browser on the Windows side of WSL.
 *:Zone.Identifier
 
-# Private planning, agent tooling, and local scratch. These were previously ignored
-# only through .git/info/exclude, which is per-clone and per-machine: a fresh clone
-# had no protection at all, so the first `git add` there would have committed them.
-# They are tracked here so the rule travels with the repository.
+# Local-only tooling, planning, and scratch directories. These are per-machine
+# working material and must never be published. Kept generic: any dot-directory of
+# local tool state, plus the scratch and planning paths used during development.
+/.[a-z]*/
+!/.github/
+/*-handoffs/
+/*-out/
+/planning/
 /research/
 /design-analysis-*.md
 /norfold-ui-audit.md

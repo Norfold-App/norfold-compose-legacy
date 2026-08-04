@@ -63,7 +63,6 @@ record intent; they do not describe shipped behavior.
 
 | Document | Status | Purpose |
 | --- | --- | --- |
-| [archive/COMMIT_HISTORY_INDEX.md](archive/COMMIT_HISTORY_INDEX.md) | Historical record | Why published commit history was **not** rewritten, the constraints that made a rewrite unsafe, historical milestones, and the Phase 1–4 commit/report mapping. Changes no Git objects. |
 | [archive/editor/PHASE_1_FINAL_REPORT.md](archive/editor/PHASE_1_FINAL_REPORT.md) | Historical evidence | FlowHost Phase 1 closure. Implementation complete; device certification deferred. |
 | [archive/editor/PHASE_2_VALIDATION_REPORT.md](archive/editor/PHASE_2_VALIDATION_REPORT.md) | Historical evidence | DocumentHost Phase 2 validation. Gate passed with one scope note. |
 | [archive/editor/PHASE_3_FINAL_REPORT.md](archive/editor/PHASE_3_FINAL_REPORT.md) | Historical evidence | Phase 3 rendering, tokens, mixed state, semantics, gestures, style preservation, document scale. |

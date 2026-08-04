@@ -164,25 +164,25 @@ branch or tag, opening a pull request.
 
 ### History rewriting
 
-Rewriting a commit changes its SHA and every descendant SHA.
+Rewriting a commit changes its SHA and every descendant SHA. It requires **explicit
+owner authorization for that specific rewrite** — it is never a routine cleanup step.
 
-**Unpushed commits** may have their *messages* reworded when the task authorizes it,
-provided that:
+When authorized, the requirements are absolute:
 
-1. a safety capture exists first;
-2. no commit is squashed, reordered, combined, or split;
-3. every rewritten commit's tree hash is compared to its original and matches exactly;
-4. author, author date, and content are preserved.
+1. a safety capture exists first, including a `git bundle` of all refs;
+2. no commit is squashed, reordered, combined, or split unless that is the stated goal;
+3. every rewritten commit's tree hash is compared to its original and matches exactly,
+   unless the rewrite is deliberately changing content;
+4. author identity, author date, and committer date are preserved;
+5. the result is verified before the push, not after.
 
-**Pushed commits are not rewritten.** GitHub Pages deployments and the
-`v0.1.0-alpha.*` tags reference published SHAs. The safe fallback is to record the
-intended clearer descriptions in
-[archive/COMMIT_HISTORY_INDEX.md](archive/COMMIT_HISTORY_INDEX.md) and leave the Git
-objects untouched. Do not claim messages were changed when only an index was written.
+Push a rewrite only with `--force-with-lease`, never plain `--force`. Stop immediately
+if the remote moved unexpectedly, if another contributor depends on the current SHAs,
+or if commit signatures or release references would break.
 
 ### Commit convention
 
-Conventional Commits, owner identity only, no third-party attribution:
+Conventional Commits, owner identity only, no third-party attribution trailers:
 
 ```
 feat(editor): add shared pure-JVM calculation domain
