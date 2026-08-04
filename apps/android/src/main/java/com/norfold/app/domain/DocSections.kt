@@ -55,6 +55,14 @@ fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
     is ContainerBlock -> copy(id = freshId(), children = children.map { it.withFreshIds() })
     is DividerBlock -> copy(id = freshId())
     is CodeBlock -> copy(id = freshId())
+    // The block id is refreshed; the calculation payload's *internal* ids deliberately are not.
+    //
+    // A TableBlock carries its whole workbook as a self-contained encoded payload, decoded into a fresh
+    // object graph per block. Two blocks holding the same sheet/cell/table ids are therefore two separate
+    // workbooks that never meet — no lookup crosses from one block's payload into another's. Re-identifying
+    // would mean rewriting every formula's stable references to match, which is a transform that can lose
+    // data if it is ever incomplete; keeping isolated ids cannot. `TableAndHostPhase4Test` pins this by
+    // editing a duplicate and proving the source is untouched.
     is TableBlock -> copy(id = freshId())
     is ImageBlock -> copy(id = freshId())
     is FileBlock -> copy(id = freshId())

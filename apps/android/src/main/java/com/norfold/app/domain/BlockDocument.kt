@@ -1,9 +1,12 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package com.norfold.app.domain
 
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.StyleAssignment
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -173,6 +176,15 @@ data class CodeBlock(
 
 @Serializable enum class TableAlignment { Start, Center, End }
 
+/** Exact pre-calculation representation retained before a legacy table's first copy-on-write upgrade. */
+@Serializable
+data class LegacyTableRecovery(
+    val headers: List<TableCell>,
+    val rows: List<List<TableCell>>,
+    val columnWidthsDp: List<Float>,
+    val columnAlignments: List<TableAlignment>,
+)
+
 @Serializable @SerialName("table")
 data class TableBlock(
     override val id: String = blockId(),
@@ -180,6 +192,17 @@ data class TableBlock(
     val rows: List<List<TableCell>> = emptyList(),
     val columnWidthsDp: List<Float> = emptyList(),
     val columnAlignments: List<TableAlignment> = emptyList(),
+    /**
+     * Additive Phase-4 payload. Null means the legacy fields above remain authoritative. The payload is
+     * the strict [com.norfold.app.editor.calculation.CalculationWorkbookJson] representation; keeping it
+     * opaque at the document-domain boundary prevents the persistence model from depending on an editor
+     * runtime while still storing one authoritative workbook identity.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val calculationPayload: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val calculationTableId: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val calculationSchemaVersion: Int? = null,
+    /** Pre-upgrade copy; created before the first typed mutation and never overwritten. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val legacyRecovery: LegacyTableRecovery? = null,
 ) : DocumentBlock {
     override fun plainText() = (listOf(headers) + rows).joinToString("\n") { row -> row.joinToString("\t") { it.content.plainText() } }
 }

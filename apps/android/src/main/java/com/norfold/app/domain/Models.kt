@@ -642,6 +642,7 @@ enum class Destination {
     DocumentsHome,
     NoteEditor,
     DocumentEditor,
+    SpreadsheetEditor,
     Notebooks,
     Tags,
     Search,
