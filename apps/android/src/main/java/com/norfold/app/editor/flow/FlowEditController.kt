@@ -10,6 +10,9 @@ import com.norfold.app.editor.history.HistoryEngine
 import com.norfold.app.editor.history.HistoryListener
 import com.norfold.app.editor.history.InMemoryEditWorkspace
 import com.norfold.app.editor.history.PersistableEditController
+import com.norfold.app.editor.recovery.RecoveryReason
+import com.norfold.app.editor.recovery.RecoverySnapshot
+import com.norfold.app.editor.recovery.RecoverySnapshotManager
 
 /**
  * The authoritative edit controller for one Flow note (roadmap Phase 1 D1/D9; spec §13).
@@ -40,10 +43,11 @@ class FlowEditController(
     historyListener: HistoryListener? = null,
     private val nanoTime: () -> Long = System::nanoTime,
 ) : PersistableEditController {
-    private val workspace: EditWorkspace =
+    val workspace: EditWorkspace =
         InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
 
     private val history = HistoryEngine(workspace, historyListener)
+    private val recovery = RecoverySnapshotManager(workspace)
 
     /** The document as last persisted; the baseline for [dirtyBlockIds]/[deletedBlockIds]. */
     private var lastSavedDocument: BlockDocument = workspace.documentOf(target)
@@ -73,6 +77,12 @@ class FlowEditController(
 
     /** Read-only history, oldest first, for a future History UI (Phase 10). */
     fun history(): List<EditTransaction> = history.history()
+
+    /** Durable-codec pre-image required before a copy-on-write legacy table upgrade. */
+    fun snapshotBeforeMigration(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.MIGRATION, listOf(target), label)
+
+    fun recoverySnapshots(): List<RecoverySnapshot> = recovery.snapshots()
 
     /**
      * Runs [mutation] against a throwaway [BlockEditorSession] seeded from the live document and

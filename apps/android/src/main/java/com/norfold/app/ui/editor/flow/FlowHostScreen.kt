@@ -127,6 +127,7 @@ fun FlowHostScreen(
     title: String,
     onTitleChange: (String) -> Unit,
     onOpenSidebar: () -> Unit,
+    onOpenTableInSpreadsheet: (String) -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -250,6 +251,7 @@ fun FlowHostScreen(
                                 presenter = presenter,
                                 drag = drag,
                                 onNotice = { notice = it },
+                                onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                                 modifier = Modifier.widthIn(max = FLOW_CONTENT_MAX_WIDTH),
                             )
                         }
@@ -451,6 +453,7 @@ private fun FlowBlockRow(
     presenter: FlowHostPresenter,
     drag: FlowDragState,
     onNotice: (String) -> Unit,
+    onOpenTableInSpreadsheet: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val selected = block.id in state.selectedIds
@@ -480,6 +483,12 @@ private fun FlowBlockRow(
             onCaret = { blockId, itemId, caret -> presenter.act { setCaret(blockId, caret, itemId) } },
             onToggleTodo = { blockId, itemId -> presenter.act { toggleTodo(blockId, itemId) } },
             onTableCell = { cursor -> presenter.act { setTableCursor(cursor) } },
+            onTableCellCommit = { cursor, value ->
+                val result = presenter.act { editTableCell(cursor, value) }
+                result.error?.let { onNotice(it.detail.ifBlank { it.displayLabel }) }
+                result.warning?.let(onNotice)
+            },
+            onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
             onNewLine = { presenter.act { newLine() } },
             onBackspaceAtStart = { presenter.act { backspaceAtStart() } },
             onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },

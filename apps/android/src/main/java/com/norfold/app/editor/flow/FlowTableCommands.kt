@@ -71,6 +71,9 @@ class FlowTableInsertCommand(
         if (direction == FlowTableDirection.ROW_ABOVE && insertIndex < 0) {
             return CommandResult.Failure("The header row is always first")
         }
+        if (table.calculationPayload == null) {
+            scope.controller.snapshotBeforeMigration("Upgrade table ${table.id} for ${direction.label.lowercase()}")
+        }
         val updated = if (direction.isRow) {
             FlowTableOps.insertRow(table, insertIndex)
         } else {

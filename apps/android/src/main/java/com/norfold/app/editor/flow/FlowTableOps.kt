@@ -3,6 +3,9 @@ package com.norfold.app.editor.flow
 import com.norfold.app.domain.TableAlignment
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TableCell
+import com.norfold.app.editor.calculation.CalculationMutations
+import com.norfold.app.editor.calculation.TableCalculationBridge
+import com.norfold.app.editor.calculation.TableUpgradeResult
 
 /**
  * Directional row/column structure operations on a [TableBlock] (roadmap Phase 1 deliverable 8; §4.15,
@@ -30,6 +33,29 @@ object FlowTableOps {
      * displaced: `index = 0` inserts immediately below the header.
      */
     fun insertRow(table: TableBlock, index: Int): TableBlock {
+        if (table.calculationPayload == null) {
+            val upgraded = TableCalculationBridge.upgrade(table) as? TableUpgradeResult.Success
+            if (upgraded != null) return insertRow(upgraded.block, index)
+        }
+        if (table.calculationPayload != null) {
+            val view = TableCalculationBridge.view(table)
+            val definition = view.workbook.embeddedTables.first { it.id == view.tableId }
+            val sheet = view.workbook.sheet(definition.range.start.sheetId) ?: return table
+            val tableStart = sheet.rowIndex(definition.range.start.rowId)
+            val at = tableStart + (if (definition.headerRow) 1 else 0) + index.coerceAtLeast(0)
+            val result = CalculationMutations.insertRow(view.workbook, sheet.id, at)
+            val nextSheet = result.workbook.sheet(sheet.id) ?: return table
+            val oldEnd = sheet.rowIndex(definition.range.end.rowId)
+            val newEndIndex = if (at <= oldEnd) oldEnd + 1 else at
+            val updatedDefinition = definition.copy(
+                range = definition.range.copy(end = nextSheet.coordinateAt(newEndIndex.coerceAtMost(nextSheet.rowCount - 1), sheet.columnIndex(definition.range.end.columnId))!!),
+            )
+            val workbook = result.workbook.copy(
+                embeddedTables = result.workbook.embeddedTables.map { if (it.id == definition.id) updatedDefinition else it },
+                revision = result.workbook.revision + 1,
+            )
+            return TableCalculationBridge.persist(table, workbook, view.tableId)
+        }
         val at = index.coerceIn(0, table.rows.size)
         val blank = List(columnCount(table)) { TableCell() }
         return table.copy(rows = table.rows.subList(0, at) + listOf(blank) + table.rows.subList(at, table.rows.size))
@@ -40,6 +66,33 @@ object FlowTableOps {
      * grid stays rectangular, and keeping per-column widths and alignments aligned with their columns.
      */
     fun insertColumn(table: TableBlock, index: Int): TableBlock {
+        if (table.calculationPayload == null) {
+            val upgraded = TableCalculationBridge.upgrade(table) as? TableUpgradeResult.Success
+            if (upgraded != null) return insertColumn(upgraded.block, index)
+        }
+        if (table.calculationPayload != null) {
+            val view = TableCalculationBridge.view(table)
+            val definition = view.workbook.embeddedTables.first { it.id == view.tableId }
+            val sheet = view.workbook.sheet(definition.range.start.sheetId) ?: return table
+            val tableStart = sheet.columnIndex(definition.range.start.columnId)
+            val at = tableStart + index.coerceAtLeast(0)
+            val result = CalculationMutations.insertColumn(view.workbook, sheet.id, at)
+            val nextSheet = result.workbook.sheet(sheet.id) ?: return table
+            val oldEnd = sheet.columnIndex(definition.range.end.columnId)
+            val newEndIndex = if (at <= oldEnd) oldEnd + 1 else at
+            val newColumn = nextSheet.columns[at]
+            val updatedDefinition = definition.copy(
+                range = definition.range.copy(end = nextSheet.coordinateAt(sheet.rowIndex(definition.range.end.rowId), newEndIndex.coerceAtMost(nextSheet.columnCount - 1))!!),
+                columns = definition.columns.toMutableList().apply {
+                    add(index.coerceIn(0, size), com.norfold.app.editor.calculation.EmbeddedTableColumn(newColumn.id, "Column${size + 1}"))
+                },
+            )
+            val workbook = result.workbook.copy(
+                embeddedTables = result.workbook.embeddedTables.map { if (it.id == definition.id) updatedDefinition else it },
+                revision = result.workbook.revision + 1,
+            )
+            return TableCalculationBridge.persist(table, workbook, view.tableId)
+        }
         val columns = columnCount(table)
         val at = index.coerceIn(0, columns)
         // An empty widths/alignments list means "unset" and must stay unset; a populated one is padded to

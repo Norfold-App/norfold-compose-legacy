@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +46,10 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -83,6 +89,9 @@ import com.norfold.app.editor.flow.FlowCaretRequest
 import com.norfold.app.editor.flow.FlowInlineStyle
 import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.editor.flow.FlowTableCursor
+import com.norfold.app.editor.calculation.TableCalculationBridge
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 import com.norfold.app.ui.screens.highlightColor
 import com.norfold.app.domain.style.Stylesheet
@@ -115,6 +124,8 @@ class FlowBlockCallbacks(
     val onCaret: (blockId: String, itemId: String?, caret: Int) -> Unit,
     val onToggleTodo: (blockId: String, itemId: String) -> Unit,
     val onTableCell: (FlowTableCursor) -> Unit,
+    val onTableCellCommit: (FlowTableCursor, String) -> Unit = { _, _ -> },
+    val onOpenTableInSpreadsheet: (String) -> Unit = {},
     /**
      * Enter pressed with the caret inside this field. Returns true when the runtime turned it into a document
      * change (split, new list item, leaving a list) and the field should *not* also insert a newline.
@@ -399,6 +410,18 @@ private fun FlowTablePreview(
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
+        // Gated on the same flag as the route itself: an escape hatch into a host the build has not
+        // enabled would make the flag decorative. §25 — this opens the *same* table identity, so it is a
+        // deeper surface, not a conversion.
+        if (editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(
+                    onClick = { callbacks.onOpenTableInSpreadsheet(block.id) },
+                    enabled = !context.selectionMode,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text("Open in Spreadsheet") }
+            }
+        }
         Row(Modifier.fillMaxWidth()) {
             block.headers.forEachIndexed { column, cell ->
                 FlowTableCell(
@@ -410,6 +433,8 @@ private fun FlowTablePreview(
                     enabled = !context.selectionMode,
                     modifier = Modifier.weight(1f),
                     onClick = { callbacks.onTableCell(FlowTableCursor(block.id, row = -1, column = column)) },
+                    editableText = if (cursor?.row == -1 && cursor.column == column) TableCalculationBridge.editorText(block, -1, column) else null,
+                    onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, -1, column), it) },
                 )
             }
         }
@@ -424,6 +449,8 @@ private fun FlowTablePreview(
                         enabled = !context.selectionMode,
                         modifier = Modifier.weight(1f),
                         onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
+                        editableText = if (cursor?.row == rowIndex && cursor.column == column) TableCalculationBridge.editorText(block, rowIndex, column) else null,
+                        onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, rowIndex, column), it) },
                     )
                 }
             }
@@ -439,12 +466,15 @@ private fun FlowTableCell(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    editableText: String? = null,
+    onCommit: (String) -> Unit = {},
 ) {
-    Text(
-        text = text.ifBlank { " " },
-        style = if (header) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium,
+    val cellStyle = if (header) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium
+    var draft by remember(editableText) { mutableStateOf(editableText.orEmpty()) }
+    Box(
         modifier = modifier
-            .clickable(enabled = enabled, onClick = onClick)
+            .heightIn(min = 48.dp)
+            .clickable(enabled = enabled && !addressed, onClick = onClick)
             .then(
                 if (addressed) {
                     Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
@@ -452,8 +482,29 @@ private fun FlowTableCell(
                     Modifier
                 },
             )
+            .semantics {
+                role = Role.Button
+                contentDescription = "${if (header) "Header" else "Table"} cell, ${text.ifBlank { "blank" }}${if (addressed) ", selected and editable" else ""}"
+            }
             .padding(horizontal = 10.dp, vertical = 8.dp),
-    )
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        if (addressed && enabled && editableText != null) {
+            BasicTextField(
+                value = draft,
+                onValueChange = {
+                    draft = it
+                    onCommit(it)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = cellStyle.copy(color = LocalContentColor.current),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                singleLine = true,
+            )
+        } else {
+            Text(text = text.ifBlank { " " }, style = cellStyle)
+        }
+    }
 }
 
 @Composable

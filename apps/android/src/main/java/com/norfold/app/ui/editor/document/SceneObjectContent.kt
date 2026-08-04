@@ -1,6 +1,7 @@
 package com.norfold.app.ui.editor.document
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +26,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,6 +48,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
@@ -89,6 +93,9 @@ import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.UnknownBlock
 import com.norfold.app.domain.plainText
+import com.norfold.app.editor.calculation.TableCalculationBridge
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flow.FlowInlineStyle
 import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
@@ -128,6 +135,8 @@ data class SceneTextEdit(
 class SceneContentCallbacks(
     val onEdit: (SceneTextEdit) -> Unit,
     val onToggleTodo: (blockId: String, itemId: String) -> Unit,
+    val onTableCellCommit: (legacyRow: Int, column: Int, value: String) -> Unit = { _, _, _ -> },
+    val onOpenTableInSpreadsheet: (String) -> Unit = {},
 )
 
 /**
@@ -326,7 +335,7 @@ fun SceneObjectContent(
             }
         }
 
-        is TableBlock -> SceneTable(block, renderScale, modifier)
+        is TableBlock -> SceneTable(block, editing, callbacks, renderScale, modifier)
 
         is ShapeBlock -> SceneShape(
             block,
@@ -591,24 +600,57 @@ private fun SceneReadOnlyCode(
 @Composable
 private fun SceneTable(
     block: TableBlock,
+    editing: Boolean,
+    callbacks: SceneContentCallbacks,
     renderScale: DocumentRenderScale,
     modifier: Modifier = Modifier,
 ) {
+    var activeCell by remember(block.id) { mutableStateOf<Pair<Int, Int>?>(null) }
     Column(
         modifier
             .clip(RoundedCornerShape(renderScale.pointToDp(6f)))
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Row(Modifier.fillMaxWidth()) {
-            block.headers.forEach { cell ->
-                SceneTableCell(cell.content.plainText(), true, renderScale, Modifier.weight(1f))
+        // Read mode exposes no way into an editing host, and the flag governs this route exactly as it
+        // governs the sidebar entry — otherwise a disabled host would still be one tap away.
+        if (editing && editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(
+                    onClick = { callbacks.onOpenTableInSpreadsheet(block.id) },
+                    modifier = Modifier.heightIn(min = renderScale.pointToDp(48f)),
+                ) { Text("Open in Spreadsheet") }
             }
         }
-        block.rows.forEach { row ->
+        Row(Modifier.fillMaxWidth()) {
+            block.headers.forEachIndexed { column, cell ->
+                SceneTableCell(
+                    text = cell.content.plainText(),
+                    header = true,
+                    editing = editing,
+                    active = activeCell == (-1 to column),
+                    editorText = TableCalculationBridge.editorText(block, -1, column),
+                    onActivate = { activeCell = -1 to column },
+                    onCommit = { callbacks.onTableCellCommit(-1, column, it) },
+                    renderScale = renderScale,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        block.rows.forEachIndexed { rowIndex, row ->
             HorizontalDivider(thickness = renderScale.pointToDp(1f))
             Row(Modifier.fillMaxWidth()) {
-                row.forEach { cell ->
-                    SceneTableCell(cell.content.plainText(), false, renderScale, Modifier.weight(1f))
+                row.forEachIndexed { column, cell ->
+                    SceneTableCell(
+                        text = cell.content.plainText(),
+                        header = false,
+                        editing = editing,
+                        active = activeCell == (rowIndex to column),
+                        editorText = TableCalculationBridge.editorText(block, rowIndex, column),
+                        onActivate = { activeCell = rowIndex to column },
+                        onCommit = { callbacks.onTableCellCommit(rowIndex, column, it) },
+                        renderScale = renderScale,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
         }
@@ -619,16 +661,40 @@ private fun SceneTable(
 private fun SceneTableCell(
     text: String,
     header: Boolean,
+    editing: Boolean,
+    active: Boolean,
+    editorText: String,
+    onActivate: () -> Unit,
+    onCommit: (String) -> Unit,
     renderScale: DocumentRenderScale = DocumentRenderScale.At100Percent,
     modifier: Modifier = Modifier,
 ) {
-    Text(
-        text = text.ifBlank { " " },
-        style = renderScale.pointTextStyle(
-            if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
-        ),
-        modifier = modifier.padding(horizontal = renderScale.pointToDp(6f), vertical = renderScale.pointToDp(4f)),
-    )
+    val style = renderScale.pointTextStyle(if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall)
+    var draft by remember(editorText) { mutableStateOf(editorText) }
+    Box(
+        modifier
+            .heightIn(min = 48.dp)
+            .clickable(enabled = editing && !active, onClick = onActivate)
+            .semantics {
+                role = Role.Button
+                contentDescription = "${if (header) "Header" else "Table"} cell, ${text.ifBlank { "blank" }}${if (active) ", selected and editable" else ""}"
+            }
+            .padding(horizontal = renderScale.pointToDp(6f), vertical = renderScale.pointToDp(4f)),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        if (editing && active) {
+            BasicTextField(
+                value = draft,
+                onValueChange = { draft = it; onCommit(it) },
+                textStyle = style.copy(color = LocalContentColor.current),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            Text(text.ifBlank { " " }, style = style)
+        }
+    }
 }
 
 /** A shape drawn at its own fill and stroke, with its label centred — not a grey box with a type name. */

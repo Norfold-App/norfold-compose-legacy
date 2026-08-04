@@ -129,6 +129,7 @@ fun DocumentHostScreen(
     title: String,
     onTitleChange: (String) -> Unit,
     onOpenSidebar: () -> Unit,
+    onOpenTableInSpreadsheet: (String) -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -200,7 +201,7 @@ fun DocumentHostScreen(
         notice?.let { message -> NoticeRow(message) { notice = null } }
 
         Box(Modifier.weight(1f)) {
-            DocumentPageStack(presenter, Modifier.fillMaxSize())
+            DocumentPageStack(presenter, onOpenTableInSpreadsheet, Modifier.fillMaxSize())
         }
 
         // Original View owns zoom; Adaptive View fits to the viewport and has nothing to zoom.
@@ -286,7 +287,11 @@ fun DocumentHostScreen(
  * being drawn in the wrong place.
  */
 @Composable
-private fun DocumentPageStack(presenter: DocumentHostPresenter, modifier: Modifier = Modifier) {
+private fun DocumentPageStack(
+    presenter: DocumentHostPresenter,
+    onOpenTableInSpreadsheet: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val state = presenter.state
     val scroll = rememberScrollState()
     val density = LocalDensity.current
@@ -354,6 +359,7 @@ private fun DocumentPageStack(presenter: DocumentHostPresenter, modifier: Modifi
                     visibleTopPt = scrollOffsetPt - window.topOf(index),
                     visibleBottomPt = scrollOffsetPt + viewportHeightPt / scale - window.topOf(index),
                     presenter = presenter,
+                    onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                 )
             }
         }
@@ -370,6 +376,7 @@ private fun PageSheet(
     visibleTopPt: Float,
     visibleBottomPt: Float,
     presenter: DocumentHostPresenter,
+    onOpenTableInSpreadsheet: (String) -> Unit,
 ) {
     val state = presenter.state
     val editing = state.representation == LayoutRepresentation.ORIGINAL && state.intent == WorkingIntent.EDIT
@@ -445,7 +452,7 @@ private fun PageSheet(
 
         // Back-to-front: the front-most object is drawn last, so it is the one that overlaps the others.
         visible.sortedBy { it.z }.forEach { obj ->
-            SceneObjectBox(obj, page, scale, presenter)
+            SceneObjectBox(obj, page, scale, presenter, onOpenTableInSpreadsheet)
         }
     }
 }
@@ -526,6 +533,7 @@ private fun SceneObjectBox(
     page: DocumentPageBlock,
     scale: Float,
     presenter: DocumentHostPresenter,
+    onOpenTableInSpreadsheet: (String) -> Unit,
 ) {
     val state = presenter.state
     val geometry = state.manipulation?.previewFor(obj.id) ?: obj.geometry
@@ -701,6 +709,10 @@ private fun SceneObjectBox(
                     onToggleTodo = { blockId, itemId ->
                         presenter.act { toggleObjectTodo(obj.id, blockId, itemId) }
                     },
+                    onTableCellCommit = { row, column, value ->
+                        presenter.act { editObjectTableCell(obj.id, row, column, value) }
+                    },
+                    onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(

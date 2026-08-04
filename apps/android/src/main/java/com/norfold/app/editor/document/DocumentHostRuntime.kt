@@ -214,6 +214,30 @@ class DocumentHostRuntime(
      */
     var revision: Long = 0L
         private set
+    private var pendingTableWarning: List<Any>? = null
+
+    /**
+     * The live calculation engine for the scene object currently being edited, keyed by object id.
+     *
+     * Same reason as Flow: constructing an engine per keystroke rebuilds the whole dependency graph and
+     * recalculates every formula, turning a one-cell edit into a full-workbook recalculation. Reuse is
+     * conditional on the workbook still matching, so an undo or an edit from another host rebuilds rather than
+     * painting stale values.
+     */
+    private var tableEngineObjectId: String? = null
+    private var tableEngine: com.norfold.app.editor.calculation.CalculationEngine? = null
+
+    private fun engineFor(
+        objectId: String,
+        workbook: com.norfold.app.editor.calculation.CalculationWorkbook,
+    ): com.norfold.app.editor.calculation.CalculationEngine {
+        val cached = tableEngine?.takeIf { tableEngineObjectId == objectId && it.workbook() == workbook }
+        if (cached != null) return cached
+        val fresh = com.norfold.app.editor.calculation.CalculationEngine(workbook)
+        tableEngineObjectId = objectId
+        tableEngine = fresh
+        return fresh
+    }
 
     /** A message to show the user once, e.g. after an automatic Adaptive → Original transition. */
     var notice: String? = null
@@ -850,6 +874,59 @@ class DocumentHostRuntime(
     fun toggleObjectTodo(objectId: String, blockId: String, itemId: String): Boolean {
         if (view.intent != WorkingIntent.EDIT) return false
         return controller.toggleObjectTodo(objectId, blockId, itemId).also { if (it) revision++ }
+    }
+
+    /** Edits a table cell inside the selected scene object through the shared calculation engine. */
+    fun editObjectTableCell(objectId: String, legacyRow: Int, column: Int, raw: String): com.norfold.app.editor.calculation.CellCommitResult {
+        if (view.intent != WorkingIntent.EDIT || editingObjectId != objectId) {
+            return com.norfold.app.editor.calculation.CellCommitResult(
+                false,
+                error = com.norfold.app.editor.calculation.CalculationError(
+                    com.norfold.app.editor.calculation.CalculationErrorKind.VALUE,
+                    "Enter table editing first",
+                ),
+            )
+        }
+        val block = controller.findObject(objectId)?.second?.content as? com.norfold.app.domain.TableBlock
+            ?: return com.norfold.app.editor.calculation.CellCommitResult(false)
+        val upgraded = if (block.calculationPayload == null) {
+            controller.snapshotBeforeMigration("Upgrade document table ${block.id} before cell edit")
+            (com.norfold.app.editor.calculation.TableCalculationBridge.upgrade(block) as? com.norfold.app.editor.calculation.TableUpgradeResult.Success)?.block
+                ?: return com.norfold.app.editor.calculation.CellCommitResult(false)
+        } else block
+        val tableView = com.norfold.app.editor.calculation.TableCalculationBridge.view(upgraded)
+        val definition = tableView.workbook.embeddedTables.firstOrNull { it.id == tableView.tableId }
+            ?: return com.norfold.app.editor.calculation.CellCommitResult(false)
+        val sheet = tableView.workbook.sheet(definition.range.start.sheetId)
+            ?: return com.norfold.app.editor.calculation.CellCommitResult(false)
+        val row = sheet.rowIndex(definition.range.start.rowId) + when {
+            legacyRow < 0 -> 0
+            definition.headerRow -> legacyRow + 1
+            else -> legacyRow
+        }
+        val absoluteColumn = sheet.columnIndex(definition.range.start.columnId) + column
+        val engine = engineFor(objectId, tableView.workbook)
+        val warningKey = listOf(objectId, legacyRow, column, raw)
+        val result = engine.commitInput(
+            sheet.id,
+            row,
+            absoluteColumn,
+            com.norfold.app.editor.calculation.CellInputParser.parse(raw),
+            confirmWarning = pendingTableWarning == warningKey,
+        )
+        if (!result.accepted) {
+            pendingTableWarning = if (result.requiresConfirmation) warningKey else null
+            val reported = if (result.requiresConfirmation) result.copy(warning = "${result.warning.orEmpty()} Submit the same value again to confirm.") else result
+            notice = reported.error?.detail ?: reported.warning
+            revision++
+            return reported
+        }
+        pendingTableWarning = null
+        val after = com.norfold.app.editor.calculation.TableCalculationBridge.persist(upgraded, engine.workbook(), tableView.tableId)
+        if (!controller.setContent(objectId, after, "Edit table cell")) return com.norfold.app.editor.calculation.CellCommitResult(false)
+        notice = result.warning
+        revision++
+        return result
     }
 
     /** The accessibility actions for [obj], as registered command ids that are invokable right now. */

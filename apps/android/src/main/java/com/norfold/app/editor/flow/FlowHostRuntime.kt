@@ -6,6 +6,7 @@ import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.TodoListBlock
+import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.supportsStyle
 import com.norfold.app.domain.findById
@@ -32,6 +33,13 @@ import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.surface.SurfaceCoordinator
 import com.norfold.app.editor.surface.ToolSurface
 import com.norfold.app.editor.style.EditorStyleRuntime
+import com.norfold.app.editor.calculation.CalculationEngine
+import com.norfold.app.editor.calculation.CellCommitResult
+import com.norfold.app.editor.calculation.CellInputParser
+import com.norfold.app.editor.calculation.CalculationError
+import com.norfold.app.editor.calculation.CalculationErrorKind
+import com.norfold.app.editor.calculation.TableCalculationBridge
+import com.norfold.app.editor.calculation.TableUpgradeResult
 import com.norfold.app.editor.style.EditorStyleSelection
 import com.norfold.app.editor.style.EditorStyleUiState
 import com.norfold.app.editor.style.StyleController
@@ -268,6 +276,28 @@ class FlowHostRuntime(
     /** Bumped by anything that changes what the shell should draw. Compose recomposes off this. */
     var revision: Long = 0L
         private set
+    private var pendingTableWarning: Pair<FlowTableCursor, String>? = null
+
+    /**
+     * The live calculation engine for the table block currently being edited, keyed by block id.
+     *
+     * Without this, every keystroke in an embedded table constructed a fresh engine, which rebuilds the whole
+     * dependency graph and recalculates every formula in the workbook — a full recalculation for a one-cell
+     * edit. The cache is a single entry because only one table is edited at a time, and it is only reused when
+     * the engine's workbook still matches what is stored, so a change from anywhere else (undo, another host,
+     * a reload) falls back to a rebuild rather than rendering stale values.
+     */
+    private var tableEngineBlockId: String? = null
+    private var tableEngine: CalculationEngine? = null
+
+    private fun engineFor(blockId: String, workbook: com.norfold.app.editor.calculation.CalculationWorkbook): CalculationEngine {
+        val cached = tableEngine?.takeIf { tableEngineBlockId == blockId && it.workbook() == workbook }
+        if (cached != null) return cached
+        val fresh = CalculationEngine(workbook)
+        tableEngineBlockId = blockId
+        tableEngine = fresh
+        return fresh
+    }
 
     private var selectionModeActive = false
     private var selectionRestore: SelectionSnapshot? = null
@@ -686,6 +716,58 @@ class FlowHostRuntime(
 
     /** The addressed cell, for the surface to highlight. Never row-local state — this is the command context. */
     fun tableCursor(): FlowTableCursor? = scope.tableCursor
+
+    /** Commits a visible table-cell edit through the shared calculation engine and canonical History. */
+    fun editTableCell(cursor: FlowTableCursor, raw: String): CellCommitResult {
+        val original = controller.document().findById(cursor.blockId) as? TableBlock
+            ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "Table no longer exists"))
+        val upgraded = if (original.calculationPayload == null) {
+            controller.snapshotBeforeMigration("Upgrade table ${original.id} before cell edit")
+            (TableCalculationBridge.upgrade(original) as? TableUpgradeResult.Success)?.block
+                ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.INTERNAL, "Table could not be upgraded safely"))
+        } else original
+        val view = TableCalculationBridge.view(upgraded)
+        val definition = view.workbook.embeddedTables.firstOrNull { it.id == view.tableId }
+            ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "Embedded table identity is missing"))
+        val sheet = view.workbook.sheet(definition.range.start.sheetId)
+            ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "Table sheet is missing"))
+        val row = sheet.rowIndex(definition.range.start.rowId) + cursor.row + if (definition.headerRow) 1 else 0
+        val column = sheet.columnIndex(definition.range.start.columnId) + cursor.column
+        if (cursor.row == -1 && definition.headerRow) {
+            // Header cursor is represented as -1 in Flow but is the first typed row in the calculation model.
+            return commitCalculatedCell(original, upgraded, view, sheet, sheet.rowIndex(definition.range.start.rowId), column, raw, cursor)
+        }
+        return commitCalculatedCell(original, upgraded, view, sheet, row, column, raw, cursor)
+    }
+
+    private fun commitCalculatedCell(
+        original: TableBlock,
+        upgraded: TableBlock,
+        view: com.norfold.app.editor.calculation.TableWorkbookView,
+        sheet: com.norfold.app.editor.calculation.CalculationSheet,
+        row: Int,
+        column: Int,
+        raw: String,
+        cursor: FlowTableCursor,
+    ): CellCommitResult {
+        val engine = engineFor(cursor.blockId, view.workbook)
+        val input = CellInputParser.parse(raw)
+        val confirmWarning = pendingTableWarning == (cursor to raw)
+        val result = engine.commitInput(sheet.id, row, column, input, confirmWarning = confirmWarning)
+        if (!result.accepted) {
+            pendingTableWarning = if (result.requiresConfirmation) cursor to raw else null
+            return if (result.requiresConfirmation) result.copy(warning = "${result.warning.orEmpty()} Submit the same value again to confirm.") else result
+        }
+        pendingTableWarning = null
+        val after = TableCalculationBridge.persist(upgraded, engine.workbook(), view.tableId)
+        controller.mutate("Edit table cell", coalescingKey = "table:${cursor.blockId}:${cursor.row}:${cursor.column}") { session ->
+            session.replaceBlock(after)
+            BlockCursor(cursor.blockId, 0)
+        } ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.INTERNAL, "Table edit was not committed"))
+        scope.tableCursor = cursor
+        revision++
+        return result
+    }
 
     /**
      * Expands or collapses a callout (correction item 16).

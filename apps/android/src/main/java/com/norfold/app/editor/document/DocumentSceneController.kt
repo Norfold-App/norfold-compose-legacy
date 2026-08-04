@@ -29,6 +29,9 @@ import com.norfold.app.editor.history.HistoryListener
 import com.norfold.app.editor.history.InMemoryEditWorkspace
 import com.norfold.app.editor.history.PersistableEditController
 import com.norfold.app.editor.history.TransactionOrigin
+import com.norfold.app.editor.recovery.RecoveryReason
+import com.norfold.app.editor.recovery.RecoverySnapshot
+import com.norfold.app.editor.recovery.RecoverySnapshotManager
 
 /**
  * What a page-geometry operation actually did, page by page.
@@ -99,6 +102,7 @@ class DocumentSceneController(
     val workspace: EditWorkspace = InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
 
     private val history = HistoryEngine(workspace, historyListener)
+    private val recovery = RecoverySnapshotManager(workspace)
 
     private var lastSavedDocument: BlockDocument = workspace.documentOf(target)
     private var baselineGeneration: Long = 0L
@@ -117,6 +121,11 @@ class DocumentSceneController(
     fun canRedo(): Boolean = history.canRedo()
     fun undoDepth(): Int = history.undoDepth()
     fun history(): List<EditTransaction> = history.history()
+
+    fun snapshotBeforeMigration(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.MIGRATION, listOf(target), label)
+
+    fun recoverySnapshots(): List<RecoverySnapshot> = recovery.snapshots()
 
     fun undo(): Boolean = history.undo() != null
     fun redo(): Boolean = history.redo() != null
