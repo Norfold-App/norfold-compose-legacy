@@ -1,6 +1,27 @@
 # Norfold UI Completion Goalset
 
-This checklist is the controlling acceptance document for the next visible build. The exact screenshots in `Downloads/Zielorya` define the visual result; `Downloads/Problems` defines defects that must disappear. Unfinished modules remain in source but are hidden from production navigation.
+This checklist is the controlling acceptance document for the next visible build. Unfinished modules remain in source but are hidden from production navigation.
+
+## Reference-Capture Status
+
+This goalset was originally written against two screenshot sets held only in a
+contributor's local downloads folder — one defining the intended visual result,
+one defining the defects that had to disappear. **Those captures are not in this
+repository and are not recoverable from it.** A machine-local folder cannot be a
+source of truth for a checklist that outlives the machine.
+
+Until the captures are supplied, the following applies:
+
+- The written acceptance items below are authoritative on their own. Each one is
+  phrased to be verifiable without the images.
+- Items whose only definition was "match this screenshot" are marked
+  **`[reference capture required]`**. They cannot be certified complete from text.
+- To restore a reference, commit the approved captures under
+  `docs/product/reference/` (repository-relative, publishable, owner-approved only)
+  and replace the marker with the committed path. Do not re-point any item at a
+  local folder.
+- Do not commit personal screenshots, unrelated downloads, or third-party product
+  captures. See [../EXTERNAL_REFERENCE_POLICY.md](../EXTERNAL_REFERENCE_POLICY.md).
 
 ## P0: Layout And Navigation
 
@@ -13,19 +34,19 @@ This checklist is the controlling acceptance document for the next visible build
 
 ## P0: Tasks Exact Workspace
 
-- [x] Match `Table view of tasks (2).png` on expanded widths and the supplied compact grouped Table designs on phones.
+- [x] Match the approved expanded-width Table design and the compact grouped Table design on phones. **`[reference capture required]`**
 - [x] Keep status groups, inline expansion, populated-properties-only rendering, cell selection, adaptive row height, focused editors, property ordering, and `+ property` functional.
-- [x] Match `Board_view_Plan_Adaptive.png`; cards size to populated title, notes, status, priority, assignee, labels, dates, checklist, files, comments, and timestamps.
+- [x] Match the approved adaptive Board design; cards size to populated title, notes, status, priority, assignee, labels, dates, checklist, files, comments, and timestamps. **`[reference capture required]`**
 - [x] Preserve BoardPointer within-column and cross-column drag behavior.
-- [x] Rebuild task detail to `Opening a task from board-view.png`: Color, one compact Main properties card, Checklist, Notes, Files, Details, New property, Comments, and Delete.
-- [x] Use the dedicated editors from `pop-ups when editing a value in Table view.png`; never show every editor expanded inside task detail.
-- [x] Merge Filter, Sort, New, and Settings into the single right-side controls panel shown in `file_00000000300871fbb350dc3d3500d106.png`.
+- [x] Rebuild task detail to the approved open-from-board design: Color, one compact Main properties card, Checklist, Notes, Files, Details, New property, Comments, and Delete. **`[reference capture required]`**
+- [x] Use the approved dedicated value editors from the Table-view popup design; never show every editor expanded inside task detail. **`[reference capture required]`**
+- [x] Merge Filter, Sort, New, and Settings into the single right-side controls panel from the approved design. **`[reference capture required]`**
 - [x] Add swipe/page navigation to Task Calendar week and month modes, including month rollover and selected-day task list.
 - [x] Hide the global hamburger while task detail is open.
 
 ## P0: Notes And Preview
 
-- [x] Match Page, Raw, and Preview screenshots in `Downloads/Zielorya`.
+- [x] Match the approved Page, Raw, and Preview designs. **`[reference capture required]`**
 - [x] Remove duplicated Page title and reduce the excessive left offset.
 - [x] Style inline Markdown syntax while preserving source offsets and lossless Markdown round trips.
 - [x] Keep Preview under one Compose vertical scroll owner, add bottom navigation clearance, and ensure the final line is reachable.
@@ -63,7 +84,7 @@ This goalset is complete only after every visible acceptance item above is imple
 
 These remain subordinate to the ordered stabilization gates in this goalset, but must be completed alongside the related destination work.
 
-- [x] Rename the current compact Tasks "Table" presentation to `List`; reserve `Table` for the AppFlowy spreadsheet implementation from `Table view of tasks (2).png`.
+- [x] Rename the current compact Tasks "Table" presentation to `List`; reserve `Table` for the spreadsheet-grade implementation in the approved expanded-width Table design. **`[reference capture required]`**
 - [ ] Add positional, animated drag feedback before drop for note blocks, table rows/columns, task rows, Kanban cards/columns, checklist rows, sidebar nodes, and every other reorderable surface.
 - [x] Promote Calendar to a workspace-level sidebar destination rather than a Tasks-only view.
 - [x] Add smooth, continuously animated calendar navigation instead of instant seven-day/month jumps.

@@ -518,7 +518,7 @@ What remains is certification, not implementation. Deferred to the later integra
 - `apps/android/src/test/java/com/norfold/app/editor/flow/FlowHostRuntimeTest.kt`
 - `apps/android/src/androidTest/java/com/norfold/app/editor/flow/FlowHostInstrumentationTest.kt`
 - `apps/android/src/androidTest/java/com/norfold/app/editor/flow/FlowHostPersistenceTest.kt`
-- `docs/editor/PHASE_1_FINAL_REPORT.md` (this file)
+- `docs/archive/editor/PHASE_1_FINAL_REPORT.md` (this file; archived from `docs/editor/` during the repository documentation reorganization — content unchanged)
 
 ### Modified Files (Phase 1 Final Slice + Closure)
 - `apps/android/src/main/java/com/norfold/app/ui/editor/FlowNoteEditorScreen.kt` (test injection mechanism; `rememberSaveable` title; auto-save)
@@ -805,7 +805,7 @@ completion, where the harm actually shows.
 | `test/…/FlowSaveCoordinatorTest.kt` | **New.** Persistence matrix A–W |
 | `test/…/FlowSlashContextTest.kt` | **New.** Slash matrix A–O |
 | `test/…/FlowHostCorrectionTest.kt` | Three `slashInputFor` call sites updated to the new signature |
-| `docs/editor/PHASE_1_FINAL_REPORT.md` | This section; rows 6, 13, 18, 20 updated; counts 577 → 619 |
+| `docs/archive/editor/PHASE_1_FINAL_REPORT.md` | This section; rows 6, 13, 18, 20 updated; counts 577 → 619 |
 
 ## Scope check
 

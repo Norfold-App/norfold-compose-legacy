@@ -76,7 +76,10 @@ page layout, structured tables, object metadata, comments, or future document
 capabilities. Since 2026-07-16, the canonical document is a versioned typed
 block tree owned generically by notes, tasks, and calendar events. Markdown is
 an import/export boundary. Full decision record and active
-architecture: [docs/EDITOR-REARCHITECTURE.md](docs/EDITOR-REARCHITECTURE.md).
+architecture: [docs/editor/decisions/EDITOR-REARCHITECTURE.md](docs/editor/decisions/EDITOR-REARCHITECTURE.md).
+
+Documentation index: [docs/README.md](docs/README.md). Repository layout, safe
+Git workflow, and build gates: [docs/REPOSITORY_GUIDE.md](docs/REPOSITORY_GUIDE.md).
 
 ## Remaining Roadmap
 
