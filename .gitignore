@@ -49,3 +49,18 @@ apps/android/google-services.json
 # Windows-download metadata: NTFS alternate-data-stream files that appear beside
 # any file fetched through a browser on the Windows side of WSL.
 *:Zone.Identifier
+
+# Private planning, agent tooling, and local scratch. These were previously ignored
+# only through .git/info/exclude, which is per-clone and per-machine: a fresh clone
+# had no protection at all, so the first `git add` there would have committed them.
+# They are tracked here so the rule travels with the repository.
+/research/
+/design-analysis-*.md
+/norfold-ui-audit.md
+
+# Local Android extraction/build scratch left beside the project.
+/AndroidManifest.xml
+/R.txt
+/classes.jar
+/proguard.txt
+/test.sh
