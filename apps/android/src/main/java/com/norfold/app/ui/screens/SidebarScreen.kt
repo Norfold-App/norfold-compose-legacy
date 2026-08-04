@@ -108,6 +108,8 @@ import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
 import com.norfold.app.domain.DocOutline
@@ -642,6 +644,11 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                 letterSpacing = 0.8.sp,
             )
             SideNavItem("Database", SemanticActionId.AppDatabase, state.destination == Destination.Database) { viewModel.go(Destination.Database) }
+            if (editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
+                SideNavItem("Spreadsheet", Icons.Outlined.GridView, state.destination == Destination.SpreadsheetEditor) {
+                    viewModel.openOrCreateSpreadsheet()
+                }
+            }
             SideNavItem("Graph", SemanticActionId.AppGraph, state.destination == Destination.Graph) { viewModel.go(Destination.Graph) }
             SideNavItem("Activity", SemanticActionId.AppActivity, state.destination == Destination.Activity) { viewModel.go(Destination.Activity) }
             SideNavItem("Templates", SemanticActionId.AppTemplates, state.destination == Destination.Templates) { viewModel.go(Destination.Templates) }

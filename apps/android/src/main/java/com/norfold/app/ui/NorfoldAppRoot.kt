@@ -95,6 +95,7 @@ import com.norfold.app.ui.feedback.performNorfoldHaptic
 import com.norfold.app.ui.screens.LockScreen
 import com.norfold.app.ui.editor.BoundedDocumentEditorScreen
 import com.norfold.app.ui.editor.FlowNoteEditorScreen
+import com.norfold.app.ui.editor.SpreadsheetEditorScreen
 import com.norfold.app.ui.screens.NotebookScreen
 import com.norfold.app.ui.screens.NotesHome
 import com.norfold.app.ui.screens.LibraryKind
@@ -622,6 +623,7 @@ private fun NotesApp(
         val immersiveDestination = state.destination in setOf(
             Destination.NoteEditor,
             Destination.DocumentEditor,
+            Destination.SpreadsheetEditor,
             Destination.ObjectDetail,
             Destination.CommandPalette,
         ) ||
@@ -700,6 +702,7 @@ private val Destination.showCompactSidebarButton: Boolean
     get() = this !in setOf(
         Destination.NoteEditor,
         Destination.DocumentEditor,
+        Destination.SpreadsheetEditor,
         Destination.ObjectDetail,
         Destination.CommandPalette,
         Destination.WorkspaceHub,
@@ -787,6 +790,7 @@ private fun DestinationContent(
             when (destination) {
                 Destination.NoteEditor -> FlowNoteEditorScreen(state, viewModel, Modifier.fillMaxSize(), viewModel::toggleSidebar)
                 Destination.DocumentEditor -> BoundedDocumentEditorScreen(state, viewModel, Modifier.fillMaxSize(), viewModel::toggleSidebar)
+                Destination.SpreadsheetEditor -> SpreadsheetEditorScreen(state, viewModel, Modifier.fillMaxSize(), viewModel::toggleSidebar)
                 Destination.WorkspaceHub -> WorkspaceHubScreen(state, viewModel)
                 Destination.Inbox -> WorkspaceHubScreen(state, viewModel, inboxMode = true)
                 // Legacy deep links enter the same integrated Tasks calendar instead of a

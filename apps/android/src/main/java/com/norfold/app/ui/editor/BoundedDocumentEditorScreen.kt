@@ -223,6 +223,7 @@ private fun DocumentHostRoute(
             saves.onTitleChanged(next)
         },
         onOpenSidebar = onOpenSidebar,
+        onOpenTableInSpreadsheet = viewModel::openTableInSpreadsheet,
         onExit = viewModel::handleBack,
         modifier = modifier,
     )

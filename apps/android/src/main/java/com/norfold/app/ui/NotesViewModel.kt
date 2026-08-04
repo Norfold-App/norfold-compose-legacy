@@ -71,6 +71,7 @@ import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockDocumentJson
+import com.norfold.app.domain.walk
 import com.norfold.app.domain.DocLayoutJson
 import com.norfold.app.domain.mergeSharedDocumentBlocks
 import com.norfold.app.domain.NoteGestureAction
@@ -1086,6 +1087,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
      * kind would have to be unwrapped by type at every use.
      */
     val documentSessions = DocumentSessionRegistry()
+    val spreadsheetSessions = com.norfold.app.editor.calculation.SpreadsheetSessionRegistry()
+    var spreadsheetTableBlockId: String? = null
+        private set
 
     init {
         // Ending a session is deliberately not the editor screen's call: that screen is disposed on every
@@ -1095,6 +1099,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             selectedDocumentOwner.collect { owner ->
                 flowSessions.closeAllExcept(owner?.documentId)
                 documentSessions.closeAllExcept(owner?.documentId)
+                spreadsheetSessions.closeAllExceptDocument(owner?.documentId)
             }
         }
     }
@@ -1127,7 +1132,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun Note.isUntouchedDraft(): Boolean {
-        if (title.isNotBlank() && title !in setOf("Untitled doc", "Untitled note", "Untitled document")) return false
+        if (title.isNotBlank() && title !in setOf("Untitled doc", "Untitled note", "Untitled document", "Untitled spreadsheet")) return false
         val blocks = document.blocks
         // Only a blank paragraph counts as untouched: any other block type (image, table,
         // chart, heading, …) is real content even when its plainText() is empty.
@@ -1154,7 +1159,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun discardUntouchedDrafts(leaving: Destination) {
         when (leaving) {
-            Destination.NoteEditor, Destination.DocumentEditor -> {
+            Destination.NoteEditor, Destination.DocumentEditor, Destination.SpreadsheetEditor -> {
                 val noteId = selectedNoteId.value ?: return
                 if (!draftNoteIds.remove(noteId)) return
                 // Don't decide from persisted state here — the editor may still hold unsaved
@@ -3901,6 +3906,40 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         selectedNoteId.value = id
         selectedDocumentOwner.value = DocumentOwner.note(id)
         navigateTo(Destination.DocumentEditor)
+    }
+
+    fun createSpreadsheet() = viewModelScope.launch {
+        val block = com.norfold.app.editor.calculation.SpreadsheetWorkbookFactory.createBlock("Untitled spreadsheet")
+        val document = BlockDocument(listOf(block))
+        val id = repository.createNote(title = "Untitled spreadsheet", body = "", layoutMode = DocOverlapMode.Reflow)
+        repository.noteById(id)?.let { note ->
+            repository.updateNote(note, "Untitled spreadsheet", document, setOf(block.id))
+        }
+        draftNoteIds += id
+        persistDraftIds()
+        spreadsheetSessions.closeAll()
+        spreadsheetTableBlockId = block.id
+        selectedNoteId.value = id
+        selectedDocumentOwner.value = DocumentOwner.note(id)
+        navigateTo(Destination.SpreadsheetEditor)
+    }
+
+    fun openTableInSpreadsheet(blockId: String) {
+        spreadsheetSessions.closeAll()
+        spreadsheetTableBlockId = blockId
+        navigateTo(Destination.SpreadsheetEditor)
+    }
+
+    fun openOrCreateSpreadsheet() {
+        val current = activeDocument.value
+        var tableId: String? = null
+        current?.document?.walk { if (tableId == null && it is com.norfold.app.domain.TableBlock) tableId = it.id }
+        if (tableId != null) {
+            spreadsheetTableBlockId = tableId
+            navigateTo(Destination.SpreadsheetEditor)
+        } else {
+            createSpreadsheet()
+        }
     }
 
     fun enterDocumentPresence(owner: DocumentOwner) {
@@ -6945,6 +6984,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         stopChatAudio()
         flowSessions.closeAll()
         documentSessions.closeAll()
+        spreadsheetSessions.closeAll()
         super.onCleared()
     }
 

@@ -5437,7 +5437,16 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is ContainerBlock -> ContainerBlock(axis = block.axis, children = block.children.map(::duplicateBlock), weights = block.weights)
     is DividerBlock -> DividerBlock()
     is CodeBlock -> CodeBlock(language = block.language, code = block.code, editorHeightDp = block.editorHeightDp)
-    is TableBlock -> TableBlock(headers = block.headers, rows = block.rows, columnWidthsDp = block.columnWidthsDp, columnAlignments = block.columnAlignments)
+    is TableBlock -> TableBlock(
+        headers = block.headers,
+        rows = block.rows,
+        columnWidthsDp = block.columnWidthsDp,
+        columnAlignments = block.columnAlignments,
+        calculationPayload = block.calculationPayload,
+        calculationTableId = block.calculationTableId,
+        calculationSchemaVersion = block.calculationSchemaVersion,
+        legacyRecovery = block.legacyRecovery,
+    )
     is ImageBlock -> ImageBlock(source = block.source, caption = block.caption, layout = block.layout, displayHeightDp = block.displayHeightDp)
     is FileBlock -> FileBlock(name = block.name, mimeType = block.mimeType, sizeBytes = block.sizeBytes, uri = block.uri)
     is EmbedBlock -> EmbedBlock(url = block.url, metadata = block.metadata, displayHeightDp = block.displayHeightDp)
