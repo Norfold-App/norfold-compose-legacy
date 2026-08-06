@@ -17,5 +17,9 @@
   "devDependencies": {
     "typescript": "^5.9.0",
     "wrangler": "^4.0.0"
-  }
+  },
+  "overrides": {
+    "undici": "7.29.0"
+  },
+  "//": "undici 7.29.0 override: miniflare pins 7.28.0 (vulnerable). The override forces 7.29.0, which resolves GHSA-8xcm-r25x-g524 (response desync), GHSA-4cwx-7wf7-3272 (cache disclosure), GHSA-m8rv-5g2x-5cg5 (CRLF injection), GHSA-jr45-8vmc-qm54 (whitespace cache disclosure), and GHSA-v3r7-h72x-cjcm (cookie injection). Verified compatible with wrangler 4.119.0 / miniflare 5.20260801.0-alpha via `npm run check`."
 }
