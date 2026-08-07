@@ -66,9 +66,15 @@ deferred rather than claiming it passed.
 
 Stage by explicit path. **Never `git add -A`.**
 
-The mechanical subset of these rules is enforced by `tools/repo-guard.sh`. Run it against
-your staged changes before every commit, and install it once as a pre-commit hook so the
-check cannot be forgotten:
+`.gitignore` already covers every filename in that list, and it is the layer to fix first
+if something new belongs there. It cannot help in two cases, which are how this material
+has actually landed before: `git add -f` overrides it outright, and a file that is already
+tracked stays tracked however the ignore rules read afterwards. Never use `git add -f`.
+
+The mechanical subset of these rules is enforced by `tools/repo-guard.sh`, which catches
+those two cases plus the things `.gitignore` cannot see at all — file *contents*, and the
+commit message. Run it against your staged changes before every commit, and install it
+once as a pre-commit hook so the check cannot be forgotten:
 
 ```
 tools/repo-guard.sh              # check what is staged

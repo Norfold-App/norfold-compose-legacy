@@ -20,14 +20,25 @@ norfold.properties
 *.keystore
 *.jks
 *.p8
+*.p12
+*.pem
+id_rsa
+id_rsa.*
+*_id_rsa
 service-account*.json
-supabase/.env
-supabase/.env.*
+.env
+.env.*
+**/.env
+**/.env.*
 supabase/.temp/
 # Local, secret-bearing setup scripts (never committed).
 scripts/local/
 apps/android/build/
 apps/android/.gradle/
+
+# Packaged app binaries. Built artifacts are attached to a release, never committed.
+*.apk
+*.aab
 
 # Legacy Flutter prototype
 .dart_tool/
@@ -57,6 +68,7 @@ apps/android/google-services.json
 !/.github/
 /*-handoffs/
 /*-out/
+**/agent-transcripts/
 /planning/
 /research/
 /design-analysis-*.md

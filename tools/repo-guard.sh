@@ -81,18 +81,36 @@ for f in $files; do
 done
 
 # ---- 3. files that must never be committed -------------------------------------------
+# .gitignore is the real defence here and covers every pattern below; this is the backstop
+# for the two cases it cannot see. `git add -f` overrides .gitignore outright, and a file
+# that is already tracked stays tracked no matter what .gitignore says. Both are how this
+# class of file has actually landed before, so the check is cheap insurance rather than a
+# duplicate rule. Add new patterns to .gitignore first; mirror them here only to keep the
+# two in step.
 for f in $files; do
     case "$f" in
         *:Zone.Identifier|*.jks|*.keystore|*.p12|*.pem|*id_rsa*|*service-account*.json)
             violation "$f must never be committed" ;;
-        codex-handoffs/*|graphify-out/*|*/agent-transcripts/*|.serena/*|.claude/*)
+        codex-handoffs/*|graphify-out/*|*/agent-transcripts/*|agent-transcripts/*|.serena/*|.claude/*)
             violation "$f is agent scratch material" ;;
         apps/android/build/*|*/node_modules/*|dist/*|*.apk|*.aab|classes.jar)
             violation "$f is generated build output" ;;
-        .env|.env.*|*/.env)
+        .env|.env.*|*/.env|*/.env.*)
             violation "$f may carry credentials" ;;
     esac
 done
+
+# A file that reaches this check while .gitignore also covers it means someone forced it in.
+# Worth saying out loud, because the fix is usually "drop the -f", not "loosen the rule".
+# `--no-index` is required: without it, check-ignore stays silent for anything already staged,
+# which is every file this loop sees.
+if [ "$fail" -ne 0 ]; then
+    for f in $files; do
+        if git check-ignore -q --no-index "$f" 2>/dev/null; then
+            note "$f is covered by .gitignore, so it was staged with -f or is already tracked"
+        fi
+    done
+fi
 
 # ---- 4. credential-shaped literals ---------------------------------------------------
 # Long opaque tokens and provider key prefixes. Shape-based, so it is deliberately

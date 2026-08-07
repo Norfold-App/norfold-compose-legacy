@@ -12,9 +12,11 @@ this one is a pointer and `AGENTS.md` is the single source of truth. Do not copy
 These are restated because history shows them being broken by sessions that had already read
 the rules. The rest of `AGENTS.md` still applies in full.
 
-1. **Stage by explicit path. Never `git add -A`.** The worktree normally holds unfinished owner
-   work and local cruft. A blanket add is how agent scratch files, `*:Zone.Identifier`, and
-   half-finished work reach a commit.
+1. **Stage by explicit path. Never `git add -A`, never `git add -f`.** The worktree normally
+   holds unfinished owner work and local cruft. A blanket add is how agent scratch files,
+   `*:Zone.Identifier`, and half-finished work reach a commit. `.gitignore` covers all of it,
+   but `-f` overrides `.gitignore` outright — if a file needs forcing, that is the signal to
+   stop, not to force it.
 2. **No branch, no pull request, no tag, unless the task says so.** Commit on `main` and push
    directly to the `norfold` remote.
 3. **Owner identity only, and no attribution markers** — no co-author trailer, no
