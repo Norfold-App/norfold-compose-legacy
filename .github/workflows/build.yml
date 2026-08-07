@@ -11,29 +11,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  guard:
-    name: Repository guard
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          # The guard judges a commit range, so it needs more than the tip commit.
-          fetch-depth: 0
-
-      - name: Check pushed commits
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
-          elif [ -n "${{ github.event.before }}" ] && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
-            range="${{ github.event.before }}..${{ github.sha }}"
-          else
-            # First push of a branch, or a force-push whose base is gone: judge the tip only.
-            range="${{ github.sha }}~1..${{ github.sha }}"
-          fi
-          echo "checking $range"
-          tools/repo-guard.sh --range "$range"
-
   web:
     name: Web prototype
     runs-on: ubuntu-latest

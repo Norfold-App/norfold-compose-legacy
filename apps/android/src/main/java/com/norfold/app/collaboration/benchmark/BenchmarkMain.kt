@@ -42,6 +42,5 @@ private fun printSummary(results: List<BenchmarkHarness.ProviderResult>) {
     }
     println()
     println("  PROVIDER DECISION: pending device-side validation")
-    println("  See docs/collaboration/PROVIDER_DECISION.md for criteria.")
     println("═══════════════════════════════════════════════════")
 }

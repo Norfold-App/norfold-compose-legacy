@@ -80,3 +80,15 @@ apps/android/google-services.json
 /classes.jar
 /proguard.txt
 /test.sh
+
+# Contributor and assistant working material. The published repository carries the
+# product and nothing about how it gets built, so these live on disk only. They stay
+# at these paths rather than moving out of the tree because each one is loaded by
+# path: assistants read the two rule files from the repository root, and the guard
+# installs itself as .git/hooks/pre-commit from tools/.
+# Internal engineering documents (roadmap, phase reports, decision records,
+# operations runbooks) are not listed here at all — they live outside the
+# repository entirely, so no ignore rule has to hold them back.
+/AGENTS.md
+/CLAUDE.md
+/tools/

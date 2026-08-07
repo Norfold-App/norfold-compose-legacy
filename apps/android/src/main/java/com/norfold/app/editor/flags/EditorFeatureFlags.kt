@@ -5,8 +5,6 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Phase-0 feature-flag substrate for the editor re-hosting effort.
  *
- * Roadmap of record: docs/editor/EDITOR_IMPLEMENTATION_ROADMAP.md, Phase 0 deliverable #1.
- *
  * Every flag defaults **OFF**. While a flag is off, none of the new editor engines are reachable
  * from product code, so Phase-0 work introduces no user-visible behavior change and the legacy
  * [com.norfold.app.ui.screens] `StructuredBlockEditorHost` remains the only live editor host.
