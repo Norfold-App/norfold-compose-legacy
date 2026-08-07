@@ -4,6 +4,10 @@ Read this before touching the repository. It is short so that it actually gets r
 The long version is [docs/REPOSITORY_GUIDE.md](docs/REPOSITORY_GUIDE.md); the
 documentation map is [docs/README.md](docs/README.md).
 
+This file is the single source of truth for every assistant and contributor.
+[CLAUDE.md](CLAUDE.md) exists only because some assistants load that filename by
+convention; it points here and holds no rules of its own.
+
 ## Release stage: `PRE_BETA`
 
 Development data is disposable. Incompatible development schemas may use a clean
@@ -62,6 +66,19 @@ deferred rather than claiming it passed.
 
 Stage by explicit path. **Never `git add -A`.**
 
+The mechanical subset of these rules is enforced by `tools/repo-guard.sh`. Run it against
+your staged changes before every commit, and install it once as a pre-commit hook so the
+check cannot be forgotten:
+
+```
+tools/repo-guard.sh              # check what is staged
+tools/repo-guard.sh --install    # install as .git/hooks/pre-commit
+```
+
+CI runs the same script over the pushed commit range. A clean guard is the floor, not
+proof of a good commit — it cannot judge scope, correctness, or whether the change was
+authorized.
+
 ## Commits
 
 Use the owner's Git identity only. Use Conventional Commits:
@@ -82,8 +99,9 @@ application source changes, and do not push unrelated changes together.
 - Do not change Supabase, chat, infrastructure, or `apps/web` unless the current task
   explicitly owns them.
 - Collaboration and CRDT integration are frozen until Phase 12.
-- **Phase 4 is complete and must not be modified** — its code, tests, and report are
-  fixed. See [docs/editor/PHASE_4_FINAL_REPORT.md](docs/editor/PHASE_4_FINAL_REPORT.md).
+- **Phase 4 is closed.** Its code, tests, and report are fixed and must not be modified
+  without an owner directive that names Phase 4 explicitly. See
+  [docs/editor/PHASE_4_FINAL_REPORT.md](docs/editor/PHASE_4_FINAL_REPORT.md).
 - **Every editor feature flag defaults to `false`** in
   `apps/android/src/main/java/com/norfold/app/editor/flags/EditorFeatureFlags.kt`.
   `FLOW_HOST`, `DOCUMENT_HOST`, and `SPREADSHEET_HOST` defaults do not change without
