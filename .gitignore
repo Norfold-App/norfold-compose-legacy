@@ -60,35 +60,3 @@ apps/android/google-services.json
 # Windows-download metadata: NTFS alternate-data-stream files that appear beside
 # any file fetched through a browser on the Windows side of WSL.
 *:Zone.Identifier
-
-# Local-only tooling, planning, and scratch directories. These are per-machine
-# working material and must never be published. Kept generic: any dot-directory of
-# local tool state, plus the scratch and planning paths used during development.
-/.[a-z]*/
-!/.github/
-/*-handoffs/
-/*-out/
-**/agent-transcripts/
-/planning/
-/research/
-/design-analysis-*.md
-/norfold-ui-audit.md
-
-# Local Android extraction/build scratch left beside the project.
-/AndroidManifest.xml
-/R.txt
-/classes.jar
-/proguard.txt
-/test.sh
-
-# Contributor and assistant working material. The published repository carries the
-# product and nothing about how it gets built, so these live on disk only. They stay
-# at these paths rather than moving out of the tree because each one is loaded by
-# path: assistants read the two rule files from the repository root, and the guard
-# installs itself as .git/hooks/pre-commit from tools/.
-# Internal engineering documents (roadmap, phase reports, decision records,
-# operations runbooks) are not listed here at all — they live outside the
-# repository entirely, so no ignore rule has to hold them back.
-/AGENTS.md
-/CLAUDE.md
-/tools/
