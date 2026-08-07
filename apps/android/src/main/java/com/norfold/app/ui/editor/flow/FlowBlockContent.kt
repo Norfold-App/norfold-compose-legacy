@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
@@ -38,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -59,6 +62,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
@@ -89,7 +93,6 @@ import com.norfold.app.editor.flow.FlowCaretRequest
 import com.norfold.app.editor.flow.FlowInlineStyle
 import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.editor.flow.FlowTableCursor
-import com.norfold.app.editor.calculation.TableCalculationBridge
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
@@ -124,6 +127,15 @@ class FlowBlockCallbacks(
     val onCaret: (blockId: String, itemId: String?, caret: Int) -> Unit,
     val onToggleTodo: (blockId: String, itemId: String) -> Unit,
     val onTableCell: (FlowTableCursor) -> Unit,
+    /**
+     * A keystroke inside the addressed cell. Records the draft; it does not write.
+     *
+     * Separate from [onTableCellCommit] because they are different events. The old surface called one lambda
+     * for both, so `=SUM(A1:A2)` reached the engine as eight partial inputs — each an undo step and a chance
+     * to warn about text the user had not finished typing.
+     */
+    val onTableCellDraft: (FlowTableCursor, String) -> Unit = { _, _ -> },
+    /** The user finished the cell: Done on the keyboard, or focus leaving the field. Writes once. */
     val onTableCellCommit: (FlowTableCursor, String) -> Unit = { _, _ -> },
     val onOpenTableInSpreadsheet: (String) -> Unit = {},
     /**
@@ -162,6 +174,12 @@ data class FlowBlockContext(
      * a highlighted cell always means the command system genuinely has a table cursor (correction item 7).
      */
     val tableCursor: FlowTableCursor? = null,
+    /**
+     * The uncommitted text of the addressed cell. Owned by the runtime, not by the cell composable: a draft
+     * kept in a `remember` is lost to any recomposition the host cannot see, and the recovery re-seeded the
+     * committed value, discarding what the user had typed.
+     */
+    val tableDraft: String? = null,
     val stylesheet: Stylesheet = Stylesheet.defaults(),
     val previewRole: ColorRole? = null,
     val previewPaint: ColorPaint? = null,
@@ -433,7 +451,8 @@ private fun FlowTablePreview(
                     enabled = !context.selectionMode,
                     modifier = Modifier.weight(1f),
                     onClick = { callbacks.onTableCell(FlowTableCursor(block.id, row = -1, column = column)) },
-                    editableText = if (cursor?.row == -1 && cursor.column == column) TableCalculationBridge.editorText(block, -1, column) else null,
+                    editableText = if (cursor?.row == -1 && cursor.column == column) context.tableDraft else null,
+                    onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, -1, column), it) },
                     onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, -1, column), it) },
                 )
             }
@@ -449,7 +468,8 @@ private fun FlowTablePreview(
                         enabled = !context.selectionMode,
                         modifier = Modifier.weight(1f),
                         onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
-                        editableText = if (cursor?.row == rowIndex && cursor.column == column) TableCalculationBridge.editorText(block, rowIndex, column) else null,
+                        editableText = if (cursor?.row == rowIndex && cursor.column == column) context.tableDraft else null,
+                        onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, rowIndex, column), it) },
                         onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, rowIndex, column), it) },
                     )
                 }
@@ -467,10 +487,13 @@ private fun FlowTableCell(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     editableText: String? = null,
+    onDraft: (String) -> Unit = {},
     onCommit: (String) -> Unit = {},
 ) {
     val cellStyle = if (header) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium
-    var draft by remember(editableText) { mutableStateOf(editableText.orEmpty()) }
+    // Focus loss is a commit route, not a discard: tapping the next cell has always meant "keep what I typed"
+    // in every grid the user has met. Tracked here because Compose reports the transition, not the state.
+    var hadFocus by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
             .heightIn(min = 48.dp)
@@ -491,15 +514,19 @@ private fun FlowTableCell(
     ) {
         if (addressed && enabled && editableText != null) {
             BasicTextField(
-                value = draft,
-                onValueChange = {
-                    draft = it
-                    onCommit(it)
-                },
-                modifier = Modifier.fillMaxWidth(),
+                value = editableText,
+                onValueChange = onDraft,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focus ->
+                        if (hadFocus && !focus.isFocused) onCommit(editableText)
+                        hadFocus = focus.isFocused
+                    },
                 textStyle = cellStyle.copy(color = LocalContentColor.current),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onCommit(editableText) }),
             )
         } else {
             Text(text = text.ifBlank { " " }, style = cellStyle)

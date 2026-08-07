@@ -412,7 +412,6 @@ class Phase4RequiredValidationTest {
     }
 
     @Test fun cases132Through150_realHostIntegrationAndSharedIdentity() {
-        val flowSource = File("src/main/java/com/norfold/app/ui/editor/flow/FlowBlockContent.kt").readText()
         val docSource = File("src/main/java/com/norfold/app/ui/editor/document/SceneObjectContent.kt").readText()
         val docRuntime = File("src/main/java/com/norfold/app/editor/document/DocumentHostRuntime.kt").readText()
         val spreadsheetSource = File("src/main/java/com/norfold/app/ui/editor/spreadsheet/SpreadsheetHostScreen.kt").readText()
@@ -438,7 +437,27 @@ class Phase4RequiredValidationTest {
             val editable = TableCalculationBridge.editorText(stored, 0, 0)
             rendered == "10" && editable == "=5+5"
         })
-        case(132, "TableCalculationBridge.editorText" in flowSource)
+        // The same invariant from the surface's side, and behavioural for the same reason. Addressing a cell
+        // that holds a formula must seed the editor with the formula *source*; seeding it with the rendered
+        // value would replace `=5+5` with `10` the moment the user committed without retyping. The seeding
+        // moved from the cell composable into the runtime when the draft became runtime-owned state, so a
+        // grep against the Compose file would now report a regression that has not happened.
+        case(132, run {
+            val table = TableBlock(
+                id = "seed-from-source",
+                rows = listOf(listOf(TableCell(listOf(InlineText(""))), TableCell(listOf(InlineText(""))))),
+            )
+            val controller = com.norfold.app.editor.flow.FlowEditController(
+                EditTarget("validation:seed-from-source"),
+                BlockDocument(listOf(table)),
+            )
+            val host = com.norfold.app.editor.flow.FlowHostRuntime(controller, com.norfold.app.editor.presentation.FormFactor(400, 800))
+            val cursor = com.norfold.app.editor.flow.FlowTableCursor(table.id, 0, 0)
+            host.editTableCell(cursor, "=5+5")
+            host.setTableCursor(null)
+            host.setTableCursor(cursor)
+            host.tableDraft() == "=5+5"
+        })
         case(133, "editTableCell(cursor, value)" in File("src/main/java/com/norfold/app/ui/editor/flow/FlowHostScreen.kt").readText())
         // Behavioural, not a source-string match: a formula typed into a Flow table cell must be *evaluated*
         // by the shared engine and persisted as a formula, which is the only thing "Flow commits through the
@@ -534,14 +553,18 @@ class Phase4RequiredValidationTest {
             assertTrue(docHost.beginContentEdit(objectId))
             assertTrue(docHost.editObjectTableCell(objectId, 0, 0, "=6*7").accepted)
             val stored = docHost.controller.findObject(objectId)?.second?.content as TableBlock
+            // Re-addressing the cell must seed the editor with the formula source, not the rendered value.
+            // Asserted through the runtime because the draft is runtime state now; a grep against the Compose
+            // file would fail on that refactor while the contract it stands for is intact.
+            docHost.setObjectTableCell(objectId, 0, 0)
             stored.rows.first().first().content.plainText() == "42" &&
-                TableCalculationBridge.editorText(stored, 0, 0) == "=6*7"
+                TableCalculationBridge.editorText(stored, 0, 0) == "=6*7" &&
+                docHost.editingTableDraft == "=6*7"
         })
-        case(136, "TableCalculationBridge.editorText" in docSource)
         case(137, "engine.commitInput" in docRuntime)
         case(138, "renderScale" in docSource && "pointToDp" in docSource)
         case(139, "editing = editing" in docSource && "if (editing && active)" in docSource)
-        case(140, "activeCell" in docSource && "editingObjectId" in docRuntime)
+        case(140, "activeTableCell" in docSource && "editingObjectId" in docRuntime)
         case(141, "class SpreadsheetHostRuntime" in File("src/main/java/com/norfold/app/editor/calculation/SpreadsheetHostRuntime.kt").readText())
         case(142, "Destination.SpreadsheetEditor" in rootSource && "SPREADSHEET_HOST" in File("src/main/java/com/norfold/app/ui/screens/SidebarScreen.kt").readText())
         val runtime = SpreadsheetHostRuntime(EditTarget("validation:host"), BlockDocument(listOf(SpreadsheetWorkbookFactory.createBlock())))

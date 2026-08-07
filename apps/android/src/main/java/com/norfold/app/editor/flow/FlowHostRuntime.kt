@@ -150,6 +150,8 @@ data class FlowHostUiState(
     val caret: TextCaret?,
     val caretRequest: FlowCaretRequest?,
     val tableCursor: FlowTableCursor?,
+    /** The uncommitted text of the addressed cell, or null when no cell is mid-edit. */
+    val tableDraft: String?,
     val selectionMode: Boolean,
     val selectedCount: Int,
     val formFactor: FormFactor,
@@ -704,18 +706,66 @@ class FlowHostRuntime(
         // Addressing a cell must also make the table the primary structural target, or the cell looks selected
         // while every table command still resolves against whatever was selected before (correction item 7).
         if (cursor != null && controller.document().findById(cursor.blockId) == null) return
+        // Moving the cursor abandons whatever was being typed into the previous cell. Committing it here
+        // instead would turn "I tapped away" into a silent write; discarding it is the reversible choice, and
+        // the deliberate commit routes below are the ones that write.
+        if (cursor != scope.tableCursor) scope.tableDraft = null
         scope.tableCursor = cursor
         if (cursor != null) {
             controller.breakTypingGroup()
             scope.caretItemId = null
             if (!selectionModeActive) scope.selectBlocks(listOf(cursor.blockId))
             scope.selection.setCaret(TextCaret(cursor.blockId, 0))
+            scope.tableDraft = editorTextAt(cursor)
         }
         revision++
     }
 
     /** The addressed cell, for the surface to highlight. Never row-local state — this is the command context. */
     fun tableCursor(): FlowTableCursor? = scope.tableCursor
+
+    /** The in-flight cell text, or null when no cell is being typed into. */
+    fun tableDraft(): String? = scope.tableDraft
+
+    /**
+     * Records a keystroke in the addressed cell without writing anything.
+     *
+     * The defect this replaces committed on every keystroke, so `=SUM(A1:A2)` reached the engine as eight
+     * successive inputs — six of them unparseable — each one a History transaction, a full recalculation, and
+     * a chance to raise a validation warning about text the user had not finished typing.
+     */
+    fun updateTableDraft(value: String): Boolean {
+        if (scope.tableCursor == null) return false
+        scope.tableDraft = value
+        revision++
+        return true
+    }
+
+    /** Commits the in-flight draft. The single write point for every in-cell commit route. */
+    fun commitTableDraft(): CellCommitResult {
+        val cursor = scope.tableCursor
+            ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "No cell is being edited"))
+        val draft = scope.tableDraft
+            ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "No cell is being edited"))
+        // A refused commit leaves the draft alone so the user can correct it; a confirmation prompt keeps it
+        // for the same reason. `commitCalculatedCell` re-seeds it from storage when the write succeeds.
+        return editTableCell(cursor, draft)
+    }
+
+    /** Abandons the in-flight draft, restoring the committed text. Back and Escape route here. */
+    fun cancelTableDraft(): Boolean {
+        if (scope.tableDraft == null) return false
+        scope.tableDraft = scope.tableCursor?.let(::editorTextAt)
+        pendingTableWarning = null
+        revision++
+        return true
+    }
+
+    /** The committed editor text of a cell — the formula when there is one, else the literal. */
+    private fun editorTextAt(cursor: FlowTableCursor): String {
+        val block = controller.document().findById(cursor.blockId) as? TableBlock ?: return ""
+        return TableCalculationBridge.editorText(block, cursor.row, cursor.column)
+    }
 
     /** Commits a visible table-cell edit through the shared calculation engine and canonical History. */
     fun editTableCell(cursor: FlowTableCursor, raw: String): CellCommitResult {
@@ -765,6 +815,14 @@ class FlowHostRuntime(
             BlockCursor(cursor.blockId, 0)
         } ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.INTERNAL, "Table edit was not committed"))
         scope.tableCursor = cursor
+        // Re-seed the draft from what was actually stored. A formula commits as `=5+5` and renders as `10`;
+        // leaving the draft alone would show the raw text against a cell that now holds a calculated value,
+        // and re-seeding from the rendered value would destroy the formula on the next commit.
+        scope.tableDraft = TableCalculationBridge.editorText(
+            controller.document().findById(cursor.blockId) as? TableBlock ?: after,
+            cursor.row,
+            cursor.column,
+        )
         revision++
         return result
     }
@@ -1130,6 +1188,7 @@ class FlowHostRuntime(
             caret = scope.caret(),
             caretRequest = caretRequest,
             tableCursor = scope.tableCursor,
+            tableDraft = scope.tableDraft,
             selectionMode = selectionModeActive,
             selectedCount = selectedCount,
             formFactor = presentation.formFactor,

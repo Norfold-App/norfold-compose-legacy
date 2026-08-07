@@ -23,6 +23,42 @@ data class PasteReport(
     val rejectedCount: Int get() = outcomes.size - acceptedCount
 }
 
+/**
+ * One copied cell, addressed *relative* to the copy origin.
+ *
+ * Relative rather than absolute so a paste can be placed anywhere: the offsets are what let the same payload
+ * land at A1 or at M40, and what lets a relative formula reference move with it the way it does in every
+ * other spreadsheet.
+ */
+data class ClipboardCell(
+    val rowOffset: Int,
+    val columnOffset: Int,
+    val input: CellInput,
+    val format: CellFormat,
+)
+
+/**
+ * The internal clipboard payload: what a Norfold copy actually captured.
+ *
+ * The system clipboard can only carry text, so a copy/paste that went through it lost everything a cell is
+ * apart from its editor string — number format, fill, borders, alignment, bold. Round-tripping a formatted
+ * currency column through copy and paste returned plain numbers, and the user's only recourse was to
+ * re-apply the formatting by hand.
+ *
+ * [exportedText] is the tab-separated text handed to the system clipboard at copy time. Paste compares the
+ * incoming text against it, so copying something in *another app* correctly falls back to the plain-text
+ * path instead of silently pasting Norfold's stale structured payload.
+ */
+data class SpreadsheetClipboard(
+    val cells: List<ClipboardCell>,
+    val rowCount: Int,
+    val columnCount: Int,
+    val sheetId: SheetId,
+    val origin: GridAddress,
+    val cut: Boolean,
+    val exportedText: String,
+)
+
 object CalculationMutations {
     fun insertRow(workbook: CalculationWorkbook, sheetId: SheetId, index: Int): CalculationMutationResult {
         val sheet = workbook.sheet(sheetId) ?: return CalculationMutationResult(workbook)
@@ -266,6 +302,10 @@ object CalculationMutations {
     fun deleteSheet(workbook: CalculationWorkbook, sheetId: SheetId): CalculationWorkbook {
         if (workbook.sheets.size <= 1) return workbook
         val removed = workbook.sheet(sheetId) ?: return workbook
+        // A sheet carrying an embedded table cannot be deleted: the table *is* the block this workbook belongs
+        // to, and persisting a workbook whose embedded-table identity has been filtered away fails outright.
+        // Refusing here rather than at one call site keeps every caller on the safe side of that invariant.
+        if (workbook.embeddedTables.any { it.range.start.sheetId == sheetId }) return workbook
         // Deleting the last *visible* sheet must not leave every survivor hidden with one of them active: the
         // active sheet is what the grid renders, so it is revealed rather than left in a contradictory state.
         val survivors = workbook.sheets.filterNot { it.id == sheetId }
@@ -349,6 +389,58 @@ object CalculationMutations {
             engine.workbook(),
             mutations.zip(results).map { (mutation, outcome) ->
                 PasteCellOutcome(mutation.row, mutation.column, outcome.accepted, outcome.error?.detail ?: outcome.warning)
+            },
+        )
+    }
+
+    /**
+     * Pastes a structured payload, carrying formatting and offsetting relative formula references.
+     *
+     * The reference offsetting reuses [FormulaReferenceTransform.offsetForFill], which is the same rule fill
+     * uses — `$A$1` stays put, `A1` moves — so "copy a formula down a column" behaves identically whether it
+     * arrived by fill or by paste. Two implementations of that rule would eventually disagree.
+     *
+     * Validation still applies: a pasted value the destination refuses is reported in the outcomes rather
+     * than written, which is what makes [PasteReport.rejectedCount] meaningful.
+     */
+    fun pasteStructured(
+        workbook: CalculationWorkbook,
+        sheetId: SheetId,
+        startRow: Int,
+        startColumn: Int,
+        clipboard: SpreadsheetClipboard,
+    ): PasteReport {
+        val rowDelta = startRow - clipboard.origin.row
+        val columnDelta = startColumn - clipboard.origin.column
+        val placed = clipboard.cells.map { cell ->
+            val row = startRow + cell.rowOffset
+            val column = startColumn + cell.columnOffset
+            val input = when (val original = cell.input) {
+                is CellInput.Formula -> {
+                    val parsed = FormulaParser().parse(original.source) as? FormulaParseResult.Success
+                    parsed?.let {
+                        CellInput.Formula(
+                            FormulaRenderer.render(FormulaReferenceTransform.offsetForFill(it.expression, rowDelta, columnDelta)),
+                        )
+                    } ?: original
+                }
+                else -> original
+            }
+            Triple(CellMutation(row, column, input), cell.format, GridAddress(row, column))
+        }
+        val engine = CalculationEngine(workbook)
+        val results = engine.commitBatch(sheetId, placed.map { it.first }, confirmWarnings = true)
+        // Formatting follows only the cells whose *content* was accepted. Painting a rejected cell would
+        // leave a currency-formatted blank where the user believes a value landed.
+        var next = engine.workbook()
+        placed.zip(results).forEach { (entry, outcome) ->
+            if (!outcome.accepted || entry.second == CellFormat()) return@forEach
+            next = applyFormat(next, sheetId, listOf(entry.third), entry.second)
+        }
+        return PasteReport(
+            next,
+            placed.zip(results).map { (entry, outcome) ->
+                PasteCellOutcome(entry.first.row, entry.first.column, outcome.accepted, outcome.error?.detail ?: outcome.warning)
             },
         )
     }

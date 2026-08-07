@@ -48,6 +48,17 @@ class FlowCommandScope(
     var tableCursor: FlowTableCursor? = null
 
     /**
+     * The uncommitted text of the cell being typed into, or null when no cell is mid-edit.
+     *
+     * Held here rather than in the surface's `remember` because a draft is editor state, not view state. A
+     * Compose-local draft dies on every recomposition the host cannot see — a reflow, a theme change, a
+     * process-death restore — and the recovery seeded the *committed* text, silently discarding what the user
+     * had typed. Keeping it beside [tableCursor] also means the commit routes (Done key, focus loss, dock
+     * button, accessibility action) all read the same string rather than three copies that can disagree.
+     */
+    var tableDraft: String? = null
+
+    /**
      * The list/to-do item the caret sits in, when it is inside one.
      *
      * The Selection Engine's [TextCaret] addresses the *block*, because that is the unit every structural

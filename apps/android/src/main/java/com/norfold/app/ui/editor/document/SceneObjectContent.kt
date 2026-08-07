@@ -20,6 +20,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
@@ -40,6 +42,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -60,6 +63,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
@@ -93,7 +97,6 @@ import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.UnknownBlock
 import com.norfold.app.domain.plainText
-import com.norfold.app.editor.calculation.TableCalculationBridge
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flow.FlowInlineStyle
@@ -135,6 +138,11 @@ data class SceneTextEdit(
 class SceneContentCallbacks(
     val onEdit: (SceneTextEdit) -> Unit,
     val onToggleTodo: (blockId: String, itemId: String) -> Unit,
+    /** A cell was addressed. The runtime seeds the draft; the surface holds no cell state of its own. */
+    val onTableCellActivate: (legacyRow: Int, column: Int) -> Unit = { _, _ -> },
+    /** A keystroke inside the addressed cell. Records the draft; it does not write. */
+    val onTableCellDraft: (legacyRow: Int, column: Int, value: String) -> Unit = { _, _, _ -> },
+    /** The user finished the cell: Done on the keyboard, or focus leaving the field. Writes once. */
     val onTableCellCommit: (legacyRow: Int, column: Int, value: String) -> Unit = { _, _, _ -> },
     val onOpenTableInSpreadsheet: (String) -> Unit = {},
 )
@@ -170,6 +178,10 @@ fun SceneObjectContent(
     previewTargetIds: Set<String> = emptySet(),
     wrapperStyles: List<WrapperStyleSource> = emptyList(),
     renderScale: DocumentRenderScale = DocumentRenderScale.At100Percent,
+    /** The table cell the runtime has addressed, as `row to column`; row `-1` is the header. */
+    activeTableCell: Pair<Int, Int>? = null,
+    /** The uncommitted text of [activeTableCell]. Runtime-owned, so a recomposition cannot lose it. */
+    tableCellDraft: String? = null,
 ) {
     when (block) {
         is ParagraphBlock -> SceneEditableLine(
@@ -322,6 +334,8 @@ fun SceneObjectContent(
                             previewTargetIds = previewTargetIds,
                             wrapperStyles = wrapperStyles,
                             renderScale = renderScale,
+                            activeTableCell = activeTableCell,
+                            tableCellDraft = tableCellDraft,
                         )
                     }
                 }
@@ -331,11 +345,12 @@ fun SceneObjectContent(
                 SceneStyledChildren(
                     block.children, objectId, editing, callbacks, stylesheet,
                     previewRole, previewPaint, previewTargetIds, wrapperStyles, renderScale,
+                    activeTableCell, tableCellDraft,
                 )
             }
         }
 
-        is TableBlock -> SceneTable(block, editing, callbacks, renderScale, modifier)
+        is TableBlock -> SceneTable(block, editing, callbacks, renderScale, modifier, activeTableCell, tableCellDraft)
 
         is ShapeBlock -> SceneShape(
             block,
@@ -441,6 +456,8 @@ private fun SceneStyledChildren(
     previewTargetIds: Set<String>,
     wrapperStyles: List<WrapperStyleSource>,
     renderScale: DocumentRenderScale,
+    activeTableCell: Pair<Int, Int>? = null,
+    tableCellDraft: String? = null,
 ) {
     val metrics = remember(children, stylesheet, wrapperStyles, renderScale) {
         children.map { renderScale.pointBlockMetrics(resolvedBlockMetrics(it, stylesheet, wrapperStyles)) }
@@ -462,6 +479,8 @@ private fun SceneStyledChildren(
             previewTargetIds,
             wrapperStyles,
             renderScale,
+            activeTableCell,
+            tableCellDraft,
         )
     }
 }
@@ -604,8 +623,9 @@ private fun SceneTable(
     callbacks: SceneContentCallbacks,
     renderScale: DocumentRenderScale,
     modifier: Modifier = Modifier,
+    activeCell: Pair<Int, Int>? = null,
+    cellDraft: String? = null,
 ) {
-    var activeCell by remember(block.id) { mutableStateOf<Pair<Int, Int>?>(null) }
     Column(
         modifier
             .clip(RoundedCornerShape(renderScale.pointToDp(6f)))
@@ -628,8 +648,9 @@ private fun SceneTable(
                     header = true,
                     editing = editing,
                     active = activeCell == (-1 to column),
-                    editorText = TableCalculationBridge.editorText(block, -1, column),
-                    onActivate = { activeCell = -1 to column },
+                    editorText = cellDraft.orEmpty(),
+                    onActivate = { callbacks.onTableCellActivate(-1, column) },
+                    onDraft = { callbacks.onTableCellDraft(-1, column, it) },
                     onCommit = { callbacks.onTableCellCommit(-1, column, it) },
                     renderScale = renderScale,
                     modifier = Modifier.weight(1f),
@@ -645,8 +666,9 @@ private fun SceneTable(
                         header = false,
                         editing = editing,
                         active = activeCell == (rowIndex to column),
-                        editorText = TableCalculationBridge.editorText(block, rowIndex, column),
-                        onActivate = { activeCell = rowIndex to column },
+                        editorText = cellDraft.orEmpty(),
+                        onActivate = { callbacks.onTableCellActivate(rowIndex, column) },
+                        onDraft = { callbacks.onTableCellDraft(rowIndex, column, it) },
                         onCommit = { callbacks.onTableCellCommit(rowIndex, column, it) },
                         renderScale = renderScale,
                         modifier = Modifier.weight(1f),
@@ -665,12 +687,14 @@ private fun SceneTableCell(
     active: Boolean,
     editorText: String,
     onActivate: () -> Unit,
+    onDraft: (String) -> Unit,
     onCommit: (String) -> Unit,
     renderScale: DocumentRenderScale = DocumentRenderScale.At100Percent,
     modifier: Modifier = Modifier,
 ) {
     val style = renderScale.pointTextStyle(if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall)
-    var draft by remember(editorText) { mutableStateOf(editorText) }
+    // Focus loss commits, matching every grid the user has met. The draft itself lives in the runtime.
+    var hadFocus by remember { mutableStateOf(false) }
     Box(
         modifier
             .heightIn(min = 48.dp)
@@ -684,12 +708,19 @@ private fun SceneTableCell(
     ) {
         if (editing && active) {
             BasicTextField(
-                value = draft,
-                onValueChange = { draft = it; onCommit(it) },
+                value = editorText,
+                onValueChange = onDraft,
                 textStyle = style.copy(color = LocalContentColor.current),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onCommit(editorText) }),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focus ->
+                        if (hadFocus && !focus.isFocused) onCommit(editorText)
+                        hadFocus = focus.isFocused
+                    },
             )
         } else {
             Text(text.ifBlank { " " }, style = style)

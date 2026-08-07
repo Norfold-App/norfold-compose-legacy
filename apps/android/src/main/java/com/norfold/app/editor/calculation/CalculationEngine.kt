@@ -45,6 +45,13 @@ data class ConditionalFormatResult(
 class CalculationEngine(
     initialWorkbook: CalculationWorkbook,
     private val limits: CalculationLimits = CalculationLimits(),
+    /**
+     * The wall clock the volatile functions read.
+     *
+     * Injected rather than called inline so `TODAY`/`NOW` are deterministic under test and so the whole
+     * engine keeps a single point of contact with the system clock. Production passes the default.
+     */
+    private val clock: () -> LocalDateTime = LocalDateTime::now,
 ) {
     private val parser = FormulaParser(limits.maximumFormulaTokens, limits.maximumFormulaDepth)
     private var workbookState = initialWorkbook
@@ -54,12 +61,45 @@ class CalculationEngine(
     private val dependents = mutableMapOf<CellId, MutableSet<CellId>>()
     private var metrics = CalculationInstrumentation()
 
+    /**
+     * The instant every volatile cell in the current recalculation pass observes.
+     *
+     * Read once per pass, never per call. If `TODAY`/`NOW` each hit the clock directly, two volatile cells
+     * evaluated microseconds apart could straddle midnight and disagree about the date, and `=NOW()-NOW()`
+     * could return non-zero. One pass, one instant.
+     */
+    private var evaluationInstant: LocalDateTime = clock()
+
+    /**
+     * Cells whose formula reads the evaluation instant.
+     *
+     * Ordinary cells are cached until a dependency changes, which is exactly wrong for a volatile cell: its
+     * input is the clock, and the clock is not in the dependency graph. These are dropped from the cache at
+     * the start of every pass so they recompute against the new instant.
+     */
+    private val volatileCells = linkedSetOf<CellId>()
+
     init {
         rebuildGraphAndCalculate()
     }
 
     fun workbook(): CalculationWorkbook = workbookState
     fun instrumentation(): CalculationInstrumentation = metrics.copy()
+
+    /** The instant the most recent recalculation pass observed. Volatile results are consistent with it. */
+    fun evaluationInstant(): LocalDateTime = evaluationInstant
+
+    /**
+     * Opens a recalculation pass: samples the clock once and invalidates everything the previous instant fed.
+     *
+     * Invalidating the *closure* matters — a cell reading `=A1+1` where `A1` is `=TODAY()` is just as stale as
+     * `A1` itself, and nothing in the dependency graph would otherwise say so.
+     */
+    private fun beginPass() {
+        evaluationInstant = clock()
+        if (volatileCells.isEmpty()) return
+        dependencyClosure(volatileCells.toSet()).forEach(calculated::remove)
+    }
 
     fun recordViewport(requestedCells: Long, composedCells: Int) {
         metrics = metrics.copy(
@@ -102,6 +142,7 @@ class CalculationEngine(
             rebuildGraphAndCalculate()
             return
         }
+        beginPass()
         val impacted = dependencyClosure(changedCells)
         metrics = metrics.copy(invalidatedCellCount = metrics.invalidatedCellCount + impacted.size)
         impacted.forEach {
@@ -234,6 +275,8 @@ class CalculationEngine(
         calculated.clear()
         dependencies.clear()
         dependents.clear()
+        volatileCells.clear()
+        beginPass()
         var formulaCount = 0
         workbookState.sheets.forEach { sheet ->
             sheet.cells.forEach { cell ->
@@ -245,6 +288,7 @@ class CalculationEngine(
                         ?.let { referencesOf(it.expression, sheet) }
                         .orEmpty()
                     setDependencies(cell.id, refs)
+                    (parse as? FormulaParseResult.Success)?.let { recordVolatility(cell.id, it.expression) }
                 }
             }
         }
@@ -286,6 +330,7 @@ class CalculationEngine(
                         metrics = metrics.copy(formulasRecalculated = metrics.formulasRecalculated + 1)
                         val refs = referencesOf(parse.expression, sheet)
                         setDependencies(cell.id, refs)
+                        recordVolatility(cell.id, parse.expression)
                         evaluate(parse.expression, sheet, cell, stack, budget).scalarOrError()
                     }
                 }
@@ -504,7 +549,10 @@ class CalculationEngine(
                     }))
                 }
             }
-            "SUMIF", "COUNTIF" -> aggregateIf(call, sheet, owner, stack, budget, name == "SUMIF")
+            "SUMIF", "COUNTIF" -> aggregateIf(
+                call, sheet, owner, stack, budget,
+                if (name == "SUMIF") AggregateIfMode.SUM else AggregateIfMode.COUNT,
+            )
             "CONCAT" -> text(buildString { argumentSequence().forEach { append(it.displayText()) } })
             "LEN" -> exact(1)?.let { number(BigDecimal(it.first().displayText().length)) } ?: wrongCount()
             "LEFT", "RIGHT" -> {
@@ -540,6 +588,203 @@ class CalculationEngine(
                 values.first().asDate()?.let { date -> number(BigDecimal(when (name) { "YEAR" -> date.year; "MONTH" -> date.monthValue; else -> date.dayOfMonth })) }
                     ?: error("$name expects a date")
             } ?: wrongCount()
+
+            // ---- Math and numeric ----------------------------------------------------------------
+            "SIGN" -> exact(1)?.first()?.numberOrError()?.let {
+                if (it is CalculatedValue.Number) number(BigDecimal(it.value.signum())) else it.runtime()
+            } ?: wrongCount()
+            "INT" -> exact(1)?.first()?.numberOrError()?.let {
+                // Excel's INT floors toward negative infinity; -1.5 is -2, not -1. FLOOR, not truncation.
+                if (it is CalculatedValue.Number) number(it.value.setScale(0, RoundingMode.FLOOR)) else it.runtime()
+            } ?: wrongCount()
+            "MOD" -> exact(2)?.let { values ->
+                val dividend = values[0].coerceNumber()
+                val divisor = values[1].coerceNumber()
+                when {
+                    dividend == null || divisor == null -> error("MOD expects numbers")
+                    divisor.compareTo(BigDecimal.ZERO) == 0 ->
+                        CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.DIVIDE_BY_ZERO)).runtime()
+                    // Excel's MOD takes the sign of the divisor, so MOD(-3,2) is 1 rather than BigDecimal's -1.
+                    else -> number(dividend.subtract(divisor.multiply(dividend.divide(divisor, 0, RoundingMode.FLOOR))))
+                }
+            } ?: wrongCount()
+            "POWER" -> exact(2)?.let { values ->
+                val base = values[0].coerceNumber()
+                val exponent = values[1].coerceNumber()
+                if (base == null || exponent == null) error("POWER expects numbers") else {
+                    val powered = base.toDouble().pow(exponent.toDouble())
+                    if (!powered.isFinite()) error("Non-finite power result") else number(BigDecimal(powered.toString()))
+                }
+            } ?: wrongCount()
+            "SQRT" -> exact(1)?.let { values ->
+                val source = values.first().coerceNumber()
+                when {
+                    source == null -> error("SQRT expects a number")
+                    source.signum() < 0 -> error("SQRT cannot take a negative number")
+                    else -> {
+                        val root = kotlin.math.sqrt(source.toDouble())
+                        if (!root.isFinite()) error("Non-finite square root") else number(BigDecimal(root.toString()))
+                    }
+                }
+            } ?: wrongCount()
+            "PRODUCT" -> {
+                var total = BigDecimal.ONE
+                var count = 0
+                var failure: CalculatedValue.ErrorValue? = null
+                val iterator = argumentSequence().iterator()
+                while (iterator.hasNext() && failure == null) {
+                    val value = iterator.next()
+                    if (value is CalculatedValue.ErrorValue) failure = value else value.aggregateNumber()?.let {
+                        total = total.multiply(it)
+                        count++
+                    }
+                }
+                failure?.runtime() ?: number(if (count == 0) BigDecimal.ZERO else total)
+            }
+
+            // ---- Logical and error ---------------------------------------------------------------
+            "IFS" -> {
+                // Lazy like IF: only the branch whose condition wins is evaluated.
+                if (call.arguments.size < 2 || call.arguments.size % 2 != 0) wrongCount() else {
+                    var chosen: RuntimeValue? = null
+                    var index = 0
+                    while (chosen == null && index < call.arguments.size) {
+                        val condition = evaluate(call.arguments[index], sheet, owner, stack, budget).scalarOrError()
+                        if (condition is CalculatedValue.ErrorValue) chosen = condition.runtime()
+                        else if (condition.truthy()) chosen = evaluate(call.arguments[index + 1], sheet, owner, stack, budget)
+                        index += 2
+                    }
+                    chosen ?: CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.UNAVAILABLE, "No IFS condition matched")).runtime()
+                }
+            }
+            "IFNA" -> if (call.arguments.size != 2) wrongCount() else {
+                // Narrower than IFERROR by design: only #N/A is caught, so a genuine #DIV/0! still surfaces.
+                val first = evaluate(call.arguments[0], sheet, owner, stack, budget)
+                val value = first.scalarOrError()
+                if (value is CalculatedValue.ErrorValue && value.error.kind == CalculationErrorKind.UNAVAILABLE) {
+                    evaluate(call.arguments[1], sheet, owner, stack, budget)
+                } else first
+            }
+
+            // ---- Conditional aggregation ---------------------------------------------------------
+            "AVERAGEIF" -> aggregateIf(call, sheet, owner, stack, budget, AggregateIfMode.AVERAGE)
+            "SUMIFS", "COUNTIFS", "AVERAGEIFS" -> multiCriteriaAggregate(call, sheet, owner, stack, budget, name)
+
+            // ---- Text -----------------------------------------------------------------------------
+            "CONCATENATE" -> text(buildString { argumentSequence().forEach { append(it.displayText()) } })
+            "TEXTJOIN" -> {
+                if (call.arguments.size < 3) wrongCount() else {
+                    val delimiter = evaluate(call.arguments[0], sheet, owner, stack, budget).scalarOrError().displayText()
+                    val ignoreEmpty = evaluate(call.arguments[1], sheet, owner, stack, budget).scalarOrError().truthy()
+                    val parts = mutableListOf<String>()
+                    var failure: CalculatedValue.ErrorValue? = null
+                    val iterator = call.arguments.drop(2).asSequence()
+                        .flatMap { evaluate(it, sheet, owner, stack, budget).asSequence() }
+                        .iterator()
+                    while (iterator.hasNext() && failure == null) {
+                        val value = iterator.next()
+                        if (value is CalculatedValue.ErrorValue) failure = value else {
+                            val rendered = value.displayText()
+                            if (!ignoreEmpty || rendered.isNotEmpty()) parts += rendered
+                        }
+                    }
+                    failure?.runtime() ?: text(parts.joinToString(delimiter))
+                }
+            }
+            "FIND", "SEARCH" -> {
+                // FIND is case-sensitive; SEARCH is not. Neither supports wildcards here, and §3.2 requires
+                // that narrowing be stated rather than implied.
+                if (call.arguments.size !in 2..3) wrongCount() else {
+                    val values = arguments()
+                    val needle = values.getOrNull(0)?.displayText().orEmpty()
+                    val haystack = values.getOrNull(1)?.displayText().orEmpty()
+                    val start = values.getOrNull(2)?.coerceNumber()?.toInt() ?: 1
+                    if (start < 1 || start > haystack.length + 1) error("$name start position is outside the text") else {
+                        val found = haystack.indexOf(needle, startIndex = start - 1, ignoreCase = name == "SEARCH")
+                        if (found < 0) CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.VALUE, "$name did not find the text")).runtime()
+                        else number(BigDecimal(found + 1))
+                    }
+                }
+            }
+            "SUBSTITUTE" -> {
+                if (call.arguments.size !in 3..4) wrongCount() else {
+                    val values = arguments()
+                    val source = values.getOrNull(0)?.displayText().orEmpty()
+                    val target = values.getOrNull(1)?.displayText().orEmpty()
+                    val replacement = values.getOrNull(2)?.displayText().orEmpty()
+                    val occurrence = values.getOrNull(3)?.coerceNumber()?.toInt()
+                    when {
+                        target.isEmpty() -> text(source)
+                        occurrence == null -> text(source.replace(target, replacement))
+                        occurrence < 1 -> error("SUBSTITUTE occurrence must be positive")
+                        else -> {
+                            // Replace only the nth occurrence; anything else stays as typed.
+                            var index = -1
+                            var seen = 0
+                            var cursor = 0
+                            while (seen < occurrence) {
+                                index = source.indexOf(target, cursor)
+                                if (index < 0) break
+                                seen++
+                                cursor = index + target.length
+                            }
+                            text(if (seen < occurrence || index < 0) source else source.replaceRange(index, index + target.length, replacement))
+                        }
+                    }
+                }
+            }
+            "VALUE" -> exact(1)?.let { values ->
+                val source = values.first()
+                if (source is CalculatedValue.ErrorValue) source.runtime()
+                else parseRenderableDecimal(source.displayText().trim())?.let(::number) ?: error("VALUE expects numeric text")
+            } ?: wrongCount()
+
+            // ---- Date and time ---------------------------------------------------------------------
+            "DATEVALUE" -> exact(1)?.let { values ->
+                val source = values.first()
+                if (source is CalculatedValue.ErrorValue) source.runtime()
+                else runCatching { LocalDate.parse(source.displayText().trim()) }
+                    .fold({ RuntimeValue.Scalar(CalculatedValue.DateValue(it)) }, { error("DATEVALUE expects an ISO-8601 date") })
+            } ?: wrongCount()
+            "TIME" -> exact(3)?.let { values ->
+                val hour = values[0].coerceNumber()?.toInt()
+                val minute = values[1].coerceNumber()?.toInt()
+                val second = values[2].coerceNumber()?.toInt()
+                // A time alone has no date, so it is carried on the epoch day; HOUR/MINUTE/SECOND read it back.
+                // Written out rather than via `LocalDate.EPOCH`, which is API 34 and would crash on minSdk 26.
+                runCatching { LocalDateTime.of(LocalDate.of(1970, 1, 1), java.time.LocalTime.of(hour!!, minute!!, second!!)) }
+                    .fold({ RuntimeValue.Scalar(CalculatedValue.DateTimeValue(it)) }, { error("Invalid TIME") })
+            } ?: wrongCount()
+            "HOUR", "MINUTE", "SECOND" -> exact(1)?.let { values ->
+                values.first().asTime()?.let { time ->
+                    number(BigDecimal(when (name) { "HOUR" -> time.hour; "MINUTE" -> time.minute; else -> time.second }))
+                } ?: error("$name expects a time")
+            } ?: wrongCount()
+            "TODAY" -> if (call.arguments.isNotEmpty()) wrongCount() else {
+                RuntimeValue.Scalar(CalculatedValue.DateValue(evaluationInstant.toLocalDate()))
+            }
+            "NOW" -> if (call.arguments.isNotEmpty()) wrongCount() else {
+                RuntimeValue.Scalar(CalculatedValue.DateTimeValue(evaluationInstant))
+            }
+
+            // ---- Lookup and reference --------------------------------------------------------------
+            "VLOOKUP", "HLOOKUP" -> vlookup(call, sheet, owner, stack, budget, horizontal = name == "HLOOKUP")
+            "ROW", "COLUMN" -> {
+                if (call.arguments.size > 1) wrongCount() else {
+                    val reference = call.arguments.firstOrNull()
+                    val address = referenceAddress(reference, sheet, owner)
+                        ?: return valueError("$name expects a reference")
+                    number(BigDecimal(if (name == "ROW") address.row + 1 else address.column + 1))
+                }
+            }
+            "ROWS", "COLUMNS" -> exact(1).let {
+                if (call.arguments.size != 1) wrongCount() else {
+                    // Shape, not contents: measured from the reference itself so a huge range costs nothing.
+                    val extent = referenceExtent(call.arguments[0], sheet)
+                        ?: return valueError("$name expects a reference")
+                    number(BigDecimal(if (name == "ROWS") extent.first else extent.second))
+                }
+            }
             else -> RuntimeValue.Scalar(CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.NAME, "Unknown function $name")))
         }
     }
@@ -550,7 +795,7 @@ class CalculationEngine(
         owner: CalculationCell,
         stack: LinkedHashSet<CellId>,
         budget: EvaluationBudget,
-        sum: Boolean,
+        mode: AggregateIfMode,
     ): RuntimeValue {
         if (call.arguments.size !in 2..3) return CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.VALUE, "Wrong argument count")).runtime()
         val candidates = evaluate(call.arguments[0], sheet, owner, stack, budget).asSequence().iterator()
@@ -558,15 +803,165 @@ class CalculationEngine(
         val sumValues = call.arguments.getOrNull(2)?.let { evaluate(it, sheet, owner, stack, budget).asSequence().iterator() }
         var total = BigDecimal.ZERO
         var count = 0
+        var numericCount = 0
         while (candidates.hasNext()) {
             val value = candidates.next()
             val sumValue = if (sumValues == null) value else if (sumValues.hasNext()) sumValues.next() else CalculatedValue.Blank
             if (criterionMatches(value, criterion)) {
                 count++
-                sumValue.coerceNumber()?.let { total += it }
+                sumValue.coerceNumber()?.let { total += it; numericCount++ }
             }
         }
-        return calculatedNumber(if (sum) total else BigDecimal(count)).runtime()
+        return when (mode) {
+            AggregateIfMode.SUM -> calculatedNumber(total).runtime()
+            AggregateIfMode.COUNT -> calculatedNumber(BigDecimal(count)).runtime()
+            // An average over nothing is not zero. #DIV/0! is the honest answer and the one Excel gives.
+            AggregateIfMode.AVERAGE -> if (numericCount == 0) {
+                CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.DIVIDE_BY_ZERO, "AVERAGEIF matched no numbers")).runtime()
+            } else {
+                calculatedNumber(total.divide(BigDecimal(numericCount), 15, RoundingMode.HALF_UP)).runtime()
+            }
+        }
+    }
+
+    /**
+     * `SUMIFS` / `COUNTIFS` / `AVERAGEIFS` — every criteria pair must hold for a position to count.
+     *
+     * `COUNTIFS` takes pairs from argument 0; the other two take an aggregate range first and then pairs. All
+     * ranges are walked in lockstep as sequences, so a wide criteria set costs one pass, not one pass per pair.
+     */
+    private fun multiCriteriaAggregate(
+        call: FormulaExpression.FunctionCall,
+        sheet: CalculationSheet,
+        owner: CalculationCell,
+        stack: LinkedHashSet<CellId>,
+        budget: EvaluationBudget,
+        name: String,
+    ): RuntimeValue {
+        val counting = name == "COUNTIFS"
+        val pairStart = if (counting) 0 else 1
+        val pairCount = call.arguments.size - pairStart
+        if (pairCount < 2 || pairCount % 2 != 0) {
+            return valueError("$name has the wrong argument count")
+        }
+        val aggregate = if (counting) null else evaluate(call.arguments[0], sheet, owner, stack, budget).asSequence().iterator()
+        val criteriaRanges = (pairStart until call.arguments.size step 2).map {
+            evaluate(call.arguments[it], sheet, owner, stack, budget).asSequence().iterator()
+        }
+        val criteria = (pairStart + 1 until call.arguments.size step 2).map {
+            evaluate(call.arguments[it], sheet, owner, stack, budget).scalarOrError().displayText()
+        }
+        var total = BigDecimal.ZERO
+        var matched = 0
+        var numericCount = 0
+        var failure: CalculatedValue.ErrorValue? = null
+        while (failure == null && criteriaRanges.all(Iterator<CalculatedValue>::hasNext)) {
+            val candidates = criteriaRanges.map(Iterator<CalculatedValue>::next)
+            val aggregateValue = aggregate?.let { if (it.hasNext()) it.next() else CalculatedValue.Blank }
+            val errored = candidates.firstOrNull { it is CalculatedValue.ErrorValue } as? CalculatedValue.ErrorValue
+                ?: aggregateValue as? CalculatedValue.ErrorValue
+            if (errored != null) {
+                failure = errored
+            } else if (candidates.indices.all { criterionMatches(candidates[it], criteria[it]) }) {
+                matched++
+                (aggregateValue ?: candidates.first()).coerceNumber()
+                    ?.takeIf { !counting }
+                    ?.let { total += it; numericCount++ }
+            }
+        }
+        failure?.let { return it.runtime() }
+        return when {
+            counting -> calculatedNumber(BigDecimal(matched)).runtime()
+            name == "SUMIFS" -> calculatedNumber(total).runtime()
+            numericCount == 0 ->
+                CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.DIVIDE_BY_ZERO, "AVERAGEIFS matched no numbers")).runtime()
+            else -> calculatedNumber(total.divide(BigDecimal(numericCount), 15, RoundingMode.HALF_UP)).runtime()
+        }
+    }
+
+    /**
+     * `VLOOKUP` / `HLOOKUP` over the two-dimensional shape of a range.
+     *
+     * Only exact match is supported: the optional fourth argument must be absent or FALSE. Approximate match
+     * needs a sorted range and silently returns a neighbouring row when that assumption is wrong, which is a
+     * worse answer than saying so.
+     */
+    private fun vlookup(
+        call: FormulaExpression.FunctionCall,
+        sheet: CalculationSheet,
+        owner: CalculationCell,
+        stack: LinkedHashSet<CellId>,
+        budget: EvaluationBudget,
+        horizontal: Boolean,
+    ): RuntimeValue {
+        val name = if (horizontal) "HLOOKUP" else "VLOOKUP"
+        if (call.arguments.size !in 3..4) return valueError("$name has the wrong argument count")
+        if (call.arguments.size == 4) {
+            val approximate = evaluate(call.arguments[3], sheet, owner, stack, budget).scalarOrError()
+            if (approximate.truthy()) return valueError("Only exact $name match is supported")
+        }
+        val needle = evaluate(call.arguments[0], sheet, owner, stack, budget).scalarOrError()
+        val table = evaluate(call.arguments[1], sheet, owner, stack, budget)
+        val offset = evaluate(call.arguments[2], sheet, owner, stack, budget).scalarOrError().coerceNumber()?.toInt()
+            ?: return valueError("$name index must be numeric")
+        if (offset < 1) return valueError("$name index must be positive")
+        val grid = table as? RuntimeValue.Range ?: return valueError("$name expects a range")
+        val lines = if (horizontal) grid.rowCount else grid.columnCount
+        if (offset > lines) return CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.REFERENCE, "$name index is outside the range")).runtime()
+        val search = if (horizontal) grid.columnCount else grid.rowCount
+        for (position in 0 until search) {
+            val key = if (horizontal) grid.indexed(0, position) else grid.indexed(position, 0)
+            if (compare(key, needle) == 0) {
+                return (if (horizontal) grid.indexed(offset - 1, position) else grid.indexed(position, offset - 1)).runtime()
+            }
+        }
+        return CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.UNAVAILABLE)).runtime()
+    }
+
+    /** The cell a `ROW`/`COLUMN` argument addresses, defaulting to the calling cell when omitted. */
+    private fun referenceAddress(
+        reference: FormulaExpression?,
+        sheet: CalculationSheet,
+        owner: CalculationCell,
+    ): GridAddress? = when (reference) {
+        null -> sheet.addressOf(owner)
+        is FormulaExpression.CellReference -> GridAddress(reference.reference.row, reference.reference.column)
+        is FormulaExpression.RangeReference -> GridAddress(
+            minOf(reference.start.row, reference.end.row),
+            minOf(reference.start.column, reference.end.column),
+        )
+        is FormulaExpression.NamedReference -> workbookState.namedRange(reference.name)?.target?.let { stableAddress(it) }
+        else -> null
+    }
+
+    /** The (rows, columns) shape of a reference, measured without reading a single cell value. */
+    private fun referenceExtent(reference: FormulaExpression, sheet: CalculationSheet): Pair<Int, Int>? = when (reference) {
+        is FormulaExpression.CellReference -> 1 to 1
+        is FormulaExpression.RangeReference -> {
+            val rows = kotlin.math.abs(reference.end.row - reference.start.row) + 1
+            val columns = kotlin.math.abs(reference.end.column - reference.start.column) + 1
+            rows to columns
+        }
+        is FormulaExpression.NamedReference -> workbookState.namedRange(reference.name)?.target?.let { stableExtent(it) }
+        is FormulaExpression.StructuredReference -> workbookState.embeddedTable(reference.tableName)?.range?.let { stableExtent(it) }
+        else -> null
+    }
+
+    private fun stableAddress(range: StableCellRange): GridAddress? {
+        val sheet = workbookState.sheet(range.start.sheetId) ?: return null
+        val row = minOf(sheet.rowIndex(range.start.rowId), sheet.rowIndex(range.end.rowId))
+        val column = minOf(sheet.columnIndex(range.start.columnId), sheet.columnIndex(range.end.columnId))
+        return if (row < 0 || column < 0) null else GridAddress(row, column)
+    }
+
+    private fun stableExtent(range: StableCellRange): Pair<Int, Int>? {
+        val sheet = workbookState.sheet(range.start.sheetId) ?: return null
+        val startRow = sheet.rowIndex(range.start.rowId)
+        val endRow = sheet.rowIndex(range.end.rowId)
+        val startColumn = sheet.columnIndex(range.start.columnId)
+        val endColumn = sheet.columnIndex(range.end.columnId)
+        if (minOf(startRow, endRow, startColumn, endColumn) < 0) return null
+        return (kotlin.math.abs(endRow - startRow) + 1) to (kotlin.math.abs(endColumn - startColumn) + 1)
     }
 
     private fun index(call: FormulaExpression.FunctionCall, sheet: CalculationSheet, owner: CalculationCell, stack: LinkedHashSet<CellId>, budget: EvaluationBudget): RuntimeValue {
@@ -721,6 +1116,19 @@ class CalculationEngine(
     private fun resolveCellId(reference: A1Reference, currentSheet: CalculationSheet): CellId? =
         sheetFor(reference.sheetName, currentSheet)?.cellAt(reference.row, reference.column)?.id
 
+    /** Notes whether [expression] reads the evaluation instant, so the pass opener can invalidate it. */
+    private fun recordVolatility(cellId: CellId, expression: FormulaExpression) {
+        if (isVolatile(expression)) volatileCells.add(cellId) else volatileCells.remove(cellId)
+    }
+
+    private fun isVolatile(expression: FormulaExpression): Boolean = when (expression) {
+        is FormulaExpression.FunctionCall ->
+            expression.name.uppercase() in VOLATILE_FUNCTIONS || expression.arguments.any(::isVolatile)
+        is FormulaExpression.Unary -> isVolatile(expression.operand)
+        is FormulaExpression.Binary -> isVolatile(expression.left) || isVolatile(expression.right)
+        else -> false
+    }
+
     private fun setDependencies(cellId: CellId, refs: Set<CellId>) {
         removeDependencyEdges(cellId)
         dependencies[cellId] = refs
@@ -834,8 +1242,18 @@ class CalculationEngine(
     }
 }
 
-private sealed interface RuntimeValue {
-    data class Scalar(val value: CalculatedValue) : RuntimeValue
+/** How a criteria aggregate reduces the values it matched. */
+private enum class AggregateIfMode { SUM, COUNT, AVERAGE }
+
+/**
+ * Functions whose value depends on the evaluation instant rather than on any cell.
+ *
+ * A formula naming one of these is dropped from the value cache at the start of every recalculation pass,
+ * because the dependency graph cannot express "depends on the clock".
+ */
+private val VOLATILE_FUNCTIONS = setOf("TODAY", "NOW")
+
+private sealed interface RuntimeValue {    data class Scalar(val value: CalculatedValue) : RuntimeValue
     data class Range(val rowCount: Int, val columnCount: Int, val values: Sequence<CalculatedValue>) : RuntimeValue
     fun asSequence(): Sequence<CalculatedValue> = when (this) { is Scalar -> sequenceOf(value); is Range -> values }
     fun flatten(): List<CalculatedValue> = asSequence().toList()
@@ -947,8 +1365,13 @@ private fun CalculatedValue.aggregateNumber(): BigDecimal? = when (this) {
     else -> null
 }
 
-private fun CalculatedValue.numberOrError(): CalculatedValue = coerceNumber()?.let(CalculatedValue::Number)
-    ?: CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.VALUE, "Expected a number"))
+private fun CalculatedValue.numberOrError(): CalculatedValue = when {
+    // An incoming error keeps its own kind. Collapsing it into #VALUE! here would report "expected a number"
+    // for a `#DIV/0!` the caller never produced, hiding the real cause one level down the expression.
+    this is CalculatedValue.ErrorValue -> this
+    else -> coerceNumber()?.let(CalculatedValue::Number)
+        ?: CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.VALUE, "Expected a number"))
+}
 
 private fun CalculatedValue.truthy(): Boolean = when (this) {
     CalculatedValue.Blank -> false
@@ -963,6 +1386,14 @@ private fun CalculatedValue.asDate(): LocalDate? = when (this) {
     is CalculatedValue.DateValue -> value
     is CalculatedValue.DateTimeValue -> value.toLocalDate()
     is CalculatedValue.Text -> runCatching { LocalDate.parse(value) }.getOrNull()
+    else -> null
+}
+
+/** The clock component of a value, for HOUR/MINUTE/SECOND. A plain date has no time and yields null. */
+private fun CalculatedValue.asTime(): java.time.LocalTime? = when (this) {
+    is CalculatedValue.DateTimeValue -> value.toLocalTime()
+    is CalculatedValue.Text -> runCatching { java.time.LocalTime.parse(value) }.getOrNull()
+        ?: runCatching { LocalDateTime.parse(value).toLocalTime() }.getOrNull()
     else -> null
 }
 

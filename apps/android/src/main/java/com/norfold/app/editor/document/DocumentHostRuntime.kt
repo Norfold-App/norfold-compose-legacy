@@ -93,6 +93,10 @@ data class DocumentHostUiState(
     val manipulation: ActiveManipulation?,
     /** The object whose text content is being edited, or null. Never entered by a first tap. */
     val editingObjectId: String?,
+    /** The addressed table cell as `objectId to (row, column)`, or null. Row `-1` is the header. */
+    val editingTableCell: Pair<String, Pair<Int, Int>>?,
+    /** The uncommitted text of [editingTableCell]. Runtime-owned so a recomposition cannot lose it. */
+    val editingTableDraft: String?,
     /** True while object multi-select is active — the count bar with Cancel/Done is showing. */
     val selectionMode: Boolean,
     val formFactor: FormFactor,
@@ -802,6 +806,68 @@ class DocumentHostRuntime(
         private set
 
     /**
+     * The table cell being typed into, as `objectId to (row, column)`, or null.
+     *
+     * Runtime state for the same reason the Flow draft is: a cell draft held in a Compose `remember` dies to
+     * any recomposition the host cannot see, and the recovery re-seeds the committed value — silently
+     * discarding what the user had typed. Row `-1` addresses the header, matching [editObjectTableCell].
+     */
+    var editingTableCell: Pair<String, Pair<Int, Int>>? = null
+        private set
+
+    /** The uncommitted text of [editingTableCell], or null when no cell is mid-edit. */
+    var editingTableDraft: String? = null
+        private set
+
+    /**
+     * Addresses a table cell inside the object being edited, seeding its draft from storage.
+     *
+     * Refuses when the object is not the one in content editing: a cell in a *different* object being typed
+     * into would write through a table the user never entered.
+     */
+    fun setObjectTableCell(objectId: String, legacyRow: Int, column: Int): Boolean {
+        if (view.intent != WorkingIntent.EDIT || editingObjectId != objectId) return false
+        val block = controller.findObject(objectId)?.second?.content as? com.norfold.app.domain.TableBlock ?: return false
+        editingTableCell = objectId to (legacyRow to column)
+        editingTableDraft = com.norfold.app.editor.calculation.TableCalculationBridge.editorText(block, legacyRow, column)
+        revision++
+        return true
+    }
+
+    /** Records a keystroke in the addressed cell without writing. See [commitObjectTableDraft] for the write. */
+    fun updateObjectTableDraft(value: String): Boolean {
+        if (editingTableCell == null) return false
+        editingTableDraft = value
+        revision++
+        return true
+    }
+
+    /** Commits the in-flight cell draft. The single write point for every in-cell commit route. */
+    fun commitObjectTableDraft(): com.norfold.app.editor.calculation.CellCommitResult {
+        val (objectId, cell) = editingTableCell
+            ?: return com.norfold.app.editor.calculation.CellCommitResult(
+                false,
+                error = com.norfold.app.editor.calculation.CalculationError(
+                    com.norfold.app.editor.calculation.CalculationErrorKind.REFERENCE,
+                    "No cell is being edited",
+                ),
+            )
+        val draft = editingTableDraft ?: return com.norfold.app.editor.calculation.CellCommitResult(false)
+        return editObjectTableCell(objectId, cell.first, cell.second, draft)
+    }
+
+    /** Abandons the in-flight draft, restoring the committed text. */
+    fun cancelObjectTableDraft(): Boolean {
+        val (objectId, cell) = editingTableCell ?: return false
+        val block = controller.findObject(objectId)?.second?.content as? com.norfold.app.domain.TableBlock
+        editingTableDraft = block?.let {
+            com.norfold.app.editor.calculation.TableCalculationBridge.editorText(it, cell.first, cell.second)
+        }
+        revision++
+        return true
+    }
+
+    /**
      * Enters content editing for [objectId], or refuses.
      *
      * A content-locked object refuses and says so rather than silently doing nothing — "why can I not type in
@@ -838,6 +904,10 @@ class DocumentHostRuntime(
     fun endContentEdit() {
         if (editingObjectId == null) return
         editingObjectId = null
+        // Leaving content editing takes the cell with it. The draft is discarded rather than written: the
+        // gesture that ends editing is Back or a tap outside, and neither of those means "save this".
+        editingTableCell = null
+        editingTableDraft = null
         revision++
     }
 
@@ -924,6 +994,15 @@ class DocumentHostRuntime(
         pendingTableWarning = null
         val after = com.norfold.app.editor.calculation.TableCalculationBridge.persist(upgraded, engine.workbook(), tableView.tableId)
         if (!controller.setContent(objectId, after, "Edit table cell")) return com.norfold.app.editor.calculation.CellCommitResult(false)
+        // Re-seed from what was stored: a formula commits as `=5+5` and renders as `10`, so neither the raw
+        // draft nor the rendered value is the right thing to leave in the field.
+        if (editingTableCell == objectId to (legacyRow to column)) {
+            editingTableDraft = com.norfold.app.editor.calculation.TableCalculationBridge.editorText(
+                controller.findObject(objectId)?.second?.content as? com.norfold.app.domain.TableBlock ?: after,
+                legacyRow,
+                column,
+            )
+        }
         notice = result.warning
         revision++
         return result
@@ -1218,6 +1297,8 @@ class DocumentHostRuntime(
             panX = view.panX,
             manipulation = view.manipulation,
             editingObjectId = editingObjectId,
+            editingTableCell = editingTableCell,
+            editingTableDraft = editingTableDraft,
             selectionMode = selectionMode,
             formFactor = presentation.formFactor,
             presentationMode = presentation.modeFor(

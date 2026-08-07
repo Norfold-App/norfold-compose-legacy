@@ -483,6 +483,7 @@ private fun FlowBlockRow(
             onCaret = { blockId, itemId, caret -> presenter.act { setCaret(blockId, caret, itemId) } },
             onToggleTodo = { blockId, itemId -> presenter.act { toggleTodo(blockId, itemId) } },
             onTableCell = { cursor -> presenter.act { setTableCursor(cursor) } },
+            onTableCellDraft = { _, value -> presenter.act { updateTableDraft(value) } },
             onTableCellCommit = { cursor, value ->
                 val result = presenter.act { editTableCell(cursor, value) }
                 result.error?.let { onNotice(it.detail.ifBlank { it.displayLabel }) }
@@ -611,6 +612,7 @@ private fun FlowBlockRow(
                     caretRequest = state.caretRequest,
                     selectionMode = state.selectionMode,
                     tableCursor = state.tableCursor,
+                    tableDraft = state.tableDraft,
                     stylesheet = state.document.stylesheet(),
                     previewRole = state.editorStyle.colorStudio.target?.role,
                     previewPaint = state.editorStyle.previewPaint,

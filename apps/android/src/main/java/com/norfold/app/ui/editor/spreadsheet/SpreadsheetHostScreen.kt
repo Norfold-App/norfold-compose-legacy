@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -91,6 +92,12 @@ import com.norfold.app.editor.calculation.CellBorderStyle
 import com.norfold.app.editor.calculation.CellNumberFormat
 import com.norfold.app.editor.calculation.NumberFormatKind
 import com.norfold.app.editor.calculation.GridAddress
+import com.norfold.app.editor.calculation.ConditionalRuleId
+import com.norfold.app.editor.calculation.ConditionalRuleSummary
+import com.norfold.app.editor.calculation.NamedRangeId
+import com.norfold.app.editor.calculation.NamedRangeSummary
+import com.norfold.app.editor.calculation.ValidationRuleId
+import com.norfold.app.editor.calculation.ValidationRuleSummary
 import com.norfold.app.editor.calculation.HorizontalCellAlignment
 import com.norfold.app.editor.calculation.SpreadsheetCommandIds
 import com.norfold.app.editor.calculation.SpreadsheetHostRuntime
@@ -116,7 +123,6 @@ fun SpreadsheetHostScreen(
 ) {
     var refresh by remember { mutableIntStateOf(0) }
     val state = remember(refresh) { runtime.state() }
-    var notice by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val clipboard = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     val rootFocus = remember { FocusRequester() }
@@ -148,19 +154,23 @@ fun SpreadsheetHostScreen(
         )
         FormulaBar(
             address = selectedAddress(state.selection)?.a1().orEmpty(),
-            initialValue = state.formulaBarText,
+            value = state.formulaBarText,
+            onDraft = { runtime.updateFormulaBarDraft(it); refresh++ },
             onCommit = { value ->
-                val result = runtime.commitFormulaBar(value)
-                notice = result.error?.detail ?: result.warning
-                refresh++
-                if (result.accepted) onChanged()
+                runtime.commitFormulaBar(value).let { result ->
+                    refresh++
+                    if (result.accepted) onChanged()
+                }
             },
         )
-        notice?.let { message ->
+        // One notice channel, owned by the runtime. It used to be a local `notice` fed only by the formula
+        // bar, so every other refusal — an invalid range name, an out-of-bounds column width, a rename
+        // collision — set a message the user never saw and the button simply looked broken.
+        state.lastMessage?.let { message ->
             Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = { notice = null }) { Text("Dismiss") }
+                    TextButton(onClick = { runtime.dismissMessage(); refresh++ }) { Text("Dismiss") }
                 }
             }
         }
@@ -169,6 +179,9 @@ fun SpreadsheetHostScreen(
                 runtime = runtime,
                 refresh = refresh,
                 onChanged = { refresh++; onChanged() },
+                // Scrolling and drafting change what is *shown*, not what is stored. Routing them through
+                // `onChanged` would mark the document dirty and schedule a save for a scroll gesture.
+                onInvalidate = { refresh++ },
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -225,6 +238,24 @@ fun SpreadsheetHostScreen(
                 onOpenFillStudio = { if (runtime.openCellFillStudio()) { refresh++ } },
                 onNumberFormat = { if (runtime.setNumberFormat(it)) { refresh++; onChanged() } },
                 onTableStyle = { if (runtime.applyBuiltInTableStyle()) { refresh++; onChanged() } },
+            )
+            // Defining a name without being able to see, find, rename or remove one is a one-way door: the
+            // name exists in every formula that uses it and nowhere the user can reach. The manager is the
+            // other half of the workflow.
+            NamedRangeManager(
+                ranges = runtime.namedRangeSummaries(),
+                onGoTo = { if (runtime.goToNamedRange(it)) { refresh++ } },
+                onRename = { id, newName -> if (runtime.renameNamedRange(id, newName)) { refresh++; onChanged() } },
+                onDelete = { if (runtime.deleteNamedRange(it)) { refresh++; onChanged() } },
+            )
+            RuleManager(
+                validations = runtime.validationRules(),
+                conditionals = runtime.conditionalRules(),
+                onValidationWarnOnly = { id, warnOnly -> if (runtime.setValidationWarnOnly(id, warnOnly)) { refresh++; onChanged() } },
+                onDeleteValidation = { if (runtime.deleteValidationRule(it)) { refresh++; onChanged() } },
+                onConditionalEnabled = { id, enabled -> if (runtime.setConditionalRuleEnabled(id, enabled)) { refresh++; onChanged() } },
+                onMoveConditional = { id, delta -> if (runtime.moveConditionalRule(id, delta)) { refresh++; onChanged() } },
+                onDeleteConditional = { if (runtime.deleteConditionalRule(it)) { refresh++; onChanged() } },
             )
         }
         // The shared Phase-3 Color Studio, mounted by this host exactly as Flow and Document mount it.
@@ -283,9 +314,15 @@ private fun SpreadsheetTopBar(
     HorizontalDivider()
 }
 
+/**
+ * The formula bar.
+ *
+ * Holds no draft of its own. The text it shows and the text it commits are both the runtime's, so a reflow, a
+ * theme change or a configuration change cannot discard a half-typed formula — which is exactly what a
+ * `remember` keyed on the selected address used to do.
+ */
 @Composable
-private fun FormulaBar(address: String, initialValue: String, onCommit: (String) -> Unit) {
-    var value by remember(address, initialValue) { mutableStateOf(initialValue) }
+private fun FormulaBar(address: String, value: String, onDraft: (String) -> Unit, onCommit: (String) -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -296,7 +333,7 @@ private fun FormulaBar(address: String, initialValue: String, onCommit: (String)
         }
         OutlinedTextField(
             value = value,
-            onValueChange = { value = it },
+            onValueChange = onDraft,
             modifier = Modifier.weight(1f),
             singleLine = true,
             label = { Text("Value or formula") },
@@ -312,6 +349,7 @@ private fun VirtualSpreadsheetGrid(
     runtime: SpreadsheetHostRuntime,
     refresh: Int,
     onChanged: () -> Unit,
+    onInvalidate: () -> Unit = onChanged,
     modifier: Modifier = Modifier,
 ) {
     val state = remember(refresh) { runtime.state() }
@@ -320,22 +358,25 @@ private fun VirtualSpreadsheetGrid(
     // rebuild the dependency graph and recalculate every formula on every recomposition.
     val engine = runtime.engine()
     val density = LocalDensity.current
-    var verticalOffset by remember(sheet.id) { mutableFloatStateOf(0f) }
-    var horizontalOffset by remember(sheet.id) { mutableFloatStateOf(0f) }
+    // Scroll position is the runtime's, not the composition's: a reflow or configuration change used to
+    // scroll a large grid back to A1, losing the user's place in a way nothing on screen explained.
+    val (verticalOffset, horizontalOffset) = state.viewportOffset
     val vertical = rememberScrollableState { delta ->
         val maximum = sheet.rows.sumOf { (it.heightPoints ?: 24f).toDouble() }.toFloat()
         val deltaPoints = with(density) { delta.toDp().value }
-        val next = (verticalOffset - deltaPoints).coerceIn(0f, maximum)
-        val consumed = with(density) { (verticalOffset - next).dp.toPx() }
-        verticalOffset = next
+        val next = (runtime.viewportOffset().first - deltaPoints).coerceIn(0f, maximum)
+        val consumed = with(density) { (runtime.viewportOffset().first - next).dp.toPx() }
+        runtime.setViewportOffset(next, runtime.viewportOffset().second)
+        onInvalidate()
         consumed
     }
     val horizontal = rememberScrollableState { delta ->
         val maximum = sheet.columns.sumOf { (it.widthPoints ?: 96f).toDouble() }.toFloat()
         val deltaPoints = with(density) { delta.toDp().value }
-        val next = (horizontalOffset - deltaPoints).coerceIn(0f, maximum)
-        val consumed = with(density) { (horizontalOffset - next).dp.toPx() }
-        horizontalOffset = next
+        val next = (runtime.viewportOffset().second - deltaPoints).coerceIn(0f, maximum)
+        val consumed = with(density) { (runtime.viewportOffset().second - next).dp.toPx() }
+        runtime.setViewportOffset(runtime.viewportOffset().first, next)
+        onInvalidate()
         consumed
     }
     BoxWithConstraints(modifier.background(MaterialTheme.colorScheme.surface)) {
@@ -384,10 +425,15 @@ private fun VirtualSpreadsheetGrid(
                         conditionalDescriptions = presentation.descriptions,
                         selected = selected,
                         editing = state.selection is TableSelectionState.Editing && state.selection.cell == address,
+                        // The editor text is the runtime's draft while this cell is being typed into, and the
+                        // stored value otherwise. A `remember` here used to hold it, so any recomposition the
+                        // surface could not predict discarded what the user had typed.
+                        draft = (state.selection as? TableSelectionState.Editing)?.takeIf { it.cell == address }?.draft,
                         onClick = {
                             if (selected && state.selection is TableSelectionState.CellSelected) runtime.beginEdit() else runtime.select(address)
-                            onChanged()
+                            onInvalidate()
                         },
+                        onDraft = { runtime.updateDraft(it); onInvalidate() },
                         onCommit = { runtime.commitFormulaBar(it); onChanged() },
                         onExtendRight = { runtime.select(GridAddress(row, (column + 1).coerceAtMost(sheet.columnCount - 1)), extend = true); onChanged() },
                         onExtendDown = { runtime.select(GridAddress((row + 1).coerceAtMost(sheet.rowCount - 1), column), extend = true); onChanged() },
@@ -627,13 +673,16 @@ private fun GridCell(
     conditionalDescriptions: List<String>,
     selected: Boolean,
     editing: Boolean,
+    /** The uncommitted text while this cell is being typed into, or null. Runtime-owned. */
+    draft: String?,
     onClick: () -> Unit,
+    onDraft: (String) -> Unit,
     onCommit: (String) -> Unit,
     onExtendRight: () -> Unit,
     onExtendDown: () -> Unit,
     modifier: Modifier,
 ) {
-    var draft by remember(address, input) { mutableStateOf(input) }
+    val editorText = draft ?: input
     val cellFill = format.fillColor?.let { Color(it.toArgb()) } ?: Color.Transparent
     val textColor = format.textColor?.let { Color(it.toArgb()) } ?: MaterialTheme.colorScheme.onSurface
     val alignment = when (format.horizontalAlignment) {
@@ -673,8 +722,8 @@ private fun GridCell(
     ) {
         if (editing) {
             BasicTextField(
-                value = draft,
-                onValueChange = { draft = it },
+                value = editorText,
+                onValueChange = onDraft,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -686,7 +735,7 @@ private fun GridCell(
                     textAlign = textAlign,
                 ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onCommit(draft) }),
+                keyboardActions = KeyboardActions(onDone = { onCommit(editorText) }),
             )
         } else {
             Text(
@@ -726,6 +775,166 @@ private fun Modifier.cellBorders(format: CellFormat): Modifier = drawBehind {
     draw(format.borderRight, Offset(size.width, 0f), Offset(size.width, size.height))
     draw(format.borderBottom, Offset(0f, size.height), Offset(size.width, size.height))
     draw(format.borderLeft, Offset.Zero, Offset(0f, size.height))
+}
+
+/**
+ * The defined-name manager: list, find, rename, remove.
+ *
+ * Every row is reachable and every row is honest. A name whose cells were deleted still appears — marked
+ * unresolved and still deletable — because the alternative is a formula reporting `#NAME?` against a name the
+ * UI claims does not exist. Rename edits in place rather than through a dialog so the old name stays visible
+ * while the new one is typed, which is what makes "am I renaming the right one" answerable.
+ */
+@Composable
+private fun NamedRangeManager(
+    ranges: List<NamedRangeSummary>,
+    onGoTo: (NamedRangeId) -> Unit,
+    onRename: (NamedRangeId, String) -> Unit,
+    onDelete: (NamedRangeId) -> Unit,
+) {
+    if (ranges.isEmpty()) return
+    // Keyed by id, so the field follows the name it was opened for even when the list re-sorts after a rename.
+    var renaming by remember { mutableStateOf<NamedRangeId?>(null) }
+    var draft by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Text("Named ranges", style = MaterialTheme.typography.labelLarge)
+        ranges.forEach { range ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (renaming == range.id) {
+                    OutlinedTextField(
+                        draft,
+                        { draft = it },
+                        label = { Text("Rename \"${range.name}\"") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { onRename(range.id, draft); renaming = null },
+                        enabled = draft.isNotBlank(),
+                        modifier = Modifier.height(48.dp),
+                    ) { Text("Save") }
+                    TextButton(onClick = { renaming = null }, modifier = Modifier.height(48.dp)) { Text("Cancel") }
+                } else {
+                    Column(Modifier.weight(1f)) {
+                        Text(range.name, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (range.resolvable) range.location else "${range.location} — the cells it pointed at are gone",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    TextButton(
+                        onClick = { onGoTo(range.id) },
+                        // Navigating to cells that no longer exist has nowhere to go; the row stays listed so
+                        // it can still be renamed or removed.
+                        enabled = range.resolvable,
+                        modifier = Modifier.height(48.dp),
+                    ) { Text("Go to") }
+                    TextButton(
+                        onClick = { renaming = range.id; draft = range.name },
+                        modifier = Modifier.height(48.dp),
+                    ) { Text("Rename") }
+                    TextButton(onClick = { onDelete(range.id) }, modifier = Modifier.height(48.dp)) { Text("Delete") }
+                }
+            }
+            HorizontalDivider()
+        }
+    }
+}
+
+/**
+ * Validation and highlight rules already on the sheet.
+ *
+ * Applying a rule used to be a one-way door: the rule kept refusing input or repainting cells, and the only
+ * thing the UI offered was applying another one on top. Each row states what the rule does and where, so
+ * "why was my value refused" and "why is this cell yellow" are answerable without reading the model.
+ *
+ * Highlight rows are listed in evaluation order and carry that order in their accessible description, because
+ * priority is what decides which rule wins on a cell two rules both match.
+ */
+@Composable
+private fun RuleManager(
+    validations: List<ValidationRuleSummary>,
+    conditionals: List<ConditionalRuleSummary>,
+    onValidationWarnOnly: (ValidationRuleId, Boolean) -> Unit,
+    onDeleteValidation: (ValidationRuleId) -> Unit,
+    onConditionalEnabled: (ConditionalRuleId, Boolean) -> Unit,
+    onMoveConditional: (ConditionalRuleId, Int) -> Unit,
+    onDeleteConditional: (ConditionalRuleId) -> Unit,
+) {
+    if (validations.isEmpty() && conditionals.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+        if (validations.isNotEmpty()) {
+            Text("Validation rules", style = MaterialTheme.typography.labelLarge)
+            validations.forEach { rule ->
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics {
+                        contentDescription = "${rule.location} allows ${rule.description}"
+                        stateDescription = if (rule.warnOnly) "Warns about other values" else "Refuses other values"
+                    },
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${rule.location} — allows ${rule.description}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (rule.warnOnly) "Warns, then accepts" else "Refuses anything else",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    // A rule that is right about the range but too strict is far more common than a rule that
+                    // should not exist, so relaxing it is one tap and does not lose the range.
+                    TextButton(
+                        onClick = { onValidationWarnOnly(rule.id, !rule.warnOnly) },
+                        modifier = Modifier.height(48.dp),
+                    ) { Text(if (rule.warnOnly) "Refuse" else "Warn only") }
+                    TextButton(onClick = { onDeleteValidation(rule.id) }, modifier = Modifier.height(48.dp)) { Text("Delete") }
+                }
+                HorizontalDivider()
+            }
+        }
+        if (conditionals.isNotEmpty()) {
+            Text("Highlight rules", style = MaterialTheme.typography.labelLarge)
+            conditionals.forEachIndexed { index, rule ->
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics {
+                        contentDescription = "Rule ${index + 1} of ${conditionals.size}: ${rule.location} ${rule.description}"
+                        stateDescription = if (rule.enabled) "On" else "Off"
+                    },
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${rule.location} — ${rule.description}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Checked ${rule.priority}${if (rule.stopIfTrue) " · stops here when it matches" else ""}",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    TextButton(
+                        onClick = { onMoveConditional(rule.id, -1) },
+                        enabled = index > 0,
+                        modifier = Modifier.size(48.dp),
+                    ) { Text("↑") }
+                    TextButton(
+                        onClick = { onMoveConditional(rule.id, 1) },
+                        enabled = index < conditionals.lastIndex,
+                        modifier = Modifier.size(48.dp),
+                    ) { Text("↓") }
+                    // Off rather than deleted, so "what did this look like before" stays answerable.
+                    TextButton(
+                        onClick = { onConditionalEnabled(rule.id, !rule.enabled) },
+                        modifier = Modifier.height(48.dp),
+                    ) { Text(if (rule.enabled) "Turn off" else "Turn on") }
+                    TextButton(onClick = { onDeleteConditional(rule.id) }, modifier = Modifier.height(48.dp)) { Text("Delete") }
+                }
+                HorizontalDivider()
+            }
+        }
+    }
 }
 
 @Composable

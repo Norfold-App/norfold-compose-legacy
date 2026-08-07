@@ -709,6 +709,10 @@ private fun SceneObjectBox(
                     onToggleTodo = { blockId, itemId ->
                         presenter.act { toggleObjectTodo(obj.id, blockId, itemId) }
                     },
+                    onTableCellActivate = { row, column ->
+                        presenter.act { setObjectTableCell(obj.id, row, column) }
+                    },
+                    onTableCellDraft = { _, _, value -> presenter.act { updateObjectTableDraft(value) } },
                     onTableCellCommit = { row, column, value ->
                         presenter.act { editObjectTableCell(obj.id, row, column, value) }
                     },
@@ -726,6 +730,8 @@ private fun SceneObjectBox(
             previewPaint = state.editorStyle.previewPaint,
             previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
             renderScale = renderScale,
+            activeTableCell = state.editingTableCell?.takeIf { it.first == obj.id }?.second,
+            tableCellDraft = state.editingTableDraft,
         )
     }
 
