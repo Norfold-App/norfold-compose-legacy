@@ -216,6 +216,8 @@ data class ImageBlock(
     val caption: String = "",
     val layout: ImageLayout = ImageLayout.Fit,
     val displayHeightDp: Float = 220f,
+    /** Phase-6 canonical, non-destructive edit payload. Null preserves every pre-Phase-6 image exactly. */
+    val imageEditDocument: String? = null,
 ) : DocumentBlock { override fun plainText() = caption }
 
 @Serializable @SerialName("file")
