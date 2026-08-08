@@ -119,4 +119,19 @@ class InteractionMemoryTest {
     @Test fun allSixScopes_exist() {
         assertEquals(6, MemoryScope.entries.size)
     }
+
+    @Test fun durablePrimitiveValues_restoreButTransientAndComplexValuesDoNot() {
+        val backend = InMemoryInteractionMemoryBackend()
+        InteractionMemory(backend).apply {
+            put(MemoryScope.GUIDE_DISCOVERY, "topic", "1:LEARNED")
+            put(MemoryScope.USER_PREFERENCE, "motion", false)
+            put(MemoryScope.TRANSIENT, "drag", "block-1")
+            put(MemoryScope.CONTEXT_PREFERENCE, "complex", listOf("session-only"))
+        }
+        val restored = InteractionMemory(backend)
+        assertEquals("1:LEARNED", restored.get<String>(MemoryScope.GUIDE_DISCOVERY, "topic"))
+        assertEquals(false, restored.get<Boolean>(MemoryScope.USER_PREFERENCE, "motion"))
+        assertNull(restored.get<String>(MemoryScope.TRANSIENT, "drag"))
+        assertNull(restored.get<List<String>>(MemoryScope.CONTEXT_PREFERENCE, "complex"))
+    }
 }
