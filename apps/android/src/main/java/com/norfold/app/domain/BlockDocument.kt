@@ -245,8 +245,10 @@ data class ChartBlock(
     override val id: String = blockId(),
     val vegaLiteSpec: String = "{}",
     val editorHeightDp: Float = 180f,
+    /** Phase-5 canonical payload. Null means the legacy Vega payload remains the sole source of truth. */
+    val chartDocument: String? = null,
 ) : DocumentBlock {
-    override fun plainText() = vegaLiteSpec
+    override fun plainText() = chartDocument ?: vegaLiteSpec
 }
 
 @Serializable @SerialName("math")
