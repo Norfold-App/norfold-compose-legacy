@@ -63,6 +63,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -109,6 +110,9 @@ import com.norfold.app.ui.editor.chart.ChartStudioSheet
 import com.norfold.app.ui.editor.image.ImageFocusSheet
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.editor.relationship.CommentAuthorRef
+import com.norfold.app.editor.relationship.CommentMention
+import com.norfold.app.ui.editor.relationship.RelationshipReviewSurface
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
@@ -139,6 +143,8 @@ fun DocumentHostScreen(
     onOpenSidebar: () -> Unit,
     onOpenTableInSpreadsheet: (String) -> Unit,
     onExit: () -> Unit,
+    currentAuthor: CommentAuthorRef,
+    mentionCandidates: List<CommentMention>,
     modifier: Modifier = Modifier,
 ) {
     val state = presenter.state
@@ -209,6 +215,16 @@ fun DocumentHostScreen(
         HorizontalDivider()
 
         notice?.let { message -> NoticeRow(message) { notice = null } }
+        state.relationshipReview.connectMode?.let {
+            NoticeRow("Connect mode · choose an eligible object target") {
+                presenter.act { relationshipReview.exitConnectMode() }
+            }
+        }
+        if (state.relationshipReview.relationships.isNotEmpty() || state.relationshipReview.unresolvedCount > 0) {
+            NoticeRow(
+                "${state.relationshipReview.relationships.size} relationships · ${state.relationshipReview.unresolvedCount} unresolved comments",
+            ) { presenter.act { openSurface(DocumentSurfaces.REVIEW) } }
+        }
 
         Box(Modifier.weight(1f)) {
             DocumentPageStack(
@@ -290,6 +306,35 @@ fun DocumentHostScreen(
         )
         DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES ->
             DocumentEditorStyleSurface(state.activeSurfaceId, state, presenter) { notice = it }
+        DocumentSurfaces.RELATIONSHIP_MANAGER, DocumentSurfaces.COMMENTS, DocumentSurfaces.REVIEW -> {
+            RelationshipReviewSurface(
+                title = when (state.activeSurfaceId) {
+                    DocumentSurfaces.COMMENTS -> "Comments"
+                    DocumentSurfaces.REVIEW -> "Review"
+                    else -> "Relationships"
+                },
+                state = state.relationshipReview,
+                onDismiss = { presenter.act {
+                    if (state.activeSurfaceId == DocumentSurfaces.REVIEW) relationshipReview.closeReviewMode()
+                    dismiss(DismissTrigger.OUTSIDE_TAP)
+                } },
+                mentionCandidates = mentionCandidates,
+                onAddComment = { body, mentions -> presenter.act { addComment(currentAuthor, body, mentions) } },
+                onRemoveRelationship = { id -> presenter.act { relationshipReview.removeRelationship(id) } },
+                onChangeRelationshipType = { id, kind -> presenter.act { relationshipReview.changeType(id, kind) } },
+                onRenameRelationship = { id, label -> presenter.act { relationshipReview.rename(id, label) } },
+                onReverseRelationship = { id -> presenter.act { relationshipReview.reverse(id) } },
+                onBeginRebind = { id, stableId -> presenter.act { relationshipReview.beginRebind(id, stableId) } },
+                onNavigateEndpoint = { endpoint -> presenter.act { navigateTo(endpoint) } },
+                onNavigateThread = { id -> presenter.act { relationshipReview.focusThread(id)?.let { navigateTo(it.anchor) } } },
+                onReply = { id, body, mentions -> presenter.act { relationshipReview.reply(id, currentAuthor, body, mentions) } },
+                onResolve = { id -> presenter.act { relationshipReview.resolve(id, currentAuthor) } },
+                onReopen = { id -> presenter.act { relationshipReview.reopen(id) } },
+                onCreateSnapshot = { presenter.act { relationshipReview.createReviewSnapshot(author = currentAuthor) } },
+                onRestoreSnapshot = { id -> presenter.act { relationshipReview.restoreReviewSnapshot(id) } },
+                onExitConnect = { presenter.act { relationshipReview.exitConnectMode() } },
+            )
+        }
     }
 
     chartEditingId?.let { blockId ->
@@ -633,7 +678,11 @@ private fun SceneObjectBox(
             }
             .drawBehind { drawObjectChrome(obj, selected, isPrimary) }
             .then(
-                if (state.selectionMode) {
+                if (state.relationshipReview.connectMode != null) {
+                    Modifier.pointerInput(obj.id, state.revision) {
+                        detectTapGestures { presenter.act { selectObjects(listOf(obj.id)) } }
+                    }
+                } else if (state.selectionMode) {
                     Modifier.pointerInput(obj.id, state.revision) {
                         detectTapGestures { presenter.act { toggleObjectSelection(obj.id) } }
                     }
@@ -732,6 +781,9 @@ private fun SceneObjectBox(
             )
             .semantics {
                 contentDescription = obj.displayName()
+                if (state.relationshipReview.connectMode != null) {
+                    stateDescription = "Eligible relationship target"
+                }
                 customActions = actions.filter { it.enabled }.map { item ->
                     CustomAccessibilityAction(item.label) {
                         presenter.act {

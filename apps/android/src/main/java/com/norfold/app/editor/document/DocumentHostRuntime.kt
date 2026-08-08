@@ -46,6 +46,17 @@ import com.norfold.app.editor.chart.ChartDocument
 import com.norfold.app.domain.ImageBlock
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.editor.calculation.CalculationRangeRuntime
+import com.norfold.app.editor.relationship.CommentAnchor
+import com.norfold.app.editor.relationship.CommentAuthorRef
+import com.norfold.app.editor.relationship.CommentMention
+import com.norfold.app.editor.relationship.RelationshipAnchor
+import com.norfold.app.editor.relationship.RelationshipCommandIds
+import com.norfold.app.editor.relationship.RelationshipCommands
+import com.norfold.app.editor.relationship.RelationshipEndpoint
+import com.norfold.app.editor.relationship.RelationshipReviewRuntime
+import com.norfold.app.editor.relationship.RelationshipReviewUiState
+import com.norfold.app.editor.relationship.RelationshipSurfaces
+import com.norfold.app.editor.relationship.TextEdit
 
 /** One command as a Document surface should render it: the same status behind every route (§4.1, §4.2). */
 data class DocumentCommandItem(
@@ -129,6 +140,7 @@ data class DocumentHostUiState(
     val notice: String?,
     val lastFailure: String?,
     val editorStyle: EditorStyleUiState,
+    val relationshipReview: RelationshipReviewUiState,
 ) {
     /** The primary selected object, which is the only one that exposes individual manipulation handles. */
     val primaryObject: SceneObject?
@@ -155,6 +167,7 @@ class DocumentHostRuntime(
     val instrumentation: DocumentHostInstrumentation = DocumentHostInstrumentation.None,
     fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
     chartStudioEnabled: Boolean = false,
+    relationshipsEnabled: Boolean = false,
 ) {
     private val chartRanges = CalculationRangeRuntime()
     val selection = SelectionEngine()
@@ -164,6 +177,13 @@ class DocumentHostRuntime(
     val presentation = AdaptivePresentationRuntime(initialFormFactor)
     val memory = InteractionMemory()
     val view = DocumentViewState()
+    val relationshipReview = RelationshipReviewRuntime(
+        artifactId = controller.target.id,
+        enabled = relationshipsEnabled,
+        documentProvider = controller::document,
+        mutateDocument = controller::transformDocument,
+        protectBeforeRestore = { controller.snapshotBeforeDestructiveEdit(it) },
+    )
     val styleController = StyleController(
         mutate = controller::mutateDocument,
         documentProvider = controller::document,
@@ -215,6 +235,7 @@ class DocumentHostRuntime(
     }
 
     init {
+        controller.setDocumentInvariant(relationshipReview::reconcileEndpointsIn)
         EditorStyleCommands.register(
             registry = commands,
             textColor = { openStyleColor(ColorRole.TEXT) },
@@ -229,6 +250,101 @@ class DocumentHostRuntime(
                 if (count > 0) CommandResult.Success(count) else CommandResult.NoOp
             },
         )
+        if (relationshipsEnabled) {
+            RelationshipCommands.register(
+                registry = commands,
+                enterConnect = {
+                    if (view.intent != WorkingIntent.EDIT) {
+                        CommandResult.Failure("Switch to Edit mode to create relationships")
+                    } else {
+                        sourceRelationshipEndpoint()?.let { source ->
+                            if (relationshipReview.enterConnectMode(source)) CommandResult.Success() else CommandResult.Failure(relationshipReview.lastFailure ?: "Cannot enter Connect mode")
+                        } ?: CommandResult.Failure("Select an object first")
+                    }
+                },
+                exitConnect = { relationshipReview.exitConnectMode(); CommandResult.Success() },
+                openManager = { openSurface(DocumentSurfaces.RELATIONSHIP_MANAGER); CommandResult.Success() },
+                addComment = { openSurface(DocumentSurfaces.COMMENTS); CommandResult.Success() },
+                nextComment = { navigateDiscussion(forward = true) },
+                previousComment = { navigateDiscussion(forward = false) },
+                openReview = { relationshipReview.openReviewMode(); openSurface(DocumentSurfaces.REVIEW); CommandResult.Success() },
+                createSnapshot = { if (relationshipReview.createReviewSnapshot() != null) CommandResult.Success() else CommandResult.Failure(relationshipReview.lastFailure ?: "Snapshot failed") },
+            )
+        }
+    }
+
+    private fun sourceRelationshipEndpoint(objectId: String? = scope.primaryObjectId()): RelationshipEndpoint? {
+        val (page, obj) = objectId?.let(controller::findObject) ?: return null
+        return RelationshipEndpoint(RelationshipAnchor.SceneObject(controller.target.id, page.id, obj.id))
+    }
+
+    fun addComment(author: CommentAuthorRef, body: String, mentions: List<CommentMention> = emptyList()): Boolean {
+        if (view.intent != WorkingIntent.EDIT) return false
+        val (page, obj) = scope.primaryObjectId()?.let(controller::findObject) ?: return false
+        val range = selection.textRange()?.takeIf { !it.isCollapsed }
+        val anchor = if (range != null && listOf(obj.content).findById(range.targetId) != null) {
+            val text = listOf(obj.content).findById(range.targetId)?.plainText().orEmpty()
+            val start = range.start.coerceIn(0, text.length)
+            val end = range.end.coerceIn(start, text.length)
+            CommentAnchor.Text(
+                artifactId = controller.target.id,
+                blockId = range.targetId,
+                start = start,
+                end = end,
+                quote = text.substring(start, end),
+                prefix = text.substring(maxOf(0, start - 24), start),
+                suffix = text.substring(end, minOf(text.length, end + 24)),
+            )
+        } else CommentAnchor.SceneObject(controller.target.id, page.id, obj.id)
+        val created = relationshipReview.addThread(anchor, author, body, mentions) != null
+        if (created) revision++
+        return created
+    }
+
+    private fun navigateDiscussion(forward: Boolean): CommandResult {
+        val thread = relationshipReview.nextThread(forward) ?: return CommandResult.NoOp
+        navigateTo(thread.anchor)
+        openSurface(DocumentSurfaces.COMMENTS)
+        return CommandResult.Success()
+    }
+
+    fun navigateTo(anchor: CommentAnchor): Boolean {
+        val objectId = when (anchor) {
+            is CommentAnchor.SceneObject -> anchor.objectId
+            is CommentAnchor.Text -> controller.document().pages().asSequence()
+                .flatMap { it.objects.asSequence() }
+                .firstOrNull { listOf(it.content).findById(anchor.blockId) != null }?.id
+            is CommentAnchor.TableRange -> controller.document().pages().asSequence().flatMap { it.objects.asSequence() }
+                .firstOrNull { listOf(it.content).findById(anchor.tableId) != null }?.id
+            is CommentAnchor.Chart -> controller.document().pages().asSequence().flatMap { it.objects.asSequence() }
+                .firstOrNull { listOf(it.content).findById(anchor.chartId) != null }?.id
+            is CommentAnchor.Image -> controller.document().pages().asSequence().flatMap { it.objects.asSequence() }
+                .firstOrNull { listOf(it.content).findById(anchor.imageId) != null }?.id
+            else -> null
+        } ?: return false
+        if (controller.findObject(objectId) == null) return false
+        selectObjects(listOf(objectId))
+        if (anchor is CommentAnchor.Text && anchor.state == com.norfold.app.editor.relationship.AnchorState.ATTACHED) {
+            selection.setTextRange(com.norfold.app.editor.selection.TextRange(anchor.blockId, anchor.start, anchor.end))
+            revision++
+        }
+        return true
+    }
+
+    fun navigateTo(endpoint: RelationshipEndpoint): Boolean {
+        val objectId = when (val anchor = endpoint.anchor) {
+            is RelationshipAnchor.SceneObject -> anchor.objectId
+            is RelationshipAnchor.TableRange -> controller.document().pages().asSequence().flatMap { it.objects.asSequence() }
+                .firstOrNull { listOf(it.content).findById(anchor.tableId) != null }?.id
+            is RelationshipAnchor.Chart -> controller.document().pages().asSequence().flatMap { it.objects.asSequence() }
+                .firstOrNull { listOf(it.content).findById(anchor.chartId) != null }?.id
+            is RelationshipAnchor.Image -> controller.document().pages().asSequence().flatMap { it.objects.asSequence() }
+                .firstOrNull { listOf(it.content).findById(anchor.imageId) != null }?.id
+            else -> null
+        } ?: return false
+        if (controller.findObject(objectId) == null) return false
+        selectObjects(listOf(objectId))
+        return true
     }
 
     private fun openStyleColor(role: ColorRole): CommandResult {
@@ -366,6 +482,7 @@ class DocumentHostRuntime(
      */
     fun setIntent(intent: WorkingIntent) {
         if (intent != WorkingIntent.EDIT) {
+            relationshipReview.exitConnectMode()
             editingObjectId = null
             if (view.manipulation != null) view.cancelManipulation()
         }
@@ -559,6 +676,12 @@ class DocumentHostRuntime(
 
     /** Selects at a page point, cycling through overlapping objects on repeat taps. */
     fun selectAt(pageId: String, px: Float, py: Float): String? {
+        if (relationshipReview.connectMode != null) {
+            val target = scope.hitStack(pageId, px, py).firstOrNull() ?: return null
+            sourceRelationshipEndpoint(target.id)?.let(relationshipReview::commitConnectTarget)
+            revision++
+            return target.id
+        }
         val current = scope.primaryObjectId()
         val hit = scope.hitSelect(pageId, px, py, current)
         if (hit == null) {
@@ -582,6 +705,11 @@ class DocumentHostRuntime(
 
     /** Replaces the object selection — the route a marquee, list row or keyboard select-all lands on. */
     fun selectObjects(ids: List<String>) {
+        if (relationshipReview.connectMode != null && ids.size == 1) {
+            sourceRelationshipEndpoint(ids.single())?.let(relationshipReview::commitConnectTarget)
+            revision++
+            return
+        }
         scope.selectObjects(ids)
         instrumentation.onSelectionChanged(selection.count, ids.firstOrNull())
         revision++
@@ -726,6 +854,7 @@ class DocumentHostRuntime(
         if (result is DispatchResult.Dismissed) {
             presentation.close(result.closed.id)
             if (result.closed.id == DocumentSurfaces.COLOR_STUDIO) editorStyle.closeColor(cancelAdjustment = true)
+            if (result.closed.id == DocumentSurfaces.REVIEW) relationshipReview.closeReviewMode()
             revision++
         }
         return result
@@ -745,12 +874,18 @@ class DocumentHostRuntime(
      * ended up leaving the editor while a text field was still focused.
      */
     fun back(): DocumentBackResult {
+        if (relationshipReview.connectMode != null) {
+            relationshipReview.exitConnectMode()
+            revision++
+            return DocumentBackResult.ExitedConnectMode
+        }
         val outcome = surfaces.back(hasSelectionMode = selectionMode)
         revision++
         return when (outcome) {
             is BackOutcome.ClosedSurface -> {
                 presentation.close(outcome.closed.id)
                 if (outcome.closed.id == DocumentSurfaces.COLOR_STUDIO) editorStyle.closeColor(cancelAdjustment = true)
+                if (outcome.closed.id == DocumentSurfaces.REVIEW) relationshipReview.closeReviewMode()
                 DocumentBackResult.ClosedSurface(outcome.closed.id, outcome.nowActive?.id)
             }
             is BackOutcome.Consumed -> DocumentBackResult.Consumed(outcome.surface.id)
@@ -786,7 +921,8 @@ class DocumentHostRuntime(
             // Page Control is a browsable catalogue of dozens of controls; on a phone it needs a sheet, not
             // a popover it would overflow.
             DocumentSurfaces.PAGE_CONTROL -> com.norfold.app.editor.presentation.CompactPreference.SHEET
-            DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES ->
+            DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES,
+            DocumentSurfaces.RELATIONSHIP_MANAGER, DocumentSurfaces.COMMENTS, DocumentSurfaces.REVIEW ->
                 com.norfold.app.editor.presentation.CompactPreference.SHEET
             else -> com.norfold.app.editor.presentation.CompactPreference.POPOVER
         }
@@ -972,12 +1108,27 @@ class DocumentHostRuntime(
     ): Boolean {
         if (before == after) return false
         if (view.intent != WorkingIntent.EDIT) return false
-        val edited = controller.editObjectText(objectId, blockId, itemId, before, after)
+        val edited = controller.editObjectText(
+            objectId,
+            blockId,
+            itemId,
+            before,
+            after,
+            afterTransform = { document -> relationshipReview.repairTextAnchors(document, blockId, singleTextEdit(before, after), after) },
+        )
         if (edited) {
             lastFailure = null
             revision++
         }
         return edited
+    }
+
+    private fun singleTextEdit(before: String, after: String): TextEdit {
+        val prefix = before.commonPrefixWith(after).length
+        val suffixLimit = minOf(before.length - prefix, after.length - prefix)
+        var suffix = 0
+        while (suffix < suffixLimit && before[before.lastIndex - suffix] == after[after.lastIndex - suffix]) suffix++
+        return TextEdit(prefix, before.length - suffix, after.substring(prefix, after.length - suffix))
     }
 
     /** Toggles a to-do item inside a scene object's content, addressed by its own block id. */
@@ -1050,7 +1201,7 @@ class DocumentHostRuntime(
 
     /** The accessibility actions for [obj], as registered command ids that are invokable right now. */
     fun accessibilityActions(obj: SceneObject): List<Pair<String, String>> =
-        DocumentCommands.accessibilityActionsFor(obj).mapNotNull { id ->
+        (DocumentCommands.accessibilityActionsFor(obj) + RelationshipCommandIds.contextual).distinct().mapNotNull { id ->
             commands.get(id)?.let { command -> id to command.label }
         }
 
@@ -1159,7 +1310,7 @@ class DocumentHostRuntime(
     /** The context dock for the current selection: object actions when an object is selected, else pages. */
     fun dockCommands(): List<DocumentCommandItem> {
         val ids = if (scope.selectedObjectIds().isEmpty()) PAGE_DOCK_ORDER else OBJECT_DOCK_ORDER
-        return itemsOf(ids, CommandSurface.DOCK)
+        return itemsOf((ids + RelationshipCommandIds.contextual).distinct(), CommandSurface.DOCK)
     }
 
     /** Every page-setup control, for the Page Control surface. */
@@ -1358,6 +1509,7 @@ class DocumentHostRuntime(
             notice = notice,
             lastFailure = lastFailure,
             editorStyle = editorStyle.uiState(),
+            relationshipReview = relationshipReview.uiState(sourceRelationshipEndpoint()?.anchor),
         )
     }
 

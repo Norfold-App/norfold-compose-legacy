@@ -181,6 +181,9 @@ object DocumentSurfaces {
     const val COLOR_STUDIO = "editor.surface.colorStudio"
     const val FONT_BROWSER = "editor.surface.fontBrowser"
     const val NAMED_STYLES = "editor.surface.namedStyles"
+    const val RELATIONSHIP_MANAGER = com.norfold.app.editor.relationship.RelationshipSurfaces.MANAGER
+    const val COMMENTS = com.norfold.app.editor.relationship.RelationshipSurfaces.COMMENTS
+    const val REVIEW = com.norfold.app.editor.relationship.RelationshipSurfaces.REVIEW
 
     /** Page setup at a chosen scope. */
     const val PAGE_CONTROL = "document.surface.pageControl"
@@ -200,6 +203,7 @@ sealed interface DocumentBackResult {
     data class Consumed(val surface: String) : DocumentBackResult
 
     data object ExitedSelectionMode : DocumentBackResult
+    data object ExitedConnectMode : DocumentBackResult
 
     /** A gesture was in flight and was cancelled, restoring the pre-gesture geometry exactly. */
     data object CancelledManipulation : DocumentBackResult

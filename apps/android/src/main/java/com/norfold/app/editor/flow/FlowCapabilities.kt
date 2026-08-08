@@ -36,6 +36,8 @@ object FlowCapabilities {
         add(Capability.DUPLICATION)
         // Any block can be wrapped into a container; a container can additionally be unwrapped.
         add(Capability.GROUPING)
+        add(Capability.LINKING)
+        add(Capability.COMMENTS)
 
         if (block.bearsEditableText()) add(Capability.TEXT_EDITING)
         if (FlowBlockKind.of(block)?.convertible == true) add(Capability.CONVERSION)

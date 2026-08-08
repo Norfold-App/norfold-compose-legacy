@@ -28,6 +28,8 @@ import com.norfold.app.editor.document.DocumentSession
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.flow.FlowSaveCoordinator
 import com.norfold.app.editor.history.EditTarget
+import com.norfold.app.editor.relationship.CommentAuthorRef
+import com.norfold.app.editor.relationship.CommentMention
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.recovery.RecoverySnapshotManager
 import com.norfold.app.ui.DocsUiState
@@ -118,6 +120,7 @@ private fun DocumentHostRoute(
                 initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
                 fontRegistry = com.norfold.app.ui.fonts.OfflineFontLibrary.registry,
                 chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
+                relationshipsEnabled = editorFlags.isEnabled(EditorFeatureFlag.RELATIONSHIPS),
             )
             // The snapshot manager captures the controller's *own* workspace: a snapshot over any other
             // workspace would restore something the editor is not looking at, and report success doing it.
@@ -216,6 +219,7 @@ private fun DocumentHostRoute(
         onDispose { saves.flush() }
     }
 
+    val currentMember = state.workspaceMembers.firstOrNull { it.username == state.settings.syncUserName }
     DocumentHostScreen(
         presenter = presenter,
         title = title,
@@ -226,6 +230,14 @@ private fun DocumentHostRoute(
         onOpenSidebar = onOpenSidebar,
         onOpenTableInSpreadsheet = viewModel::openTableInSpreadsheet,
         onExit = viewModel::handleBack,
+        currentAuthor = CommentAuthorRef(
+            stableId = currentMember?.userId ?: state.settings.syncUserName.ifBlank { "local" },
+            displayName = currentMember?.displayName?.takeIf(String::isNotBlank)
+                ?: state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "You" } },
+        ),
+        mentionCandidates = state.workspaceMembers.map {
+            CommentMention(it.userId, it.displayName.ifBlank { it.username })
+        },
         modifier = modifier,
     )
 }

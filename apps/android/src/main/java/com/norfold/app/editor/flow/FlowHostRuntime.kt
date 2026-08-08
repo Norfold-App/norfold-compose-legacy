@@ -53,6 +53,17 @@ import com.norfold.app.editor.style.StyleController
 import com.norfold.app.editor.style.EditorStyleCommands
 import com.norfold.app.domain.style.FontRegistry
 import com.norfold.app.domain.style.ColorRole
+import com.norfold.app.editor.relationship.CommentAnchor
+import com.norfold.app.editor.relationship.CommentAuthorRef
+import com.norfold.app.editor.relationship.CommentMention
+import com.norfold.app.editor.relationship.RelationshipAnchor
+import com.norfold.app.editor.relationship.RelationshipCommandIds
+import com.norfold.app.editor.relationship.RelationshipCommands
+import com.norfold.app.editor.relationship.RelationshipEndpoint
+import com.norfold.app.editor.relationship.RelationshipReviewRuntime
+import com.norfold.app.editor.relationship.RelationshipReviewUiState
+import com.norfold.app.editor.relationship.RelationshipSurfaces
+import com.norfold.app.editor.relationship.TextEdit
 
 /** Ids of the tool surfaces FlowHost opens on the [SurfaceCoordinator] stack. */
 object FlowSurfaces {
@@ -67,6 +78,9 @@ object FlowSurfaces {
     const val COLOR_STUDIO = "editor.surface.colorStudio"
     const val FONT_BROWSER = "editor.surface.fontBrowser"
     const val NAMED_STYLES = "editor.surface.namedStyles"
+    const val RELATIONSHIP_MANAGER = RelationshipSurfaces.MANAGER
+    const val COMMENTS = RelationshipSurfaces.COMMENTS
+    const val REVIEW = RelationshipSurfaces.REVIEW
 
     /** The retarget domain every Flow surface is compatible with (§5.6). */
     const val DOMAIN = "flow"
@@ -125,6 +139,7 @@ sealed interface FlowBackResult {
     data class ClosedSurface(val surfaceId: String, val nowActive: String?) : FlowBackResult
     data class Consumed(val surfaceId: String) : FlowBackResult
     data object ExitedSelectionMode : FlowBackResult
+    data object ExitedConnectMode : FlowBackResult
     data object LeftEditor : FlowBackResult
 }
 
@@ -177,6 +192,7 @@ data class FlowHostUiState(
     val showMultiSelectHint: Boolean,
     val lastFailure: String?,
     val editorStyle: EditorStyleUiState,
+    val relationshipReview: RelationshipReviewUiState,
 )
 
 /**
@@ -207,6 +223,7 @@ class FlowHostRuntime(
     private val instrumentation: FlowHostInstrumentation = FlowHostInstrumentation.None,
     fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
     chartStudioEnabled: Boolean = false,
+    relationshipsEnabled: Boolean = false,
 ) {
     private val chartRanges = CalculationRangeRuntime()
 
@@ -215,6 +232,13 @@ class FlowHostRuntime(
     val slashResolver: FlowSlashResolver = FlowSlashResolver(scope, registry)
     val surfaces: SurfaceCoordinator = SurfaceCoordinator()
     val presentation: AdaptivePresentationRuntime = AdaptivePresentationRuntime(initialFormFactor)
+    val relationshipReview = RelationshipReviewRuntime(
+        artifactId = controller.target.id,
+        enabled = relationshipsEnabled,
+        documentProvider = controller::document,
+        mutateDocument = controller::mutateDocument,
+        protectBeforeRestore = { controller.snapshotBeforeDestructiveEdit(it) },
+    )
     val styleController = StyleController(
         mutate = { label, mutation ->
             controller.mutate(label) { session ->
@@ -282,6 +306,7 @@ class FlowHostRuntime(
     }
 
     init {
+        controller.setDocumentInvariant(relationshipReview::reconcileEndpointsIn)
         EditorStyleCommands.register(
             registry = registry,
             textColor = { openStyleColor(ColorRole.TEXT) },
@@ -296,6 +321,104 @@ class FlowHostRuntime(
                 if (count > 0) CommandResult.Success(count) else CommandResult.NoOp
             },
         )
+        if (relationshipsEnabled) {
+            RelationshipCommands.register(
+                registry = registry,
+                enterConnect = {
+                    sourceRelationshipEndpoint()?.let { source ->
+                        if (relationshipReview.enterConnectMode(source)) CommandResult.Success() else CommandResult.Failure(relationshipReview.lastFailure ?: "Cannot enter Connect mode")
+                    } ?: CommandResult.Failure("Select a block first")
+                },
+                exitConnect = { relationshipReview.exitConnectMode(); CommandResult.Success() },
+                openManager = { openSurface(FlowSurfaces.RELATIONSHIP_MANAGER); CommandResult.Success() },
+                addComment = { openSurface(FlowSurfaces.COMMENTS); CommandResult.Success() },
+                nextComment = { navigateDiscussion(forward = true) },
+                previousComment = { navigateDiscussion(forward = false) },
+                openReview = { relationshipReview.openReviewMode(); openSurface(FlowSurfaces.REVIEW); CommandResult.Success() },
+                createSnapshot = { if (relationshipReview.createReviewSnapshot() != null) CommandResult.Success() else CommandResult.Failure(relationshipReview.lastFailure ?: "Snapshot failed") },
+            )
+        }
+    }
+
+    private fun sourceRelationshipEndpoint(blockId: String? = scope.primaryBlockId()): RelationshipEndpoint? {
+        val block = blockId?.let { controller.document().findById(it) } ?: return null
+        val anchor = when (block) {
+            is ImageBlock -> RelationshipAnchor.Image(artifactId, block.id)
+            is ChartBlock -> RelationshipAnchor.Chart(artifactId, block.id)
+            is TableBlock -> RelationshipAnchor.TableRange(artifactId, block.id, "whole")
+            else -> RelationshipAnchor.Block(artifactId, block.id)
+        }
+        return RelationshipEndpoint(anchor)
+    }
+
+    fun addComment(author: CommentAuthorRef, body: String, mentions: List<CommentMention> = emptyList()): Boolean {
+        val endpoint = sourceRelationshipEndpoint() ?: return false
+        val range = scope.selection.textRange()?.takeIf { it.targetId == scope.primaryBlockId() && !it.isCollapsed }
+        val anchor = if (range != null) {
+            val text = controller.document().findById(range.targetId)?.plainText().orEmpty()
+            val start = range.start.coerceIn(0, text.length)
+            val end = range.end.coerceIn(start, text.length)
+            CommentAnchor.Text(
+                artifactId = artifactId,
+                blockId = range.targetId,
+                start = start,
+                end = end,
+                quote = text.substring(start, end),
+                prefix = text.substring(maxOf(0, start - 24), start),
+                suffix = text.substring(end, minOf(text.length, end + 24)),
+            )
+        } else when (val value = endpoint.anchor) {
+            is RelationshipAnchor.Block -> CommentAnchor.Block(value.artifactId, value.blockId)
+            is RelationshipAnchor.Image -> CommentAnchor.Image(value.artifactId, value.imageId)
+            is RelationshipAnchor.Chart -> CommentAnchor.Chart(value.artifactId, value.chartId, value.seriesId)
+            is RelationshipAnchor.TableRange -> CommentAnchor.TableRange(value.artifactId, value.tableId, value.rangeId)
+            else -> CommentAnchor.Artifact(artifactId)
+        }
+        val created = relationshipReview.addThread(anchor, author, body, mentions) != null
+        if (created) revision++
+        return created
+    }
+
+    private fun navigateDiscussion(forward: Boolean): CommandResult {
+        val thread = relationshipReview.nextThread(forward) ?: return CommandResult.NoOp
+        navigateTo(thread.anchor)
+        openSurface(FlowSurfaces.COMMENTS)
+        return CommandResult.Success()
+    }
+
+    fun navigateTo(anchor: CommentAnchor): Boolean {
+        val target = when (anchor) {
+            is CommentAnchor.Block -> anchor.blockId
+            is CommentAnchor.Text -> anchor.blockId
+            is CommentAnchor.TableRange -> anchor.tableId
+            is CommentAnchor.Chart -> anchor.chartId
+            is CommentAnchor.Image -> anchor.imageId
+            else -> null
+        } ?: return false
+        if (controller.document().findById(target) == null) return false
+        if (anchor is CommentAnchor.Text && anchor.state == com.norfold.app.editor.relationship.AnchorState.ATTACHED) {
+            scope.selectBlocks(listOf(target))
+            scope.selection.setTextRange(com.norfold.app.editor.selection.TextRange(target, anchor.start, anchor.end))
+            caretRequest = FlowCaretRequest(target, null, anchor.end, ++caretStamp)
+        } else {
+            requestCaret(target, null, 0)
+        }
+        revision++
+        return true
+    }
+
+    fun navigateTo(endpoint: RelationshipEndpoint): Boolean {
+        val target = when (val anchor = endpoint.anchor) {
+            is RelationshipAnchor.Block -> anchor.blockId
+            is RelationshipAnchor.TableRange -> anchor.tableId
+            is RelationshipAnchor.Chart -> anchor.chartId
+            is RelationshipAnchor.Image -> anchor.imageId
+            else -> null
+        } ?: return false
+        if (controller.document().findById(target) == null) return false
+        requestCaret(target, null, 0)
+        revision++
+        return true
     }
 
     private fun openStyleColor(role: ColorRole): CommandResult {
@@ -487,7 +610,10 @@ class FlowHostRuntime(
 
     /** The context dock: the curated structural row, minus anything the current selection hides. */
     fun dockCommands(): List<FlowCommandItem> =
-        itemsOf(FlowIds.DOCK_ORDER.mapNotNull(registry::get), CommandSurface.DOCK)
+        itemsOf(
+            (FlowIds.DOCK_ORDER + RelationshipCommandIds.contextual).distinct().mapNotNull(registry::get),
+            CommandSurface.DOCK,
+        )
             .filter { it.status.isVisible }
 
     /**
@@ -548,7 +674,11 @@ class FlowHostRuntime(
         // keystroke. The item type decides which vocabulary call addresses it.
         val todo = itemId != null && controller.document().findById(blockId) is TodoListBlock
         val previous = controller.document()
-        controller.mutate("Typing", coalescingKey = key) { session ->
+        controller.mutate(
+            "Typing",
+            coalescingKey = key,
+            afterTransform = { document -> relationshipReview.repairTextAnchors(document, blockId, singleTextEdit(before, after), after) },
+        ) { session ->
             when {
                 itemId == null -> session.editText(blockId, before, after)
                 todo -> session.editTodoItem(blockId, itemId, before, after)
@@ -558,6 +688,14 @@ class FlowHostRuntime(
         if (controller.document() == previous) return false
         revision++
         return true
+    }
+
+    private fun singleTextEdit(before: String, after: String): TextEdit {
+        val prefix = before.commonPrefixWith(after).length
+        val suffixLimit = minOf(before.length - prefix, after.length - prefix)
+        var suffix = 0
+        while (suffix < suffixLimit && before[before.lastIndex - suffix] == after[after.lastIndex - suffix]) suffix++
+        return TextEdit(prefix, before.length - suffix, after.substring(prefix, after.length - suffix))
     }
 
     /**
@@ -704,6 +842,11 @@ class FlowHostRuntime(
 
     /** Moves the caret. Leaving a block breaks the typing run so the next edit opens a new undo unit. */
     fun setCaret(blockId: String, offset: Int, itemId: String? = null) {
+        if (relationshipReview.connectMode != null) {
+            sourceRelationshipEndpoint(blockId)?.let(relationshipReview::commitConnectTarget)
+            revision++
+            return
+        }
         val current = scope.caret()
         if (current?.targetId != blockId) controller.breakTypingGroup()
         // An item id is only meaningful if that item exists in that block. Storing one the document does not
@@ -1116,6 +1259,11 @@ class FlowHostRuntime(
 
     /** One Back press against the whole hierarchy: child tool → parent tool → selection mode → editor (§5.4). */
     fun back(): FlowBackResult {
+        if (relationshipReview.connectMode != null) {
+            relationshipReview.exitConnectMode()
+            revision++
+            return FlowBackResult.ExitedConnectMode
+        }
         val outcome = surfaces.back(hasSelectionMode = selectionModeActive)
         revision++
         return when (outcome) {
@@ -1149,6 +1297,7 @@ class FlowHostRuntime(
         memory.endToolSession(surfaceId)
         presentation.close(surfaceId)
         if (surfaceId == FlowSurfaces.COLOR_STUDIO) editorStyle.closeColor(cancelAdjustment = true)
+        if (surfaceId == FlowSurfaces.REVIEW) relationshipReview.closeReviewMode()
     }
 
     // ── Adaptive presentation (deliverable 7) ─────────────────────────────────────────────────────────
@@ -1180,7 +1329,8 @@ class FlowHostRuntime(
     private fun compactPreferenceFor(surfaceId: String?): CompactPreference = when (surfaceId) {
         // The palette is a browsable catalogue; on a phone it deserves a sheet, not a cramped popover (§2.8).
         FlowSurfaces.INSERT_PALETTE, FlowSurfaces.CONVERT_MENU -> CompactPreference.SHEET
-        FlowSurfaces.COLOR_STUDIO, FlowSurfaces.FONT_BROWSER, FlowSurfaces.NAMED_STYLES -> CompactPreference.SHEET
+        FlowSurfaces.COLOR_STUDIO, FlowSurfaces.FONT_BROWSER, FlowSurfaces.NAMED_STYLES,
+        FlowSurfaces.RELATIONSHIP_MANAGER, FlowSurfaces.COMMENTS, FlowSurfaces.REVIEW -> CompactPreference.SHEET
         else -> CompactPreference.POPOVER
     }
 
@@ -1251,6 +1401,7 @@ class FlowHostRuntime(
             showMultiSelectHint = showMultiSelectHint(),
             lastFailure = lastFailure,
             editorStyle = editorStyle.uiState(),
+            relationshipReview = relationshipReview.uiState(sourceRelationshipEndpoint()?.anchor),
         )
     }
 

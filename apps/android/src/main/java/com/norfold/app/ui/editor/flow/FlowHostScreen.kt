@@ -78,6 +78,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -108,6 +109,7 @@ import com.norfold.app.ui.editor.style.rememberFontImportLauncher
 import com.norfold.app.ui.editor.style.rememberImportedFontRemover
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 import com.norfold.app.domain.stylesheet
+import com.norfold.app.domain.RelationshipDataBlock
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.StylesheetBlock
 import com.norfold.app.editor.chart.ChartBlockAdapter
@@ -115,6 +117,9 @@ import com.norfold.app.ui.editor.chart.ChartStudioSheet
 import com.norfold.app.ui.editor.image.ImageFocusSheet
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.editor.relationship.CommentAuthorRef
+import com.norfold.app.editor.relationship.CommentMention
+import com.norfold.app.ui.editor.relationship.RelationshipReviewSurface
 
 /**
  * FlowHost — the writing-first Notes host (roadmap Phase 1 deliverables 1, 5, 6, 10).
@@ -137,10 +142,14 @@ fun FlowHostScreen(
     onOpenSidebar: () -> Unit,
     onOpenTableInSpreadsheet: (String) -> Unit,
     onExit: () -> Unit,
+    currentAuthor: CommentAuthorRef,
+    mentionCandidates: List<CommentMention>,
     modifier: Modifier = Modifier,
 ) {
     val state = presenter.state
-    val visibleBlocks = remember(state.document) { state.document.blocks.filterNot { it is StylesheetBlock } }
+    val visibleBlocks = remember(state.document) {
+        state.document.blocks.filterNot { it is StylesheetBlock || it is RelationshipDataBlock }
+    }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = presenter.runtime.restoredScrollIndex())
     var notice by remember { mutableStateOf<String?>(null) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
@@ -310,6 +319,11 @@ fun FlowHostScreen(
                 .onSizeChanged { lowerSurfaceHeight = it.height },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            state.relationshipReview.connectMode?.let {
+                FlowNotice("Connect mode · choose an eligible block target") {
+                    presenter.act { relationshipReview.exitConnectMode() }
+                }
+            }
             notice?.let { FlowNotice(it) { notice = null } }
             state.slash?.let { session ->
                 FlowSlashMenu(
@@ -348,6 +362,36 @@ fun FlowHostScreen(
             state = state,
             presenter = presenter,
             onNotice = { notice = it },
+        )
+    }
+
+    if (state.activeSurfaceId in setOf(FlowSurfaces.RELATIONSHIP_MANAGER, FlowSurfaces.COMMENTS, FlowSurfaces.REVIEW)) {
+        RelationshipReviewSurface(
+            title = when (state.activeSurfaceId) {
+                FlowSurfaces.COMMENTS -> "Comments"
+                FlowSurfaces.REVIEW -> "Review"
+                else -> "Relationships"
+            },
+            state = state.relationshipReview,
+            onDismiss = { presenter.act {
+                if (state.activeSurfaceId == FlowSurfaces.REVIEW) relationshipReview.closeReviewMode()
+                dismiss(DismissTrigger.OUTSIDE_TAP)
+            } },
+            mentionCandidates = mentionCandidates,
+            onAddComment = { body, mentions -> presenter.act { addComment(currentAuthor, body, mentions) } },
+            onRemoveRelationship = { id -> presenter.act { relationshipReview.removeRelationship(id) } },
+            onChangeRelationshipType = { id, kind -> presenter.act { relationshipReview.changeType(id, kind) } },
+            onRenameRelationship = { id, label -> presenter.act { relationshipReview.rename(id, label) } },
+            onReverseRelationship = { id -> presenter.act { relationshipReview.reverse(id) } },
+            onBeginRebind = { id, stableId -> presenter.act { relationshipReview.beginRebind(id, stableId) } },
+            onNavigateEndpoint = { endpoint -> presenter.act { navigateTo(endpoint) } },
+            onNavigateThread = { id -> presenter.act { relationshipReview.focusThread(id)?.let { navigateTo(it.anchor) } } },
+            onReply = { id, body, mentions -> presenter.act { relationshipReview.reply(id, currentAuthor, body, mentions) } },
+            onResolve = { id -> presenter.act { relationshipReview.resolve(id, currentAuthor) } },
+            onReopen = { id -> presenter.act { relationshipReview.reopen(id) } },
+            onCreateSnapshot = { presenter.act { relationshipReview.createReviewSnapshot(author = currentAuthor) } },
+            onRestoreSnapshot = { id -> presenter.act { relationshipReview.restoreReviewSnapshot(id) } },
+            onExitConnect = { presenter.act { relationshipReview.exitConnectMode() } },
         )
     }
 
@@ -576,9 +620,15 @@ private fun FlowBlockRow(
                 },
                 // Long-press is the second, gesture-native way into multi-select; the top bar's Select
                 // button is the first. Both call the same runtime entry point.
-                onLongClick = { presenter.act { enterSelectionMode(block.id) } },
+                onLongClick = {
+                    if (state.relationshipReview.connectMode != null) presenter.act { setCaret(block.id, 0) }
+                    else presenter.act { enterSelectionMode(block.id) }
+                },
             )
             .semantics {
+                if (state.relationshipReview.connectMode != null) {
+                    stateDescription = "Eligible relationship target"
+                }
                 // Actions are resolved against *this* block, so the availability and reason a screen reader
                 // announces describe the row it is on rather than whatever happened to be selected
                 // (correction item 14). Execution re-selects the row and runs the same registry command.
@@ -604,11 +654,11 @@ private fun FlowBlockRow(
         // otherwise compete with the row's select/toggle tap for the same touch.
         IconButton(
             onClick = { presenter.act { openInsertPalette(block.id) } },
-            enabled = !rowSelectable,
+            enabled = !rowSelectable && state.relationshipReview.connectMode == null,
             modifier = Modifier
                 .width(36.dp)
-                .pointerInput(block.id, state.document.blocks.count { it !is StylesheetBlock }, rowSelectable) {
-                    if (rowSelectable) return@pointerInput
+                .pointerInput(block.id, state.document.blocks.count { it !is StylesheetBlock && it !is RelationshipDataBlock }, rowSelectable) {
+                    if (rowSelectable || state.relationshipReview.connectMode != null) return@pointerInput
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
                             drag.begin(block.id)
@@ -618,7 +668,7 @@ private fun FlowBlockRow(
                         onDrag = { change, amount ->
                             change.consume()
                             drag.pointerY += amount.y
-                            val order = state.document.blocks.filterNot { it is StylesheetBlock }.map { it.id }
+                            val order = state.document.blocks.filterNot { it is StylesheetBlock || it is RelationshipDataBlock }.map { it.id }
                             val crossed = drag.refresh(order)
                             if (crossed && drag.placement?.isNoOp == false) {
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -669,6 +719,14 @@ private fun FlowBlockRow(
                     chartDataRevision = state.revision,
                 ),
             )
+            if (selected && state.relationshipReview.relationships.isNotEmpty()) {
+                Text(
+                    "${state.relationshipReview.relationships.size} relation${if (state.relationshipReview.relationships.size == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                )
+            }
         }
     }
 }

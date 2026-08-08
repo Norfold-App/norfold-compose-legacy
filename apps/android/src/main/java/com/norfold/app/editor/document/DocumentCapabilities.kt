@@ -25,6 +25,8 @@ object DocumentCapabilities {
         add(Capability.EXPORT)
         // Ordering is a page-level concern, unaffected by the object's own position/size locks.
         add(Capability.ORDERING)
+        add(Capability.LINKING)
+        add(Capability.COMMENTS)
         if (obj.canMove) add(Capability.MOVEMENT)
         if (obj.canResize) add(Capability.RESIZE)
         if (obj.canRotate) add(Capability.ROTATION)
