@@ -80,6 +80,8 @@ fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
     // Settings are document-level, so a duplicate keeps the same values under a fresh identity.
     is DocumentSettingsBlock -> copy(id = freshId())
     is StylesheetBlock -> copy(id = freshId())
+    // One canonical relationship store per artifact; structural duplication never clones its graph.
+    is RelationshipDataBlock -> this
 }
 
 private fun ListItem.withFreshIds(): ListItem =

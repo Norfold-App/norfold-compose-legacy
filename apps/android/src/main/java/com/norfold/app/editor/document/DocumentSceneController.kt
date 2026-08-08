@@ -92,6 +92,10 @@ class DocumentSceneController(
     initialDocument: BlockDocument,
     historyListener: HistoryListener? = null,
 ) : PersistableEditController {
+    private var documentInvariant: (BlockDocument) -> BlockDocument = { it }
+
+    fun setDocumentInvariant(transform: (BlockDocument) -> BlockDocument) { documentInvariant = transform }
+
     /**
      * The workspace this controller edits.
      *
@@ -126,6 +130,9 @@ class DocumentSceneController(
         recovery.snapshot(RecoveryReason.MIGRATION, listOf(target), label)
 
     fun recoverySnapshots(): List<RecoverySnapshot> = recovery.snapshots()
+
+    fun snapshotBeforeDestructiveEdit(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.DESTRUCTIVE_EDIT, listOf(target), label)
 
     fun undo(): Boolean = history.undo() != null
     fun redo(): Boolean = history.redo() != null
@@ -271,6 +278,7 @@ class DocumentSceneController(
         itemId: String?,
         before: String,
         after: String,
+        afterTransform: (BlockDocument) -> BlockDocument = { it },
     ): Boolean {
         if (before == after) return false
         val document = document()
@@ -290,8 +298,10 @@ class DocumentSceneController(
         if (edited == obj.content) return false
 
         val next = page.withObject(obj.copy(content = edited))
+        val contentDocument = document.copy(blocks = document.blocks.map { if (it.id == page.id) next else it })
+        val transformed = documentInvariant(afterTransform(contentDocument).normalized()).normalized()
         val key = if (itemId != null) "block:$blockId/item:$itemId" else "block:$blockId"
-        return commit("Typing", listOf(replacePage(document, page, next)), coalescingKey = key)
+        return commit("Typing", BlockDocumentDiff.diff(target, document, transformed), coalescingKey = key)
     }
 
     /**
@@ -748,6 +758,13 @@ class DocumentSceneController(
         return commit(label, BlockDocumentDiff.diff(target, before, after))
     }
 
+    /** Whole-artifact transform used by durable editor metadata and guarded review restoration. */
+    fun transformDocument(label: String, transform: (BlockDocument) -> BlockDocument): Boolean {
+        val before = document()
+        val after = documentInvariant(transform(before).normalized()).normalized()
+        return commit(label, BlockDocumentDiff.diff(target, before, after))
+    }
+
     // --- Internals -----------------------------------------------------------------------------------
 
     /** The ReplaceBlock that swaps [page] for [next], resolving the page's top-level index. */
@@ -776,11 +793,16 @@ class DocumentSceneController(
         coalescingKey: String? = null,
     ): Boolean {
         if (ops.isEmpty()) return false
+        val before = document()
+        val afterOperations = ops.fold(before) { current, operation -> operation.applyTo(current) }
+        val after = documentInvariant(afterOperations.normalized()).normalized()
+        val canonicalOps = BlockDocumentDiff.diff(target, before, after)
+        if (canonicalOps.isEmpty()) return false
         history.commit(
             EditTransaction(
                 id = "doc-${transactionCounter++}",
                 label = label,
-                operations = ops,
+                operations = canonicalOps,
                 origin = origin,
                 coalescingKey = coalescingKey,
             ),

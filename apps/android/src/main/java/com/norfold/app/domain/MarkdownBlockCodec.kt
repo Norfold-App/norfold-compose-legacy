@@ -354,6 +354,8 @@ object MarkdownBlockCodec {
         is DocumentSettingsBlock -> ""
         // Styles are not prose: exporting them as markdown would emit configuration into the document body.
         is StylesheetBlock -> ""
+        // Relationships and review discussion are structured metadata, never prose/export content.
+        is RelationshipDataBlock -> ""
     }
 
     /**

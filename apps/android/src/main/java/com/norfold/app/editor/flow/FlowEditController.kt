@@ -43,6 +43,10 @@ class FlowEditController(
     historyListener: HistoryListener? = null,
     private val nanoTime: () -> Long = System::nanoTime,
 ) : PersistableEditController {
+    private var documentInvariant: (BlockDocument) -> BlockDocument = { it }
+
+    fun setDocumentInvariant(transform: (BlockDocument) -> BlockDocument) { documentInvariant = transform }
+
     val workspace: EditWorkspace =
         InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
 
@@ -84,6 +88,30 @@ class FlowEditController(
 
     fun recoverySnapshots(): List<RecoverySnapshot> = recovery.snapshots()
 
+    fun snapshotBeforeDestructiveEdit(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.DESTRUCTIVE_EDIT, listOf(target), label)
+
+    /** Canonical whole-artifact mutation seam for durable editor metadata such as Phase-7 discussion. */
+    fun mutateDocument(label: String, edit: (BlockDocument) -> BlockDocument): Boolean {
+        val before = document()
+        val after = documentInvariant(edit(before).normalized()).normalized()
+        if (batchDepth > 0) {
+            if (after != before) workspace.setDocument(target, after)
+            return after != before
+        }
+        val ops = FlowDocumentDiff.diff(target, before, after)
+        if (ops.isEmpty()) return false
+        history.commit(
+            EditTransaction(
+                id = "flow-${transactionCounter++}",
+                label = label,
+                operations = ops,
+                coalescingKey = resolveCoalescingKey(null),
+            ),
+        )
+        return true
+    }
+
     /**
      * Runs [mutation] against a throwaway [BlockEditorSession] seeded from the live document and
      * commits the difference as one canonical transaction. All sub-operations the caller performs
@@ -98,12 +126,13 @@ class FlowEditController(
     fun mutate(
         label: String,
         coalescingKey: String? = null,
+        afterTransform: (BlockDocument) -> BlockDocument = { it },
         mutation: (BlockEditorSession) -> BlockCursor,
     ): BlockCursor? {
         val before = document()
         val session = BlockEditorSession(before)
         val cursor = mutation(session)
-        val after = session.document
+        val after = documentInvariant(afterTransform(session.document).normalized()).normalized()
         if (batchDepth > 0) {
             // Inside a composite: apply to the live document now, but let the enclosing `transaction`
             // record the single transaction covering the whole composite.

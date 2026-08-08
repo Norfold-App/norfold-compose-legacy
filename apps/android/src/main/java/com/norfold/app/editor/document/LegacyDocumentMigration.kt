@@ -131,8 +131,17 @@ object LegacyDocumentMigration {
         }
 
         val spec = canvas.normalized()
+        // Document-level records are not visible scene content. In particular, relationship/review
+        // metadata must remain a top-level record so Flow -> Document migration cannot turn it into a
+        // text frame and sever the canonical Phase-7 store.
+        val documentMetadata = document.blocks.filter {
+            it is com.norfold.app.domain.DocumentSettingsBlock ||
+                it is com.norfold.app.domain.StylesheetBlock ||
+                it is com.norfold.app.domain.RelationshipDataBlock
+        }
+        val contentBlocks = document.blocks.filterNot { it in documentMetadata }
         val effectiveLayout = if (mode == DocOverlapMode.Reflow) emptyMap() else layout
-        val blockIds = document.blocks.mapTo(HashSet()) { it.id }
+        val blockIds = contentBlocks.mapTo(HashSet()) { it.id }
         val orphans = effectiveLayout.keys.filter { it !in blockIds }.sorted()
 
         val geometry = pageGeometryOf(spec)
@@ -148,7 +157,7 @@ object LegacyDocumentMigration {
         // one of them would sit exactly under the last and only the top would be visible.
         var flowIndex = 0
 
-        document.blocks.forEachIndexed { index, block ->
+        contentBlocks.forEachIndexed { index, block ->
             val placement = effectiveLayout[block.id]
             val pageIndex = placement?.let { spec.rawPageIndexOf(it) }?.coerceIn(0, pageCount - 1) ?: 0
             val sceneGeometry = if (placement != null) {
@@ -183,7 +192,7 @@ object LegacyDocumentMigration {
         }
 
         return Report(
-            document = BlockDocument(pages).normalized(),
+            document = BlockDocument(documentMetadata + pages).normalized(),
             pageCount = pages.size,
             objectCount = pages.sumOf { it.objects.size },
             unplacedBlocks = unplaced,
