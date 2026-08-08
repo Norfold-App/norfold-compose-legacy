@@ -43,6 +43,7 @@ import com.norfold.app.domain.style.FontRegistry
 import com.norfold.app.domain.style.ColorRole
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartDocument
+import com.norfold.app.domain.ImageBlock
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.editor.calculation.CalculationRangeRuntime
 
@@ -189,6 +190,15 @@ class DocumentHostRuntime(
         val before = controller.document().findById(blockId) as? ChartBlock ?: return false
         val after = ChartBlockAdapter.save(before, document)
         val changed = controller.mutateDocument("Edit chart") { it.replaceBlock(after) }
+        if (changed) revision++
+        return changed
+    }
+
+    /** Replaces one image while preserving its scene object's geometry, z-order and page ownership. */
+    fun updateImage(blockId: String, after: ImageBlock): Boolean {
+        val before = controller.document().findById(blockId) as? ImageBlock ?: return false
+        if (after.id != before.id || after == before) return false
+        val changed = controller.mutateDocument("Edit image") { it.replaceBlock(after) }
         if (changed) revision++
         return changed
     }

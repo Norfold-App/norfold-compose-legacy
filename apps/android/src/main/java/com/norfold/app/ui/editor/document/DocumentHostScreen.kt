@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.DocumentPageBlock
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.ResizeCorner
 import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneLock
@@ -105,6 +106,9 @@ import com.norfold.app.domain.style.resolvedPageBackground
 import com.norfold.app.ui.editor.style.backgroundPaint
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
+import com.norfold.app.ui.editor.image.ImageFocusSheet
+import com.norfold.app.ui.editor.editorFlags
+import com.norfold.app.editor.flags.EditorFeatureFlag
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
@@ -140,6 +144,7 @@ fun DocumentHostScreen(
     val state = presenter.state
     var notice by remember { mutableStateOf<String?>(null) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
+    var imageEditingId by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
 
     // The runtime raises a notice when it had to switch representation to keep an action faithful. Consuming
@@ -206,7 +211,13 @@ fun DocumentHostScreen(
         notice?.let { message -> NoticeRow(message) { notice = null } }
 
         Box(Modifier.weight(1f)) {
-            DocumentPageStack(presenter, onOpenTableInSpreadsheet, { chartEditingId = it }, Modifier.fillMaxSize())
+            DocumentPageStack(
+                presenter,
+                onOpenTableInSpreadsheet,
+                { chartEditingId = it },
+                { imageEditingId = it },
+                Modifier.fillMaxSize(),
+            )
         }
 
         // Original View owns zoom; Adaptive View fits to the viewport and has nothing to zoom.
@@ -297,6 +308,21 @@ fun DocumentHostScreen(
             )
         }
     }
+
+    imageEditingId?.takeIf { editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS) }?.let { blockId ->
+        val block = state.document.findById(blockId) as? ImageBlock
+        if (block == null) {
+            imageEditingId = null
+        } else {
+            ImageFocusSheet(
+                block = block,
+                readOnly = state.intent != WorkingIntent.EDIT,
+                onCommit = { edited -> presenter.act { updateImage(blockId, edited) } },
+                onDismiss = { imageEditingId = null },
+                onDone = { imageEditingId = null },
+            )
+        }
+    }
 }
 
 // ── Page stack: virtualized composition from real geometry ──────────────────────────────────────────
@@ -313,6 +339,7 @@ private fun DocumentPageStack(
     presenter: DocumentHostPresenter,
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
+    onOpenImage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state = presenter.state
@@ -384,6 +411,7 @@ private fun DocumentPageStack(
                     presenter = presenter,
                     onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                     onOpenChart = onOpenChart,
+                    onOpenImage = onOpenImage,
                 )
             }
         }
@@ -402,6 +430,7 @@ private fun PageSheet(
     presenter: DocumentHostPresenter,
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
+    onOpenImage: (String) -> Unit,
 ) {
     val state = presenter.state
     val editing = state.representation == LayoutRepresentation.ORIGINAL && state.intent == WorkingIntent.EDIT
@@ -477,7 +506,7 @@ private fun PageSheet(
 
         // Back-to-front: the front-most object is drawn last, so it is the one that overlaps the others.
         visible.sortedBy { it.z }.forEach { obj ->
-            SceneObjectBox(obj, page, scale, presenter, onOpenTableInSpreadsheet, onOpenChart)
+            SceneObjectBox(obj, page, scale, presenter, onOpenTableInSpreadsheet, onOpenChart, onOpenImage)
         }
     }
 }
@@ -560,6 +589,7 @@ private fun SceneObjectBox(
     presenter: DocumentHostPresenter,
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
+    onOpenImage: (String) -> Unit,
 ) {
     val state = presenter.state
     val geometry = state.manipulation?.previewFor(obj.id) ?: obj.geometry
@@ -744,6 +774,7 @@ private fun SceneObjectBox(
                     },
                     onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                     onOpenChart = onOpenChart,
+                    onOpenImage = onOpenImage,
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(

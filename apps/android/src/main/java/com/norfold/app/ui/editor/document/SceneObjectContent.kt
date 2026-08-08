@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -119,6 +120,8 @@ import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartDataResolver
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.ui.editor.chart.ChartRenderer
+import com.norfold.app.editor.image.ImageBlockAdapter
+import com.norfold.app.ui.editor.image.ImageFocusRenderer
 import androidx.compose.foundation.border
 
 /**
@@ -150,6 +153,7 @@ class SceneContentCallbacks(
     val onTableCellCommit: (legacyRow: Int, column: Int, value: String) -> Unit = { _, _, _ -> },
     val onOpenTableInSpreadsheet: (String) -> Unit = {},
     val onOpenChart: (String) -> Unit = {},
+    val onOpenImage: (String) -> Unit = {},
 )
 
 /**
@@ -372,7 +376,20 @@ fun SceneObjectContent(
         // Blocks a later phase owns render as an honest, labelled placeholder rather than a half-working
         // editor. Silently showing nothing would make placed content look lost and invite the user to
         // "fix" it by overwriting what is actually preserved intact.
-        is ImageBlock -> ScenePlaceholder("Image", block.caption.ifBlank { block.source }, renderScale, modifier)
+        is ImageBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
+            val loaded = remember(block.imageEditDocument) { ImageBlockAdapter.load(block) }
+            Box(modifier.fillMaxSize()) {
+                ImageFocusRenderer(block, Modifier.fillMaxSize())
+                if (editing && loaded.isEditable) {
+                    TextButton(
+                        onClick = { callbacks.onOpenImage(block.id) },
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    ) { Text("Edit image") }
+                }
+            }
+        } else {
+            ScenePlaceholder("Image", block.caption.ifBlank { block.source }, renderScale, modifier)
+        }
         is ChartBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {

@@ -28,6 +28,7 @@ import com.norfold.app.editor.presentation.PresentedTool
 import com.norfold.app.editor.presentation.ToolPresentationState
 import com.norfold.app.editor.selection.TextCaret
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.ImageBlock
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartDocument
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
@@ -250,6 +251,18 @@ class FlowHostRuntime(
         val before = controller.document().findById(blockId) as? ChartBlock ?: return false
         val after = ChartBlockAdapter.save(before, document)
         val changed = controller.mutate("Edit chart") { session ->
+            session.replaceBlock(after)
+            BlockCursor(blockId, 0)
+        } != null
+        if (changed) revision++
+        return changed
+    }
+
+    /** Replaces one image through the canonical Flow history as the single Image Focus transaction. */
+    fun updateImage(blockId: String, after: ImageBlock): Boolean {
+        val before = controller.document().findById(blockId) as? ImageBlock ?: return false
+        if (after.id != before.id || after == before) return false
+        val changed = controller.mutate("Edit image") { session ->
             session.replaceBlock(after)
             BlockCursor(blockId, 0)
         } != null

@@ -86,6 +86,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.isActive
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.flow.FlowCommandItem
@@ -111,6 +112,9 @@ import com.norfold.app.domain.findById
 import com.norfold.app.domain.StylesheetBlock
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
+import com.norfold.app.ui.editor.image.ImageFocusSheet
+import com.norfold.app.ui.editor.editorFlags
+import com.norfold.app.editor.flags.EditorFeatureFlag
 
 /**
  * FlowHost — the writing-first Notes host (roadmap Phase 1 deliverables 1, 5, 6, 10).
@@ -140,6 +144,7 @@ fun FlowHostScreen(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = presenter.runtime.restoredScrollIndex())
     var notice by remember { mutableStateOf<String?>(null) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
+    var imageEditingId by remember { mutableStateOf<String?>(null) }
 
     // ── Adaptive presentation: the window drives the mode, never the other way round (§2.6) ──
     val configuration = LocalConfiguration.current
@@ -258,6 +263,7 @@ fun FlowHostScreen(
                                 onNotice = { notice = it },
                                 onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                                 onOpenChart = { chartEditingId = it },
+                                onOpenImage = { imageEditingId = it },
                                 modifier = Modifier.widthIn(max = FLOW_CONTENT_MAX_WIDTH),
                             )
                         }
@@ -358,6 +364,21 @@ fun FlowHostScreen(
                 onDocumentChanged = { document -> presenter.act { updateChart(blockId, document) } },
                 onDismiss = { chartEditingId = null },
                 onDone = { chartEditingId = null },
+            )
+        }
+    }
+
+    imageEditingId?.takeIf { editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS) }?.let { blockId ->
+        val block = state.document.findById(blockId) as? ImageBlock
+        if (block == null) {
+            imageEditingId = null
+        } else {
+            ImageFocusSheet(
+                block = block,
+                readOnly = false,
+                onCommit = { edited -> presenter.act { updateImage(blockId, edited) } },
+                onDismiss = { imageEditingId = null },
+                onDone = { imageEditingId = null },
             )
         }
     }
@@ -478,6 +499,7 @@ private fun FlowBlockRow(
     onNotice: (String) -> Unit,
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
+    onOpenImage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val selected = block.id in state.selectedIds
@@ -518,6 +540,7 @@ private fun FlowBlockRow(
             onBackspaceAtStart = { presenter.act { backspaceAtStart() } },
             onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },
             onOpenChart = onOpenChart,
+            onOpenImage = onOpenImage,
         )
     }
 

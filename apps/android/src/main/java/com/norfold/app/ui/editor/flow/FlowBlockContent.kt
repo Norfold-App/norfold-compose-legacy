@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
@@ -110,6 +111,8 @@ import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartDataResolver
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.ui.editor.chart.ChartRenderer
+import com.norfold.app.editor.image.ImageBlockAdapter
+import com.norfold.app.ui.editor.image.ImageFocusRenderer
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -156,6 +159,7 @@ class FlowBlockCallbacks(
     /** Expand/collapse a collapsible block (correction item 16). */
     val onToggleCollapsed: (blockId: String) -> Unit = {},
     val onOpenChart: (blockId: String) -> Unit = {},
+    val onOpenImage: (blockId: String) -> Unit = {},
 )
 
 /**
@@ -373,6 +377,24 @@ fun FlowBlockContent(
         }
 
         is TableBlock -> FlowTablePreview(block, callbacks, context, modifier)
+
+        is ImageBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
+            val loaded = remember(block.imageEditDocument) { ImageBlockAdapter.load(block) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ImageFocusRenderer(
+                    block = block,
+                    modifier = Modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(120f, 560f).dp),
+                )
+                if (!context.selectionMode && loaded.isEditable) {
+                    TextButton(onClick = { callbacks.onOpenImage(block.id) }) { Text("Edit image") }
+                }
+                if (block.caption.isNotBlank()) {
+                    Text(block.caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        } else {
+            FlowPlaceholder("Image", block.caption.ifBlank { block.source }.take(120).ifBlank { "empty" }, modifier)
+        }
 
         is ChartBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }

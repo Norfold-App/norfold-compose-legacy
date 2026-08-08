@@ -5117,6 +5117,7 @@ private fun EditableImageBlock(block: ImageBlock, mode: BlockSurfaceMode, onRepl
     var landscape by rememberSaveable(block.id) { mutableStateOf(false) }
     var liveHeight by remember(block.id) { mutableStateOf(block.displayHeightDp.coerceIn(120f, 560f)) }
     var resizing by remember(block.id) { mutableStateOf(false) }
+    var imageFocusOpen by remember(block.id) { mutableStateOf(false) }
     LaunchedEffect(block.displayHeightDp) { if (!resizing) liveHeight = block.displayHeightDp.coerceIn(120f, 560f) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -5136,7 +5137,14 @@ private fun EditableImageBlock(block: ImageBlock, mode: BlockSurfaceMode, onRepl
                 com.norfold.app.domain.ImageLayout.Wide -> Modifier.width(840.dp)
                 com.norfold.app.domain.ImageLayout.Original -> Modifier.width(1080.dp)
             }
-            AsyncImage(block.source, block.caption, imageModifier.height(liveHeight.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Fit)
+            if (editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
+                com.norfold.app.ui.editor.image.ImageFocusRenderer(
+                    block,
+                    imageModifier.height(liveHeight.dp).clip(RoundedCornerShape(8.dp)),
+                )
+            } else {
+                AsyncImage(block.source, block.caption, imageModifier.height(liveHeight.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Fit)
+            }
             if (mode == BlockSurfaceMode.Edit) {
                 val density = LocalDensity.current
                 Icon(Icons.Outlined.DragIndicator, "Resize image", Modifier.align(Alignment.BottomEnd).size(30.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = .8f), RoundedCornerShape(6.dp)).pointerInput(block.id) {
@@ -5150,7 +5158,15 @@ private fun EditableImageBlock(block: ImageBlock, mode: BlockSurfaceMode, onRepl
             }
         }
         if (mode == BlockSurfaceMode.Edit) {
-            TextButton(onClick = { picker.launch(arrayOf("image/*")) }) { Icon(Icons.Outlined.Image, null); Text(if (block.source.isBlank()) "Choose image" else "Replace image") }
+            if (editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS) && block.source.isNotBlank()) {
+                Button(onClick = { imageFocusOpen = true }) { Text("Edit image") }
+            }
+            if (!editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS) || block.source.isBlank()) {
+                TextButton(onClick = { picker.launch(arrayOf("image/*")) }) {
+                    Icon(Icons.Outlined.Image, null)
+                    Text(if (block.source.isBlank()) "Choose image" else "Replace image")
+                }
+            }
             SimpleLabeledBlockField("Caption", block.caption) { onReplace(block.copy(caption = it)) }
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 com.norfold.app.domain.ImageLayout.entries.forEach { layout ->
@@ -5163,8 +5179,18 @@ private fun EditableImageBlock(block: ImageBlock, mode: BlockSurfaceMode, onRepl
         MediaFullscreenDialog(
             label = block.caption.ifBlank { "Image" },
             source = block.source,
+            imageBlock = block,
             landscape = landscape,
             onDismiss = { fullScreen = false; landscape = false },
+        )
+    }
+    if (imageFocusOpen && editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
+        com.norfold.app.ui.editor.image.ImageFocusSheet(
+            block = block,
+            readOnly = mode != BlockSurfaceMode.Edit,
+            onCommit = { edited -> onReplace(edited); true },
+            onDismiss = { imageFocusOpen = false },
+            onDone = { imageFocusOpen = false },
         )
     }
 }
@@ -5173,6 +5199,7 @@ private fun EditableImageBlock(block: ImageBlock, mode: BlockSurfaceMode, onRepl
 private fun MediaFullscreenDialog(
     label: String,
     source: String,
+    imageBlock: ImageBlock? = null,
     landscape: Boolean,
     onDismiss: () -> Unit,
 ) {
@@ -5185,7 +5212,11 @@ private fun MediaFullscreenDialog(
                     TextButton(onClick = onDismiss) { Text("Close") }
                 }
                 Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState()), contentAlignment = Alignment.Center) {
-                    AsyncImage(source, label, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    if (imageBlock != null && editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
+                        com.norfold.app.ui.editor.image.ImageFocusRenderer(imageBlock, Modifier.fillMaxSize())
+                    } else {
+                        AsyncImage(source, label, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    }
                 }
             }
         }
@@ -5491,7 +5522,13 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
         calculationSchemaVersion = block.calculationSchemaVersion,
         legacyRecovery = block.legacyRecovery,
     )
-    is ImageBlock -> ImageBlock(source = block.source, caption = block.caption, layout = block.layout, displayHeightDp = block.displayHeightDp)
+    is ImageBlock -> ImageBlock(
+        source = block.source,
+        caption = block.caption,
+        layout = block.layout,
+        displayHeightDp = block.displayHeightDp,
+        imageEditDocument = block.imageEditDocument,
+    )
     is FileBlock -> FileBlock(name = block.name, mimeType = block.mimeType, sizeBytes = block.sizeBytes, uri = block.uri)
     is EmbedBlock -> EmbedBlock(url = block.url, metadata = block.metadata, displayHeightDp = block.displayHeightDp)
     is ChartBlock -> ChartBlock(
