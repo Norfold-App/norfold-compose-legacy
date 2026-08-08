@@ -2,4 +2,5 @@
 <paths>
     <cache-path name="chat_camera" path="chat-camera/" />
     <files-path name="captures" path="captures/" />
+    <files-path name="imported_artifacts" path="imported-artifacts/" />
 </paths>

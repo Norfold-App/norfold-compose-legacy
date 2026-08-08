@@ -356,6 +356,7 @@ object MarkdownBlockCodec {
         is StylesheetBlock -> ""
         // Relationships and review discussion are structured metadata, never prose/export content.
         is RelationshipDataBlock -> ""
+        is InterchangeDataBlock -> ""
     }
 
     /**

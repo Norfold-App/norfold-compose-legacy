@@ -1,6 +1,8 @@
 package com.norfold.app.ui.editor
 
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -12,12 +14,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.domain.findById
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.flow.FlowDocumentSession
 import com.norfold.app.editor.flow.FlowEditController
 import com.norfold.app.editor.flow.FlowHostRuntime
 import com.norfold.app.editor.flow.FlowSaveCoordinator
 import com.norfold.app.editor.history.EditTarget
+import com.norfold.app.editor.interchange.InterchangeImportService
 import com.norfold.app.editor.relationship.CommentAuthorRef
 import com.norfold.app.editor.relationship.CommentMention
 import com.norfold.app.editor.presentation.FormFactor
@@ -25,6 +29,7 @@ import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.editor.flow.FlowHostScreen
 import com.norfold.app.ui.editor.flow.rememberFlowHostPresenter
+import com.norfold.app.ui.editor.interchange.InterchangeHostBridge
 import com.norfold.app.ui.screens.EditorSurface
 import com.norfold.app.ui.screens.StructuredBlockEditorHost
 import kotlinx.coroutines.CompletableDeferred
@@ -106,8 +111,9 @@ private fun FlowHostRoute(
                 controller = FlowEditController(EditTarget(owner.documentId), active.document),
                 initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
                 fontRegistry = com.norfold.app.ui.fonts.OfflineFontLibrary.registry,
-                    chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
-                    relationshipsEnabled = editorFlags.isEnabled(EditorFeatureFlag.RELATIONSHIPS),
+                chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
+                relationshipsEnabled = editorFlags.isEnabled(EditorFeatureFlag.RELATIONSHIPS),
+                importExportRawEnabled = editorFlags.isEnabled(EditorFeatureFlag.IMPORT_EXPORT_RAW),
                 )
             FlowDocumentSession(
                 runtime = runtime,
@@ -173,26 +179,50 @@ private fun FlowHostRoute(
     }
 
     val currentMember = state.workspaceMembers.firstOrNull { it.username == state.settings.syncUserName }
-    FlowHostScreen(
-        presenter = presenter,
-        title = title,
-        onTitleChange = { next ->
-            title = next
-            // Title typing enters the same pipeline as content: debounced, serialized, retried on failure.
-            // The coordinator holds the authoritative value, so there is one answer to "what is this called".
-            saves.onTitleChanged(next)
-        },
-        onOpenSidebar = onOpenSidebar,
-        onOpenTableInSpreadsheet = viewModel::openTableInSpreadsheet,
-        onExit = viewModel::handleBack,
-        currentAuthor = CommentAuthorRef(
-            stableId = currentMember?.userId ?: state.settings.syncUserName.ifBlank { "local" },
-            displayName = currentMember?.displayName?.takeIf(String::isNotBlank)
-                ?: state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "You" } },
-        ),
-        mentionCandidates = state.workspaceMembers.map {
-            CommentMention(it.userId, it.displayName.ifBlank { it.username })
-        },
-        modifier = modifier,
-    )
+    Box(modifier) {
+        FlowHostScreen(
+            presenter = presenter,
+            title = title,
+            onTitleChange = { next ->
+                title = next
+                // Title typing enters the same pipeline as content: debounced, serialized, retried on failure.
+                // The coordinator holds the authoritative value, so there is one answer to "what is this called".
+                saves.onTitleChanged(next)
+            },
+            onOpenSidebar = onOpenSidebar,
+            onOpenTableInSpreadsheet = viewModel::openTableInSpreadsheet,
+            onExit = viewModel::handleBack,
+            currentAuthor = CommentAuthorRef(
+                stableId = currentMember?.userId ?: state.settings.syncUserName.ifBlank { "local" },
+                displayName = currentMember?.displayName?.takeIf(String::isNotBlank)
+                    ?: state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "You" } },
+            ),
+            mentionCandidates = state.workspaceMembers.map {
+                CommentMention(it.userId, it.displayName.ifBlank { it.username })
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (editorFlags.isEnabled(EditorFeatureFlag.IMPORT_EXPORT_RAW)) {
+            InterchangeHostBridge(
+                title = title,
+                artifactId = owner.documentId,
+                state = presenter.state.interchange,
+                mutateRuntime = { action -> presenter.act { interchange.action() } },
+                export = { format, resolver -> runtime.interchange.export(title, format, resolver) },
+                applyImport = { request, prepared ->
+                    presenter.act { InterchangeImportService.apply(controller, request, prepared) }
+                },
+                beforeOpenRawSource = { runtime.controller.snapshotBeforeRawSource("Before opening Raw Source") },
+                applyRawSource = { draft ->
+                    presenter.act { InterchangeImportService.applyRawSource(controller, draft, snapshotRequired = false) }
+                },
+                navigateToRegion = { target ->
+                    presenter.act {
+                        if (controller.document().findById(target) != null) scope.selectBlocks(listOf(target))
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
 }

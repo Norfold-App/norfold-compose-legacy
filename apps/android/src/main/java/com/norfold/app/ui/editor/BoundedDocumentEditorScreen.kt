@@ -1,8 +1,10 @@
 package com.norfold.app.ui.editor
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,6 +30,7 @@ import com.norfold.app.editor.document.DocumentSession
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.flow.FlowSaveCoordinator
 import com.norfold.app.editor.history.EditTarget
+import com.norfold.app.editor.interchange.InterchangeImportService
 import com.norfold.app.editor.relationship.CommentAuthorRef
 import com.norfold.app.editor.relationship.CommentMention
 import com.norfold.app.editor.presentation.FormFactor
@@ -36,6 +39,7 @@ import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.editor.document.DocumentHostScreen
 import com.norfold.app.ui.editor.document.rememberDocumentHostPresenter
+import com.norfold.app.ui.editor.interchange.InterchangeHostBridge
 import com.norfold.app.ui.screens.EditorSurface
 import com.norfold.app.ui.screens.StructuredBlockEditorHost
 import kotlinx.coroutines.CompletableDeferred
@@ -121,6 +125,7 @@ private fun DocumentHostRoute(
                 fontRegistry = com.norfold.app.ui.fonts.OfflineFontLibrary.registry,
                 chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
                 relationshipsEnabled = editorFlags.isEnabled(EditorFeatureFlag.RELATIONSHIPS),
+                importExportRawEnabled = editorFlags.isEnabled(EditorFeatureFlag.IMPORT_EXPORT_RAW),
             )
             // The snapshot manager captures the controller's *own* workspace: a snapshot over any other
             // workspace would restore something the editor is not looking at, and report success doing it.
@@ -220,24 +225,54 @@ private fun DocumentHostRoute(
     }
 
     val currentMember = state.workspaceMembers.firstOrNull { it.username == state.settings.syncUserName }
-    DocumentHostScreen(
-        presenter = presenter,
-        title = title,
-        onTitleChange = { next ->
-            title = next
-            saves.onTitleChanged(next)
-        },
-        onOpenSidebar = onOpenSidebar,
-        onOpenTableInSpreadsheet = viewModel::openTableInSpreadsheet,
-        onExit = viewModel::handleBack,
-        currentAuthor = CommentAuthorRef(
-            stableId = currentMember?.userId ?: state.settings.syncUserName.ifBlank { "local" },
-            displayName = currentMember?.displayName?.takeIf(String::isNotBlank)
-                ?: state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "You" } },
-        ),
-        mentionCandidates = state.workspaceMembers.map {
-            CommentMention(it.userId, it.displayName.ifBlank { it.username })
-        },
-        modifier = modifier,
-    )
+    Box(modifier) {
+        DocumentHostScreen(
+            presenter = presenter,
+            title = title,
+            onTitleChange = { next ->
+                title = next
+                saves.onTitleChanged(next)
+            },
+            onOpenSidebar = onOpenSidebar,
+            onOpenTableInSpreadsheet = viewModel::openTableInSpreadsheet,
+            onExit = viewModel::handleBack,
+            currentAuthor = CommentAuthorRef(
+                stableId = currentMember?.userId ?: state.settings.syncUserName.ifBlank { "local" },
+                displayName = currentMember?.displayName?.takeIf(String::isNotBlank)
+                    ?: state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "You" } },
+            ),
+            mentionCandidates = state.workspaceMembers.map {
+                CommentMention(it.userId, it.displayName.ifBlank { it.username })
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (editorFlags.isEnabled(EditorFeatureFlag.IMPORT_EXPORT_RAW)) {
+            InterchangeHostBridge(
+                title = title,
+                artifactId = owner.documentId,
+                state = presenter.state.interchange,
+                mutateRuntime = { action -> presenter.act { interchange.action() } },
+                export = { format, resolver -> runtime.interchange.export(title, format, resolver) },
+                applyImport = { request, prepared ->
+                    presenter.act { InterchangeImportService.apply(controller, request, prepared) }
+                },
+                beforeOpenRawSource = { runtime.controller.snapshotBeforeRawSource("Before opening Raw Source") },
+                applyRawSource = { draft ->
+                    presenter.act { InterchangeImportService.applyRawSource(controller, draft, snapshotRequired = false) }
+                },
+                navigateToRegion = { target ->
+                    presenter.act {
+                        val page = pages().firstOrNull { it.id == target }
+                        val objectId = pages().asSequence().flatMap { it.objects.asSequence() }
+                            .firstOrNull { it.id == target || it.content.id == target }?.id
+                        when {
+                            page != null -> selectPage(page.id)
+                            objectId != null -> selectObjects(listOf(objectId))
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
 }

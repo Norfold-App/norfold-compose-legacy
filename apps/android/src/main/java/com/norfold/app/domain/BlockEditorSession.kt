@@ -1112,6 +1112,7 @@ private fun DocumentBlock.withId(nextId: String): DocumentBlock = when (this) {
     is DocumentSettingsBlock -> copy(id = nextId)
     is StylesheetBlock -> copy(id = nextId)
     is RelationshipDataBlock -> this
+    is InterchangeDataBlock -> this
     is UnknownBlock -> BlockDocumentJson.reidentify(this, nextId)
 }
 

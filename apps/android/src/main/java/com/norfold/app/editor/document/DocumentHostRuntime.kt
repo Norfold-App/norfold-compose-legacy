@@ -57,6 +57,8 @@ import com.norfold.app.editor.relationship.RelationshipReviewRuntime
 import com.norfold.app.editor.relationship.RelationshipReviewUiState
 import com.norfold.app.editor.relationship.RelationshipSurfaces
 import com.norfold.app.editor.relationship.TextEdit
+import com.norfold.app.editor.interchange.InterchangeCommands
+import com.norfold.app.editor.interchange.InterchangeRuntime
 
 /** One command as a Document surface should render it: the same status behind every route (§4.1, §4.2). */
 data class DocumentCommandItem(
@@ -141,6 +143,7 @@ data class DocumentHostUiState(
     val lastFailure: String?,
     val editorStyle: EditorStyleUiState,
     val relationshipReview: RelationshipReviewUiState,
+    val interchange: com.norfold.app.editor.interchange.InterchangeUiState,
 ) {
     /** The primary selected object, which is the only one that exposes individual manipulation handles. */
     val primaryObject: SceneObject?
@@ -168,11 +171,15 @@ class DocumentHostRuntime(
     fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
     chartStudioEnabled: Boolean = false,
     relationshipsEnabled: Boolean = false,
+    importExportRawEnabled: Boolean = false,
 ) {
     private val chartRanges = CalculationRangeRuntime()
     val selection = SelectionEngine()
     val scope = DocumentCommandScope(controller, selection)
-    val commands: CommandRegistry = DocumentCommands.registerAll(scope, chartStudioEnabled = chartStudioEnabled)
+    val interchange = InterchangeRuntime(controller::document)
+    val commands: CommandRegistry = DocumentCommands.registerAll(scope, chartStudioEnabled = chartStudioEnabled).also {
+        if (importExportRawEnabled) InterchangeCommands.register(it, interchange)
+    }
     val surfaces = SurfaceCoordinator()
     val presentation = AdaptivePresentationRuntime(initialFormFactor)
     val memory = InteractionMemory()
@@ -1510,6 +1517,7 @@ class DocumentHostRuntime(
             lastFailure = lastFailure,
             editorStyle = editorStyle.uiState(),
             relationshipReview = relationshipReview.uiState(sourceRelationshipEndpoint()?.anchor),
+            interchange = interchange.state,
         )
     }
 

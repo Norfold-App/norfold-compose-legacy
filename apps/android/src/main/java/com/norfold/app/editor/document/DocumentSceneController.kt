@@ -32,6 +32,7 @@ import com.norfold.app.editor.history.TransactionOrigin
 import com.norfold.app.editor.recovery.RecoveryReason
 import com.norfold.app.editor.recovery.RecoverySnapshot
 import com.norfold.app.editor.recovery.RecoverySnapshotManager
+import com.norfold.app.editor.interchange.updateInterchangeFidelity
 
 /**
  * What a page-geometry operation actually did, page by page.
@@ -133,6 +134,12 @@ class DocumentSceneController(
 
     fun snapshotBeforeDestructiveEdit(label: String): RecoverySnapshot =
         recovery.snapshot(RecoveryReason.DESTRUCTIVE_EDIT, listOf(target), label)
+
+    fun snapshotBeforeImport(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.IMPORT, listOf(target), label)
+
+    fun snapshotBeforeRawSource(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.RAW_SOURCE, listOf(target), label)
 
     fun undo(): Boolean = history.undo() != null
     fun redo(): Boolean = history.redo() != null
@@ -795,7 +802,7 @@ class DocumentSceneController(
         if (ops.isEmpty()) return false
         val before = document()
         val afterOperations = ops.fold(before) { current, operation -> operation.applyTo(current) }
-        val after = documentInvariant(afterOperations.normalized()).normalized()
+        val after = documentInvariant(afterOperations.normalized()).normalized().updateInterchangeFidelity(before)
         val canonicalOps = BlockDocumentDiff.diff(target, before, after)
         if (canonicalOps.isEmpty()) return false
         history.commit(

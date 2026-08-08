@@ -46,6 +46,9 @@ enum class RecoveryReason {
     /** An import that overwrites existing content. */
     IMPORT,
 
+    /** A validated product Raw Source draft is about to replace an artifact. */
+    RAW_SOURCE,
+
     /** A user- or app-requested manual checkpoint. */
     MANUAL_CHECKPOINT,
 }

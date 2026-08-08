@@ -110,6 +110,7 @@ import com.norfold.app.ui.editor.style.rememberImportedFontRemover
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 import com.norfold.app.domain.stylesheet
 import com.norfold.app.domain.RelationshipDataBlock
+import com.norfold.app.domain.InterchangeDataBlock
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.StylesheetBlock
 import com.norfold.app.editor.chart.ChartBlockAdapter
@@ -148,7 +149,7 @@ fun FlowHostScreen(
 ) {
     val state = presenter.state
     val visibleBlocks = remember(state.document) {
-        state.document.blocks.filterNot { it is StylesheetBlock || it is RelationshipDataBlock }
+        state.document.blocks.filterNot { it is StylesheetBlock || it is RelationshipDataBlock || it is InterchangeDataBlock }
     }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = presenter.runtime.restoredScrollIndex())
     var notice by remember { mutableStateOf<String?>(null) }
@@ -657,7 +658,7 @@ private fun FlowBlockRow(
             enabled = !rowSelectable && state.relationshipReview.connectMode == null,
             modifier = Modifier
                 .width(36.dp)
-                .pointerInput(block.id, state.document.blocks.count { it !is StylesheetBlock && it !is RelationshipDataBlock }, rowSelectable) {
+                .pointerInput(block.id, state.document.blocks.count { it !is StylesheetBlock && it !is RelationshipDataBlock && it !is InterchangeDataBlock }, rowSelectable) {
                     if (rowSelectable || state.relationshipReview.connectMode != null) return@pointerInput
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
@@ -668,7 +669,7 @@ private fun FlowBlockRow(
                         onDrag = { change, amount ->
                             change.consume()
                             drag.pointerY += amount.y
-                            val order = state.document.blocks.filterNot { it is StylesheetBlock || it is RelationshipDataBlock }.map { it.id }
+                            val order = state.document.blocks.filterNot { it is StylesheetBlock || it is RelationshipDataBlock || it is InterchangeDataBlock }.map { it.id }
                             val crossed = drag.refresh(order)
                             if (crossed && drag.placement?.isNoOp == false) {
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)

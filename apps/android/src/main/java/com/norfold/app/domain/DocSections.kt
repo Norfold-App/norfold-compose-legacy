@@ -82,6 +82,7 @@ fun DocumentBlock.withFreshIds(): DocumentBlock = when (this) {
     is StylesheetBlock -> copy(id = freshId())
     // One canonical relationship store per artifact; structural duplication never clones its graph.
     is RelationshipDataBlock -> this
+    is InterchangeDataBlock -> this
 }
 
 private fun ListItem.withFreshIds(): ListItem =

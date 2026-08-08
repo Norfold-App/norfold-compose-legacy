@@ -13,6 +13,7 @@ import com.norfold.app.editor.history.PersistableEditController
 import com.norfold.app.editor.recovery.RecoveryReason
 import com.norfold.app.editor.recovery.RecoverySnapshot
 import com.norfold.app.editor.recovery.RecoverySnapshotManager
+import com.norfold.app.editor.interchange.updateInterchangeFidelity
 
 /**
  * The authoritative edit controller for one Flow note (roadmap Phase 1 D1/D9; spec §13).
@@ -91,10 +92,16 @@ class FlowEditController(
     fun snapshotBeforeDestructiveEdit(label: String): RecoverySnapshot =
         recovery.snapshot(RecoveryReason.DESTRUCTIVE_EDIT, listOf(target), label)
 
+    fun snapshotBeforeImport(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.IMPORT, listOf(target), label)
+
+    fun snapshotBeforeRawSource(label: String): RecoverySnapshot =
+        recovery.snapshot(RecoveryReason.RAW_SOURCE, listOf(target), label)
+
     /** Canonical whole-artifact mutation seam for durable editor metadata such as Phase-7 discussion. */
     fun mutateDocument(label: String, edit: (BlockDocument) -> BlockDocument): Boolean {
         val before = document()
-        val after = documentInvariant(edit(before).normalized()).normalized()
+        val after = documentInvariant(edit(before).normalized()).normalized().updateInterchangeFidelity(before)
         if (batchDepth > 0) {
             if (after != before) workspace.setDocument(target, after)
             return after != before
@@ -132,7 +139,7 @@ class FlowEditController(
         val before = document()
         val session = BlockEditorSession(before)
         val cursor = mutation(session)
-        val after = documentInvariant(afterTransform(session.document).normalized()).normalized()
+        val after = documentInvariant(afterTransform(session.document).normalized()).normalized().updateInterchangeFidelity(before)
         if (batchDepth > 0) {
             // Inside a composite: apply to the live document now, but let the enclosing `transaction`
             // record the single transaction covering the whole composite.

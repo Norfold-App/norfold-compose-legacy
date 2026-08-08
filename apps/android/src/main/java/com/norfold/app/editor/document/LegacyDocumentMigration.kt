@@ -137,7 +137,8 @@ object LegacyDocumentMigration {
         val documentMetadata = document.blocks.filter {
             it is com.norfold.app.domain.DocumentSettingsBlock ||
                 it is com.norfold.app.domain.StylesheetBlock ||
-                it is com.norfold.app.domain.RelationshipDataBlock
+                it is com.norfold.app.domain.RelationshipDataBlock ||
+                it is com.norfold.app.domain.InterchangeDataBlock
         }
         val contentBlocks = document.blocks.filterNot { it in documentMetadata }
         val effectiveLayout = if (mode == DocOverlapMode.Reflow) emptyMap() else layout

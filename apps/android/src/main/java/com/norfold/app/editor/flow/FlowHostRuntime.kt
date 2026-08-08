@@ -64,6 +64,8 @@ import com.norfold.app.editor.relationship.RelationshipReviewRuntime
 import com.norfold.app.editor.relationship.RelationshipReviewUiState
 import com.norfold.app.editor.relationship.RelationshipSurfaces
 import com.norfold.app.editor.relationship.TextEdit
+import com.norfold.app.editor.interchange.InterchangeCommands
+import com.norfold.app.editor.interchange.InterchangeRuntime
 
 /** Ids of the tool surfaces FlowHost opens on the [SurfaceCoordinator] stack. */
 object FlowSurfaces {
@@ -193,6 +195,7 @@ data class FlowHostUiState(
     val lastFailure: String?,
     val editorStyle: EditorStyleUiState,
     val relationshipReview: RelationshipReviewUiState,
+    val interchange: com.norfold.app.editor.interchange.InterchangeUiState,
 )
 
 /**
@@ -224,11 +227,15 @@ class FlowHostRuntime(
     fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
     chartStudioEnabled: Boolean = false,
     relationshipsEnabled: Boolean = false,
+    importExportRawEnabled: Boolean = false,
 ) {
     private val chartRanges = CalculationRangeRuntime()
 
     val scope: FlowCommandScope = FlowCommandScope(controller)
-    val registry: CommandRegistry = FlowCommands.registry(scope, chartStudioEnabled)
+    val interchange = InterchangeRuntime(controller::document)
+    val registry: CommandRegistry = FlowCommands.registry(scope, chartStudioEnabled).also {
+        if (importExportRawEnabled) InterchangeCommands.register(it, interchange)
+    }
     val slashResolver: FlowSlashResolver = FlowSlashResolver(scope, registry)
     val surfaces: SurfaceCoordinator = SurfaceCoordinator()
     val presentation: AdaptivePresentationRuntime = AdaptivePresentationRuntime(initialFormFactor)
@@ -1402,6 +1409,7 @@ class FlowHostRuntime(
             lastFailure = lastFailure,
             editorStyle = editorStyle.uiState(),
             relationshipReview = relationshipReview.uiState(sourceRelationshipEndpoint()?.anchor),
+            interchange = interchange.state,
         )
     }
 
