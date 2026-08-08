@@ -117,6 +117,7 @@ private fun DocumentHostRoute(
                 controller = controller,
                 initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
                 fontRegistry = com.norfold.app.ui.fonts.OfflineFontLibrary.registry,
+                chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
             )
             // The snapshot manager captures the controller's *own* workspace: a snapshot over any other
             // workspace would restore something the editor is not looking at, and report success doing it.

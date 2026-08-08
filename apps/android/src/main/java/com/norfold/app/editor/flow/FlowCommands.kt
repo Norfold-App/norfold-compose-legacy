@@ -29,8 +29,9 @@ object FlowCommands {
      * Builds the full catalogue bound to [scope], in the order surfaces should present it: insertion first
      * (the `+` menu), then conversion ("turn into"), then structure, then table hooks.
      */
-    fun catalogue(scope: FlowCommandScope): List<EditorCommand> = buildList {
-        FlowBlockKind.insertable.forEach { add(FlowInsertCommand(scope, it)) }
+    fun catalogue(scope: FlowCommandScope, chartStudioEnabled: Boolean = false): List<EditorCommand> = buildList {
+        val insertable = FlowBlockKind.insertable + listOfNotNull(FlowBlockKind.CHART.takeIf { chartStudioEnabled })
+        insertable.forEach { add(FlowInsertCommand(scope, it)) }
         add(FlowInsertAboveCommand(scope))
 
         FlowBlockKind.convertTargets.forEach { add(FlowConvertCommand(scope, it)) }
@@ -52,6 +53,6 @@ object FlowCommands {
     }
 
     /** A [CommandRegistry] holding the whole catalogue. FlowHost builds exactly one of these. */
-    fun registry(scope: FlowCommandScope): CommandRegistry =
-        CommandRegistry().also { registry -> catalogue(scope).forEach(registry::register) }
+    fun registry(scope: FlowCommandScope, chartStudioEnabled: Boolean = false): CommandRegistry =
+        CommandRegistry().also { registry -> catalogue(scope, chartStudioEnabled).forEach(registry::register) }
 }

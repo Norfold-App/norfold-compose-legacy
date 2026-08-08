@@ -7,9 +7,13 @@ import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneObject
 import com.norfold.app.domain.SceneObjectKind
 import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.TableBlock
+import com.norfold.app.domain.walk
 import com.norfold.app.domain.supportsStyle
 import com.norfold.app.domain.pageNumberLabels
 import com.norfold.app.domain.pages
+import com.norfold.app.domain.findById
 import com.norfold.app.editor.command.CommandContext
 import com.norfold.app.editor.command.CommandRegistry
 import com.norfold.app.editor.command.CommandResult
@@ -37,6 +41,10 @@ import com.norfold.app.editor.style.StyleController
 import com.norfold.app.editor.style.EditorStyleCommands
 import com.norfold.app.domain.style.FontRegistry
 import com.norfold.app.domain.style.ColorRole
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartDocument
+import com.norfold.app.editor.chart.ChartCalculationDataProvider
+import com.norfold.app.editor.calculation.CalculationRangeRuntime
 
 /** One command as a Document surface should render it: the same status behind every route (§4.1, §4.2). */
 data class DocumentCommandItem(
@@ -145,10 +153,12 @@ class DocumentHostRuntime(
     initialFormFactor: FormFactor,
     val instrumentation: DocumentHostInstrumentation = DocumentHostInstrumentation.None,
     fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
+    chartStudioEnabled: Boolean = false,
 ) {
+    private val chartRanges = CalculationRangeRuntime()
     val selection = SelectionEngine()
     val scope = DocumentCommandScope(controller, selection)
-    val commands: CommandRegistry = DocumentCommands.registerAll(scope)
+    val commands: CommandRegistry = DocumentCommands.registerAll(scope, chartStudioEnabled = chartStudioEnabled)
     val surfaces = SurfaceCoordinator()
     val presentation = AdaptivePresentationRuntime(initialFormFactor)
     val memory = InteractionMemory()
@@ -173,6 +183,26 @@ class DocumentHostRuntime(
         },
         onChanged = { revision++ },
     )
+
+    /** Replaces chart content through DocumentHost's canonical History Engine. */
+    fun updateChart(blockId: String, document: ChartDocument): Boolean {
+        val before = controller.document().findById(blockId) as? ChartBlock ?: return false
+        val after = ChartBlockAdapter.save(before, document)
+        val changed = controller.mutateDocument("Edit chart") { it.replaceBlock(after) }
+        if (changed) revision++
+        return changed
+    }
+
+    fun chartCalculationProvider(): ChartCalculationDataProvider = ChartCalculationDataProvider { binding ->
+        var workbook: com.norfold.app.editor.calculation.CalculationWorkbook? = null
+        controller.document().walk { block ->
+            if (workbook == null && block is TableBlock) {
+                val candidate = com.norfold.app.editor.calculation.TableCalculationBridge.view(block).workbook
+                if (candidate.id == binding.workbookId) workbook = candidate
+            }
+        }
+        chartRanges.read(workbook ?: error("The bound workbook is not in this document"), binding)
+    }
 
     init {
         EditorStyleCommands.register(
@@ -1344,6 +1374,7 @@ class DocumentHostRuntime(
         val PAGE_DOCK_ORDER = listOf(
             DocumentIds.INSERT_TEXT,
             DocumentIds.INSERT_SHAPE,
+            DocumentIds.INSERT_CHART,
             DocumentIds.PAGE_INSERT_AFTER,
             DocumentIds.PAGE_INSERT_BEFORE,
             DocumentIds.PAGE_DUPLICATE,

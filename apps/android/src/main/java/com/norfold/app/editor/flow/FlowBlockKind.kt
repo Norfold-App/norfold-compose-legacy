@@ -3,6 +3,7 @@ package com.norfold.app.editor.flow
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.CodeBlock
+import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.HeadingBlock
@@ -19,6 +20,8 @@ import com.norfold.app.domain.TableCell
 import com.norfold.app.domain.TodoItem
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.plainText
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartDocument
 
 /**
  * The Flow block kinds a user can *insert* or *convert to* by name (roadmap Phase 1 deliverables 2–4).
@@ -66,6 +69,7 @@ enum class FlowBlockKind(
     TABLE("Table", listOf("table", "grid"), convertible = false),
     MATH("Equation", listOf("math", "equation", "latex", "tex"), convertible = false),
     MERMAID("Diagram", listOf("mermaid", "diagram", "flowchart"), convertible = false),
+    CHART("Chart", listOf("chart", "graph", "plot", "visualization"), convertible = false),
     ;
 
     /** A new, empty block of this kind. Fresh id — the caller inserts it. */
@@ -90,6 +94,7 @@ enum class FlowBlockKind(
         )
         MATH -> MathBlock()
         MERMAID -> MermaidBlock()
+        CHART -> ChartBlockAdapter.save(ChartBlock(), ChartDocument())
     }
 
     /** True when [block] is already of this kind — the source of ACTIVE state on a convert command. */
@@ -111,6 +116,7 @@ enum class FlowBlockKind(
         TABLE -> block is TableBlock
         MATH -> block is MathBlock
         MERMAID -> block is MermaidBlock
+        CHART -> block is ChartBlock
     }
 
     /**
@@ -144,7 +150,7 @@ enum class FlowBlockKind(
             // A divider carries no content by definition; the conversion is intentionally lossy and is
             // undoable as one transaction like any other command.
             DIVIDER -> DividerBlock(id = block.id)
-            CALLOUT, TABLE, MATH, MERMAID -> block
+            CALLOUT, TABLE, MATH, MERMAID, CHART -> block
         }
     }
 
@@ -152,8 +158,8 @@ enum class FlowBlockKind(
         /** The kind [block] currently is, or null for kinds outside this vocabulary (image, embed, …). */
         fun of(block: DocumentBlock): FlowBlockKind? = entries.firstOrNull { it.matches(block) }
 
-        /** Kinds offered by the `+` insert surface and the slash resolver, in menu order. */
-        val insertable: List<FlowBlockKind> = entries.toList()
+        /** Always-available kinds offered by the `+` insert surface and slash resolver, in menu order. */
+        val insertable: List<FlowBlockKind> = entries.filterNot { it == CHART }
 
         /** Kinds offered by the "turn into" surface, in menu order. */
         val convertTargets: List<FlowBlockKind> = entries.filter { it.convertible }

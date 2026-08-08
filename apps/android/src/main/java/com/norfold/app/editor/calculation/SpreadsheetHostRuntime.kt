@@ -3,7 +3,9 @@ package com.norfold.app.editor.calculation
 import com.norfold.app.domain.BlockCursor
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.TableBlock
+import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.walk
+import com.norfold.app.domain.findById
 import com.norfold.app.domain.style.ColorDomain
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
@@ -15,6 +17,10 @@ import com.norfold.app.editor.style.ColorStudioEngine
 import com.norfold.app.editor.style.ColorStudioHost
 import com.norfold.app.editor.style.ColorStudioInteractionController
 import com.norfold.app.editor.style.ColorStudioState
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartCalculationDataProvider
+import com.norfold.app.editor.chart.ChartDataSource
+import com.norfold.app.editor.chart.ChartDocument
 
 /**
  * One defined name as a management surface should show it.
@@ -125,7 +131,56 @@ class SpreadsheetHostRuntime(
     /** Scroll position in points, per sheet. Losing it on a reflow loses the user's place in a large grid. */
     private val viewportOffsets = linkedMapOf<SheetId, Pair<Float, Float>>()
     private val tableSession: CalculationTableSession
+    private val chartRanges = CalculationRangeRuntime()
     val commandRegistry by lazy { SpreadsheetCommandCatalog.create(this) }
+
+    fun selectedChartBinding(): CalculationRangeBinding? = selectedStableRange()?.let { range ->
+        CalculationRangeBinding(tableSession.workbook().id, range, includeHeaders = true)
+    }
+
+    fun chartCalculationProvider(): ChartCalculationDataProvider = ChartCalculationDataProvider { binding ->
+        chartRanges.read(tableSession.workbook(), binding)
+    }
+
+    /** Creates a durable chart beside the workbook through the owner's canonical history. */
+    fun createChartFromSelection(): String? {
+        val binding = selectedChartBinding() ?: return null
+        val chart = ChartDocument(source = ChartDataSource.CalculationRange(binding))
+        val block = ChartBlockAdapter.save(ChartBlock(), chart)
+        val anchor = tableBlockId ?: controller.document().blocks.filterIsInstance<TableBlock>().firstOrNull()?.id ?: return null
+        val inserted = controller.mutate("Create chart from selection") { session -> session.insertAfter(anchor, block) } != null
+        if (!inserted) return null
+        revision++
+        return block.id
+    }
+
+    fun updateChart(blockId: String, document: ChartDocument): Boolean {
+        val before = controller.document().findById(blockId) as? ChartBlock ?: return false
+        val after = ChartBlockAdapter.save(before, document)
+        val changed = controller.mutate("Edit chart") { session ->
+            session.replaceBlock(after)
+            BlockCursor(blockId, 0)
+        } != null
+        if (changed) revision++
+        return changed
+    }
+
+    /** Rebinds an existing chart to the current stable selection without copying workbook values. */
+    fun rebindChartToSelection(blockId: String): Boolean {
+        val binding = selectedChartBinding() ?: return false
+        val block = controller.document().findById(blockId) as? ChartBlock ?: return false
+        val loaded = ChartBlockAdapter.load(block)
+        if (!loaded.isEditable) return false
+        val previous = loaded.document.source as? ChartDataSource.CalculationRange
+        return updateChart(
+            blockId,
+            loaded.document.copy(source = ChartDataSource.CalculationRange(
+                binding = binding,
+                headerMode = previous?.headerMode ?: com.norfold.app.editor.chart.ChartHeaderMode.AUTO,
+                orientation = previous?.orientation ?: com.norfold.app.editor.chart.ChartDataOrientation.COLUMNS_AS_SERIES,
+            )),
+        )
+    }
 
     /**
      * Cell fill through the shared Phase-3 Color Studio — not a private hex field.

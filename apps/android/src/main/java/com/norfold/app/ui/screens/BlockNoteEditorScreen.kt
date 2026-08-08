@@ -332,6 +332,12 @@ import com.norfold.app.ui.LocalEditorToolbarScale
 import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.ChartBuilderSheet
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartDataResolver
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.ui.editor.editorFlags
+import com.norfold.app.ui.editor.chart.ChartStudioSheet
+import com.norfold.app.ui.editor.chart.ChartRenderer
 import com.norfold.app.ui.components.DiagramBuilderSheet
 import com.norfold.app.ui.components.MathBuilderSheet
 import com.norfold.app.ui.components.MathInsertionKind
@@ -1579,19 +1585,46 @@ internal fun StructuredBlockEditorHost(
         )
     }
     chartBuilderRequest?.let { request ->
-        ChartBuilderSheet(
-            initialSpec = request.initialSpec,
-            onDismiss = { chartBuilderRequest = null },
-            onCreate = { output ->
-                if (request.editingId != null) {
-                    session.replaceBlock(output.withBlockId(request.editingId))
-                    changed()
-                } else {
-                    changed(session.insertAfter(request.anchorId, output))
-                }
-                chartBuilderRequest = null
-            },
-        )
+        if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
+            val existing = request.editingId?.let(session.document::findById) as? ChartBlock
+            val seed = existing ?: ChartBlock(vegaLiteSpec = request.initialSpec ?: "{}")
+            val loaded = remember(seed) { ChartBlockAdapter.load(seed) }
+            ChartStudioSheet(
+                initial = loaded.document,
+                readOnly = !editMode || !loaded.isEditable,
+                onDocumentChanged = { document ->
+                    if (request.editingId != null && loaded.isEditable && editMode) {
+                        session.replaceBlock(ChartBlockAdapter.save(seed, document).withBlockId(request.editingId))
+                        changed()
+                    }
+                    true
+                },
+                onDismiss = { chartBuilderRequest = null },
+                onDone = { document ->
+                    if (loaded.isEditable && editMode) {
+                        val output = ChartBlockAdapter.save(seed, document)
+                        if (request.editingId == null) {
+                            changed(session.insertAfter(request.anchorId, output))
+                        }
+                    }
+                    chartBuilderRequest = null
+                },
+            )
+        } else {
+            ChartBuilderSheet(
+                initialSpec = request.initialSpec,
+                onDismiss = { chartBuilderRequest = null },
+                onCreate = { output ->
+                    if (request.editingId != null) {
+                        session.replaceBlock(output.withBlockId(request.editingId))
+                        changed()
+                    } else {
+                        changed(session.insertAfter(request.anchorId, output))
+                    }
+                    chartBuilderRequest = null
+                },
+            )
+        }
     }
     mathBuilderRequest?.let { request ->
         MathBuilderSheet(
@@ -4396,16 +4429,27 @@ private fun EditableChartBlock(block: ChartBlock, mode: BlockSurfaceMode, onRepl
         if (mode == BlockSurfaceMode.Edit) {
             Button(onClick = { onEditChart(block) }) { Text("Edit chart") }
         }
-        EditableEngineCard(
-            blockId = block.id,
-            label = "Chart",
-            source = block.vegaLiteSpec,
-            mode = mode,
-            editorHeightDp = block.editorHeightDp,
-            onSourceChange = { onReplace(block.copy(vegaLiteSpec = it)) },
-            onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
-            contentKind = EngineContentKind.Chart,
-        )
+        if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
+            val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
+            val resolution = remember(loaded.document) { ChartDataResolver.resolve(loaded.document) }
+            ChartRenderer(
+                document = loaded.document,
+                resolution = resolution,
+                modifier = Modifier.fillMaxWidth(),
+                heightDp = block.editorHeightDp.toInt().coerceIn(120, 560),
+            )
+        } else {
+            EditableEngineCard(
+                blockId = block.id,
+                label = "Chart",
+                source = block.vegaLiteSpec,
+                mode = mode,
+                editorHeightDp = block.editorHeightDp,
+                onSourceChange = { onReplace(block.copy(vegaLiteSpec = it)) },
+                onHeightChange = { onReplace(block.copy(editorHeightDp = it)) },
+                contentKind = EngineContentKind.Chart,
+            )
+        }
     }
 }
 
@@ -5450,7 +5494,11 @@ private fun duplicateBlock(block: DocumentBlock): DocumentBlock = when (block) {
     is ImageBlock -> ImageBlock(source = block.source, caption = block.caption, layout = block.layout, displayHeightDp = block.displayHeightDp)
     is FileBlock -> FileBlock(name = block.name, mimeType = block.mimeType, sizeBytes = block.sizeBytes, uri = block.uri)
     is EmbedBlock -> EmbedBlock(url = block.url, metadata = block.metadata, displayHeightDp = block.displayHeightDp)
-    is ChartBlock -> ChartBlock(vegaLiteSpec = block.vegaLiteSpec, editorHeightDp = block.editorHeightDp)
+    is ChartBlock -> ChartBlock(
+        vegaLiteSpec = block.vegaLiteSpec,
+        editorHeightDp = block.editorHeightDp,
+        chartDocument = block.chartDocument,
+    )
     is MathBlock -> MathBlock(tex = block.tex, display = block.display, editorHeightDp = block.editorHeightDp)
     is MermaidBlock -> MermaidBlock(code = block.code, editorHeightDp = block.editorHeightDp)
     is ShapeBlock -> block.copy(id = java.util.UUID.randomUUID().toString())

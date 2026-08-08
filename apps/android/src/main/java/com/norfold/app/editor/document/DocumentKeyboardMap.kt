@@ -162,6 +162,7 @@ object DocumentIds {
 
     const val INSERT_TEXT = "document.object.insertText"
     const val INSERT_SHAPE = "document.object.insertShape"
+    const val INSERT_CHART = "document.object.insertChart"
 
     const val PAGE_INSERT_AFTER = "document.page.insertAfter"
     const val PAGE_INSERT_BEFORE = "document.page.insertBefore"

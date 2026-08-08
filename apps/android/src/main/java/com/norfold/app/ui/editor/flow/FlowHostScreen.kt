@@ -85,6 +85,7 @@ import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
 import kotlinx.coroutines.isActive
 import com.norfold.app.domain.DocumentBlock
+import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.flow.FlowCommandItem
@@ -106,7 +107,10 @@ import com.norfold.app.ui.editor.style.rememberFontImportLauncher
 import com.norfold.app.ui.editor.style.rememberImportedFontRemover
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 import com.norfold.app.domain.stylesheet
+import com.norfold.app.domain.findById
 import com.norfold.app.domain.StylesheetBlock
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.ui.editor.chart.ChartStudioSheet
 
 /**
  * FlowHost — the writing-first Notes host (roadmap Phase 1 deliverables 1, 5, 6, 10).
@@ -135,6 +139,7 @@ fun FlowHostScreen(
     val visibleBlocks = remember(state.document) { state.document.blocks.filterNot { it is StylesheetBlock } }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = presenter.runtime.restoredScrollIndex())
     var notice by remember { mutableStateOf<String?>(null) }
+    var chartEditingId by remember { mutableStateOf<String?>(null) }
 
     // ── Adaptive presentation: the window drives the mode, never the other way round (§2.6) ──
     val configuration = LocalConfiguration.current
@@ -252,6 +257,7 @@ fun FlowHostScreen(
                                 drag = drag,
                                 onNotice = { notice = it },
                                 onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
+                                onOpenChart = { chartEditingId = it },
                                 modifier = Modifier.widthIn(max = FLOW_CONTENT_MAX_WIDTH),
                             )
                         }
@@ -337,6 +343,23 @@ fun FlowHostScreen(
             presenter = presenter,
             onNotice = { notice = it },
         )
+    }
+
+    chartEditingId?.let { blockId ->
+        val block = state.document.findById(blockId) as? ChartBlock
+        if (block == null) {
+            chartEditingId = null
+        } else {
+            val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
+            ChartStudioSheet(
+                initial = loaded.document,
+                readOnly = !loaded.isEditable,
+                calculationProvider = presenter.runtime.chartCalculationProvider(),
+                onDocumentChanged = { document -> presenter.act { updateChart(blockId, document) } },
+                onDismiss = { chartEditingId = null },
+                onDone = { chartEditingId = null },
+            )
+        }
     }
 
     // Keep the edited line above the keyboard and the dock. Driven by the runtime's caret request rather than
@@ -454,6 +477,7 @@ private fun FlowBlockRow(
     drag: FlowDragState,
     onNotice: (String) -> Unit,
     onOpenTableInSpreadsheet: (String) -> Unit,
+    onOpenChart: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val selected = block.id in state.selectedIds
@@ -493,6 +517,7 @@ private fun FlowBlockRow(
             onNewLine = { presenter.act { newLine() } },
             onBackspaceAtStart = { presenter.act { backspaceAtStart() } },
             onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },
+            onOpenChart = onOpenChart,
         )
     }
 
@@ -617,6 +642,8 @@ private fun FlowBlockRow(
                     previewRole = state.editorStyle.colorStudio.target?.role,
                     previewPaint = state.editorStyle.previewPaint,
                     previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
+                    chartCalculationProvider = presenter.runtime.chartCalculationProvider(),
+                    chartDataRevision = state.revision,
                 ),
             )
         }

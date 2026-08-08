@@ -110,6 +110,12 @@ import com.norfold.app.editor.calculation.SortDirection
 import com.norfold.app.editor.calculation.SpreadsheetKey
 import com.norfold.app.editor.calculation.SpreadsheetShortcut
 import com.norfold.app.domain.style.ColorValue
+import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.findById
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.ui.editor.editorFlags
+import com.norfold.app.ui.editor.chart.ChartStudioSheet
 
 @Composable
 fun SpreadsheetHostScreen(
@@ -122,6 +128,7 @@ fun SpreadsheetHostScreen(
     modifier: Modifier = Modifier,
 ) {
     var refresh by remember { mutableIntStateOf(0) }
+    var chartEditingId by remember { mutableStateOf<String?>(null) }
     val state = remember(refresh) { runtime.state() }
     val context = LocalContext.current
     val clipboard = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
@@ -152,6 +159,37 @@ fun SpreadsheetHostScreen(
             onRedo = { if (runtime.redo()) { refresh++; onChanged() } },
             onAdvanced = { runtime.toggleAdvancedTools(); refresh++ },
         )
+        if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
+            val existingCharts = runtime.controller.document().blocks.filterIsInstance<ChartBlock>()
+            if (existingCharts.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Charts", style = MaterialTheme.typography.labelLarge)
+                    existingCharts.forEachIndexed { index, chart ->
+                        val loaded = remember(chart.chartDocument, chart.vegaLiteSpec) { ChartBlockAdapter.load(chart) }
+                        TextButton(onClick = { chartEditingId = chart.id }, modifier = Modifier.height(48.dp)) {
+                            Text(loaded.document.title.ifBlank { "Chart ${index + 1}" })
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
+                TextButton(
+                    onClick = {
+                        runtime.createChartFromSelection()?.let { id ->
+                            chartEditingId = id
+                            refresh++
+                            onChanged()
+                        }
+                    },
+                    enabled = runtime.selectedChartBinding() != null,
+                    modifier = Modifier.height(48.dp),
+                ) { Text("Chart from selection") }
+            }
+        }
         FormulaBar(
             address = selectedAddress(state.selection)?.a1().orEmpty(),
             value = state.formulaBarText,
@@ -279,6 +317,33 @@ fun SpreadsheetHostScreen(
             onMove = { if (runtime.reorderActiveSheet(it)) { refresh++; onChanged() } },
             onSetHidden = { if (runtime.setActiveSheetHidden(it)) { refresh++; onChanged() } },
         )
+    }
+
+    chartEditingId?.let { blockId ->
+        val block = runtime.controller.document().findById(blockId) as? ChartBlock
+        if (block == null) {
+            chartEditingId = null
+        } else {
+            val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
+            ChartStudioSheet(
+                initial = loaded.document,
+                readOnly = !loaded.isEditable,
+                calculationProvider = runtime.chartCalculationProvider(),
+                onRequestRangeBinding = {
+                    if (runtime.rebindChartToSelection(blockId)) {
+                        refresh++
+                        onChanged()
+                    }
+                },
+                onDocumentChanged = { document ->
+                    runtime.updateChart(blockId, document).also { changed ->
+                        if (changed) { refresh++; onChanged() }
+                    }
+                },
+                onDismiss = { chartEditingId = null },
+                onDone = { chartEditingId = null },
+            )
+        }
     }
 }
 
@@ -540,6 +605,7 @@ private fun VirtualSpreadsheetGrid(
             }
         }
     }
+
 }
 
 private enum class ResizeAxis { HORIZONTAL, VERTICAL }

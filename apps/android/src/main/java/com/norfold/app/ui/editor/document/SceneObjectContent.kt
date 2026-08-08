@@ -115,6 +115,10 @@ import com.norfold.app.domain.style.resolvedShapeFill
 import com.norfold.app.domain.style.resolvedShapeStroke
 import com.norfold.app.ui.editor.style.resolvedShapeMetrics
 import com.norfold.app.ui.editor.style.backgroundPaint
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartDataResolver
+import com.norfold.app.editor.chart.ChartCalculationDataProvider
+import com.norfold.app.ui.editor.chart.ChartRenderer
 import androidx.compose.foundation.border
 
 /**
@@ -145,6 +149,7 @@ class SceneContentCallbacks(
     /** The user finished the cell: Done on the keyboard, or focus leaving the field. Writes once. */
     val onTableCellCommit: (legacyRow: Int, column: Int, value: String) -> Unit = { _, _, _ -> },
     val onOpenTableInSpreadsheet: (String) -> Unit = {},
+    val onOpenChart: (String) -> Unit = {},
 )
 
 /**
@@ -182,6 +187,8 @@ fun SceneObjectContent(
     activeTableCell: Pair<Int, Int>? = null,
     /** The uncommitted text of [activeTableCell]. Runtime-owned, so a recomposition cannot lose it. */
     tableCellDraft: String? = null,
+    chartCalculationProvider: ChartCalculationDataProvider? = null,
+    chartDataRevision: Long = 0,
 ) {
     when (block) {
         is ParagraphBlock -> SceneEditableLine(
@@ -366,7 +373,24 @@ fun SceneObjectContent(
         // editor. Silently showing nothing would make placed content look lost and invite the user to
         // "fix" it by overwriting what is actually preserved intact.
         is ImageBlock -> ScenePlaceholder("Image", block.caption.ifBlank { block.source }, renderScale, modifier)
-        is ChartBlock -> ScenePlaceholder("Chart", "Chart Studio arrives in a later phase.", renderScale, modifier)
+        is ChartBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
+            val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ChartRenderer(
+                    document = loaded.document,
+                    resolution = remember(loaded.document, chartDataRevision) {
+                        ChartDataResolver.resolve(loaded.document, chartCalculationProvider)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    heightDp = block.editorHeightDp.toInt().coerceIn(100, 560),
+                )
+                if (editing && loaded.isEditable) {
+                    TextButton(onClick = { callbacks.onOpenChart(block.id) }) { Text("Edit chart") }
+                }
+            }
+        } else {
+            ScenePlaceholder("Chart", "Chart Studio is unavailable.", renderScale, modifier)
+        }
         is MathBlock -> ScenePlaceholder("Equation", block.tex.ifBlank { "empty" }, renderScale, modifier)
         is MermaidBlock -> ScenePlaceholder("Diagram", block.code.ifBlank { "empty" }, renderScale, modifier)
         is EmbedBlock -> ScenePlaceholder("Embed", block.url.ifBlank { "empty" }, renderScale, modifier)

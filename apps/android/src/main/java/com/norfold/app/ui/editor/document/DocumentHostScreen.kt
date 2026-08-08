@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.DocumentPageBlock
+import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ResizeCorner
 import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneLock
@@ -98,9 +99,12 @@ import com.norfold.app.ui.editor.style.rememberFontImportLauncher
 import com.norfold.app.ui.editor.style.rememberImportedFontRemover
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 import com.norfold.app.domain.stylesheet
+import com.norfold.app.domain.findById
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.norfold.app.domain.style.resolvedPageBackground
 import com.norfold.app.ui.editor.style.backgroundPaint
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.ui.editor.chart.ChartStudioSheet
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
@@ -135,6 +139,7 @@ fun DocumentHostScreen(
 ) {
     val state = presenter.state
     var notice by remember { mutableStateOf<String?>(null) }
+    var chartEditingId by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
 
     // The runtime raises a notice when it had to switch representation to keep an action faithful. Consuming
@@ -201,7 +206,7 @@ fun DocumentHostScreen(
         notice?.let { message -> NoticeRow(message) { notice = null } }
 
         Box(Modifier.weight(1f)) {
-            DocumentPageStack(presenter, onOpenTableInSpreadsheet, Modifier.fillMaxSize())
+            DocumentPageStack(presenter, onOpenTableInSpreadsheet, { chartEditingId = it }, Modifier.fillMaxSize())
         }
 
         // Original View owns zoom; Adaptive View fits to the viewport and has nothing to zoom.
@@ -275,6 +280,23 @@ fun DocumentHostScreen(
         DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES ->
             DocumentEditorStyleSurface(state.activeSurfaceId, state, presenter) { notice = it }
     }
+
+    chartEditingId?.let { blockId ->
+        val block = state.document.findById(blockId) as? ChartBlock
+        if (block == null) {
+            chartEditingId = null
+        } else {
+            val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
+            ChartStudioSheet(
+                initial = loaded.document,
+                readOnly = state.intent != WorkingIntent.EDIT || !loaded.isEditable,
+                calculationProvider = presenter.runtime.chartCalculationProvider(),
+                onDocumentChanged = { document -> presenter.act { updateChart(blockId, document) } },
+                onDismiss = { chartEditingId = null },
+                onDone = { chartEditingId = null },
+            )
+        }
+    }
 }
 
 // ── Page stack: virtualized composition from real geometry ──────────────────────────────────────────
@@ -290,6 +312,7 @@ fun DocumentHostScreen(
 private fun DocumentPageStack(
     presenter: DocumentHostPresenter,
     onOpenTableInSpreadsheet: (String) -> Unit,
+    onOpenChart: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state = presenter.state
@@ -360,6 +383,7 @@ private fun DocumentPageStack(
                     visibleBottomPt = scrollOffsetPt + viewportHeightPt / scale - window.topOf(index),
                     presenter = presenter,
                     onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
+                    onOpenChart = onOpenChart,
                 )
             }
         }
@@ -377,6 +401,7 @@ private fun PageSheet(
     visibleBottomPt: Float,
     presenter: DocumentHostPresenter,
     onOpenTableInSpreadsheet: (String) -> Unit,
+    onOpenChart: (String) -> Unit,
 ) {
     val state = presenter.state
     val editing = state.representation == LayoutRepresentation.ORIGINAL && state.intent == WorkingIntent.EDIT
@@ -452,7 +477,7 @@ private fun PageSheet(
 
         // Back-to-front: the front-most object is drawn last, so it is the one that overlaps the others.
         visible.sortedBy { it.z }.forEach { obj ->
-            SceneObjectBox(obj, page, scale, presenter, onOpenTableInSpreadsheet)
+            SceneObjectBox(obj, page, scale, presenter, onOpenTableInSpreadsheet, onOpenChart)
         }
     }
 }
@@ -534,6 +559,7 @@ private fun SceneObjectBox(
     scale: Float,
     presenter: DocumentHostPresenter,
     onOpenTableInSpreadsheet: (String) -> Unit,
+    onOpenChart: (String) -> Unit,
 ) {
     val state = presenter.state
     val geometry = state.manipulation?.previewFor(obj.id) ?: obj.geometry
@@ -717,6 +743,7 @@ private fun SceneObjectBox(
                         presenter.act { editObjectTableCell(obj.id, row, column, value) }
                     },
                     onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
+                    onOpenChart = onOpenChart,
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(
@@ -732,6 +759,8 @@ private fun SceneObjectBox(
             renderScale = renderScale,
             activeTableCell = state.editingTableCell?.takeIf { it.first == obj.id }?.second,
             tableCellDraft = state.editingTableDraft,
+            chartCalculationProvider = presenter.runtime.chartCalculationProvider(),
+            chartDataRevision = state.revision,
         )
     }
 

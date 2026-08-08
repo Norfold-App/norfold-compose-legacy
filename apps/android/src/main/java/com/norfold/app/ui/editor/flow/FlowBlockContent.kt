@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
+import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
@@ -105,6 +106,10 @@ import com.norfold.app.ui.editor.style.WrapperStyleSource
 import com.norfold.app.ui.editor.style.collapsedBlockSpacing
 import com.norfold.app.ui.editor.style.resolvedBlockMetrics
 import com.norfold.app.ui.editor.style.resolvedContentColor
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartDataResolver
+import com.norfold.app.editor.chart.ChartCalculationDataProvider
+import com.norfold.app.ui.editor.chart.ChartRenderer
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -150,6 +155,7 @@ class FlowBlockCallbacks(
     val onBackspaceAtStart: () -> Boolean = { false },
     /** Expand/collapse a collapsible block (correction item 16). */
     val onToggleCollapsed: (blockId: String) -> Unit = {},
+    val onOpenChart: (blockId: String) -> Unit = {},
 )
 
 /**
@@ -185,6 +191,8 @@ data class FlowBlockContext(
     val previewPaint: ColorPaint? = null,
     val previewTargetIds: Set<String> = emptySet(),
     val wrapperStyles: List<WrapperStyleSource> = emptyList(),
+    val chartCalculationProvider: ChartCalculationDataProvider? = null,
+    val chartDataRevision: Long = 0,
 )
 
 /**
@@ -365,6 +373,25 @@ fun FlowBlockContent(
         }
 
         is TableBlock -> FlowTablePreview(block, callbacks, context, modifier)
+
+        is ChartBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
+            val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ChartRenderer(
+                    document = loaded.document,
+                    resolution = remember(loaded.document, context.chartDataRevision) {
+                        ChartDataResolver.resolve(loaded.document, context.chartCalculationProvider)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    heightDp = block.editorHeightDp.toInt().coerceIn(120, 560),
+                )
+                if (!context.selectionMode && loaded.isEditable) {
+                    TextButton(onClick = { callbacks.onOpenChart(block.id) }) { Text("Edit chart") }
+                }
+            }
+        } else {
+            FlowPlaceholder("Chart", block.plainText().take(120).ifBlank { "empty" }, modifier)
+        }
 
         is MathBlock -> FlowPlaceholder("Equation", block.tex.ifBlank { "empty" }, modifier)
         is MermaidBlock -> FlowPlaceholder("Diagram", block.code.ifBlank { "empty" }, modifier)

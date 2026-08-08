@@ -15,7 +15,10 @@ import com.norfold.app.domain.SceneLock
 import com.norfold.app.domain.SceneObject
 import com.norfold.app.domain.SceneObjectKind
 import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.sectionIndices
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartDocument
 import com.norfold.app.editor.command.ApplicabilityPolicy
 import com.norfold.app.editor.command.Capability
 import com.norfold.app.editor.command.CommandContext
@@ -662,7 +665,11 @@ object DocumentCommands {
     const val NUDGE = 1f
     const val NUDGE_LARGE = 10f
 
-    fun registerAll(scope: DocumentCommandScope, registry: CommandRegistry = CommandRegistry()): CommandRegistry {
+    fun registerAll(
+        scope: DocumentCommandScope,
+        registry: CommandRegistry = CommandRegistry(),
+        chartStudioEnabled: Boolean = false,
+    ): CommandRegistry {
         registry.registerAll(
             // Movement
             NudgeObjectsCommand(scope, -NUDGE, 0f, "document.object.nudgeLeft", "Nudge left"),
@@ -714,6 +721,16 @@ object DocumentCommands {
             SetPageStructureLockCommand(scope, locked = true),
             SetPageStructureLockCommand(scope, locked = false),
         )
+        if (chartStudioEnabled) {
+            registry.register(InsertSceneObjectCommand(
+                scope = scope,
+                kind = SceneObjectKind.Chart,
+                id = DocumentIds.INSERT_CHART,
+                label = "Chart",
+                size = SceneGeometry(width = 360f, height = 240f),
+                content = { ChartBlockAdapter.save(ChartBlock(), ChartDocument()) },
+            ))
+        }
         registerPageSetup(scope, registry)
         return registry
     }

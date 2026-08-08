@@ -11,6 +11,7 @@ import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.supportsStyle
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.plainText
+import com.norfold.app.domain.walk
 import com.norfold.app.editor.command.CommandRegistry
 import com.norfold.app.editor.command.CommandResult
 import com.norfold.app.editor.command.CommandState
@@ -26,6 +27,11 @@ import com.norfold.app.editor.presentation.PresentationMode
 import com.norfold.app.editor.presentation.PresentedTool
 import com.norfold.app.editor.presentation.ToolPresentationState
 import com.norfold.app.editor.selection.TextCaret
+import com.norfold.app.domain.ChartBlock
+import com.norfold.app.editor.chart.ChartBlockAdapter
+import com.norfold.app.editor.chart.ChartDocument
+import com.norfold.app.editor.chart.ChartCalculationDataProvider
+import com.norfold.app.editor.calculation.CalculationRangeRuntime
 import com.norfold.app.editor.surface.BackOutcome
 import com.norfold.app.editor.surface.DismissTrigger
 import com.norfold.app.editor.surface.DispatchResult
@@ -199,10 +205,12 @@ class FlowHostRuntime(
     val memory: InteractionMemory = InteractionMemory(),
     private val instrumentation: FlowHostInstrumentation = FlowHostInstrumentation.None,
     fontRegistry: FontRegistry = EditorStyleRuntime.EMPTY_REGISTRY,
+    chartStudioEnabled: Boolean = false,
 ) {
+    private val chartRanges = CalculationRangeRuntime()
 
     val scope: FlowCommandScope = FlowCommandScope(controller)
-    val registry: CommandRegistry = FlowCommands.registry(scope)
+    val registry: CommandRegistry = FlowCommands.registry(scope, chartStudioEnabled)
     val slashResolver: FlowSlashResolver = FlowSlashResolver(scope, registry)
     val surfaces: SurfaceCoordinator = SurfaceCoordinator()
     val presentation: AdaptivePresentationRuntime = AdaptivePresentationRuntime(initialFormFactor)
@@ -236,6 +244,29 @@ class FlowHostRuntime(
         },
         onChanged = { revision++ },
     )
+
+    /** Replaces one chart through the same canonical History Engine as every other Flow edit. */
+    fun updateChart(blockId: String, document: ChartDocument): Boolean {
+        val before = controller.document().findById(blockId) as? ChartBlock ?: return false
+        val after = ChartBlockAdapter.save(before, document)
+        val changed = controller.mutate("Edit chart") { session ->
+            session.replaceBlock(after)
+            BlockCursor(blockId, 0)
+        } != null
+        if (changed) revision++
+        return changed
+    }
+
+    fun chartCalculationProvider(): ChartCalculationDataProvider = ChartCalculationDataProvider { binding ->
+        var workbook: com.norfold.app.editor.calculation.CalculationWorkbook? = null
+        controller.document().walk { block ->
+            if (workbook == null && block is TableBlock) {
+                val candidate = TableCalculationBridge.view(block).workbook
+                if (candidate.id == binding.workbookId) workbook = candidate
+            }
+        }
+        chartRanges.read(workbook ?: error("The bound workbook is not in this document"), binding)
+    }
 
     init {
         EditorStyleCommands.register(

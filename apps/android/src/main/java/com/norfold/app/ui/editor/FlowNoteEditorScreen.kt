@@ -104,6 +104,7 @@ private fun FlowHostRoute(
                 controller = FlowEditController(EditTarget(owner.documentId), active.document),
                 initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
                 fontRegistry = com.norfold.app.ui.fonts.OfflineFontLibrary.registry,
+                chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
             )
             FlowDocumentSession(
                 runtime = runtime,
