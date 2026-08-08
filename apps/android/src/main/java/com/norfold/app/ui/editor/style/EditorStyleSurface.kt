@@ -132,18 +132,19 @@ fun EditorStyleSurface(
     fontSections: List<FontBrowserSection> = emptyList(),
     actions: EditorStyleSurfaceActions,
     modifier: Modifier = Modifier,
+    onOpenGuide: (() -> Unit)? = null,
 ) {
     Surface(modifier, shape = RoundedCornerShape(24.dp), tonalElevation = 6.dp) {
         when (surfaceId) {
-            "editor.surface.colorStudio" -> ColorStudioPanel(state, actions)
-            "editor.surface.fontBrowser" -> FontBrowserPanel(state.fontBrowser, fontRows, fontSections, actions)
-            "editor.surface.namedStyles" -> NamedStylesPanel(state, actions)
+            "editor.surface.colorStudio" -> ColorStudioPanel(state, actions, onOpenGuide)
+            "editor.surface.fontBrowser" -> FontBrowserPanel(state.fontBrowser, fontRows, fontSections, actions, onOpenGuide)
+            "editor.surface.namedStyles" -> NamedStylesPanel(state, actions, onOpenGuide)
         }
     }
 }
 
 @Composable
-private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurfaceActions) {
+private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurfaceActions, onOpenGuide: (() -> Unit)?) {
     val studio = state.colorStudio
     val requiresCommonPaint = setOf(
         ColorStudioView.CURRENT,
@@ -164,7 +165,7 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
         Modifier.fillMaxWidth().heightIn(max = 680.dp).verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ToolHeader("Color Studio", studio.accessibleLabel(), { actions.dismiss(false) })
+        ToolHeader("Color Studio", studio.accessibleLabel(), { actions.dismiss(false) }, onOpenGuide)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ColorStudioView.entries.filter { view -> studio.target?.let(view::isAvailableFor) != false }.forEach { view ->
                 FilterChip(
@@ -514,12 +515,14 @@ private fun FontBrowserPanel(
     rows: List<FontRowState>,
     sections: List<FontBrowserSection>,
     actions: EditorStyleSurfaceActions,
+    onOpenGuide: (() -> Unit)?,
 ) {
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ToolHeader(
             "Font Browser",
             if (state.mixedFonts) "Mixed fonts · ${rows.size} matching families" else "${rows.size} matching families",
             { actions.dismiss(false) },
+            onOpenGuide,
         )
         sections.forEach { section ->
             Text(section.title, style = MaterialTheme.typography.labelMedium)
@@ -612,9 +615,9 @@ private fun FontBrowserPanel(
 }
 
 @Composable
-private fun NamedStylesPanel(state: EditorStyleUiState, actions: EditorStyleSurfaceActions) {
+private fun NamedStylesPanel(state: EditorStyleUiState, actions: EditorStyleSurfaceActions, onOpenGuide: (() -> Unit)?) {
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        ToolHeader("Named Styles", "Styles inherit; local overrides remain explicit", { actions.dismiss(false) })
+        ToolHeader("Named Styles", "Styles inherit; local overrides remain explicit", { actions.dismiss(false) }, onOpenGuide)
         Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(14.dp)) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(state.sharedStyleLabel, fontWeight = FontWeight.SemiBold)
@@ -653,12 +656,13 @@ private fun NamedStylesPanel(state: EditorStyleUiState, actions: EditorStyleSurf
 }
 
 @Composable
-private fun ToolHeader(title: String, detail: String, onClose: () -> Unit) {
+private fun ToolHeader(title: String, detail: String, onClose: () -> Unit, onOpenGuide: (() -> Unit)? = null) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        onOpenGuide?.let { com.norfold.app.ui.editor.guide.GuideEntryButton(title, it) }
         TextButton(onClick = onClose) { Text("Close") }
     }
 }

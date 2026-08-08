@@ -54,6 +54,13 @@ import com.norfold.app.editor.interchange.InterchangeImportService
 import com.norfold.app.editor.interchange.InterchangeRuntime
 import com.norfold.app.editor.interchange.InterchangeUiState
 import com.norfold.app.editor.interchange.RawSourceDraft
+import com.norfold.app.editor.guide.GuideContext
+import com.norfold.app.editor.guide.GuideDomain
+import com.norfold.app.editor.guide.GuideHost
+import com.norfold.app.editor.guide.GuideRuntime
+import com.norfold.app.editor.guide.GuideSignal
+import com.norfold.app.ui.editor.guide.GuideHostLayer
+import com.norfold.app.ui.editor.guide.rememberGuideUiController
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -75,6 +82,8 @@ fun InterchangeHostBridge(
     beforeOpenRawSource: () -> Unit,
     applyRawSource: (RawSourceDraft) -> Boolean,
     navigateToRegion: (String) -> Unit,
+    guideRuntime: GuideRuntime? = null,
+    guideHost: GuideHost = GuideHost.FLOW,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -86,6 +95,8 @@ fun InterchangeHostBridge(
     var prepareJob by remember { mutableStateOf<Job?>(null) }
     var importApplying by remember { mutableStateOf(false) }
     var rawApplying by remember { mutableStateOf(false) }
+    val guide = rememberGuideUiController(guideRuntime)
+    val openGuide = guide.runtime?.let { { guide.open() } }
 
     fun writeExport(uri: Uri?) {
         val result = pendingExport
@@ -278,6 +289,7 @@ fun InterchangeHostBridge(
                     applyDisabledReason = state.applyImportDisabledReason ?: if (importApplying) "Import is being applied" else null,
                     onApply = ::performImport,
                     onCancel = { mutateRuntime { cancelImport() } },
+                    onOpenGuide = openGuide,
                 )
             }
         state.requestedAction == InterchangeAction.FIDELITY_INSPECTOR && state.fidelity != null ->
@@ -287,6 +299,7 @@ fun InterchangeHostBridge(
                     selected = state.fidelityFilter,
                     onFilter = { mutateRuntime { filterFidelity(it) } },
                     onNavigate = { target -> navigateToRegion(target); mutateRuntime { clearRequest() } },
+                    onOpenGuide = openGuide,
                 )
             }
         state.rawDraft != null && state.requestedAction in setOf(InterchangeAction.RAW_OPEN, InterchangeAction.RAW_VALIDATE) ->
@@ -296,8 +309,21 @@ fun InterchangeHostBridge(
                     onSourceChange = { source -> mutateRuntime { editRawSource(source) } },
                     onApply = ::performRawApply,
                     onCancel = { mutateRuntime { cancelRawSource() } },
+                    onOpenGuide = openGuide,
                 )
             }
+    }
+    if (state.requestedAction != null || state.rawDraft != null) {
+        val signal = when {
+            state.rawDraft != null -> GuideSignal.RAW_SOURCE_OPENED
+            state.requestedAction == InterchangeAction.FIDELITY_INSPECTOR -> GuideSignal.FIDELITY_CONTEXT_OPENED
+            else -> null
+        }
+        LaunchedEffect(signal) { signal?.let(guide::signal) }
+        GuideHostLayer(
+            guide,
+            GuideContext(guideHost, domains = setOf(GuideDomain.INTERCHANGE)),
+        )
     }
 }
 

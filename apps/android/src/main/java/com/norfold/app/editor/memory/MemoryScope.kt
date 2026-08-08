@@ -24,4 +24,10 @@ enum class MemoryScope {
 
     /** Guide / progressive-discovery state (what the user has been shown or dismissed). */
     GUIDE_DISCOVERY,
+
+    ;
+
+    /** Scopes whose contract survives an editor/tool session when a persistence backend is supplied. */
+    val isDurable: Boolean
+        get() = this == CONTEXT_PREFERENCE || this == USER_PREFERENCE || this == GUIDE_DISCOVERY
 }

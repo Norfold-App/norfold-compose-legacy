@@ -116,6 +116,14 @@ import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
+import com.norfold.app.editor.guide.GuideBlocker
+import com.norfold.app.editor.guide.GuideContext
+import com.norfold.app.editor.guide.GuideDomain
+import com.norfold.app.editor.guide.GuideHost
+import com.norfold.app.editor.guide.GuideSignal
+import com.norfold.app.ui.editor.guide.GuideEntryButton
+import com.norfold.app.ui.editor.guide.GuideHostLayer
+import com.norfold.app.ui.editor.guide.rememberGuideUiController
 
 @Composable
 fun SpreadsheetHostScreen(
@@ -133,6 +141,16 @@ fun SpreadsheetHostScreen(
     val context = LocalContext.current
     val clipboard = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     val rootFocus = remember { FocusRequester() }
+    val guide = rememberGuideUiController(runtime.guide)
+    val guideContext = GuideContext(
+        host = GuideHost.SPREADSHEET,
+        domains = buildSet {
+            add(GuideDomain.SPREADSHEET)
+            if (state.colorStudio.target != null) add(GuideDomain.STYLES)
+            if (chartEditingId != null) add(GuideDomain.CHART)
+        },
+        blockers = if (state.selection is TableSelectionState.Editing) setOf(GuideBlocker.TEXT_COMPOSITION) else emptySet(),
+    )
 
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
 
@@ -158,6 +176,7 @@ fun SpreadsheetHostScreen(
             onUndo = { if (runtime.undo()) { refresh++; onChanged() } },
             onRedo = { if (runtime.redo()) { refresh++; onChanged() } },
             onAdvanced = { runtime.toggleAdvancedTools(); refresh++ },
+            onOpenGuide = guide.runtime?.let { { guide.open() } },
         )
         if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val existingCharts = runtime.controller.document().blocks.filterIsInstance<ChartBlock>()
@@ -181,6 +200,7 @@ fun SpreadsheetHostScreen(
                     onClick = {
                         runtime.createChartFromSelection()?.let { id ->
                             chartEditingId = id
+                            guide.signal(GuideSignal.CHART_STUDIO_OPENED)
                             refresh++
                             onChanged()
                         }
@@ -331,6 +351,7 @@ fun SpreadsheetHostScreen(
                 calculationProvider = runtime.chartCalculationProvider(),
                 onRequestRangeBinding = {
                     if (runtime.rebindChartToSelection(blockId)) {
+                        guide.signal(GuideSignal.CHART_DATA_BOUND)
                         refresh++
                         onChanged()
                     }
@@ -342,9 +363,12 @@ fun SpreadsheetHostScreen(
                 },
                 onDismiss = { chartEditingId = null },
                 onDone = { chartEditingId = null },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onDirectManipulation = { guide.signal(GuideSignal.CHART_DIRECT_MANIPULATION) },
             )
         }
     }
+    GuideHostLayer(guide, guideContext)
 }
 
 @Composable
@@ -357,6 +381,7 @@ private fun SpreadsheetTopBar(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onAdvanced: () -> Unit,
+    onOpenGuide: (() -> Unit)?,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
@@ -375,6 +400,7 @@ private fun SpreadsheetTopBar(
         TextButton(onClick = onUndo, enabled = canUndo, modifier = Modifier.size(48.dp)) { Text("↶") }
         TextButton(onClick = onRedo, enabled = canRedo, modifier = Modifier.size(48.dp)) { Text("↷") }
         TextButton(onClick = onAdvanced, modifier = Modifier.height(48.dp)) { Text("Tools") }
+        onOpenGuide?.let { GuideEntryButton("Spreadsheet editor", it) }
     }
     HorizontalDivider()
 }

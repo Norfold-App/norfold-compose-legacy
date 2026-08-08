@@ -28,6 +28,7 @@ import com.norfold.app.editor.document.DocumentHostRuntime
 import com.norfold.app.editor.document.DocumentSceneController
 import com.norfold.app.editor.document.DocumentSession
 import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.ui.editor.guide.rememberEditorInteractionMemory
 import com.norfold.app.editor.flow.FlowSaveCoordinator
 import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.interchange.InterchangeImportService
@@ -108,6 +109,11 @@ private fun DocumentHostRoute(
     val active = ownedDocument ?: return
     val owner = active.owner
     val configuration = LocalConfiguration.current
+    val guideEnabled = editorFlags.isEnabled(EditorFeatureFlag.GUIDE)
+    val interactionMemory = rememberEditorInteractionMemory(guideEnabled)
+    val enabledGuideFeatures = remember {
+        EditorFeatureFlag.entries.filter(editorFlags::isEnabled).toSet()
+    }
 
     val storedTitle = when (owner.type) {
         DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == owner.id }?.title ?: "Untitled document"
@@ -126,6 +132,9 @@ private fun DocumentHostRoute(
                 chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
                 relationshipsEnabled = editorFlags.isEnabled(EditorFeatureFlag.RELATIONSHIPS),
                 importExportRawEnabled = editorFlags.isEnabled(EditorFeatureFlag.IMPORT_EXPORT_RAW),
+                memory = interactionMemory,
+                guideEnabled = guideEnabled,
+                enabledGuideFeatures = enabledGuideFeatures,
             )
             // The snapshot manager captures the controller's *own* workspace: a snapshot over any other
             // workspace would restore something the editor is not looking at, and report success doing it.
@@ -271,6 +280,8 @@ private fun DocumentHostRoute(
                         }
                     }
                 },
+                guideRuntime = runtime.guide,
+                guideHost = com.norfold.app.editor.guide.GuideHost.DOCUMENT,
                 modifier = Modifier.fillMaxSize(),
             )
         }

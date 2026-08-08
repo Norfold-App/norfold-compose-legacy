@@ -21,6 +21,18 @@ import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.editor.chart.ChartDataSource
 import com.norfold.app.editor.chart.ChartDocument
+import com.norfold.app.editor.command.CommandSurface
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.editor.guide.GuideIntegration
+import com.norfold.app.editor.guide.GuideProgressStore
+import com.norfold.app.editor.guide.GuideRuntime
+import com.norfold.app.editor.guide.GuideSignal
+import com.norfold.app.editor.guide.NorfoldGuideCatalog
+import com.norfold.app.editor.guide.RegistryGuideCommandRouter
+import com.norfold.app.editor.memory.InteractionMemory
+import com.norfold.app.editor.presentation.AdaptivePresentationRuntime
+import com.norfold.app.editor.presentation.FormFactor
+import com.norfold.app.editor.surface.SurfaceCoordinator
 
 /**
  * One defined name as a management surface should show it.
@@ -105,6 +117,10 @@ object SpreadsheetWorkbookFactory {
 class SpreadsheetHostRuntime(
     val controller: FlowEditController,
     private val tableBlockId: String? = null,
+    initialFormFactor: FormFactor = FormFactor(360, 640),
+    val memory: InteractionMemory = InteractionMemory(),
+    guideEnabled: Boolean = false,
+    enabledGuideFeatures: Set<EditorFeatureFlag> = emptySet(),
 ) {
     private var revision = 0L
     private var advanced = false
@@ -133,6 +149,22 @@ class SpreadsheetHostRuntime(
     private val tableSession: CalculationTableSession
     private val chartRanges = CalculationRangeRuntime()
     val commandRegistry by lazy { SpreadsheetCommandCatalog.create(this) }
+    val surfaces = SurfaceCoordinator()
+    val presentation = AdaptivePresentationRuntime(initialFormFactor)
+    val guide: GuideRuntime? = GuideIntegration.create(guideEnabled) {
+        GuideRuntime(
+            catalog = NorfoldGuideCatalog.default,
+            progressStore = GuideProgressStore(memory),
+            enabledFeatures = enabledGuideFeatures,
+            commandRouter = RegistryGuideCommandRouter(
+                registry = commandRegistry,
+                context = { commandContext() },
+                invoke = ::invoke,
+            ),
+            surfaces = surfaces,
+            presentation = presentation,
+        )
+    }
 
     fun selectedChartBinding(): CalculationRangeBinding? = selectedStableRange()?.let { range ->
         CalculationRangeBinding(tableSession.workbook().id, range, includeHeaders = true)
@@ -299,20 +331,25 @@ class SpreadsheetHostRuntime(
         revision++
     }
 
-    fun invoke(commandId: String): com.norfold.app.editor.command.CommandResult = commandRegistry.execute(
-        commandId,
-        com.norfold.app.editor.command.CommandContext(
+    private fun commandContext() = com.norfold.app.editor.command.CommandContext(
             offeredCapabilities = setOf(com.norfold.app.editor.command.Capability.TABLE_STRUCTURE),
             targetCount = if (tableSession.selection.state == TableSelectionState.Inactive) 0 else 1,
             hasPrimary = tableSession.selection.state != TableSelectionState.Inactive,
-        ),
-    )
+        )
+
+    fun invoke(commandId: String): com.norfold.app.editor.command.CommandResult =
+        commandRegistry.execute(commandId, commandContext()).also { result ->
+            if (result is com.norfold.app.editor.command.CommandResult.Success) {
+                guide?.onCommandSucceeded(commandId, CommandSurface.COMMAND_EXPLORER)
+            }
+        }
 
     fun select(cell: GridAddress, extend: Boolean = false) {
         // The formula-bar draft belongs to the cell it was typed for. Addressing another cell abandons it
         // rather than carrying it across, which would write one cell's text into a different cell.
         if (selectedCell() != cell) formulaBarDraft = null
         if (extend) tableSession.selection.extendTo(cell) else tableSession.selection.selectCell(cell)
+        if (extend) guide?.onSignal(GuideSignal.RANGE_SELECTED)
         revision++
     }
 
@@ -401,6 +438,7 @@ class SpreadsheetHostRuntime(
             // Only an accepted write finishes the draft. A refusal keeps it so the user can correct the text
             // they typed rather than watching it revert to the old value.
             formulaBarDraft = null
+            guide?.onSignal(GuideSignal.FORMULA_COMMITTED)
         }
         message = result.error?.detail ?: result.warning
         revision++
@@ -740,7 +778,7 @@ class SpreadsheetHostRuntime(
         }
         return replace("Define named range") { workbook ->
             workbook.copy(namedRanges = workbook.namedRanges + NamedRange(name = trimmed, target = range), revision = workbook.revision + 1)
-        }.also { if (it) { message = "Named \"$trimmed\""; revision++ } }
+        }.also { if (it) { message = "Named \"$trimmed\""; guide?.onSignal(GuideSignal.NAMED_RANGE_USED); revision++ } }
     }
 
     /** Every defined name with the range it points at, for a management surface to list. */
@@ -864,7 +902,7 @@ class SpreadsheetHostRuntime(
                     ),
                 ),
             )
-        }.also { if (it) { message = "Validation applied to ${describeRange(range)}"; revision++ } }
+        }.also { if (it) { message = "Validation applied to ${describeRange(range)}"; guide?.onSignal(GuideSignal.VALIDATION_USED); revision++ } }
     }
 
     fun applyComparisonConditional(operator: ComparisonOperator, source: String, format: CellFormat): Boolean {
@@ -883,7 +921,7 @@ class SpreadsheetHostRuntime(
                     ),
                 ),
             )
-        }.also { if (it) { message = "Highlight applied to ${describeRange(range)}"; revision++ } }
+        }.also { if (it) { message = "Highlight applied to ${describeRange(range)}"; guide?.onSignal(GuideSignal.CONDITIONAL_FORMATTING_USED); revision++ } }
     }
 
     // --- Rule management -----------------------------------------------------------------------------

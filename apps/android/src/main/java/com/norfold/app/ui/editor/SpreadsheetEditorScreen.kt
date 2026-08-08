@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.editor.calculation.SpreadsheetDocumentSession
@@ -20,6 +21,7 @@ import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.editor.spreadsheet.SpreadsheetHostScreen
+import com.norfold.app.ui.editor.guide.rememberEditorInteractionMemory
 import kotlinx.coroutines.CompletableDeferred
 
 @Composable
@@ -40,6 +42,12 @@ fun SpreadsheetEditorScreen(
     val active = ownedDocument ?: return
     val owner = active.owner
     val tableBlockId = viewModel.spreadsheetTableBlockId
+    val configuration = LocalConfiguration.current
+    val guideEnabled = editorFlags.isEnabled(EditorFeatureFlag.GUIDE)
+    val interactionMemory = rememberEditorInteractionMemory(guideEnabled)
+    val enabledGuideFeatures = remember {
+        EditorFeatureFlag.entries.filter(editorFlags::isEnabled).toSet()
+    }
     val storedTitle = when (owner.type) {
         DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == owner.id }?.title ?: "Untitled spreadsheet"
         DocumentOwnerType.Task -> state.tasks.firstOrNull { it.id == owner.id }?.title ?: "Untitled spreadsheet"
@@ -51,6 +59,13 @@ fun SpreadsheetEditorScreen(
             val runtime = SpreadsheetHostRuntime(
                 FlowEditController(EditTarget(owner.documentId), active.document),
                 tableBlockId,
+                initialFormFactor = com.norfold.app.editor.presentation.FormFactor(
+                    configuration.screenWidthDp,
+                    configuration.screenHeightDp,
+                ),
+                memory = interactionMemory,
+                guideEnabled = guideEnabled,
+                enabledGuideFeatures = enabledGuideFeatures,
             )
             SpreadsheetDocumentSession(
                 runtime = runtime,

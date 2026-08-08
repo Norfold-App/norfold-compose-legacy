@@ -121,6 +121,14 @@ import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.relationship.CommentAuthorRef
 import com.norfold.app.editor.relationship.CommentMention
 import com.norfold.app.ui.editor.relationship.RelationshipReviewSurface
+import com.norfold.app.editor.guide.GuideBlocker
+import com.norfold.app.editor.guide.GuideContext
+import com.norfold.app.editor.guide.GuideDomain
+import com.norfold.app.editor.guide.GuideHost
+import com.norfold.app.editor.guide.GuideSignal
+import com.norfold.app.ui.editor.guide.GuideEntryButton
+import com.norfold.app.ui.editor.guide.GuideHostLayer
+import com.norfold.app.ui.editor.guide.rememberGuideUiController
 
 /**
  * FlowHost — the writing-first Notes host (roadmap Phase 1 deliverables 1, 5, 6, 10).
@@ -192,6 +200,24 @@ fun FlowHostScreen(
     val lowerSurfaceDp = with(density) { lowerSurfaceHeight.toDp() }
 
     val drag = rememberFlowDragState()
+    val guide = rememberGuideUiController(presenter.runtime.guide)
+    val guideContext = GuideContext(
+        host = GuideHost.FLOW,
+        capabilities = presenter.runtime.scope.commandContext(CommandSurface.DOCK).offeredCapabilities,
+        domains = buildSet {
+            add(GuideDomain.FLOW)
+            when {
+                chartEditingId != null -> add(GuideDomain.CHART)
+                imageEditingId != null -> add(GuideDomain.IMAGE)
+                state.activeSurfaceId in setOf(FlowSurfaces.COLOR_STUDIO, FlowSurfaces.FONT_BROWSER, FlowSurfaces.NAMED_STYLES) -> add(GuideDomain.STYLES)
+                state.activeSurfaceId in setOf(FlowSurfaces.RELATIONSHIP_MANAGER, FlowSurfaces.COMMENTS, FlowSurfaces.REVIEW) -> add(GuideDomain.RELATIONSHIPS)
+            }
+        },
+        blockers = buildSet {
+            if (drag.sourceId != null) add(GuideBlocker.DRAG)
+            if (imageEditingId != null) add(GuideBlocker.CROP)
+        },
+    )
 
     Box(
         modifier
@@ -210,6 +236,7 @@ fun FlowHostScreen(
                 onUndo = { presenter.act { undo() } },
                 onRedo = { presenter.act { redo() } },
                 onEnterSelection = { presenter.act { enterSelectionMode(state.primaryId) } },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
                 compact = configuration.screenWidthDp < FLOW_COMPACT_WIDTH_DP,
             )
             HorizontalDivider()
@@ -272,8 +299,8 @@ fun FlowHostScreen(
                                 drag = drag,
                                 onNotice = { notice = it },
                                 onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
-                                onOpenChart = { chartEditingId = it },
-                                onOpenImage = { imageEditingId = it },
+                                onOpenChart = { chartEditingId = it; guide.signal(GuideSignal.CHART_STUDIO_OPENED) },
+                                onOpenImage = { imageEditingId = it; guide.signal(GuideSignal.IMAGE_FOCUS_OPENED) },
                                 modifier = Modifier.widthIn(max = FLOW_CONTENT_MAX_WIDTH),
                             )
                         }
@@ -364,6 +391,9 @@ fun FlowHostScreen(
             presenter = presenter,
             onNotice = { notice = it },
         )
+        if (state.interchange.requestedAction == null && state.interchange.rawDraft == null) {
+            GuideHostLayer(guide, guideContext)
+        }
     }
 
     if (state.activeSurfaceId in setOf(FlowSurfaces.RELATIONSHIP_MANAGER, FlowSurfaces.COMMENTS, FlowSurfaces.REVIEW)) {
@@ -393,6 +423,7 @@ fun FlowHostScreen(
             onCreateSnapshot = { presenter.act { relationshipReview.createReviewSnapshot(author = currentAuthor) } },
             onRestoreSnapshot = { id -> presenter.act { relationshipReview.restoreReviewSnapshot(id) } },
             onExitConnect = { presenter.act { relationshipReview.exitConnectMode() } },
+            onOpenGuide = guide.runtime?.let { { guide.open() } },
         )
     }
 
@@ -409,6 +440,8 @@ fun FlowHostScreen(
                 onDocumentChanged = { document -> presenter.act { updateChart(blockId, document) } },
                 onDismiss = { chartEditingId = null },
                 onDone = { chartEditingId = null },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onDirectManipulation = { guide.signal(GuideSignal.CHART_DIRECT_MANIPULATION) },
             )
         }
     }
@@ -424,6 +457,8 @@ fun FlowHostScreen(
                 onCommit = { edited -> presenter.act { updateImage(blockId, edited) } },
                 onDismiss = { imageEditingId = null },
                 onDone = { imageEditingId = null },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onCommitted = { guide.signal(GuideSignal.IMAGE_FOCUS_COMMITTED) },
             )
         }
     }
@@ -753,6 +788,7 @@ private fun FlowTopBar(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onEnterSelection: () -> Unit,
+    onOpenGuide: (() -> Unit)?,
     compact: Boolean,
 ) {
     var overflow by remember { mutableStateOf(false) }
@@ -773,6 +809,7 @@ private fun FlowTopBar(
         )
         TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
         TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
+        onOpenGuide?.let { GuideEntryButton("Flow editor", it) }
         if (compact) {
             Box {
                 IconButton(onClick = { overflow = true }) {

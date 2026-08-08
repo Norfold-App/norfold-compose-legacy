@@ -113,6 +113,14 @@ import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.relationship.CommentAuthorRef
 import com.norfold.app.editor.relationship.CommentMention
 import com.norfold.app.ui.editor.relationship.RelationshipReviewSurface
+import com.norfold.app.editor.guide.GuideBlocker
+import com.norfold.app.editor.guide.GuideContext
+import com.norfold.app.editor.guide.GuideDomain
+import com.norfold.app.editor.guide.GuideHost
+import com.norfold.app.editor.guide.GuideSignal
+import com.norfold.app.ui.editor.guide.GuideEntryButton
+import com.norfold.app.ui.editor.guide.GuideHostLayer
+import com.norfold.app.ui.editor.guide.rememberGuideUiController
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
@@ -152,6 +160,25 @@ fun DocumentHostScreen(
     var chartEditingId by remember { mutableStateOf<String?>(null) }
     var imageEditingId by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
+    val guide = rememberGuideUiController(presenter.runtime.guide)
+    val guideContext = GuideContext(
+        host = GuideHost.DOCUMENT,
+        capabilities = presenter.runtime.scope.commandContext(CommandSurface.DOCK).offeredCapabilities,
+        domains = buildSet {
+            add(GuideDomain.DOCUMENT)
+            when {
+                chartEditingId != null -> add(GuideDomain.CHART)
+                imageEditingId != null -> add(GuideDomain.IMAGE)
+                state.activeSurfaceId in setOf(DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES) -> add(GuideDomain.STYLES)
+                state.activeSurfaceId in setOf(DocumentSurfaces.RELATIONSHIP_MANAGER, DocumentSurfaces.COMMENTS, DocumentSurfaces.REVIEW) -> add(GuideDomain.RELATIONSHIPS)
+            }
+        },
+        blockers = buildSet {
+            if (state.manipulation != null) add(GuideBlocker.DRAG)
+            if (state.editingObjectId != null || state.editingTableCell != null) add(GuideBlocker.TEXT_COMPOSITION)
+            if (imageEditingId != null) add(GuideBlocker.CROP)
+        },
+    )
 
     // The runtime raises a notice when it had to switch representation to keep an action faithful. Consuming
     // it here (rather than reading it every recomposition) is what makes it a one-shot explanation.
@@ -211,6 +238,7 @@ fun DocumentHostScreen(
             onOpenPageControl = { presenter.act { openSurface(DocumentSurfaces.PAGE_CONTROL) } },
             onOpenPageList = { presenter.act { openSurface(DocumentSurfaces.PAGE_LIST) } },
             onEnterSelection = { presenter.act { enterSelectionMode(state.primaryObjectId) } },
+            onOpenGuide = guide.runtime?.let { { guide.open() } },
         )
         HorizontalDivider()
 
@@ -230,8 +258,8 @@ fun DocumentHostScreen(
             DocumentPageStack(
                 presenter,
                 onOpenTableInSpreadsheet,
-                { chartEditingId = it },
-                { imageEditingId = it },
+                { chartEditingId = it; guide.signal(GuideSignal.CHART_STUDIO_OPENED) },
+                { imageEditingId = it; guide.signal(GuideSignal.IMAGE_FOCUS_OPENED) },
                 Modifier.fillMaxSize(),
             )
         }
@@ -296,6 +324,7 @@ fun DocumentHostScreen(
             onInvoke = { id -> presenter.act { invokePageControl(id, state.pageScope) } },
             onApplyValue = { id, raw -> presenter.act { invokePageValue(id, state.pageScope, raw) } },
             onClearNewPageTemplate = { presenter.act { clearNewPageTemplate() } },
+            onOpenGuide = guide.runtime?.let { { guide.open() } },
         )
         DocumentSurfaces.PAGE_LIST -> PageListSheet(
             state = state,
@@ -333,6 +362,7 @@ fun DocumentHostScreen(
                 onCreateSnapshot = { presenter.act { relationshipReview.createReviewSnapshot(author = currentAuthor) } },
                 onRestoreSnapshot = { id -> presenter.act { relationshipReview.restoreReviewSnapshot(id) } },
                 onExitConnect = { presenter.act { relationshipReview.exitConnectMode() } },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
             )
         }
     }
@@ -350,6 +380,8 @@ fun DocumentHostScreen(
                 onDocumentChanged = { document -> presenter.act { updateChart(blockId, document) } },
                 onDismiss = { chartEditingId = null },
                 onDone = { chartEditingId = null },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onDirectManipulation = { guide.signal(GuideSignal.CHART_DIRECT_MANIPULATION) },
             )
         }
     }
@@ -365,8 +397,13 @@ fun DocumentHostScreen(
                 onCommit = { edited -> presenter.act { updateImage(blockId, edited) } },
                 onDismiss = { imageEditingId = null },
                 onDone = { imageEditingId = null },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onCommitted = { guide.signal(GuideSignal.IMAGE_FOCUS_COMMITTED) },
             )
         }
+    }
+    if (state.interchange.requestedAction == null && state.interchange.rawDraft == null) {
+        GuideHostLayer(guide, guideContext)
     }
 }
 
@@ -1251,6 +1288,7 @@ private fun DocumentTopBar(
     onOpenPageControl: () -> Unit,
     onOpenPageList: () -> Unit,
     onEnterSelection: () -> Unit,
+    onOpenGuide: (() -> Unit)?,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1263,6 +1301,7 @@ private fun DocumentTopBar(
             )
             TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
             TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
+            onOpenGuide?.let { GuideEntryButton("Document editor", it) }
         }
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -1792,11 +1831,15 @@ private fun PageControlSheet(
     onInvoke: (String) -> Unit,
     onApplyValue: (String, String) -> Unit,
     onClearNewPageTemplate: () -> Unit,
+    onOpenGuide: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            Text("Page setup", style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Page setup", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                onOpenGuide?.let { GuideEntryButton("Page setup", it) }
+            }
             Text(
                 text = pageScopeSummary(state),
                 style = MaterialTheme.typography.bodySmall,

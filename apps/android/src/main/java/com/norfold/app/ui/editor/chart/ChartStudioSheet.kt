@@ -91,6 +91,8 @@ fun ChartStudioSheet(
     calculationProvider: ChartCalculationDataProvider? = null,
     onDocumentChanged: (ChartDocument) -> Boolean,
     onRequestRangeBinding: (() -> Unit)? = null,
+    onOpenGuide: (() -> Unit)? = null,
+    onDirectManipulation: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onDone: (ChartDocument) -> Unit = { onDismiss() },
 ) {
@@ -126,6 +128,7 @@ fun ChartStudioSheet(
                     Text("Chart Studio", style = MaterialTheme.typography.headlineSmall)
                     if (readOnly) Text("Read mode · editing unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                onOpenGuide?.let { com.norfold.app.ui.editor.guide.GuideEntryButton("Chart Studio", it) }
                 TextButton(onClick = {
                     if (colorStudio.engine.isOpen) colorStudio.close(commit = true)
                     if (runtime.hasGesture()) runtime.endGesture("Finish chart edit")
@@ -151,7 +154,7 @@ fun ChartStudioSheet(
                                 }
                             ) revision++
                         },
-                        onEnd = { if (runtime.endGesture("Adjust chart value")) revision++ },
+                        onEnd = { if (runtime.endGesture("Adjust chart value")) { revision++; onDirectManipulation?.invoke() } },
                         onCancel = { if (runtime.cancelGesture()) revision++ },
                     )
                 } else null,
@@ -175,6 +178,7 @@ fun ChartStudioSheet(
                     ),
                     fontRows = emptyList(),
                     actions = chartColorActions(colorStudio),
+                    onOpenGuide = onOpenGuide,
                 )
             } else when (section) {
                 ChartStudioSection.DATA -> DataSection(

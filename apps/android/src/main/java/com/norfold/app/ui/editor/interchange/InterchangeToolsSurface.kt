@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -44,9 +45,10 @@ fun ImportPreflightSurface(
     onApply: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenGuide: (() -> Unit)? = null,
 ) {
     Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Import preflight", style = MaterialTheme.typography.headlineSmall)
+        GuideHeader("Import preflight", onOpenGuide)
         Text("Format: ${preflight.detectedFormat.name}. Mode: ${preflight.proposedMode.name}. Intent: ${preflight.proposedIntent.name.replace('_', ' ')}.", Modifier.semantics { stateDescription = "${preflight.detectedFormat.name} import, ${preflight.proposedMode.name} mode" })
         Text("File size: ${preflight.source.byteSize} bytes. Pages: ${preflight.source.pageCount ?: "not applicable"}. Sheets: ${preflight.source.sheetCount ?: "not applicable"}.")
         Text("Import mode", style = MaterialTheme.typography.titleSmall)
@@ -95,9 +97,10 @@ fun FidelityInspectorSurface(
     onFilter: (Set<FidelityState>) -> Unit,
     onNavigate: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenGuide: (() -> Unit)? = null,
 ) {
     Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Fidelity Inspector", style = MaterialTheme.typography.headlineSmall)
+        GuideHeader("Fidelity Inspector", onOpenGuide)
         LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             items(FidelityState.entries, key = { it.name }) { state ->
                 FilterChip(
@@ -122,11 +125,11 @@ fun FidelityInspectorSurface(
 }
 
 @Composable
-fun RawSourceSurface(draft: RawSourceDraft, onSourceChange: (String) -> Unit, onApply: () -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+fun RawSourceSurface(draft: RawSourceDraft, onSourceChange: (String) -> Unit, onApply: () -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier, onOpenGuide: (() -> Unit)? = null) {
     val diagnostics = (draft.parse as? RawSourceParseResult.Failure)?.diagnostics.orEmpty()
     val disabled = draft.applyDisabledReason ?: diagnostics.firstOrNull()?.let { "Line ${it.line}, column ${it.column}: ${it.message}" }
     Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Raw Source", style = MaterialTheme.typography.headlineSmall)
+        GuideHeader("Raw Source", onOpenGuide)
         Text("Advanced versioned Norfold product source. Changes remain a draft until Apply.")
         OutlinedTextField(
             value = draft.source,
@@ -151,5 +154,13 @@ fun RawSourceSurface(draft: RawSourceDraft, onSourceChange: (String) -> Unit, on
             Button(onApply, Modifier.heightIn(min = 48.dp), enabled = draft.canApply) { Text("Apply Raw Source") }
         }
         if (disabled != null) Text("Apply unavailable: $disabled")
+    }
+}
+
+@Composable
+private fun GuideHeader(title: String, onOpenGuide: (() -> Unit)?) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+        onOpenGuide?.let { com.norfold.app.ui.editor.guide.GuideEntryButton(title, it) }
     }
 }

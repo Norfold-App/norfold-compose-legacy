@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.stateDescription
@@ -61,6 +62,7 @@ fun RelationshipReviewSurface(
     onCreateSnapshot: () -> Unit,
     onRestoreSnapshot: (ReviewSnapshotId) -> Unit,
     onExitConnect: () -> Unit,
+    onOpenGuide: (() -> Unit)? = null,
 ) {
     var draft by remember { mutableStateOf("") }
     var selectedMentions by remember { mutableStateOf(emptyList<CommentMention>()) }
@@ -70,7 +72,10 @@ fun RelationshipReviewSurface(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                onOpenGuide?.let { com.norfold.app.ui.editor.guide.GuideEntryButton(title, it) }
+            }
             Text(
                 "${state.unresolvedCount} unresolved comments · ${state.relationships.size} relationships",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

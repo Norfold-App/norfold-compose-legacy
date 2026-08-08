@@ -115,6 +115,8 @@ fun ImageFocusSheet(
     onCommit: (ImageBlock) -> Boolean,
     onDismiss: () -> Unit,
     onDone: () -> Unit = onDismiss,
+    onOpenGuide: (() -> Unit)? = null,
+    onCommitted: (() -> Unit)? = null,
 ) {
     val latestCommit by rememberUpdatedState(onCommit)
     val runtime = remember(block.id, block.source, block.imageEditDocument, readOnly) {
@@ -182,10 +184,11 @@ fun ImageFocusSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                onOpenGuide?.let { com.norfold.app.ui.editor.guide.GuideEntryButton("Image Focus", it) }
                 TextButton(onClick = { runtime.cancel(); onDismiss() }) { Text("Cancel") }
                 Button(onClick = {
                     if (colorStudio.engine.isOpen) colorStudio.close(commit = true)
-                    if (runtime.done()) onDone()
+                    if (runtime.done()) { onCommitted?.invoke(); onDone() }
                 }, enabled = !runtime.isReadOnly()) { Text("Done") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -249,6 +252,7 @@ fun ImageFocusSheet(
                     ),
                     fontRows = emptyList(),
                     actions = imageColorActions(colorStudio),
+                    onOpenGuide = onOpenGuide,
                 )
             } else when (section) {
                 ImageFocusSection.CROP -> CropSection(document, controlsDisabled, runtime, { revision++ }, ::edit)

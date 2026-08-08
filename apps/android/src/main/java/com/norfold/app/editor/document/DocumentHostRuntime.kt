@@ -23,6 +23,13 @@ import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.command.EditorCommand
 import com.norfold.app.editor.flow.FlowShortcut
 import com.norfold.app.editor.memory.InteractionMemory
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.editor.guide.GuideIntegration
+import com.norfold.app.editor.guide.GuideProgressStore
+import com.norfold.app.editor.guide.GuideRuntime
+import com.norfold.app.editor.guide.GuideSignal
+import com.norfold.app.editor.guide.NorfoldGuideCatalog
+import com.norfold.app.editor.guide.RegistryGuideCommandRouter
 import com.norfold.app.editor.presentation.AdaptivePresentationRuntime
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.recovery.RecoveryReason
@@ -172,6 +179,9 @@ class DocumentHostRuntime(
     chartStudioEnabled: Boolean = false,
     relationshipsEnabled: Boolean = false,
     importExportRawEnabled: Boolean = false,
+    val memory: InteractionMemory = InteractionMemory(),
+    guideEnabled: Boolean = false,
+    enabledGuideFeatures: Set<EditorFeatureFlag> = emptySet(),
 ) {
     private val chartRanges = CalculationRangeRuntime()
     val selection = SelectionEngine()
@@ -182,7 +192,20 @@ class DocumentHostRuntime(
     }
     val surfaces = SurfaceCoordinator()
     val presentation = AdaptivePresentationRuntime(initialFormFactor)
-    val memory = InteractionMemory()
+    val guide: GuideRuntime? = GuideIntegration.create(guideEnabled) {
+        GuideRuntime(
+            catalog = NorfoldGuideCatalog.default,
+            progressStore = GuideProgressStore(memory),
+            enabledFeatures = enabledGuideFeatures,
+            commandRouter = RegistryGuideCommandRouter(
+                registry = commands,
+                context = { scope.commandContext(CommandSurface.COMMAND_EXPLORER) },
+                invoke = { id -> invoke(id, CommandSurface.COMMAND_EXPLORER) },
+            ),
+            surfaces = surfaces,
+            presentation = presentation,
+        )
+    }
     val view = DocumentViewState()
     val relationshipReview = RelationshipReviewRuntime(
         artifactId = controller.target.id,
@@ -432,6 +455,7 @@ class DocumentHostRuntime(
      */
     fun invoke(commandId: String, surface: CommandSurface = CommandSurface.DOCK): CommandResult {
         val result = commands.execute(commandId, scope.commandContext(surface))
+        if (result is CommandResult.Success) guide?.onCommandSucceeded(commandId, surface)
         instrumentation.onCommandInvoked(commandId, surface, result)
         lastFailure = (result as? CommandResult.Failure)?.reason
         // A no-op still ends here: the surface must be able to tell "nothing to do" from "done", and the
@@ -494,6 +518,7 @@ class DocumentHostRuntime(
             if (view.manipulation != null) view.cancelManipulation()
         }
         view.setIntent(intent)
+        guide?.onSignal(GuideSignal.DOCUMENT_INTENT_CHANGED)
         instrumentation.onViewChanged(view.representation, intent)
         revision++
     }
@@ -509,6 +534,7 @@ class DocumentHostRuntime(
     fun setRepresentation(representation: LayoutRepresentation) {
         if (representation != LayoutRepresentation.ORIGINAL) editingObjectId = null
         view.setRepresentation(representation)
+        guide?.onSignal(GuideSignal.DOCUMENT_REPRESENTATION_CHANGED)
         instrumentation.onViewChanged(representation, view.intent)
         revision++
     }
@@ -667,6 +693,7 @@ class DocumentHostRuntime(
             else -> if (geometries.size > 1) "Move objects" else "Move"
         }
         val committed = controller.commitGeometries(geometries, label)
+        if (committed) guide?.onSignal(GuideSignal.SCENE_OBJECT_TRANSFORMED)
         instrumentation.onManipulationCommitted(label, geometries.size)
         revision++
         return committed
@@ -842,6 +869,8 @@ class DocumentHostRuntime(
             com.norfold.app.editor.presentation.ToolPresentationState(surfaceId),
             compactPreferenceFor(surfaceId),
         )
+        if (surfaceId == DocumentSurfaces.PAGE_CONTROL) guide?.onSignal(GuideSignal.PAGE_CONTROL_OPENED)
+        if (surfaceId == DocumentSurfaces.RELATIONSHIP_MANAGER) guide?.onSignal(GuideSignal.RELATIONSHIP_MANAGER_OPENED)
         revision++
         return surface
     }
@@ -1226,6 +1255,7 @@ class DocumentHostRuntime(
         if (presentation.formFactor == next) return
         editorStyle.onFormFactorChanged()
         presentation.onFormFactorChanged(next) { compactPreferenceFor(it) }
+        guide?.onFormFactorChanged(next)
         instrumentation.onPresentationChanged(presentation.modeFor("document"), next)
         revision++
     }

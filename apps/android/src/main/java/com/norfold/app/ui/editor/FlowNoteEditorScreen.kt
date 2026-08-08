@@ -16,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.findById
 import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.ui.editor.guide.rememberEditorInteractionMemory
 import com.norfold.app.editor.flow.FlowDocumentSession
 import com.norfold.app.editor.flow.FlowEditController
 import com.norfold.app.editor.flow.FlowHostRuntime
@@ -97,6 +98,11 @@ private fun FlowHostRoute(
     val active = ownedDocument ?: return
     val owner = active.owner
     val configuration = LocalConfiguration.current
+    val guideEnabled = editorFlags.isEnabled(EditorFeatureFlag.GUIDE)
+    val interactionMemory = rememberEditorInteractionMemory(guideEnabled)
+    val enabledGuideFeatures = remember {
+        EditorFeatureFlag.entries.filter(editorFlags::isEnabled).toSet()
+    }
 
     val storedTitle = when (owner.type) {
         DocumentOwnerType.Note -> state.notes.firstOrNull { it.id == owner.id }?.title ?: "Untitled note"
@@ -114,6 +120,9 @@ private fun FlowHostRoute(
                 chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
                 relationshipsEnabled = editorFlags.isEnabled(EditorFeatureFlag.RELATIONSHIPS),
                 importExportRawEnabled = editorFlags.isEnabled(EditorFeatureFlag.IMPORT_EXPORT_RAW),
+                memory = interactionMemory,
+                guideEnabled = guideEnabled,
+                enabledGuideFeatures = enabledGuideFeatures,
                 )
             FlowDocumentSession(
                 runtime = runtime,
@@ -221,6 +230,8 @@ private fun FlowHostRoute(
                         if (controller.document().findById(target) != null) scope.selectBlocks(listOf(target))
                     }
                 },
+                guideRuntime = runtime.guide,
+                guideHost = com.norfold.app.editor.guide.GuideHost.FLOW,
                 modifier = Modifier.fillMaxSize(),
             )
         }

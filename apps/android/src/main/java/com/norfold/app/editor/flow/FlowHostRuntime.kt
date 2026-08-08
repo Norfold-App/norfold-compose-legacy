@@ -20,6 +20,13 @@ import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.command.EditorCommand
 import com.norfold.app.editor.memory.InteractionMemory
 import com.norfold.app.editor.memory.MemoryScope
+import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.editor.guide.GuideIntegration
+import com.norfold.app.editor.guide.GuideProgressStore
+import com.norfold.app.editor.guide.GuideRuntime
+import com.norfold.app.editor.guide.GuideSignal
+import com.norfold.app.editor.guide.NorfoldGuideCatalog
+import com.norfold.app.editor.guide.RegistryGuideCommandRouter
 import com.norfold.app.editor.presentation.AdaptivePresentationRuntime
 import com.norfold.app.editor.presentation.CompactPreference
 import com.norfold.app.editor.presentation.FormFactor
@@ -228,6 +235,8 @@ class FlowHostRuntime(
     chartStudioEnabled: Boolean = false,
     relationshipsEnabled: Boolean = false,
     importExportRawEnabled: Boolean = false,
+    guideEnabled: Boolean = false,
+    enabledGuideFeatures: Set<EditorFeatureFlag> = emptySet(),
 ) {
     private val chartRanges = CalculationRangeRuntime()
 
@@ -239,6 +248,20 @@ class FlowHostRuntime(
     val slashResolver: FlowSlashResolver = FlowSlashResolver(scope, registry)
     val surfaces: SurfaceCoordinator = SurfaceCoordinator()
     val presentation: AdaptivePresentationRuntime = AdaptivePresentationRuntime(initialFormFactor)
+    val guide: GuideRuntime? = GuideIntegration.create(guideEnabled) {
+        GuideRuntime(
+            catalog = NorfoldGuideCatalog.default,
+            progressStore = GuideProgressStore(memory),
+            enabledFeatures = enabledGuideFeatures,
+            commandRouter = RegistryGuideCommandRouter(
+                registry = registry,
+                context = { scope.commandContext(CommandSurface.COMMAND_EXPLORER) },
+                invoke = { id -> invoke(id, CommandSurface.COMMAND_EXPLORER) },
+            ),
+            surfaces = surfaces,
+            presentation = presentation,
+        )
+    }
     val relationshipReview = RelationshipReviewRuntime(
         artifactId = controller.target.id,
         enabled = relationshipsEnabled,
@@ -520,6 +543,7 @@ class FlowHostRuntime(
         val result = registry.execute(commandId, context)
         when (result) {
             is CommandResult.Success -> {
+                guide?.onCommandSucceeded(commandId, surface)
                 lastFailure = null
                 // A command that moved the caret (§4.14) has to move real focus too, or the field the user is
                 // looking at keeps its own stale cursor and the next keystroke lands in the wrong place. This
@@ -1163,6 +1187,7 @@ class FlowHostRuntime(
         }
         anchorBlockId?.let { scope.selectBlocks(listOf(it)) }
         markMultiSelectHintShown()
+        guide?.onSignal(GuideSignal.FLOW_MULTI_SELECT)
         instrumentation.onSelectionModeChanged(true, selectedCount)
         revision++
     }
@@ -1320,6 +1345,7 @@ class FlowHostRuntime(
         }
         editorStyle.onFormFactorChanged()
         val presented = presentation.onFormFactorChanged(next) { compactPreferenceFor(it) }
+        guide?.onFormFactorChanged(next)
         instrumentation.onPresentationChanged(currentPresentationMode(), next)
         revision++
         return presented
