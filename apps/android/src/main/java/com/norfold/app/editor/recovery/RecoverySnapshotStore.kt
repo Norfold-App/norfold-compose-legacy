@@ -1,13 +1,13 @@
 package com.norfold.app.editor.recovery
 
 /**
- * Durable-shaped store of [RecoverySnapshot]s (roadmap Phase 0 D3 / spec §13.7).
+ * Store of [RecoverySnapshot]s (roadmap Phase 0 D3 / spec §13.7).
  *
- * Phase 0 provides the in-memory implementation ([InMemoryRecoverySnapshotStore]); a later phase can back
- * the same interface with encrypted on-disk storage without changing the [RecoverySnapshotManager]. The
- * store is deliberately dumb: it holds snapshots newest-last, enforces a bounded retention, and never
+ * Two implementations ship: [InMemoryRecoverySnapshotStore] for headless use and tests, and
+ * [FileRecoverySnapshotStore] for the durable, app-private on-disk store that survives process death.
+ * The store is deliberately dumb: it holds snapshots newest-last, enforces a bounded retention, and never
  * inspects payloads. Retention keeps recovery from growing without bound while always preserving the most
- * recent restore points (the ones a user is most likely to need).
+ * recent restore points (the ones a user is most likely to need) and every named one it can.
  */
 interface RecoverySnapshotStore {
     /** Persists [snapshot], evicting the oldest if capacity is exceeded. */
@@ -50,7 +50,20 @@ class InMemoryRecoverySnapshotStore(
             return
         }
         snapshots.addLast(snapshot)
-        while (snapshots.size > capacity) snapshots.removeFirst()
+        while (snapshots.size > capacity) evictOne()
+    }
+
+    /**
+     * Evicts the oldest automatic snapshot, falling back to the oldest snapshot of any kind only once no
+     * automatic one is left.
+     *
+     * Named restore points are what a user deliberately created, so a burst of automatic captures (an
+     * import, a format conversion, a mass style replacement) must not silently push them out. The fallback
+     * still exists because a store made entirely of named points has to stay bounded too.
+     */
+    private fun evictOne() {
+        val automatic = snapshots.indexOfFirst { !it.isManual }
+        snapshots.removeAt(if (automatic >= 0) automatic else 0)
     }
 
     override fun all(): List<RecoverySnapshot> = snapshots.toList()

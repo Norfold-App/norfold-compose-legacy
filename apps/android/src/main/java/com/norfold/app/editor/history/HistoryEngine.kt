@@ -26,6 +26,7 @@ package com.norfold.app.editor.history
 class HistoryEngine(
     private val workspace: EditWorkspace,
     private val listener: HistoryListener? = null,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val undoStack = ArrayDeque<EditTransaction>()
     private val redoStack = ArrayDeque<EditTransaction>()
@@ -40,8 +41,21 @@ class HistoryEngine(
     fun undoDepth(): Int = undoStack.size
     fun redoDepth(): Int = redoStack.size
 
-    /** Read-only snapshot of the authoritative undo history, oldest first. For a future History UI. */
+    /** Read-only snapshot of the applied history, oldest first. The last element is the next undo. */
     fun history(): List<EditTransaction> = undoStack.toList()
+
+    /**
+     * Read-only snapshot of the undone (redoable) history, oldest-undone first. The **last** element is
+     * the next redo. Phase 10 projects this alongside [history] so the History UI can show the user's
+     * current position within one linear order instead of pretending undone work vanished.
+     */
+    fun redoHistory(): List<EditTransaction> = redoStack.toList()
+
+    /** The transaction a global undo would reverse, without performing it. */
+    fun peekUndo(): EditTransaction? = undoStack.lastOrNull()
+
+    /** The transaction a global redo would reapply, without performing it. */
+    fun peekRedo(): EditTransaction? = redoStack.lastOrNull()
 
     /**
      * Applies [transaction] atomically and records it. Clears the redo stack (a new edit forks history).
@@ -54,21 +68,27 @@ class HistoryEngine(
     fun commit(transaction: EditTransaction) {
         applyOperationsAtomic(transaction.operations)
 
+        val stamped = if (transaction.createdAtMillis == EditTransaction.UNSTAMPED) {
+            transaction.copy(createdAtMillis = clock())
+        } else {
+            transaction
+        }
         val coalesceInto = undoStack.lastOrNull()
-        val shouldCoalesce = transaction.coalescingKey != null &&
-            transaction.coalescingKey == lastCoalescingKey &&
+        val shouldCoalesce = stamped.coalescingKey != null &&
+            stamped.coalescingKey == lastCoalescingKey &&
             coalesceInto != null
         if (shouldCoalesce) {
+            // A coalesced run keeps the *first* keystroke's timestamp: it is one logical step that began then.
             undoStack[undoStack.lastIndex] = coalesceInto.copy(
-                operations = coalesceInto.operations + transaction.operations,
-                label = transaction.label,
+                operations = coalesceInto.operations + stamped.operations,
+                label = stamped.label,
             )
         } else {
-            undoStack.addLast(transaction)
+            undoStack.addLast(stamped)
         }
-        lastCoalescingKey = transaction.coalescingKey
+        lastCoalescingKey = stamped.coalescingKey
         redoStack.clear()
-        listener?.onCommitted(transaction)
+        listener?.onCommitted(stamped)
         listener?.onHistoryChanged(this)
     }
 

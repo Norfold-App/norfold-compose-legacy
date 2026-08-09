@@ -8,9 +8,13 @@ package com.norfold.app.editor.history
  * Because operations may target different [EditTarget]s, a single transaction can span multiple
  * documents — this is what makes **cross-target undo atomic**.
  *
- * [label] is a human-facing description (for a future History UI in Phase 10). [origin] records where
- * the transaction came from so filtered/contextual history (§13.6) can be built later without changing
- * the core. The core itself does not filter — it stores the authoritative linear order.
+ * [label] is a human-facing description shown by the Phase-10 History UI. [origin] records where the
+ * transaction came from so filtered/contextual history (§13.6) is a *view* over this one record rather
+ * than a competing stack. The core itself does not filter — it stores the authoritative linear order.
+ *
+ * [createdAtMillis] satisfies the §13.1 requirement that a history record carry a timestamp. It stays a
+ * defaulted field so every existing caller keeps compiling: [HistoryEngine.commit] stamps it on the way
+ * in when it is still [UNSTAMPED], which keeps the clock out of every call site and out of the domain.
  */
 data class EditTransaction(
     val id: String,
@@ -18,6 +22,7 @@ data class EditTransaction(
     val operations: List<EditOperation>,
     val origin: TransactionOrigin = TransactionOrigin.LOCAL_USER,
     val coalescingKey: String? = null,
+    val createdAtMillis: Long = UNSTAMPED,
 ) {
     init {
         require(operations.isNotEmpty()) { "An EditTransaction must contain at least one operation" }
@@ -31,6 +36,11 @@ data class EditTransaction(
 
     /** The inverse transaction: operations reversed in order, each individually inverted. */
     fun inverse(): EditTransaction = copy(operations = operations.asReversed().map { it.inverse() })
+
+    companion object {
+        /** Sentinel for "the engine has not stamped this yet". Keeps the domain free of a clock. */
+        const val UNSTAMPED = 0L
+    }
 }
 
 /**

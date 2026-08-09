@@ -89,6 +89,11 @@ enum class EditorFeatureFlag(
     RELATIONSHIPS(key = "editor.domain.relationships", defaultEnabled = false, description = "Relationship engine + Connect mode + comments/review (Phase 7)."),
     IMPORT_EXPORT_RAW(key = "editor.domain.io", defaultEnabled = false, description = "Import/Export/Fidelity/Raw Source (Phase 8)."),
     GUIDE(key = "editor.domain.guide", defaultEnabled = false, description = "Guide / progressive discovery (Phase 9)."),
+    HISTORY_UI(
+        key = "editor.domain.history.ui",
+        defaultEnabled = false,
+        description = "History browser, filtered/contextual undo presentation, named snapshots and the recovery browser (Phase 10).",
+    ),
     ;
 
     companion object {

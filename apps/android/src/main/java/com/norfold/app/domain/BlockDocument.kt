@@ -410,6 +410,18 @@ object BlockDocumentJson {
     }
 
     /**
+     * True when [json] has the shape [encodeDocumentPayload] writes.
+     *
+     * [decodeDocumentPayload] deliberately never fails: blank content becomes an empty document and a
+     * non-array becomes one [UnknownBlock]. That is right for reading a document — nothing is dropped — but
+     * it means a caller that must *verify* a payload before overwriting live content (recovery restore)
+     * cannot learn anything from a decode attempt. This predicate is the check that decoding cannot be:
+     * it separates "a document" from "a string that will merely survive being read as one".
+     */
+    fun isDocumentPayload(json: String): Boolean =
+        json.isNotBlank() && runCatching { format.parseToJsonElement(json) }.getOrNull() is JsonArray
+
+    /**
      * Copy of [block] under [newId], rewriting the id inside the preserved payload too so the new
      * identity survives the next decode (needed when duplicating or re-identifying unknown blocks).
      */
