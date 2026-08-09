@@ -29,7 +29,7 @@ import org.junit.Test
  * So the property here is not "restore works" — the restore suites already prove that. It is that after a
  * restore the history is still a truthful account of the document.
  */
-class RecoveryHistoryCoherencePhase10Test {
+class RecoveryHistoryCoherenceTest {
 
     private fun para(text: String, id: String) = ParagraphBlock(id = id, content = listOf(InlineText(text)))
 

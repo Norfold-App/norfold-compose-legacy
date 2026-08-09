@@ -51,7 +51,7 @@ import org.junit.Test
  * cannot see the list to verify. So each test pins the announcement against what the command would actually
  * do at that moment.
  */
-class HistoryAccessibilityPhase10Test {
+class HistoryAccessibilityTest {
 
     // ── Fixtures ────────────────────────────────────────────────────────────────────────────────────
 

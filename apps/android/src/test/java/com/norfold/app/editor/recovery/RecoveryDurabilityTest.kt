@@ -28,7 +28,7 @@ import java.nio.file.Files
  *
  * Pure JVM against a real filesystem: no Android, no database, no crypto, no network.
  */
-class RecoveryDurabilityPhase10Test {
+class RecoveryDurabilityTest {
 
     private val noteA = EditTarget("note:A")
     private val noteB = EditTarget("note:B")

@@ -67,7 +67,7 @@ import org.junit.Test
  * stop rather than a fall-through into edits the user cannot see — is pinned here rather than in the focus
  * runtime's own tests, because it is only observable from the host.
  */
-class HistoryHostIntegrationPhase10Test {
+class HistoryHostIntegrationTest {
 
     // ── Fixtures ────────────────────────────────────────────────────────────────────────────────────
 

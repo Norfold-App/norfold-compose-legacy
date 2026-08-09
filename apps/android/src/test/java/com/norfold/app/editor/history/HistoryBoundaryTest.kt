@@ -21,7 +21,7 @@ import org.junit.Test
  * and that a plausible number of files were read before it asserts an absence: without those two guards a
  * renamed package would make every `!in` check trivially true and this file would pass while reading nothing.
  */
-class HistoryBoundaryPhase10Test {
+class HistoryBoundaryTest {
 
     private fun sources(path: String, minimumFiles: Int): String {
         val dir = File(path)

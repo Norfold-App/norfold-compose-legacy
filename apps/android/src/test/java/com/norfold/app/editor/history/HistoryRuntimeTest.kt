@@ -33,7 +33,7 @@ import org.junit.Test
  *
  * Pure JVM: no Android, no Compose, no persistence, no collaboration.
  */
-class HistoryRuntimePhase10Test {
+class HistoryRuntimeTest {
 
     private val noteA = EditTarget("note:A")
     private val noteB = EditTarget("note:B")
