@@ -27,6 +27,16 @@ import com.norfold.app.editor.guide.GuideRuntime
 import com.norfold.app.editor.guide.GuideSignal
 import com.norfold.app.editor.guide.NorfoldGuideCatalog
 import com.norfold.app.editor.guide.RegistryGuideCommandRouter
+import com.norfold.app.editor.history.EditTransaction
+import com.norfold.app.editor.history.FocusHistoryOwner
+import com.norfold.app.editor.history.HistoryCommands
+import com.norfold.app.editor.history.HistoryDirection
+import com.norfold.app.editor.history.HistoryHost
+import com.norfold.app.editor.history.HistoryIntegration
+import com.norfold.app.editor.history.HistoryRoute
+import com.norfold.app.editor.history.HistoryRuntime
+import com.norfold.app.editor.recovery.RecoveryBrowserIntegration
+import com.norfold.app.editor.recovery.RecoveryBrowserRuntime
 import com.norfold.app.editor.presentation.AdaptivePresentationRuntime
 import com.norfold.app.editor.presentation.CompactPreference
 import com.norfold.app.editor.presentation.FormFactor
@@ -237,6 +247,7 @@ class FlowHostRuntime(
     importExportRawEnabled: Boolean = false,
     guideEnabled: Boolean = false,
     enabledGuideFeatures: Set<EditorFeatureFlag> = emptySet(),
+    historyUiEnabled: Boolean = false,
 ) {
     private val chartRanges = CalculationRangeRuntime()
 
@@ -269,6 +280,29 @@ class FlowHostRuntime(
         mutateDocument = controller::mutateDocument,
         protectBeforeRestore = { controller.snapshotBeforeDestructiveEdit(it) },
     )
+    /**
+     * The History browser view-model over this artifact's one authoritative history (Phase 10).
+     *
+     * Like [guide], it is created only when the flag is on: with HISTORY_UI disabled there is no browser
+     * runtime, no projection, and no surface registration. Undo/redo themselves are not gated — they are
+     * the existing chord — only the UI that frames them.
+     */
+    val history: HistoryRuntime? = HistoryIntegration.create(historyUiEnabled) {
+        HistoryRuntime(
+            host = observedHistoryHost(),
+            surfaces = surfaces,
+            presentation = presentation,
+            focusOwner = { focusHistoryOwner() },
+        )
+    }
+    /** The recovery browser over this artifact's snapshots (Phase 10). Shares the controller's store. */
+    val recoveryBrowser: RecoveryBrowserRuntime? = RecoveryBrowserIntegration.create(historyUiEnabled) {
+        RecoveryBrowserRuntime(
+            manager = controller.recovery(),
+            surfaces = surfaces,
+            presentation = presentation,
+        )
+    }
     val styleController = StyleController(
         mutate = { label, mutation ->
             controller.mutate(label) { session ->
@@ -337,6 +371,7 @@ class FlowHostRuntime(
 
     init {
         controller.setDocumentInvariant(relationshipReview::reconcileEndpointsIn)
+        history?.let { HistoryCommands.register(registry, it, recoveryBrowser) }
         EditorStyleCommands.register(
             registry = registry,
             textColor = { openStyleColor(ColorRole.TEXT) },
@@ -478,6 +513,14 @@ class FlowHostRuntime(
     private var pendingTableWarning: Pair<FlowTableCursor, String>? = null
 
     /**
+     * The focus session that owns undo while it is open (§13.5), or null when artifact history owns it.
+     *
+     * Deliberately a single slot rather than a stack: two tools cannot both own the undo chord, and a stack
+     * would let a stale registration outlive the session that made it and swallow undo forever.
+     */
+    private var registeredFocusOwner: FocusHistoryOwner? = null
+
+    /**
      * The live calculation engine for the table block currently being edited, keyed by block id.
      *
      * Without this, every keystroke in an embedded table constructed a fresh engine, which rebuilds the whole
@@ -574,9 +617,100 @@ class FlowHostRuntime(
      * when the caret offset is unchanged: the *text* moved under it, and a field holding a stale
      * `TextFieldValue` would otherwise keep showing the pre-undo string until something else touched it.
      */
-    fun undo(): Boolean = controller.undo().also { if (it) afterHistoryStep() }
+    fun undo(): Boolean = undoRouted().moved
 
-    fun redo(): Boolean = controller.redo().also { if (it) afterHistoryStep() }
+    fun redo(): Boolean = redoRouted().moved
+
+    /**
+     * Registers the focus session that owns undo while it is open, or null when none is (§13.5).
+     *
+     * A focus tool with its own step history must receive Ctrl+Z itself. Without this seam the chord went
+     * straight to artifact history, so undoing inside a crop reversed the *paragraph edit before the crop
+     * began* — a change not visible on screen, in a document the user could not see.
+     */
+    fun setFocusHistoryOwner(owner: FocusHistoryOwner?) {
+        registeredFocusOwner = owner
+    }
+
+    /** The focus session currently owning undo, if any. Self-clearing once that session closes. */
+    fun focusHistoryOwner(): FocusHistoryOwner? {
+        val owner = registeredFocusOwner ?: return null
+        if (owner.isActive()) return owner
+        registeredFocusOwner = null
+        return null
+    }
+
+    /**
+     * Undo, reporting which history actually moved.
+     *
+     * [HistoryRoute.BLOCKED_BY_FOCUS] is a deliberate dead end rather than a fall-through: when a focus
+     * session is open and out of local steps, the correct answer is "nothing", not "reverse something older
+     * that this session cannot show you".
+     */
+    fun undoRouted(): HistoryRoute = historyStep(HistoryDirection.UNDO)
+
+    fun redoRouted(): HistoryRoute = historyStep(HistoryDirection.REDO)
+
+    /**
+     * One implementation behind every way of asking for a history step: chord, toolbar, palette.
+     *
+     * When the History browser exists the step goes through it, because that is the only path that honours
+     * an active filter and refuses a reversal reaching past what the user pointed at. §4.1 makes those one
+     * command; a Ctrl+Z that ignored a filter the toolbar button obeys would be a second command wearing
+     * the same name. Without the browser this is the direct route it has always been.
+     */
+    private fun historyStep(direction: HistoryDirection): HistoryRoute {
+        history?.let { browser ->
+            val outcome = when (direction) {
+                HistoryDirection.UNDO -> browser.undo()
+                HistoryDirection.REDO -> browser.redo()
+            }
+            // A global step reconciles inside observedHistoryHost(); a local focus step never touches the
+            // document, so this is the only place that can republish what the focus tool now shows.
+            if (outcome.route == HistoryRoute.LOCAL_FOCUS) revision++
+            return outcome.route
+        }
+        val owner = focusHistoryOwner()
+        if (owner != null) {
+            val stepped = when (direction) {
+                HistoryDirection.UNDO -> owner.canUndoLocally() && owner.undoLocally()
+                HistoryDirection.REDO -> owner.canRedoLocally() && owner.redoLocally()
+            }
+            if (stepped) {
+                revision++
+                return HistoryRoute.LOCAL_FOCUS
+            }
+            return HistoryRoute.BLOCKED_BY_FOCUS
+        }
+        val moved = when (direction) {
+            HistoryDirection.UNDO -> controller.undo()
+            HistoryDirection.REDO -> controller.redo()
+        }
+        if (!moved) return HistoryRoute.UNAVAILABLE
+        afterHistoryStep()
+        return HistoryRoute.GLOBAL
+    }
+
+    /** The seam the History browser reads this artifact's one authoritative history through. */
+    fun historyHost(): HistoryHost = controller.historyHost()
+
+    /**
+     * The same authoritative history, wrapped so a step taken from the browser reconciles like the chord.
+     *
+     * Not a second history — [appliedHistory] and [undo] are the host's own. What the wrapper adds is the
+     * caret clamp and revision bump that [afterHistoryStep] performs, because a browser-driven undo that
+     * skipped them would change the document and leave the editor drawing the previous one until some
+     * unrelated edit happened to republish.
+     */
+    private fun observedHistoryHost(): HistoryHost {
+        val inner = historyHost()
+        return object : HistoryHost {
+            override fun appliedHistory(): List<EditTransaction> = inner.appliedHistory()
+            override fun undoneHistory(): List<EditTransaction> = inner.undoneHistory()
+            override fun undo(): EditTransaction? = inner.undo()?.also { afterHistoryStep() }
+            override fun redo(): EditTransaction? = inner.redo()?.also { afterHistoryStep() }
+        }
+    }
 
     private fun afterHistoryStep() {
         syncSelectionToDocument()

@@ -25,6 +25,7 @@ import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.history.EditTransaction
 import com.norfold.app.editor.history.EditWorkspace
 import com.norfold.app.editor.history.HistoryEngine
+import com.norfold.app.editor.history.HistoryHost
 import com.norfold.app.editor.history.HistoryListener
 import com.norfold.app.editor.history.InMemoryEditWorkspace
 import com.norfold.app.editor.history.PersistableEditController
@@ -32,6 +33,8 @@ import com.norfold.app.editor.history.TransactionOrigin
 import com.norfold.app.editor.recovery.RecoveryReason
 import com.norfold.app.editor.recovery.RecoverySnapshot
 import com.norfold.app.editor.recovery.RecoverySnapshotManager
+import com.norfold.app.editor.recovery.RecoverySnapshotStore
+import com.norfold.app.editor.recovery.InMemoryRecoverySnapshotStore
 import com.norfold.app.editor.interchange.updateInterchangeFidelity
 
 /**
@@ -92,6 +95,7 @@ class DocumentSceneController(
     override val target: EditTarget,
     initialDocument: BlockDocument,
     historyListener: HistoryListener? = null,
+    recoveryStore: RecoverySnapshotStore = InMemoryRecoverySnapshotStore(),
 ) : PersistableEditController {
     private var documentInvariant: (BlockDocument) -> BlockDocument = { it }
 
@@ -107,7 +111,24 @@ class DocumentSceneController(
     val workspace: EditWorkspace = InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
 
     private val history = HistoryEngine(workspace, historyListener)
-    private val recovery = RecoverySnapshotManager(workspace)
+
+    /**
+     * Restores commit through the canonical history rather than writing the workspace underneath it — see
+     * [commit], which applies this host's page invariant to the restored content on the way through.
+     */
+    private val recovery = RecoverySnapshotManager(
+        workspace = workspace,
+        store = recoveryStore,
+        historySink = { label, documents ->
+            // This controller's workspace holds exactly one target, and a snapshot naming any other is
+            // refused by validation before it reaches here, so only that document can be restored. Reading
+            // it by key rather than iterating keeps [commit] — which resolves against `target` — honest.
+            val restored = documents[target]
+            val ops = if (restored == null) emptyList()
+            else BlockDocumentDiff.diff(target, document(), restored.normalized())
+            commit(label, ops, origin = TransactionOrigin.RECOVERY_RESTORE)
+        },
+    )
 
     private var lastSavedDocument: BlockDocument = workspace.documentOf(target)
     private var baselineGeneration: Long = 0L
@@ -143,6 +164,22 @@ class DocumentSceneController(
 
     fun undo(): Boolean = history.undo() != null
     fun redo(): Boolean = history.redo() != null
+
+    /** Read-only undone history; the **last** element is the next redo (§13.6 projection source). */
+    fun redoHistory(): List<EditTransaction> = history.redoHistory()
+
+    /** The seam the Phase-10 History UI reads and moves this artifact's one authoritative history through. */
+    fun historyHost(): HistoryHost = HistoryHost.of(history)
+
+    /** The recovery manager for this artifact, for named restore points and the recovery browser (§13.7). */
+    fun recovery(): RecoverySnapshotManager = recovery
+
+    /** Creates a user-named restore point over this artifact. Null when [name] is blank. */
+    fun createNamedRestorePoint(
+        name: String,
+        description: String = "",
+        scopeBlockIds: List<String> = emptyList(),
+    ): RecoverySnapshot? = recovery.createNamedSnapshot(name, description, listOf(target), scopeBlockIds)
 
     // --- Scene object mutation -----------------------------------------------------------------------
 

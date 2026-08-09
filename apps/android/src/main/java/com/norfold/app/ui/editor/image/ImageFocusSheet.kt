@@ -40,6 +40,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,7 @@ import com.norfold.app.domain.style.ColorDomain
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
 import com.norfold.app.domain.style.ColorTarget
+import com.norfold.app.editor.history.FocusHistoryOwner
 import com.norfold.app.editor.image.ImageAccessibility
 import com.norfold.app.editor.image.ImageAdjustments
 import com.norfold.app.editor.image.ImageCompositionGuide
@@ -95,6 +97,9 @@ private enum class ImageFocusSection(val label: String) {
     ARRANGE("Arrange"), ACCESSIBILITY("Accessibility"), PRESETS("Presets"),
 }
 
+/** Namespaces the focus id so it can never collide with a surface id or be mistaken for one. */
+private const val FOCUS_ID_PREFIX = "image.focus."
+
 private object ImageFocusSharedState {
     private const val PRESETS = "image.focus.presets"
     private const val CLIPBOARD = "image.focus.clipboard"
@@ -117,10 +122,24 @@ fun ImageFocusSheet(
     onDone: () -> Unit = onDismiss,
     onOpenGuide: (() -> Unit)? = null,
     onCommitted: (() -> Unit)? = null,
+    /**
+     * Hands the host this session's undo ownership while the sheet is open, and null when it closes
+     * (spec §13.5). Hosts that do not route undo may leave it null.
+     */
+    onFocusHistoryOwner: ((FocusHistoryOwner?) -> Unit)? = null,
 ) {
     val latestCommit by rememberUpdatedState(onCommit)
     val runtime = remember(block.id, block.source, block.imageEditDocument, readOnly) {
         ImageFocusRuntime(block, ImageFocusCommitHost { _, edited -> latestCommit(edited) }, readOnly)
+    }
+
+    // Registration is tied to composition rather than to Done/Cancel: the sheet can also leave by
+    // configuration change or by the host dropping it, and a session whose ownership outlived it would
+    // swallow every later undo in the document.
+    val latestOwnerSink by rememberUpdatedState(onFocusHistoryOwner)
+    DisposableEffect(runtime) {
+        latestOwnerSink?.invoke(runtime.historyOwner(FOCUS_ID_PREFIX + block.id))
+        onDispose { latestOwnerSink?.invoke(null) }
     }
     var revision by remember { mutableIntStateOf(0) }
     var sectionIndex by remember { mutableIntStateOf(0) }

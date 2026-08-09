@@ -124,6 +124,12 @@ import com.norfold.app.editor.guide.GuideSignal
 import com.norfold.app.ui.editor.guide.GuideEntryButton
 import com.norfold.app.ui.editor.guide.GuideHostLayer
 import com.norfold.app.ui.editor.guide.rememberGuideUiController
+import com.norfold.app.ui.editor.history.HistoryEntryButton
+import com.norfold.app.ui.editor.history.HistoryHostLayer
+import com.norfold.app.ui.editor.history.rememberHistoryUiController
+import com.norfold.app.ui.editor.recovery.RecoveryEntryButton
+import com.norfold.app.ui.editor.recovery.RecoveryHostLayer
+import com.norfold.app.ui.editor.recovery.rememberRecoveryUiController
 
 @Composable
 fun SpreadsheetHostScreen(
@@ -142,6 +148,9 @@ fun SpreadsheetHostScreen(
     val clipboard = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     val rootFocus = remember { FocusRequester() }
     val guide = rememberGuideUiController(runtime.guide)
+    val history = rememberHistoryUiController(runtime.history)
+    // A restore rewrites the workbook outside the edit path, so nothing else would republish the grid.
+    val recovery = rememberRecoveryUiController(runtime.recoveryBrowser) { refresh++; onChanged() }
     val guideContext = GuideContext(
         host = GuideHost.SPREADSHEET,
         domains = buildSet {
@@ -163,6 +172,9 @@ fun SpreadsheetHostScreen(
             event.toSpreadsheetShortcut()?.let { shortcut ->
                 runtime.handleShortcut(shortcut).also { handled ->
                     if (handled) { refresh++; onChanged() }
+                    // Ctrl+Z reaches History through the runtime, not through this controller: without
+                    // this a reversal that must be disclosed would refuse and show nothing.
+                    history.syncFromRuntime()
                 }
             } ?: false
         },
@@ -173,10 +185,14 @@ fun SpreadsheetHostScreen(
             onOpenSidebar = onOpenSidebar,
             canUndo = state.canUndo,
             canRedo = state.canRedo,
-            onUndo = { if (runtime.undo()) { refresh++; onChanged() } },
-            onRedo = { if (runtime.redo()) { refresh++; onChanged() } },
+            // With the browser on, Undo goes through it — the only route that can disclose a multi-step
+            // or cross-target reversal before it happens (§13.4).
+            onUndo = { if (history.runtime != null) { history.undo(); refresh++; onChanged() } else if (runtime.undo()) { refresh++; onChanged() } },
+            onRedo = { if (history.runtime != null) { history.redo(); refresh++; onChanged() } else if (runtime.redo()) { refresh++; onChanged() } },
             onAdvanced = { runtime.toggleAdvancedTools(); refresh++ },
             onOpenGuide = guide.runtime?.let { { guide.open() } },
+            onOpenHistory = history.runtime?.let { { history.open() } },
+            onOpenRecovery = recovery.runtime?.let { { recovery.open() } },
         )
         if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val existingCharts = runtime.controller.document().blocks.filterIsInstance<ChartBlock>()
@@ -369,6 +385,8 @@ fun SpreadsheetHostScreen(
         }
     }
     GuideHostLayer(guide, guideContext)
+    HistoryHostLayer(history)
+    RecoveryHostLayer(recovery)
 }
 
 @Composable
@@ -382,6 +400,8 @@ private fun SpreadsheetTopBar(
     onRedo: () -> Unit,
     onAdvanced: () -> Unit,
     onOpenGuide: (() -> Unit)?,
+    onOpenHistory: (() -> Unit)?,
+    onOpenRecovery: (() -> Unit)?,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
@@ -401,6 +421,8 @@ private fun SpreadsheetTopBar(
         TextButton(onClick = onRedo, enabled = canRedo, modifier = Modifier.size(48.dp)) { Text("↷") }
         TextButton(onClick = onAdvanced, modifier = Modifier.height(48.dp)) { Text("Tools") }
         onOpenGuide?.let { GuideEntryButton("Spreadsheet editor", it) }
+        onOpenHistory?.let { HistoryEntryButton(it) }
+        onOpenRecovery?.let { RecoveryEntryButton(it) }
     }
     HorizontalDivider()
 }

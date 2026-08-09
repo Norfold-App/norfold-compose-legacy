@@ -1,6 +1,7 @@
 package com.norfold.app.editor.image
 
 import com.norfold.app.domain.ImageBlock
+import com.norfold.app.editor.history.FocusHistoryOwner
 import kotlinx.serialization.Serializable
 
 fun interface ImageFocusCommitHost {
@@ -48,6 +49,31 @@ class ImageFocusRuntime(
     fun hasGesture(): Boolean = gestureStart != null
 
     fun stats() = ImageFocusRuntimeStats(undo.size, redo.size, commits, cancelledGestures, previewChanges)
+
+    /** True until [done] or [cancel] closes the session. */
+    fun isOpen(): Boolean = !closed
+
+    /**
+     * This session as the owner of the undo chord while it is open (spec §13.5).
+     *
+     * The predicates are the session's own, not a host's copy of them: a host that re-derived "can undo
+     * here" would eventually disagree with [canUndo] about a gesture in progress or a compare-original
+     * preview, and the chord would either run a step the tool refuses or refuse one it would have run.
+     *
+     * A read-only session is not an owner. It can never accumulate a local step, so claiming undo would
+     * create a dead zone where the chord silently does nothing for as long as the image is open.
+     */
+    fun historyOwner(focusId: String): FocusHistoryOwner? {
+        if (locked) return null
+        return FocusHistoryOwner.of(
+            focusId = focusId,
+            canUndo = ::canUndo,
+            canRedo = ::canRedo,
+            undo = ::undo,
+            redo = ::redo,
+            isActive = ::isOpen,
+        )
+    }
 
     fun edit(transform: (ImageEditDocument) -> ImageEditDocument): Boolean {
         if (isReadOnly() || comparingOriginal || gestureStart != null) return false

@@ -7,12 +7,16 @@ import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.history.EditTransaction
 import com.norfold.app.editor.history.EditWorkspace
 import com.norfold.app.editor.history.HistoryEngine
+import com.norfold.app.editor.history.HistoryHost
 import com.norfold.app.editor.history.HistoryListener
 import com.norfold.app.editor.history.InMemoryEditWorkspace
 import com.norfold.app.editor.history.PersistableEditController
+import com.norfold.app.editor.history.TransactionOrigin
 import com.norfold.app.editor.recovery.RecoveryReason
 import com.norfold.app.editor.recovery.RecoverySnapshot
 import com.norfold.app.editor.recovery.RecoverySnapshotManager
+import com.norfold.app.editor.recovery.RecoverySnapshotStore
+import com.norfold.app.editor.recovery.InMemoryRecoverySnapshotStore
 import com.norfold.app.editor.interchange.updateInterchangeFidelity
 
 /**
@@ -43,6 +47,7 @@ class FlowEditController(
     initialDocument: BlockDocument,
     historyListener: HistoryListener? = null,
     private val nanoTime: () -> Long = System::nanoTime,
+    recoveryStore: RecoverySnapshotStore = InMemoryRecoverySnapshotStore(),
 ) : PersistableEditController {
     private var documentInvariant: (BlockDocument) -> BlockDocument = { it }
 
@@ -52,7 +57,20 @@ class FlowEditController(
         InMemoryEditWorkspace(mapOf(target to initialDocument.normalized()))
 
     private val history = HistoryEngine(workspace, historyListener)
-    private val recovery = RecoverySnapshotManager(workspace)
+
+    /**
+     * Restores commit through the canonical history rather than writing the workspace underneath it.
+     *
+     * A restore that wrote documents directly would leave every inverse on the undo stack describing content
+     * that is no longer there, and would leave redo offering to replay edits from before the restore. Routing
+     * it through [commitRestore] makes it one ordinary transaction: atomic, undoable, and redo-clearing like
+     * any other commit (§13.1, §13.4).
+     */
+    private val recovery = RecoverySnapshotManager(
+        workspace = workspace,
+        store = recoveryStore,
+        historySink = { label, documents -> commitRestore(label, documents) },
+    )
 
     /** The document as last persisted; the baseline for [dirtyBlockIds]/[deletedBlockIds]. */
     private var lastSavedDocument: BlockDocument = workspace.documentOf(target)
@@ -80,8 +98,35 @@ class FlowEditController(
     fun canRedo(): Boolean = history.canRedo()
     fun undoDepth(): Int = history.undoDepth()
 
-    /** Read-only history, oldest first, for a future History UI (Phase 10). */
+    /** Read-only applied history, oldest first. The Phase-10 History UI projects from this. */
     fun history(): List<EditTransaction> = history.history()
+
+    /** Read-only undone history; the **last** element is the next redo (§13.6 projection source). */
+    fun redoHistory(): List<EditTransaction> = history.redoHistory()
+
+    /**
+     * The seam the Phase-10 History UI reads and moves history through.
+     *
+     * It routes through this controller rather than the engine directly, so a History-UI undo breaks the
+     * current typing run exactly like a keyboard undo does. Without that, undoing from the browser and then
+     * typing again would merge two logically separate steps into one.
+     */
+    fun historyHost(): HistoryHost = object : HistoryHost {
+        override fun appliedHistory(): List<EditTransaction> = history.history()
+        override fun undoneHistory(): List<EditTransaction> = history.redoHistory()
+        override fun undo(): EditTransaction? = undoTransaction()
+        override fun redo(): EditTransaction? = redoTransaction()
+    }
+
+    /** The recovery manager for this note, for named restore points and the recovery browser (§13.7). */
+    fun recovery(): RecoverySnapshotManager = recovery
+
+    /** Creates a user-named restore point over this note. Null when [name] is blank. */
+    fun createNamedRestorePoint(
+        name: String,
+        description: String = "",
+        scopeBlockIds: List<String> = emptyList(),
+    ): RecoverySnapshot? = recovery.createNamedSnapshot(name, description, listOf(target), scopeBlockIds)
 
     /** Durable-codec pre-image required before a copy-on-write legacy table upgrade. */
     fun snapshotBeforeMigration(label: String): RecoverySnapshot =
@@ -97,6 +142,36 @@ class FlowEditController(
 
     fun snapshotBeforeRawSource(label: String): RecoverySnapshot =
         recovery.snapshot(RecoveryReason.RAW_SOURCE, listOf(target), label)
+
+    /**
+     * Commits a recovery restore as one canonical transaction.
+     *
+     * The restored payload still passes through the document invariant: a snapshot taken before an invariant
+     * tightened would otherwise reinstate a document this host considers illegal, and the restore would be the
+     * one edit path that could do so. Targets other than this controller's are committed as captured, since
+     * their invariants belong to whoever owns them.
+     */
+    private fun commitRestore(label: String, documents: Map<EditTarget, BlockDocument>): Boolean {
+        val operations = documents.flatMap { (restoredTarget, restored) ->
+            val before = workspace.documentOf(restoredTarget)
+            val after = if (restoredTarget == target) {
+                documentInvariant(restored.normalized()).normalized().updateInterchangeFidelity(before)
+            } else {
+                restored.normalized()
+            }
+            FlowDocumentDiff.diff(restoredTarget, before, after)
+        }
+        if (operations.isEmpty()) return false
+        history.commit(
+            EditTransaction(
+                id = "restore-${transactionCounter++}",
+                label = label,
+                operations = operations,
+                origin = TransactionOrigin.RECOVERY_RESTORE,
+            ),
+        )
+        return true
+    }
 
     /** Canonical whole-artifact mutation seam for durable editor metadata such as Phase-7 discussion. */
     fun mutateDocument(label: String, edit: (BlockDocument) -> BlockDocument): Boolean {
@@ -221,15 +296,21 @@ class FlowEditController(
     }
 
     /** Undoes the most recent transaction atomically; returns true if anything was undone. */
-    fun undo(): Boolean {
-        breakTypingGroup()
-        return history.undo() != null
-    }
+    fun undo(): Boolean = undoTransaction() != null
 
     /** Redoes the most recently undone transaction; returns true if anything was redone. */
-    fun redo(): Boolean {
+    fun redo(): Boolean = redoTransaction() != null
+
+    /** As [undo], returning the transaction that moved so the History UI can report what happened. */
+    fun undoTransaction(): EditTransaction? {
         breakTypingGroup()
-        return history.redo() != null
+        return history.undo()
+    }
+
+    /** As [redo], returning the transaction that moved. */
+    fun redoTransaction(): EditTransaction? {
+        breakTypingGroup()
+        return history.redo()
     }
 
     // --- Persistence hand-off ---------------------------------------------------------------------

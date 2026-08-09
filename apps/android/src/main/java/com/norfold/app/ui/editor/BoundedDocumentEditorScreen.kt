@@ -27,6 +27,7 @@ import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.editor.document.DocumentHostRuntime
 import com.norfold.app.editor.document.DocumentSceneController
 import com.norfold.app.editor.document.DocumentSession
+import com.norfold.app.data.rememberRecoverySnapshotStore
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.ui.editor.guide.rememberEditorInteractionMemory
 import com.norfold.app.editor.flow.FlowSaveCoordinator
@@ -35,7 +36,6 @@ import com.norfold.app.editor.interchange.InterchangeImportService
 import com.norfold.app.editor.relationship.CommentAuthorRef
 import com.norfold.app.editor.relationship.CommentMention
 import com.norfold.app.editor.presentation.FormFactor
-import com.norfold.app.editor.recovery.RecoverySnapshotManager
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.editor.document.DocumentHostScreen
@@ -110,6 +110,11 @@ private fun DocumentHostRoute(
     val owner = active.owner
     val configuration = LocalConfiguration.current
     val guideEnabled = editorFlags.isEnabled(EditorFeatureFlag.GUIDE)
+    val historyUiEnabled = editorFlags.isEnabled(EditorFeatureFlag.HISTORY_UI)
+    // Restore points only reach the disk when the browser that lets a person manage them exists.
+    // Writing durable snapshots a user has no way to see, name or delete would be storage they
+    // never agreed to and cannot reclaim.
+    val recoveryStore = rememberRecoverySnapshotStore(owner.documentId, historyUiEnabled)
     val interactionMemory = rememberEditorInteractionMemory(guideEnabled)
     val enabledGuideFeatures = remember {
         EditorFeatureFlag.entries.filter(editorFlags::isEnabled).toSet()
@@ -124,7 +129,11 @@ private fun DocumentHostRoute(
 
     val session = remember(owner.documentId) {
         viewModel.documentSessions.open(owner.documentId, viewModel.viewModelScope) {
-            val controller = DocumentSceneController(EditTarget(owner.documentId), active.document)
+            val controller = DocumentSceneController(
+                EditTarget(owner.documentId),
+                active.document,
+                recoveryStore = recoveryStore,
+            )
             val runtime = DocumentHostRuntime(
                 controller = controller,
                 initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
@@ -135,14 +144,17 @@ private fun DocumentHostRoute(
                 memory = interactionMemory,
                 guideEnabled = guideEnabled,
                 enabledGuideFeatures = enabledGuideFeatures,
+                historyUiEnabled = historyUiEnabled,
             )
-            // The snapshot manager captures the controller's *own* workspace: a snapshot over any other
-            // workspace would restore something the editor is not looking at, and report success doing it.
+            // The controller's *own* manager, not a fresh one over the same workspace. A separate manager
+            // would default to an in-memory store, so the pre-image taken before an irreversible migration —
+            // the single most valuable restore point this app takes — would be written where nothing can
+            // ever list or restore it.
             runtime.migrateLegacyDocument(
                 layout = active.freeformLayout,
                 canvas = active.canvasSpec,
                 mode = active.layoutMode,
-                recovery = RecoverySnapshotManager(controller.workspace),
+                recovery = controller.recovery(),
             )
             DocumentSession(
                 runtime = runtime,

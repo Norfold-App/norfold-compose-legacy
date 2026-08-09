@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.findById
+import com.norfold.app.data.rememberRecoverySnapshotStore
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.ui.editor.guide.rememberEditorInteractionMemory
 import com.norfold.app.editor.flow.FlowDocumentSession
@@ -99,6 +100,11 @@ private fun FlowHostRoute(
     val owner = active.owner
     val configuration = LocalConfiguration.current
     val guideEnabled = editorFlags.isEnabled(EditorFeatureFlag.GUIDE)
+    val historyUiEnabled = editorFlags.isEnabled(EditorFeatureFlag.HISTORY_UI)
+    // Restore points only reach the disk when the browser that lets a person manage them exists.
+    // Writing durable snapshots a user has no way to see, name or delete would be storage they
+    // never agreed to and cannot reclaim.
+    val recoveryStore = rememberRecoverySnapshotStore(owner.documentId, historyUiEnabled)
     val interactionMemory = rememberEditorInteractionMemory(guideEnabled)
     val enabledGuideFeatures = remember {
         EditorFeatureFlag.entries.filter(editorFlags::isEnabled).toSet()
@@ -114,7 +120,11 @@ private fun FlowHostRoute(
     val session = remember(owner.documentId) {
         viewModel.flowSessions.open(owner.documentId, viewModel.viewModelScope) {
             val runtime = FlowHostRuntime(
-                controller = FlowEditController(EditTarget(owner.documentId), active.document),
+                controller = FlowEditController(
+                    EditTarget(owner.documentId),
+                    active.document,
+                    recoveryStore = recoveryStore,
+                ),
                 initialFormFactor = FormFactor(configuration.screenWidthDp, configuration.screenHeightDp),
                 fontRegistry = com.norfold.app.ui.fonts.OfflineFontLibrary.registry,
                 chartStudioEnabled = editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO),
@@ -123,6 +133,7 @@ private fun FlowHostRoute(
                 memory = interactionMemory,
                 guideEnabled = guideEnabled,
                 enabledGuideFeatures = enabledGuideFeatures,
+                historyUiEnabled = historyUiEnabled,
                 )
             FlowDocumentSession(
                 runtime = runtime,

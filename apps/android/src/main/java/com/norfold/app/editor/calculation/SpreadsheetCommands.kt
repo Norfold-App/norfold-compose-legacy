@@ -6,6 +6,7 @@ import com.norfold.app.editor.command.CommandContext
 import com.norfold.app.editor.command.CommandRegistry
 import com.norfold.app.editor.command.CommandResult
 import com.norfold.app.editor.command.EditorCommand
+import com.norfold.app.editor.history.HistoryCommandIds
 
 /**
  * Semantic command ids for table and spreadsheet work.
@@ -51,8 +52,11 @@ object SpreadsheetCommandIds {
     const val MOVE_SHEET_LATER = "spreadsheet.moveSheetLater"
     const val APPLY_TABLE_STYLE = "table.applyTableStyle"
     const val TOGGLE_BOLD = "table.toggleBold"
-    const val UNDO = "history.undo"
-    const val REDO = "history.redo"
+
+    // Undo and redo are the artifact's, not the table's. Pointing at the one definition is what keeps a
+    // person who searches "undo" from finding two commands that differ by which editor is open (§4.1).
+    const val UNDO = HistoryCommandIds.UNDO
+    const val REDO = HistoryCommandIds.REDO
 }
 
 object SpreadsheetCommandCatalog {

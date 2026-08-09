@@ -121,6 +121,12 @@ import com.norfold.app.editor.guide.GuideSignal
 import com.norfold.app.ui.editor.guide.GuideEntryButton
 import com.norfold.app.ui.editor.guide.GuideHostLayer
 import com.norfold.app.ui.editor.guide.rememberGuideUiController
+import com.norfold.app.ui.editor.history.HistoryEntryButton
+import com.norfold.app.ui.editor.history.HistoryHostLayer
+import com.norfold.app.ui.editor.history.rememberHistoryUiController
+import com.norfold.app.ui.editor.recovery.RecoveryEntryButton
+import com.norfold.app.ui.editor.recovery.RecoveryHostLayer
+import com.norfold.app.ui.editor.recovery.rememberRecoveryUiController
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
@@ -161,6 +167,8 @@ fun DocumentHostScreen(
     var imageEditingId by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
     val guide = rememberGuideUiController(presenter.runtime.guide)
+    val history = rememberHistoryUiController(presenter.runtime.history)
+    val recovery = rememberRecoveryUiController(presenter.runtime.recoveryBrowser) { presenter.act { } }
     val guideContext = GuideContext(
         host = GuideHost.DOCUMENT,
         capabilities = presenter.runtime.scope.commandContext(CommandSurface.DOCK).offeredCapabilities,
@@ -222,7 +230,13 @@ fun DocumentHostScreen(
             // Keys a text field owns fall through untouched — see DocumentKeyboardMap.resolve. Unbound keys
             // fall through too, so ordinary typing is never intercepted.
             .onPreviewKeyEvent { event ->
-                event.toDocumentShortcut()?.let { presenter.act { handleShortcut(it, textEntryActive) } } ?: false
+                val shortcut = event.toDocumentShortcut() ?: return@onPreviewKeyEvent false
+                val handled = presenter.act { handleShortcut(shortcut, textEntryActive) }
+                // Ctrl+Z reaches History through the host rather than through this controller, so the
+                // controller is told to look: a reversal that must be disclosed puts its sheet on screen
+                // instead of quietly declining.
+                history.syncFromRuntime()
+                handled
             },
     ) {
         DocumentTopBar(
@@ -231,14 +245,18 @@ fun DocumentHostScreen(
             onTitleChange = onTitleChange,
             onTitleFocusChange = { chromeTextFocus = it },
             onOpenSidebar = onOpenSidebar,
-            onUndo = { presenter.act { undo() } },
-            onRedo = { presenter.act { redo() } },
+            // With the History browser on, Undo goes through it: only that route can disclose a multi-step
+            // or cross-target reversal before it happens (§13.4).
+            onUndo = { if (history.runtime != null) presenter.act { history.undo() } else presenter.act { undo() } },
+            onRedo = { if (history.runtime != null) presenter.act { history.redo() } else presenter.act { redo() } },
             onRepresentation = { presenter.act { setRepresentation(it) } },
             onIntent = { presenter.act { setIntent(it) } },
             onOpenPageControl = { presenter.act { openSurface(DocumentSurfaces.PAGE_CONTROL) } },
             onOpenPageList = { presenter.act { openSurface(DocumentSurfaces.PAGE_LIST) } },
             onEnterSelection = { presenter.act { enterSelectionMode(state.primaryObjectId) } },
             onOpenGuide = guide.runtime?.let { { guide.open() } },
+            onOpenHistory = history.runtime?.let { { history.open() } },
+            onOpenRecovery = recovery.runtime?.let { { recovery.open() } },
         )
         HorizontalDivider()
 
@@ -399,12 +417,15 @@ fun DocumentHostScreen(
                 onDone = { imageEditingId = null },
                 onOpenGuide = guide.runtime?.let { { guide.open() } },
                 onCommitted = { guide.signal(GuideSignal.IMAGE_FOCUS_COMMITTED) },
+                onFocusHistoryOwner = { presenter.runtime.setFocusHistoryOwner(it) },
             )
         }
     }
     if (state.interchange.requestedAction == null && state.interchange.rawDraft == null) {
         GuideHostLayer(guide, guideContext)
     }
+    HistoryHostLayer(history)
+    RecoveryHostLayer(recovery)
 }
 
 // ── Page stack: virtualized composition from real geometry ──────────────────────────────────────────
@@ -1289,6 +1310,8 @@ private fun DocumentTopBar(
     onOpenPageList: () -> Unit,
     onEnterSelection: () -> Unit,
     onOpenGuide: (() -> Unit)?,
+    onOpenHistory: (() -> Unit)?,
+    onOpenRecovery: (() -> Unit)?,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1302,6 +1325,8 @@ private fun DocumentTopBar(
             TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
             TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
             onOpenGuide?.let { GuideEntryButton("Document editor", it) }
+            onOpenHistory?.let { HistoryEntryButton(it) }
+            onOpenRecovery?.let { RecoveryEntryButton(it) }
         }
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),

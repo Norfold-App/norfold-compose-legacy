@@ -29,6 +29,14 @@ import com.norfold.app.editor.guide.GuideRuntime
 import com.norfold.app.editor.guide.GuideSignal
 import com.norfold.app.editor.guide.NorfoldGuideCatalog
 import com.norfold.app.editor.guide.RegistryGuideCommandRouter
+import com.norfold.app.editor.history.EditTransaction
+import com.norfold.app.editor.history.HistoryCommands
+import com.norfold.app.editor.history.HistoryDirection
+import com.norfold.app.editor.history.HistoryHost
+import com.norfold.app.editor.history.HistoryIntegration
+import com.norfold.app.editor.history.HistoryRuntime
+import com.norfold.app.editor.recovery.RecoveryBrowserIntegration
+import com.norfold.app.editor.recovery.RecoveryBrowserRuntime
 import com.norfold.app.editor.memory.InteractionMemory
 import com.norfold.app.editor.presentation.AdaptivePresentationRuntime
 import com.norfold.app.editor.presentation.FormFactor
@@ -121,6 +129,7 @@ class SpreadsheetHostRuntime(
     val memory: InteractionMemory = InteractionMemory(),
     guideEnabled: Boolean = false,
     enabledGuideFeatures: Set<EditorFeatureFlag> = emptySet(),
+    historyUiEnabled: Boolean = false,
 ) {
     private var revision = 0L
     private var advanced = false
@@ -148,9 +157,31 @@ class SpreadsheetHostRuntime(
     private val viewportOffsets = linkedMapOf<SheetId, Pair<Float, Float>>()
     private val tableSession: CalculationTableSession
     private val chartRanges = CalculationRangeRuntime()
-    val commandRegistry by lazy { SpreadsheetCommandCatalog.create(this) }
+    val commandRegistry by lazy {
+        SpreadsheetCommandCatalog.create(this).also { registry ->
+            // The catalog already publishes history.undo/redo, and its actions go through this runtime's
+            // own step — which routes to the browser. Only the browser-specific commands are new here.
+            history?.let { HistoryCommands.register(registry, it, recoveryBrowser, includeStepCommands = false) }
+        }
+    }
     val surfaces = SurfaceCoordinator()
     val presentation = AdaptivePresentationRuntime(initialFormFactor)
+
+    /**
+     * The History browser over this workbook's one authoritative history (Phase 10).
+     *
+     * The workbook is blocks in the same artifact, so this is the artifact's history — not a spreadsheet
+     * history beside it. A second stack here is exactly what §13.1 forbids, and it is how a cell edit and a
+     * paragraph edit end up in an order neither of them agrees with.
+     */
+    val history: HistoryRuntime? = HistoryIntegration.create(historyUiEnabled) {
+        HistoryRuntime(host = observedHistoryHost(), surfaces = surfaces, presentation = presentation)
+    }
+
+    /** The recovery browser over this artifact's snapshots. Shares the controller's store. */
+    val recoveryBrowser: RecoveryBrowserRuntime? = RecoveryBrowserIntegration.create(historyUiEnabled) {
+        RecoveryBrowserRuntime(manager = controller.recovery(), surfaces = surfaces, presentation = presentation)
+    }
     val guide: GuideRuntime? = GuideIntegration.create(guideEnabled) {
         GuideRuntime(
             catalog = NorfoldGuideCatalog.default,
@@ -1090,16 +1121,48 @@ class SpreadsheetHostRuntime(
     fun toggleAdvancedTools() { advanced = !advanced; revision++ }
     fun consumeMessage(): String? = message.also { message = null; revision++ }
 
-    fun undo(): Boolean {
-        val changed = controller.undo()
+    fun undo(): Boolean = historyStep(HistoryDirection.UNDO)
+
+    fun redo(): Boolean = historyStep(HistoryDirection.REDO)
+
+    /**
+     * One implementation behind every way of asking for a history step: chord, toolbar, palette.
+     *
+     * With the browser present the step goes through it, because that is the only path that honours an
+     * active filter and discloses a reversal that reaches past what the user pointed at (§4.1, §13.4).
+     */
+    private fun historyStep(direction: HistoryDirection): Boolean {
+        history?.let { browser ->
+            val outcome = when (direction) {
+                HistoryDirection.UNDO -> browser.undo()
+                HistoryDirection.REDO -> browser.redo()
+            }
+            // The grid reconciles inside observedHistoryHost(); nothing else is needed here.
+            return outcome.succeeded
+        }
+        val changed = when (direction) {
+            HistoryDirection.UNDO -> controller.undo()
+            HistoryDirection.REDO -> controller.redo()
+        }
         if (changed) resync()
         return changed
     }
 
-    fun redo(): Boolean {
-        val changed = controller.redo()
-        if (changed) resync()
-        return changed
+    /**
+     * The same authoritative history, wrapped so a step taken from the browser reconciles like the toolbar.
+     *
+     * Not a second history: every read and every step is the controller's own. What the wrapper adds is
+     * [resync], because a browser-driven undo that skipped it would change the workbook and leave the grid
+     * drawing the previous one — including formula results that no longer match their inputs.
+     */
+    private fun observedHistoryHost(): HistoryHost {
+        val inner = controller.historyHost()
+        return object : HistoryHost {
+            override fun appliedHistory(): List<EditTransaction> = inner.appliedHistory()
+            override fun undoneHistory(): List<EditTransaction> = inner.undoneHistory()
+            override fun undo(): EditTransaction? = inner.undo()?.also { resync() }
+            override fun redo(): EditTransaction? = inner.redo()?.also { resync() }
+        }
     }
 
     fun mergeRemote(document: BlockDocument): Boolean {

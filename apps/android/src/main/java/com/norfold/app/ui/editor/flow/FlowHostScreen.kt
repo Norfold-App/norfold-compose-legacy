@@ -129,6 +129,12 @@ import com.norfold.app.editor.guide.GuideSignal
 import com.norfold.app.ui.editor.guide.GuideEntryButton
 import com.norfold.app.ui.editor.guide.GuideHostLayer
 import com.norfold.app.ui.editor.guide.rememberGuideUiController
+import com.norfold.app.ui.editor.history.HistoryEntryButton
+import com.norfold.app.ui.editor.history.HistoryHostLayer
+import com.norfold.app.ui.editor.history.rememberHistoryUiController
+import com.norfold.app.ui.editor.recovery.RecoveryEntryButton
+import com.norfold.app.ui.editor.recovery.RecoveryHostLayer
+import com.norfold.app.ui.editor.recovery.rememberRecoveryUiController
 
 /**
  * FlowHost — the writing-first Notes host (roadmap Phase 1 deliverables 1, 5, 6, 10).
@@ -201,6 +207,8 @@ fun FlowHostScreen(
 
     val drag = rememberFlowDragState()
     val guide = rememberGuideUiController(presenter.runtime.guide)
+    val history = rememberHistoryUiController(presenter.runtime.history)
+    val recovery = rememberRecoveryUiController(presenter.runtime.recoveryBrowser) { presenter.act { } }
     val guideContext = GuideContext(
         host = GuideHost.FLOW,
         capabilities = presenter.runtime.scope.commandContext(CommandSurface.DOCK).offeredCapabilities,
@@ -224,7 +232,13 @@ fun FlowHostScreen(
             .fillMaxSize()
             .onPreviewKeyEvent { event ->
                 // Unbound keys fall through untouched, so ordinary typing and the IME are never intercepted.
-                event.toFlowShortcut()?.let { presenter.act { handleShortcut(it) } } ?: false
+                val shortcut = event.toFlowShortcut() ?: return@onPreviewKeyEvent false
+                val handled = presenter.act { handleShortcut(shortcut) }
+                // Ctrl+Z reaches History through the host rather than through this controller, so the
+                // controller is told to look: a reversal that must be disclosed puts its sheet on screen
+                // instead of quietly declining.
+                history.syncFromRuntime()
+                handled
             },
     ) {
         Column(Modifier.fillMaxSize()) {
@@ -233,10 +247,14 @@ fun FlowHostScreen(
                 title = title,
                 onTitleChange = onTitleChange,
                 onOpenSidebar = onOpenSidebar,
-                onUndo = { presenter.act { undo() } },
-                onRedo = { presenter.act { redo() } },
+                // With the History browser on, Undo goes through it: only that route can disclose a
+                // multi-step or cross-target reversal before it happens (§13.4).
+                onUndo = { if (history.runtime != null) presenter.act { history.undo() } else presenter.act { undo() } },
+                onRedo = { if (history.runtime != null) presenter.act { history.redo() } else presenter.act { redo() } },
                 onEnterSelection = { presenter.act { enterSelectionMode(state.primaryId) } },
                 onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onOpenHistory = history.runtime?.let { { history.open() } },
+                onOpenRecovery = recovery.runtime?.let { { recovery.open() } },
                 compact = configuration.screenWidthDp < FLOW_COMPACT_WIDTH_DP,
             )
             HorizontalDivider()
@@ -394,6 +412,8 @@ fun FlowHostScreen(
         if (state.interchange.requestedAction == null && state.interchange.rawDraft == null) {
             GuideHostLayer(guide, guideContext)
         }
+        HistoryHostLayer(history)
+        RecoveryHostLayer(recovery)
     }
 
     if (state.activeSurfaceId in setOf(FlowSurfaces.RELATIONSHIP_MANAGER, FlowSurfaces.COMMENTS, FlowSurfaces.REVIEW)) {
@@ -459,6 +479,7 @@ fun FlowHostScreen(
                 onDone = { imageEditingId = null },
                 onOpenGuide = guide.runtime?.let { { guide.open() } },
                 onCommitted = { guide.signal(GuideSignal.IMAGE_FOCUS_COMMITTED) },
+                onFocusHistoryOwner = { presenter.runtime.setFocusHistoryOwner(it) },
             )
         }
     }
@@ -789,6 +810,8 @@ private fun FlowTopBar(
     onRedo: () -> Unit,
     onEnterSelection: () -> Unit,
     onOpenGuide: (() -> Unit)?,
+    onOpenHistory: (() -> Unit)?,
+    onOpenRecovery: (() -> Unit)?,
     compact: Boolean,
 ) {
     var overflow by remember { mutableStateOf(false) }
@@ -810,6 +833,8 @@ private fun FlowTopBar(
         TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
         TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
         onOpenGuide?.let { GuideEntryButton("Flow editor", it) }
+        onOpenHistory?.let { HistoryEntryButton(it) }
+        onOpenRecovery?.let { RecoveryEntryButton(it) }
         if (compact) {
             Box {
                 IconButton(onClick = { overflow = true }) {

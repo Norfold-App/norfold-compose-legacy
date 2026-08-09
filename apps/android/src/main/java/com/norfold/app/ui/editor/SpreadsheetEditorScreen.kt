@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.data.rememberRecoverySnapshotStore
 import com.norfold.app.editor.calculation.SpreadsheetDocumentSession
 import com.norfold.app.editor.calculation.SpreadsheetHostRuntime
 import com.norfold.app.editor.flags.EditorFeatureFlag
@@ -44,6 +45,11 @@ fun SpreadsheetEditorScreen(
     val tableBlockId = viewModel.spreadsheetTableBlockId
     val configuration = LocalConfiguration.current
     val guideEnabled = editorFlags.isEnabled(EditorFeatureFlag.GUIDE)
+    val historyUiEnabled = editorFlags.isEnabled(EditorFeatureFlag.HISTORY_UI)
+    // Restore points only reach the disk when the browser that lets a person manage them exists.
+    // Writing durable snapshots a user has no way to see, name or delete would be storage they
+    // never agreed to and cannot reclaim.
+    val recoveryStore = rememberRecoverySnapshotStore(owner.documentId, historyUiEnabled)
     val interactionMemory = rememberEditorInteractionMemory(guideEnabled)
     val enabledGuideFeatures = remember {
         EditorFeatureFlag.entries.filter(editorFlags::isEnabled).toSet()
@@ -57,7 +63,11 @@ fun SpreadsheetEditorScreen(
     val session = remember(sessionKey) {
         viewModel.spreadsheetSessions.open(sessionKey, viewModel.viewModelScope) {
             val runtime = SpreadsheetHostRuntime(
-                FlowEditController(EditTarget(owner.documentId), active.document),
+                FlowEditController(
+                    EditTarget(owner.documentId),
+                    active.document,
+                    recoveryStore = recoveryStore,
+                ),
                 tableBlockId,
                 initialFormFactor = com.norfold.app.editor.presentation.FormFactor(
                     configuration.screenWidthDp,
@@ -66,6 +76,7 @@ fun SpreadsheetEditorScreen(
                 memory = interactionMemory,
                 guideEnabled = guideEnabled,
                 enabledGuideFeatures = enabledGuideFeatures,
+                historyUiEnabled = historyUiEnabled,
             )
             SpreadsheetDocumentSession(
                 runtime = runtime,
