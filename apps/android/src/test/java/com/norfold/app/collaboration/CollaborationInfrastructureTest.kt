@@ -112,7 +112,7 @@ class CollaborationInfrastructureTest {
     // ── PreviewCoalescer ─────────────────────────────────────────────────────
 
     private fun outbound(actor: String, type: String, target: String, seq: Long, cls: CollabEventClass) =
-        OutboundEnvelope(RoomId("r"), ActorId(actor), cls, type, target, CollabSeq(seq))
+        OutboundEnvelope(RoomId("bench:r"), ActorId(actor), cls, type, target, CollabSeq(seq))
 
     @Test fun `PreviewCoalescer passes DURABLE immediately`() {
         val c = PreviewCoalescer()
@@ -208,29 +208,30 @@ class CollaborationInfrastructureTest {
 
     // ── OfflineOutbox ────────────────────────────────────────────────────────
 
-    @Test fun `OfflineOutbox enqueues and drains DURABLE ops`() = runBlocking {
+    @Test fun `OfflineOutbox reads DURABLE ops without removing before ack`() = runBlocking {
         val box = OfflineOutbox()
-        val env = OutboundEnvelope(RoomId("r"), ActorId("a"), CollabEventClass.DURABLE, "text.insert", null, CollabSeq(1))
+        val env = OutboundEnvelope(RoomId("bench:r"), ActorId("a"), CollabEventClass.DURABLE, "text.insert", null, CollabSeq(1))
         box.enqueue(env)
         assertEquals(1, box.size())
         val drained = box.drainAll()
         assertEquals(1, drained.size)
-        assertEquals(0, box.size())
+        assertEquals(1, box.size())
     }
 
     @Test fun `OfflineOutbox rejects non-DURABLE`() = runBlocking {
         val box = OfflineOutbox()
-        val env = OutboundEnvelope(RoomId("r"), ActorId("a"), CollabEventClass.EPHEMERAL_LATEST, "cursor", "o1", CollabSeq(1))
+        val env = OutboundEnvelope(RoomId("bench:r"), ActorId("a"), CollabEventClass.EPHEMERAL_LATEST, "cursor", "o1", CollabSeq(1))
         assertThrows(IllegalArgumentException::class.java) { runBlocking { box.enqueue(env) } }
         Unit
     }
 
-    @Test fun `OfflineOutbox caps at maxSize and drops oldest`() = runBlocking {
+    @Test fun `OfflineOutbox blocks safely without dropping oldest`() = runBlocking {
         val box = OfflineOutbox(maxSize = 3)
-        for (i in 1..4) box.enqueue(OutboundEnvelope(RoomId("r"), ActorId("a"), CollabEventClass.DURABLE, "op", null, CollabSeq(i.toLong())))
+        for (i in 1..3) assertEquals(OutboxEnqueueResult.Enqueued, box.enqueue(OutboundEnvelope(RoomId("bench:r"), ActorId("a"), CollabEventClass.DURABLE, "op", null, CollabSeq(i.toLong()))))
+        assertTrue(box.enqueue(OutboundEnvelope(RoomId("bench:r"), ActorId("a"), CollabEventClass.DURABLE, "op", null, CollabSeq(4))) is OutboxEnqueueResult.Blocked)
         val drained = box.drainAll()
         assertEquals(3, drained.size)
-        assertEquals(CollabSeq(2), drained[0].seq) // seq=1 was dropped
+        assertEquals(CollabSeq(1), drained[0].seq)
     }
 
     // ── NoOpMergeEngine ──────────────────────────────────────────────────────
@@ -241,8 +242,8 @@ class CollaborationInfrastructureTest {
         assertEquals(com.norfold.app.collaboration.merge.Revision.EMPTY, doc.currentRevision())
         val op = com.norfold.app.collaboration.merge.LocalOperation(
             opId = "op-1", actorId = "actor-1", commandId = "cmd-1",
-            op = com.norfold.app.collaboration.ops.OpaqueOperation("test", "t1", "noop",
-                kotlinx.serialization.json.buildJsonObject { put("k", "v") })
+            op = com.norfold.app.collaboration.protocol.SemanticMutation(domain = "flow", action = "block.replace", targetId = "t1",
+                payload = kotlinx.serialization.json.buildJsonObject { put("k", "v") })
         )
         doc.applyLocal(op)
         assertNotEquals(com.norfold.app.collaboration.merge.Revision.EMPTY, doc.currentRevision())
@@ -253,8 +254,8 @@ class CollaborationInfrastructureTest {
         val doc = engine.createDocument("art-1", "actor-1")
         val op = com.norfold.app.collaboration.merge.RemoteOperation(
             opId = "op-r1", actorId = "actor-2", commandId = "cmd-2",
-            op = com.norfold.app.collaboration.ops.OpaqueOperation("test", "t1", "noop",
-                kotlinx.serialization.json.buildJsonObject { put("k", "v") })
+            op = com.norfold.app.collaboration.protocol.SemanticMutation(domain = "flow", action = "block.replace", targetId = "t1",
+                payload = kotlinx.serialization.json.buildJsonObject { put("k", "v") })
         )
         doc.applyRemote(op)
         val rev1 = doc.currentRevision()
@@ -267,8 +268,8 @@ class CollaborationInfrastructureTest {
         val doc = engine.createDocument("art-1", "actor-1")
         val op = com.norfold.app.collaboration.merge.LocalOperation(
             opId = "op-1", actorId = "actor-1", commandId = "cmd-1",
-            op = com.norfold.app.collaboration.ops.OpaqueOperation("test", "t1", "noop",
-                kotlinx.serialization.json.buildJsonObject { put("k", "v") })
+            op = com.norfold.app.collaboration.protocol.SemanticMutation(domain = "flow", action = "block.replace", targetId = "t1",
+                payload = kotlinx.serialization.json.buildJsonObject { put("k", "v") })
         )
         doc.applyLocal(op)
         val snap = doc.snapshot()

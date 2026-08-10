@@ -1,8 +1,6 @@
 package com.norfold.app.collaboration.merge
 
-import com.norfold.app.collaboration.ops.OpaqueOperation
-import com.norfold.app.collaboration.ops.TextOperation
-import com.norfold.app.collaboration.ops.SceneOperation
+import com.norfold.app.collaboration.protocol.SemanticMutation
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.*
@@ -24,6 +22,7 @@ class MergeEngineBenchmarkTest {
 
     private val engines: List<CollaborationMergeEngine> = listOf(
         NoOpMergeEngine(),
+        SemanticOpSetMergeEngine(),
         AutomergeMergeEngine(),
         YjsMergeEngine(),
     )
@@ -91,7 +90,7 @@ class MergeEngineBenchmarkTest {
             val doc = engine.createDocument("art-1", "actor-1")
             val op = LocalOperation(
                 opId = "op-text-1", actorId = "actor-1", commandId = "cmd-1",
-                op = TextOperation.Insert(targetId = "text-block-1", anchor = "start", text = "Hello"),
+                op = SemanticMutation(domain = "flow", action = "text.insert", targetId = "text-block-1", payload = buildJsonObject { put("anchor", "start"); put("text", "Hello") }),
             )
             doc.applyLocal(op) // must not throw
         }
@@ -102,7 +101,7 @@ class MergeEngineBenchmarkTest {
             val doc = engine.createDocument("art-1", "actor-1")
             val op = LocalOperation(
                 opId = "op-scene-1", actorId = "actor-1", commandId = "cmd-1",
-                op = SceneOperation.SetProperty(targetId = "obj-1", key = "fill", value = "#ff0000"),
+                op = SemanticMutation(domain = "document", action = "object.property", targetId = "obj-1", payload = buildJsonObject { put("property", "fill"); put("value", "#ff0000") }),
             )
             doc.applyLocal(op) // must not throw
         }
@@ -140,6 +139,25 @@ class MergeEngineBenchmarkTest {
         val payload = doc.syncSince(Revision.EMPTY)
         println("NoOp sync payload size after 1000 ops: ${payload.bytes.size} bytes")
         assertTrue("NoOp sync payload should be < 128 bytes", payload.bytes.size < 128)
+    }
+
+    @Test fun `selected engine records incremental merge and snapshot costs`() {
+        val engine = SemanticOpSetMergeEngine(maxOperations = 20_000)
+        val doc = engine.createDocument("artifact-benchmark", "actor")
+        val count = 5_000
+        val mergeStart = System.nanoTime()
+        repeat(count) { index -> doc.applyLocal(localOp("selected-$index", "actor")) }
+        val mergeNanos = System.nanoTime() - mergeStart
+        val snapshotStart = System.nanoTime()
+        val snapshot = doc.snapshot()
+        val snapshotNanos = System.nanoTime() - snapshotStart
+        val replayStart = System.nanoTime()
+        engine.loadDocument("artifact-benchmark", "actor", snapshot)
+        val replayNanos = System.nanoTime() - replayStart
+        println("selected merge: operations=$count mergeNs=$mergeNanos snapshotNs=$snapshotNanos replayNs=$replayNanos snapshotBytes=${snapshot.bytes.size}")
+        assertNotEquals(Revision.EMPTY, doc.currentRevision())
+        assertTrue(snapshot.bytes.isNotEmpty())
+        assertTrue("superseded register history must compact", snapshot.bytes.size < 64 * 1024)
     }
 
     @Test fun `Automerge engine benchmark (skipped if library absent)`() {
@@ -194,11 +212,13 @@ class MergeEngineBenchmarkTest {
 
     private fun localOp(opId: String, actorId: String) = LocalOperation(
         opId = opId, actorId = actorId, commandId = "cmd-$opId",
-        op = OpaqueOperation("test", "t1", "noop", buildJsonObject { put("i", opId) }),
+        logicalClock = opId.filter(Char::isDigit).toLongOrNull() ?: 1,
+        op = SemanticMutation(domain = "flow", action = "block.replace", targetId = "t1", payload = buildJsonObject { put("i", opId) }),
     )
 
     private fun remoteOp(opId: String, actorId: String) = RemoteOperation(
         opId = opId, actorId = actorId, commandId = "cmd-$opId",
-        op = OpaqueOperation("test", "t1", "noop", buildJsonObject { put("i", opId) }),
+        logicalClock = opId.filter(Char::isDigit).toLongOrNull() ?: 1,
+        op = SemanticMutation(domain = "flow", action = "block.replace", targetId = "t1", payload = buildJsonObject { put("i", opId) }),
     )
 }

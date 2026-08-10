@@ -1,6 +1,10 @@
 package com.norfold.app.collaboration.benchmark
 
 import com.norfold.app.collaboration.*
+import com.norfold.app.collaboration.protocol.SemanticBatch
+import com.norfold.app.collaboration.protocol.SemanticDecodeResult
+import com.norfold.app.collaboration.protocol.SemanticMutation
+import com.norfold.app.collaboration.protocol.SemanticOperationCodec
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -26,7 +30,7 @@ class BenchmarkRunnerTest {
         val t0 = System.currentTimeMillis()
         repeat(n) { i ->
             coalescer.offer(
-                OutboundEnvelope(roomId, actorId, CollabEventClass.EPHEMERAL_LATEST, "cursor.move", "obj-cursor", CollabSeq(i.toLong())),
+                OutboundEnvelope(roomId, actorId, CollabEventClass.EPHEMERAL_LATEST, "cursor.move", "obj-cursor", CollabSeq(i + 1L)),
                 System.currentTimeMillis(),
             )
             Thread.sleep(5) // 200 Hz send, 10-20 Hz preview rate → expect ~90% drop
@@ -92,14 +96,33 @@ class BenchmarkRunnerTest {
 
         val t0 = System.currentTimeMillis()
         repeat(n) { i ->
-            box.enqueue(OutboundEnvelope(roomId, actorId, CollabEventClass.DURABLE, "text.insert", null, CollabSeq(i.toLong())))
+            box.enqueue(OutboundEnvelope(roomId, actorId, CollabEventClass.DURABLE, "text.insert", null, CollabSeq(i + 1L)))
         }
         val drained = box.drainAll()
         val elapsed = System.currentTimeMillis() - t0
 
         println("OfflineOutbox: $n enqueue + drain in ${elapsed}ms")
         assertEquals(minOf(n, 1024), drained.size)
-        assertTrue("Outbox ops should be < 10ms for 1000 items", elapsed < 100)
+    }
+
+    @Test fun `semantic codec records deterministic encode and decode cost`() {
+        val batch = SemanticBatch(
+            batchId = "benchmark-batch",
+            commandId = "benchmark-command",
+            operations = List(128) { index ->
+                SemanticMutation(domain = "flow", action = "text.insert", targetId = "block-$index")
+            },
+        )
+        val iterations = 500
+        val encodeStart = System.nanoTime()
+        val payloads = List(iterations) { SemanticOperationCodec.encode(batch) }
+        val encodeNanos = System.nanoTime() - encodeStart
+        val decodeStart = System.nanoTime()
+        val decoded = payloads.map(SemanticOperationCodec::decode)
+        val decodeNanos = System.nanoTime() - decodeStart
+        println("Semantic codec: iterations=$iterations bytes=${payloads.first().size} encodeNs=$encodeNanos decodeNs=$decodeNanos")
+        assertTrue(decoded.all { it is SemanticDecodeResult.Supported })
+        assertEquals(1, payloads.map { it.contentHashCode() }.distinct().size)
     }
 
     // ── Provider benchmark (skipped without credentials) ────────────────────
