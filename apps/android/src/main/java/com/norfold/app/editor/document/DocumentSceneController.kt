@@ -271,6 +271,24 @@ class DocumentSceneController(
             )
         }
 
+    /**
+     * Grows or shrinks objects by a delta in page points, anchored at the top-left.
+     *
+     * The non-pointer counterpart to a resize handle drag. It commits through the same [editObjects] path, so
+     * the lock axes, normalization and one-transaction-per-invocation guarantees are the drag's guarantees —
+     * "resized with the keyboard" and "resized with a finger" are indistinguishable afterwards.
+     */
+    fun resizeObjects(objectIds: Collection<String>, dWidth: Float, dHeight: Float): Boolean =
+        editObjects(objectIds, if (objectIds.size > 1) "Resize objects" else "Resize") { _, obj ->
+            if (!obj.canResize) obj else obj.copy(geometry = obj.geometry.resizedBy(dWidth, dHeight))
+        }
+
+    /** Rotates objects by a delta in degrees. Objects whose kind or lock forbids rotation are skipped. */
+    fun rotateObjects(objectIds: Collection<String>, degrees: Float): Boolean =
+        editObjects(objectIds, if (objectIds.size > 1) "Rotate objects" else "Rotate") { _, obj ->
+            if (!obj.canRotate) obj else obj.copy(geometry = obj.geometry.rotatedBy(degrees))
+        }
+
     fun setLock(objectIds: Collection<String>, lock: SceneLock): Boolean =
         editObjects(objectIds, if (lock == SceneLock.None) "Unlock" else "Lock") { _, obj ->
             obj.copy(lock = lock)

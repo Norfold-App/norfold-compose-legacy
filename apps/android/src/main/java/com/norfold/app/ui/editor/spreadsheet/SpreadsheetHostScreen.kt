@@ -631,7 +631,7 @@ private fun VirtualSpreadsheetGrid(
                         .semantics {
                             role = Role.Button
                             contentDescription = "Range selection handle"
-                            stateDescription = describeSelection(state.selection)
+                            stateDescription = runtime.selectionAccessibilityDescription()
                             customActions = listOf(
                                 CustomAccessibilityAction("Extend the range right") {
                                     runtime.select(GridAddress(focus.row, (focus.column + 1).coerceAtMost(sheet.columnCount - 1)), extend = true)
@@ -1207,26 +1207,6 @@ private fun selectedAddress(selection: TableSelectionState): GridAddress? = when
     is TableSelectionState.ColumnSelected -> GridAddress(0, selection.column)
     TableSelectionState.WholeTable -> GridAddress(0, 0)
     else -> null
-}
-
-/**
- * Selection in words — §34 requires a range to have a textual description, not just a tint.
- *
- * The tint is the only signal a sighted user gets; without this, a screen-reader user has no way to learn
- * that a 3×4 block is selected rather than one cell.
- */
-private fun describeSelection(selection: TableSelectionState): String = when (selection) {
-    is TableSelectionState.CellSelected -> "Cell ${selection.cell.a1()} selected"
-    is TableSelectionState.Editing -> "Editing cell ${selection.cell.a1()}"
-    is TableSelectionState.RangeSelected -> {
-        val rows = kotlin.math.abs(selection.focus.row - selection.anchor.row) + 1
-        val columns = kotlin.math.abs(selection.focus.column - selection.anchor.column) + 1
-        "Range ${selection.anchor.a1()} to ${selection.focus.a1()} selected, $rows rows by $columns columns"
-    }
-    is TableSelectionState.RowSelected -> "Row ${selection.row + 1} selected"
-    is TableSelectionState.ColumnSelected -> "Column ${columnName(selection.column)} selected"
-    TableSelectionState.WholeTable -> "Whole sheet selected"
-    else -> "Nothing selected"
 }
 
 private fun selectedAddresses(selection: TableSelectionState): Set<GridAddress> = when (selection) {

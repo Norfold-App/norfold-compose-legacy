@@ -388,6 +388,15 @@ class SpreadsheetHostRuntime(
     fun selectColumn(column: Int) { tableSession.selection.selectColumn(column); revision++ }
     fun selectAll() { tableSession.selection.selectWholeTable(); revision++ }
 
+    /**
+     * The sentence the accessibility tree announces for the current selection.
+     *
+     * Delegated rather than reformatted at the host, so the announcement a screen-reader user hears is the
+     * one [TableSelectionController.accessibilityDescription] is certified against.
+     */
+    fun selectionAccessibilityDescription(): String =
+        tableSession.selection.accessibilityDescription(tableSession.workbook().activeSheet(), tableSession.engine())
+
     /** The selected row's address index, or null when the selection does not identify one. */
     fun selectedRowIndex(): Int? = when (val selected = tableSession.selection.state) {
         is TableSelectionState.RowSelected -> selected.row

@@ -438,6 +438,18 @@ data class SceneGeometry(
 
     fun translatedBy(dx: Float, dy: Float): SceneGeometry = copy(x = x + dx, y = y + dy).normalized()
 
+    /**
+     * Grows or shrinks by a delta, anchored at the top-left.
+     *
+     * [normalized] does the clamping, so a shrink past [MIN_SIZE] stops at the minimum rather than inverting
+     * the box — an object driven to zero extent would be unhittable and so unrecoverable without undo.
+     */
+    fun resizedBy(dWidth: Float, dHeight: Float): SceneGeometry =
+        copy(width = width + dWidth, height = height + dHeight).normalized()
+
+    /** Rotates by a delta in degrees; [normalized] wraps the result back into `[0, 360)`. */
+    fun rotatedBy(degrees: Float): SceneGeometry = copy(rotation = rotation + degrees).normalized()
+
     /** True when this box overlaps [other]. Axis-aligned; rotation is ignored for coarse hit tests. */
     fun intersects(other: SceneGeometry): Boolean =
         x < other.right && right > other.x && y < other.bottom && bottom > other.y

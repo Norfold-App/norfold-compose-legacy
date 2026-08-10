@@ -1,6 +1,7 @@
 package com.norfold.app.editor.calculation
 
 import com.norfold.app.domain.TableBlock
+import kotlin.math.abs
 
 sealed interface TableSelectionState {
     data object Inactive : TableSelectionState
@@ -102,12 +103,27 @@ class TableSelectionController {
         else -> emptyList()
     }
 
+    /**
+     * What the accessibility tree announces for the current selection.
+     *
+     * This is the *only* producer of that sentence. A host that formatted its own would drift from it
+     * silently — announcements are the one output nothing else in the app reads, so a divergence produces no
+     * failing test and no visible symptom, and is only ever discovered by a screen-reader user.
+     *
+     * A range names both ends *and* its extent: "A1 through D3" alone leaves a user who cannot see the tint
+     * counting corners to learn how much is selected.
+     */
     fun accessibilityDescription(sheet: CalculationSheet, engine: CalculationEngine): String = when (val current = state) {
         TableSelectionState.Inactive -> "Table not selected"
         is TableSelectionState.Hovered -> "Cell ${current.cell.a1()}"
         is TableSelectionState.CellSelected -> "Selected ${current.cell.a1()}, ${engine.displayAt(sheet.id, current.cell.row, current.cell.column).ifBlank { "blank" }}"
         is TableSelectionState.Editing -> "Editing ${current.cell.a1()}"
-        is TableSelectionState.RangeSelected -> "Selected range ${current.anchor.a1()} through ${current.focus.a1()}"
+        is TableSelectionState.RangeSelected -> {
+            val rows = abs(current.focus.row - current.anchor.row) + 1
+            val columns = abs(current.focus.column - current.anchor.column) + 1
+            "Selected range ${current.anchor.a1()} through ${current.focus.a1()}, " +
+                "$rows row${if (rows == 1) "" else "s"} by $columns column${if (columns == 1) "" else "s"}"
+        }
         is TableSelectionState.RowSelected -> "Selected row ${current.row + 1}"
         is TableSelectionState.ColumnSelected -> "Selected column ${columnName(current.column)}"
         TableSelectionState.WholeTable -> "Selected entire table"

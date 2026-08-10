@@ -126,6 +126,57 @@ class NudgeObjectsCommand(
     }
 }
 
+/**
+ * Grows or shrinks every eligible object by a fixed step — the non-pointer route to the resize handles.
+ *
+ * §16.6 asks for an exact alternative to every drag. The resize handles announce themselves to a screen
+ * reader, so without this they are a control that can be found and described but not operated; the handle
+ * and this command commit through the same controller call, so the two produce the same geometry.
+ */
+class ResizeObjectsCommand(
+    scope: DocumentCommandScope,
+    private val dWidth: Float,
+    private val dHeight: Float,
+    override val id: String,
+    override val label: String,
+) : SceneObjectCommand(scope) {
+    override val requiredCapabilities = setOf(Capability.RESIZE)
+    override val applicability = ApplicabilityPolicy.ELIGIBLE_SUBSET
+    override val aliases = listOf("resize", "size", "grow", "shrink")
+    override fun unavailableReason() = "This object's size is locked"
+
+    override fun runOn(targetIds: List<String>): CommandResult {
+        if (targetIds.isEmpty()) return CommandResult.Failure(unavailableReason())
+        val resized = scope.controller.resizeObjects(targetIds, dWidth, dHeight)
+        return if (resized) CommandResult.Success(targetIds.size) else CommandResult.NoOp
+    }
+}
+
+/**
+ * Rotates every eligible object by a fixed step — the non-pointer route to the rotation handle.
+ *
+ * Unavailability here has two causes that read the same to the user but differ in kind: a rotation lock, and
+ * a [SceneObjectKind] that does not rotate at all. Both are reported through `canRotate`, so an object that
+ * cannot rotate never offers the action rather than offering one that silently does nothing.
+ */
+class RotateObjectsCommand(
+    scope: DocumentCommandScope,
+    private val degrees: Float,
+    override val id: String,
+    override val label: String,
+) : SceneObjectCommand(scope) {
+    override val requiredCapabilities = setOf(Capability.ROTATION)
+    override val applicability = ApplicabilityPolicy.ELIGIBLE_SUBSET
+    override val aliases = listOf("rotate", "turn", "angle")
+    override fun unavailableReason() = "This object cannot be rotated"
+
+    override fun runOn(targetIds: List<String>): CommandResult {
+        if (targetIds.isEmpty()) return CommandResult.Failure(unavailableReason())
+        val rotated = scope.controller.rotateObjects(targetIds, degrees)
+        return if (rotated) CommandResult.Success(targetIds.size) else CommandResult.NoOp
+    }
+}
+
 class ReorderObjectCommand(
     scope: DocumentCommandScope,
     private val move: LayerMove,
@@ -664,6 +715,10 @@ object DocumentCommands {
     /** Nudge step in page points; a coarse step for modifier-nudge. */
     const val NUDGE = 1f
     const val NUDGE_LARGE = 10f
+    /** One keyboard/accessibility step of a resize. Ten points keeps a visible step and stays bounded. */
+    const val RESIZE_STEP = 10f
+    /** One keyboard/accessibility step of a rotation. */
+    const val ROTATE_STEP = 15f
 
     fun registerAll(
         scope: DocumentCommandScope,
@@ -680,6 +735,12 @@ object DocumentCommands {
             NudgeObjectsCommand(scope, NUDGE_LARGE, 0f, "document.object.moveRight", "Move right"),
             NudgeObjectsCommand(scope, 0f, -NUDGE_LARGE, "document.object.moveUp", "Move up"),
             NudgeObjectsCommand(scope, 0f, NUDGE_LARGE, "document.object.moveDown", "Move down"),
+            ResizeObjectsCommand(scope, RESIZE_STEP, 0f, "document.object.growWidth", "Increase width"),
+            ResizeObjectsCommand(scope, -RESIZE_STEP, 0f, "document.object.shrinkWidth", "Decrease width"),
+            ResizeObjectsCommand(scope, 0f, RESIZE_STEP, "document.object.growHeight", "Increase height"),
+            ResizeObjectsCommand(scope, 0f, -RESIZE_STEP, "document.object.shrinkHeight", "Decrease height"),
+            RotateObjectsCommand(scope, ROTATE_STEP, "document.object.rotateClockwise", "Rotate clockwise"),
+            RotateObjectsCommand(scope, -ROTATE_STEP, "document.object.rotateCounterclockwise", "Rotate counterclockwise"),
 
             // Layering
             ReorderObjectCommand(scope, LayerMove.FORWARD, "document.object.bringForward"),
@@ -1079,6 +1140,16 @@ object DocumentCommands {
             add("document.object.moveRight")
             add("document.object.moveUp")
             add("document.object.moveDown")
+        }
+        if (obj.canResize) {
+            add("document.object.growWidth")
+            add("document.object.shrinkWidth")
+            add("document.object.growHeight")
+            add("document.object.shrinkHeight")
+        }
+        if (obj.canRotate) {
+            add("document.object.rotateClockwise")
+            add("document.object.rotateCounterclockwise")
         }
         add("document.object.bringForward")
         add("document.object.sendBackward")
