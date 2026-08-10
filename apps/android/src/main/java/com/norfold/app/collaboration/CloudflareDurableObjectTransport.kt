@@ -20,15 +20,14 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
+import java.net.URLEncoder
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Cloudflare Durable Object Hibernation WebSocket transport.
  *
  * Connects to: wss://<worker-host>/v1/collab/<roomId>
  * Auth: Bearer token in the Upgrade request Authorization header.
- *
- * Benchmark-only until fail-closed artifact authorization is wired in the Worker.
- * The Worker currently allows only bench:* rooms for non-Supabase tokens.
  *
  * Wire format: CollabWireEnvelope JSON, same as Supabase adapter.
  *
@@ -37,6 +36,7 @@ import java.util.concurrent.TimeUnit
  */
 class CloudflareDurableObjectTransport(
     private val workerBaseUrl: String,
+    private val deviceId: DeviceId,
     private val policy: ReconnectPolicy = ReconnectPolicy(),
     private val okHttp: OkHttpClient = defaultOkHttp(),
 ) : RealtimeCollaborationTransport {
@@ -61,6 +61,7 @@ class CloudflareDurableObjectTransport(
     private var currentToken: CollabTokenProvider? = null
     @Volatile private var socket: WebSocket? = null
     private val connectSignal = Channel<Result<Unit>>(1)
+    private val reconnectInFlight = AtomicBoolean(false)
 
     private var eventsSent = 0L
     private var eventsReceived = 0L
@@ -84,7 +85,8 @@ class CloudflareDurableObjectTransport(
         emit(TransportLifecycleEvent(providerId, roomId.value, _state.value))
 
         val token = tokenProvider.freshToken(roomId)
-        val wsUrl = "${workerBaseUrl.trimEnd('/')}/v1/collab/${roomId.value}"
+        val encodedRoom = URLEncoder.encode(roomId.value, Charsets.UTF_8.name()).replace("+", "%20")
+        val wsUrl = "${workerBaseUrl.trimEnd('/')}/v1/collab/$encodedRoom?device=${deviceId.value}"
             .replace("https://", "wss://")
             .replace("http://", "ws://")
 
@@ -97,24 +99,28 @@ class CloudflareDurableObjectTransport(
         while (connectSignal.tryReceive().isSuccess) {}
 
         socket = okHttp.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                reconnectInFlight.set(false)
                 scope.launch { connectSignal.send(Result.success(Unit)) }
             }
 
-            override fun onMessage(ws: WebSocket, text: String) {
+            override fun onMessage(webSocket: WebSocket, text: String) {
                 bytesReceived += text.length
                 eventsReceived++
                 scope.launch {
                     try {
                         val wire = json.decodeFromString(CollabWireEnvelope.serializer(), text)
                         val serverAt = System.currentTimeMillis()
-                        val env = wire.toInbound(serverAt, serverAt - wire.clientSentAt)
+                        val env = when (val decoded = wire.decodeInbound(serverAt, serverAt - wire.clientSentAt)) {
+                            is WireDecodeResult.Accepted -> decoded.envelope
+                            else -> return@launch
+                        }
                         if (seqTracker.accept(env)) _inbound.emit(env)
                     } catch (_: Exception) {}
                 }
             }
 
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 val code = response?.code?.toString() ?: "network_error"
                 val reason = if (response?.code == 401 || response?.code == 403)
                     DisconnectReason.AuthRejected(code)
@@ -122,18 +128,18 @@ class CloudflareDurableObjectTransport(
                     DisconnectReason.Transient(t.message ?: code)
                 scope.launch {
                     connectSignal.trySend(Result.failure(Exception(reason.toString())))
-                    handleDisconnect(roomId, tokenProvider, reason, attempt)
+                    handleDisconnect(webSocket, roomId, tokenProvider, reason, attempt)
                 }
             }
 
-            override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 val dr = when {
                     code == 1000 || code == 1001 -> DisconnectReason.ClientClosed
                     code == 4001 || code == 4003 -> DisconnectReason.AuthRejected(code.toString())
                     code >= 4000 -> DisconnectReason.ServerClosed(code.toString())
                     else -> DisconnectReason.Transient("ws_close_$code")
                 }
-                scope.launch { handleDisconnect(roomId, tokenProvider, dr, attempt) }
+                scope.launch { handleDisconnect(webSocket, roomId, tokenProvider, dr, attempt) }
             }
         })
 
@@ -150,18 +156,30 @@ class CloudflareDurableObjectTransport(
     }
 
     private suspend fun handleDisconnect(
+        failedSocket: WebSocket,
         roomId: RoomId,
         tokenProvider: CollabTokenProvider,
         reason: DisconnectReason,
         attempt: Int,
     ) {
-        if (_state.value == TransportState.CLOSED) return
+        if (_state.value == TransportState.CLOSED || socket !== failedSocket) return
+        if (!reconnectInFlight.compareAndSet(false, true)) return
+        // Detach the failed instance before any delay. OkHttp may report both
+        // onClosing and onFailure for one socket; only the first callback may
+        // own the reconnect attempt.
+        socket = null
         _state.value = TransportState.RECONNECTING
         emit(TransportLifecycleEvent(providerId, roomId.value, TransportState.RECONNECTING, reason))
         if (policy.shouldRetry(attempt, reason)) {
             delay(policy.delayMs(attempt))
+            if (_state.value == TransportState.CLOSED) {
+                reconnectInFlight.set(false)
+                return
+            }
+            reconnectInFlight.set(false)
             openSocket(roomId, tokenProvider, attempt + 1)
         } else {
+            reconnectInFlight.set(false)
             _state.value = TransportState.CLOSED
             emit(TransportLifecycleEvent(providerId, roomId.value, TransportState.CLOSED, reason))
         }
@@ -173,13 +191,14 @@ class CloudflareDurableObjectTransport(
         val encoded = json.encodeToString(CollabWireEnvelope.serializer(), wire)
         bytesSent += encoded.length
         eventsSent++
-        ws.send(encoded)
+        check(ws.send(encoded)) { "Cloudflare WebSocket rejected outbound envelope" }
     }
 
     override suspend fun close() {
-        socket?.close(1000, "client_closed")
+        val closing = socket
         socket = null
         _state.value = TransportState.CLOSED
+        closing?.close(1000, "client_closed")
         emit(TransportLifecycleEvent(providerId, currentRoom?.value ?: "", TransportState.CLOSED, DisconnectReason.ClientClosed))
         scope.cancel()
     }
@@ -203,7 +222,7 @@ class CloudflareDurableObjectTransport(
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.SECONDS) // WebSocket: no read timeout
             .writeTimeout(10, TimeUnit.SECONDS)
-            .pingInterval(25, TimeUnit.SECONDS) // keep-alive for Hibernation WS
+            .pingInterval(25, TimeUnit.SECONDS)
             .build()
     }
 }

@@ -94,6 +94,11 @@ enum class EditorFeatureFlag(
         defaultEnabled = false,
         description = "History browser, filtered/contextual undo presentation, named snapshots and the recovery browser (Phase 10).",
     ),
+    COLLABORATION(
+        key = "editor.integration.collaboration",
+        defaultEnabled = false,
+        description = "Bind finalized editor domains to authenticated durable collaboration.",
+    ),
     ;
 
     companion object {

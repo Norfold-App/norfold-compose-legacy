@@ -6,5 +6,5 @@
   "durable_objects": {"bindings": [{"name": "COLLAB_ROOM", "class_name": "CollabRoom"}]},
   "exports": {"CollabRoom": {"type": "durable-object", "storage": "sqlite"}},
   "vars": {"SUPABASE_URL": "https://libvhznygsoppyfhucpt.supabase.co", "BENCHMARK_ONLY": "true"},
-  "secrets": {"required": ["BENCHMARK_SHARED_SECRET"]}
+  "secrets": {"required": ["BENCHMARK_SHARED_SECRET", "SUPABASE_PUBLISHABLE_KEY"]}
 }

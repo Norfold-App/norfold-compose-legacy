@@ -26,6 +26,7 @@ package com.norfold.app.editor.history
 class HistoryEngine(
     private val workspace: EditWorkspace,
     private val listener: HistoryListener? = null,
+    private val conflictResolver: HistoryConflictResolver = StrictHistoryConflictResolver,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val undoStack = ArrayDeque<EditTransaction>()
@@ -92,22 +93,37 @@ class HistoryEngine(
         listener?.onHistoryChanged(this)
     }
 
+    /** Applies a remote transaction atomically without adding it to either local Undo stack. */
+    fun applyRemote(transaction: EditTransaction) {
+        require(transaction.origin == TransactionOrigin.REMOTE_MERGE) {
+            "Remote integration requires REMOTE_MERGE provenance"
+        }
+        applyOperationsAtomic(transaction.operations)
+        lastCoalescingKey = null
+        listener?.onRemoteIntegrated(transaction)
+        listener?.onHistoryChanged(this)
+    }
+
     /**
      * Undoes the most recent transaction atomically across all of its targets.
      * @return the transaction that was undone, or null if there was nothing to undo.
      */
     fun undo(): EditTransaction? {
         val transaction = undoStack.removeLastOrNull() ?: return null
+        val resolved = conflictResolver.resolveUndo(transaction, transaction.inverse().operations, workspace::documentOf)
         try {
-            applyOperationsAtomic(transaction.inverse().operations)
+            if (resolved.isNotEmpty()) applyOperationsAtomic(resolved)
         } catch (e: HistoryStateException) {
             // Re-push so history stays consistent with workspace, then surface the failure.
             undoStack.addLast(transaction)
             throw e
         }
-        redoStack.addLast(transaction)
+        val redoOperations = conflictResolver.redoOperationsForAppliedUndo(
+            transaction, transaction.inverse().operations, resolved,
+        )
+        if (redoOperations.isNotEmpty()) redoStack.addLast(transaction.copy(operations = redoOperations))
         lastCoalescingKey = null
-        listener?.onUndone(transaction)
+        listener?.onUndoneApplied(transaction, resolved)
         listener?.onHistoryChanged(this)
         return transaction
     }
@@ -118,15 +134,16 @@ class HistoryEngine(
      */
     fun redo(): EditTransaction? {
         val transaction = redoStack.removeLastOrNull() ?: return null
+        val resolved = conflictResolver.resolveRedo(transaction, transaction.operations, workspace::documentOf)
         try {
-            applyOperationsAtomic(transaction.operations)
+            if (resolved.isNotEmpty()) applyOperationsAtomic(resolved)
         } catch (e: HistoryStateException) {
             redoStack.addLast(transaction)
             throw e
         }
         undoStack.addLast(transaction)
         lastCoalescingKey = null
-        listener?.onRedone(transaction)
+        listener?.onRedoneApplied(transaction, resolved)
         listener?.onHistoryChanged(this)
         return transaction
     }
@@ -165,5 +182,37 @@ interface HistoryListener {
     fun onCommitted(transaction: EditTransaction) {}
     fun onUndone(transaction: EditTransaction) {}
     fun onRedone(transaction: EditTransaction) {}
+    fun onUndoneApplied(transaction: EditTransaction, appliedOperations: List<EditOperation>) { onUndone(transaction) }
+    fun onRedoneApplied(transaction: EditTransaction, appliedOperations: List<EditOperation>) { onRedone(transaction) }
+    fun onRemoteIntegrated(transaction: EditTransaction) {}
     fun onHistoryChanged(engine: HistoryEngine) {}
+}
+
+interface HistoryConflictResolver {
+    fun resolveUndo(
+        transaction: EditTransaction,
+        inverse: List<EditOperation>,
+        documentOf: (EditTarget) -> com.norfold.app.domain.BlockDocument,
+    ): List<EditOperation>
+
+    fun resolveRedo(
+        transaction: EditTransaction,
+        operations: List<EditOperation>,
+        documentOf: (EditTarget) -> com.norfold.app.domain.BlockDocument,
+    ): List<EditOperation> = operations
+
+    /** Redo may only replay the local operations whose inverse was actually applied. */
+    fun redoOperationsForAppliedUndo(
+        transaction: EditTransaction,
+        inverse: List<EditOperation>,
+        appliedInverse: List<EditOperation>,
+    ): List<EditOperation> = if (inverse.size == appliedInverse.size) transaction.operations else emptyList()
+}
+
+object StrictHistoryConflictResolver : HistoryConflictResolver {
+    override fun resolveUndo(
+        transaction: EditTransaction,
+        inverse: List<EditOperation>,
+        documentOf: (EditTarget) -> com.norfold.app.domain.BlockDocument,
+    ) = inverse
 }

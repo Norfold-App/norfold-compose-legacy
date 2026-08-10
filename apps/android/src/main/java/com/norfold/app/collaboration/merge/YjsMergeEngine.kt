@@ -1,12 +1,9 @@
 package com.norfold.app.collaboration.merge
 
-import com.norfold.app.collaboration.ops.SemanticOperation
-import com.norfold.app.collaboration.ops.TextOperation
-import com.norfold.app.collaboration.ops.SceneOperation
+import com.norfold.app.collaboration.protocol.SemanticMutation
 
 /**
- * Yjs JVM pilot engine. Sits behind [CollaborationMergeEngine] — the production editor
- * never imports Yjs directly.
+ * Inactive Yjs benchmark adapter retained behind [CollaborationMergeEngine].
  *
  * BENCHMARK/PROTOTYPE status: do not migrate the production editor until ABI/memory/rich-text
  * performance is measured against the Automerge pilot. This class is intentionally isolated
@@ -26,6 +23,7 @@ import com.norfold.app.collaboration.ops.SceneOperation
  * If no viable JVM Yjs binding reaches stability before the provider decision, this engine
  * remains SKIPPED and the Automerge pilot is the only CRDT candidate.
  */
+@Deprecated("Inactive benchmark candidate; use CollaborationMergeEngineFactory")
 class YjsMergeEngine : CollaborationMergeEngine {
     override val engineId = "yjs-jvm"
     override val supportsSelectiveUndo = false // Yjs undo manager exists but needs evaluation
@@ -64,14 +62,13 @@ class YjsMergeEngine : CollaborationMergeEngine {
  * Yjs document wrapper. Uses reflection so the file compiles without the dependency.
  * A direct-import version should be written once a stable JVM binding is confirmed viable.
  *
- * Yjs data model mapping (representative prototype):
+ * Reference mapping used only by the isolated benchmark adapter:
  *   - TextOperation targets → Y.Text instances keyed by targetId
  *   - SceneOperation targets → Y.Map instances keyed by targetId
  *   - TableOperation targets → Y.Array of Y.Map rows keyed by targetId
  *   - Sync → Y.encodeStateAsUpdate / Y.applyUpdate (binary diff)
  *
- * The exact mapping is deferred until the editor spec is finalized; this prototype
- * validates the SPI boundary and benchmark harness wiring.
+ * The selected repository-owned engine does not depend on these mappings.
  */
 private class YjsDocument(
     private val artifactId: String,
@@ -126,25 +123,8 @@ private class YjsDocument(
         return currentRevision()
     }
 
-    private fun applySemanticOp(op: SemanticOperation) {
-        // Map semantic operations to Yjs mutations. Representative prototype —
-        // full mapping deferred until editor spec is finalized.
-        when (op) {
-            is TextOperation.Insert -> {
-                // doc.getText(op.targetId).insert(index, op.text, op.marks)
-                // Anchor-to-index resolution is editor-spec-dependent; deferred.
-            }
-            is TextOperation.Delete -> { /* deferred */ }
-            is TextOperation.Mark -> {
-                // doc.getText(op.targetId).format(index, length, {mark: value})
-            }
-            is SceneOperation.SetProperty -> {
-                // doc.getMap(op.targetId).set(op.key, op.value)
-            }
-            is SceneOperation.Create, is SceneOperation.Delete,
-            is SceneOperation.Transform -> { /* deferred */ }
-            else -> { /* OpaqueOperation and other domains: deferred */ }
-        }
+    private fun applySemanticOp(op: SemanticMutation) {
+        require(op.isSupported) { "Pilot cannot reinterpret an unknown semantic mutation" }
     }
 
     private fun tryInvokeStatic(method: String, vararg args: Any?): Any? = try {

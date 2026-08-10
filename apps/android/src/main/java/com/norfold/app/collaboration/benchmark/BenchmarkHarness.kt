@@ -122,7 +122,7 @@ object BenchmarkHarness {
 
                 // Warmup
                 repeat(cfg.warmupMessages) { i ->
-                    transport.send(makePing(roomId, actorId, i.toLong(), CollabEventClass.EPHEMERAL_LATEST))
+                    transport.send(makePing(roomId, actorId, i.toLong() + 1, CollabEventClass.EPHEMERAL_LATEST))
                     delay(cfg.sendIntervalMs)
                 }
 
@@ -148,9 +148,10 @@ object BenchmarkHarness {
     ): LatencyStats {
         val rtts = mutableListOf<Double>()
         repeat(cfg.measureMessages) { i ->
-            val seq = CollabSeq(i.toLong())
+            val sequence = 10_000L + i + 1
+            val seq = CollabSeq(sequence)
             val sentAt = System.currentTimeMillis()
-            transport.send(makePing(roomId, actorId, i.toLong(), CollabEventClass.EPHEMERAL_LATEST))
+            transport.send(makePing(roomId, actorId, sequence, CollabEventClass.EPHEMERAL_LATEST))
             // Wait for echo (benchmark rooms echo back)
             val echo = withTimeoutOrNull(cfg.timeoutMs) {
                 transport.inbound.first { it.seq == seq }
@@ -174,7 +175,7 @@ object BenchmarkHarness {
             transport.inbound.collect { received++ }
         }
         repeat(cfg.measureMessages) { i ->
-            transport.send(makePing(roomId, actorId, i.toLong(), CollabEventClass.EPHEMERAL_LATEST))
+            transport.send(makePing(roomId, actorId, 20_000L + i + 1, CollabEventClass.EPHEMERAL_LATEST))
             sent++
             delay(cfg.sendIntervalMs)
         }
@@ -198,7 +199,7 @@ object BenchmarkHarness {
         var sent = 0L
         repeat(cfg.measureMessages) { i ->
             coalescer.offer(
-                OutboundEnvelope(roomId, actorId, CollabEventClass.EPHEMERAL_LATEST, "cursor.move", "obj-$i", CollabSeq(i.toLong())),
+                OutboundEnvelope(roomId, actorId, CollabEventClass.EPHEMERAL_LATEST, "cursor.move", "obj-$i", CollabSeq(i.toLong() + 1)),
                 System.currentTimeMillis(),
             )
             sent++
@@ -252,7 +253,7 @@ object BenchmarkHarness {
 
     private fun buildCloudflareTransport(): RealtimeCollaborationTransport? {
         val url = System.getenv("NORFOLD_CF_DO_URL") ?: return null
-        return CloudflareDurableObjectTransport(workerBaseUrl = url)
+        return CloudflareDurableObjectTransport(workerBaseUrl = url, deviceId = DeviceId("benchmark-device"))
     }
 
     private fun buildAblyTransport(): RealtimeCollaborationTransport? {

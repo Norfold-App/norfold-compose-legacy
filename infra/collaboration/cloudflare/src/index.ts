@@ -4,12 +4,14 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 interface Env {
   COLLAB_ROOM: DurableObjectNamespace<CollabRoom>;
   SUPABASE_URL: string;
+  SUPABASE_PUBLISHABLE_KEY: string;
   BENCHMARK_ONLY: string;
   BENCHMARK_SHARED_SECRET?: string;
 }
 
 type SocketAttachment = {
   userId: string;
+  deviceId: string;
   roomId: string;
   connectedAt: number;
   isBenchmark: boolean;
@@ -17,8 +19,18 @@ type SocketAttachment = {
 
 type CollabEnvelope = {
   type: string;
+  cls?: string;
+  room?: string;
+  actor?: string;
+  device?: string;
+  op_id?: string;
+  protocol?: number;
+  semantic?: number;
+  schema?: number;
+  key_epoch?: number;
+  payload_hash?: string;
   seq?: number;
-  targetId?: string;
+  target?: string;
   payload?: unknown;
   clientSentAt?: number;
 };
@@ -32,7 +44,7 @@ const MAX_WS_MESSAGE_BYTES = 32 * 1024;
 const MAX_PEERS_PER_ROOM = 32;
 const RATE_LIMIT_WINDOW_MS = 1_000;
 const RATE_LIMIT_MAX_MESSAGES = 60; // 60 msg/s per connection
-const HEARTBEAT_INTERVAL_MS = 25_000;
+const ARTIFACT_ROOM = /^artifact:([0-9a-f-]{36}):([0-9a-f-]{36})$/i;
 
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
@@ -41,7 +53,9 @@ function bearer(request: Request): string | null {
   return value?.startsWith("Bearer ") ? (value.slice(7).trim() || null) : null;
 }
 
-async function authenticate(request: Request, env: Env, roomId: string): Promise<string> {
+type AuthenticatedConnection = { userId: string; deviceId: string };
+
+async function authenticate(request: Request, env: Env, roomId: string): Promise<AuthenticatedConnection> {
   const token = bearer(request);
   if (!token) throw new Response("missing_bearer", { status: 401 });
 
@@ -49,7 +63,10 @@ async function authenticate(request: Request, env: Env, roomId: string): Promise
     if (!env.BENCHMARK_SHARED_SECRET || token !== env.BENCHMARK_SHARED_SECRET) {
       throw new Response("invalid_benchmark_bearer", { status: 401 });
     }
-    return `benchmark-user-${crypto.randomUUID().slice(0, 8)}`;
+    return {
+      userId: `benchmark-user-${crypto.randomUUID().slice(0, 8)}`,
+      deviceId: `benchmark-device-${crypto.randomUUID().slice(0, 8)}`,
+    };
   }
 
   if (env.BENCHMARK_ONLY === "true") throw new Response("production_rooms_disabled", { status: 403 });
@@ -64,10 +81,22 @@ async function authenticate(request: Request, env: Env, roomId: string): Promise
   const verified = await jwtVerify(token, jwks, { issuer, audience: "authenticated" });
   const userId = verified.payload.sub;
   if (!userId) throw new Response("jwt_missing_sub", { status: 401 });
-
-  // Authentication is NOT authorization. Before production rooms are enabled,
-  // add a fail-closed Norfold artifact/workspace authorization check here.
-  throw new Response("artifact_authorization_not_wired", { status: 403 });
+  const scope = ARTIFACT_ROOM.exec(roomId);
+  if (!scope) throw new Response("invalid_artifact_room", { status: 400 });
+  const deviceId = new URL(request.url).searchParams.get("device") ?? "";
+  if (!/^[0-9a-f-]{36}$/i.test(deviceId)) throw new Response("invalid_device", { status: 400 });
+  const authorization = await fetch(`${env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/rpc/authorize_collaboration_connection`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      apikey: env.SUPABASE_PUBLISHABLE_KEY,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ p_workspace: scope[1], p_artifact: scope[2], p_device: deviceId }),
+  });
+  if (!authorization.ok) throw new Response("artifact_authorization_unavailable", { status: 503 });
+  if (await authorization.json() !== true) throw new Response("artifact_authorization_denied", { status: 403 });
+  return { userId, deviceId };
 }
 
 export default {
@@ -97,13 +126,14 @@ export default {
     const roomId = decodeURIComponent(url.pathname.slice(prefix.length));
     if (!roomId) return new Response("missing_room", { status: 400 });
 
-    let userId: string;
-    try { userId = await authenticate(request, env, roomId); }
+    let connection: AuthenticatedConnection;
+    try { connection = await authenticate(request, env, roomId); }
     catch (error) { return error instanceof Response ? error : new Response("authentication_failed", { status: 401 }); }
 
     const stub = env.COLLAB_ROOM.get(env.COLLAB_ROOM.idFromName(roomId));
     const forwarded = new Request(request);
-    forwarded.headers.set("x-norfold-user-id", userId);
+    forwarded.headers.set("x-norfold-user-id", connection.userId);
+    forwarded.headers.set("x-norfold-device-id", connection.deviceId);
     forwarded.headers.set("x-norfold-room-id", roomId);
     forwarded.headers.set("x-norfold-is-benchmark", roomId.startsWith("bench:") ? "1" : "0");
     return stub.fetch(forwarded);
@@ -124,9 +154,10 @@ export class CollabRoom extends DurableObject<Env> {
     }
 
     const userId = request.headers.get("x-norfold-user-id");
+    const deviceId = request.headers.get("x-norfold-device-id");
     const roomId = request.headers.get("x-norfold-room-id");
     const isBenchmark = request.headers.get("x-norfold-is-benchmark") === "1";
-    if (!userId || !roomId) return new Response("missing_internal_auth_context", { status: 403 });
+    if (!userId || !deviceId || !roomId) return new Response("missing_internal_auth_context", { status: 403 });
 
     // Capacity check
     const currentPeers = this.ctx.getWebSockets().length;
@@ -138,7 +169,7 @@ export class CollabRoom extends DurableObject<Env> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ userId, roomId, connectedAt: Date.now(), isBenchmark } satisfies SocketAttachment);
+    server.serializeAttachment({ userId, deviceId, roomId, connectedAt: Date.now(), isBenchmark } satisfies SocketAttachment);
 
     const newPeerCount = currentPeers + 1;
     if (newPeerCount > this.peakPeers) this.peakPeers = newPeerCount;
@@ -166,23 +197,7 @@ export class CollabRoom extends DurableObject<Env> {
       serverAt: Date.now(),
     }));
 
-    // Schedule heartbeat alarm if not already set
-    const currentAlarm = await this.ctx.storage.getAlarm();
-    if (currentAlarm === null) {
-      await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
-    }
-
     return new Response(null, { status: 101, webSocket: client });
-  }
-
-  async alarm(): Promise<void> {
-    const sockets = this.ctx.getWebSockets();
-    if (sockets.length === 0) return; // room empty, let alarm expire
-    const ping = JSON.stringify({ type: "ping", serverAt: Date.now() });
-    for (const ws of sockets) {
-      try { ws.send(ping); } catch {}
-    }
-    await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_INTERVAL_MS);
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -218,6 +233,25 @@ export class CollabRoom extends DurableObject<Env> {
       return;
     }
 
+    if (parsed.type !== "ping" && !attachment.isBenchmark) {
+      const valid = parsed.room === attachment.roomId && parsed.protocol === 1 &&
+        Number.isInteger(parsed.semantic) && (parsed.semantic ?? 0) > 0 &&
+        Number.isInteger(parsed.schema) && (parsed.schema ?? 0) > 0 &&
+        Number.isInteger(parsed.key_epoch) && (parsed.key_epoch ?? -1) >= 0 &&
+        parsed.device === attachment.deviceId &&
+        typeof parsed.op_id === "string" && parsed.op_id.length > 0 && parsed.op_id.length <= 256 &&
+        typeof parsed.payload_hash === "string" && /^[0-9a-f]{64}$/.test(parsed.payload_hash) &&
+        /^[a-z][a-z0-9_.-]{0,63}$/.test(parsed.type) &&
+        Number.isInteger(parsed.seq) && (parsed.seq ?? 0) > 0 &&
+        (parsed.target === undefined || (typeof parsed.target === "string" && parsed.target.length <= 256)) &&
+        (parsed.cls === "EPHEMERAL_LATEST" || parsed.cls === "EPHEMERAL_EVENT") &&
+        parsed.type !== "semantic.batch";
+      if (!valid) {
+        ws.send(JSON.stringify({ type: "error", code: "invalid_protocol_envelope" }));
+        return;
+      }
+    }
+
     // Pong response to client-initiated ping
     if (parsed.type === "ping") {
       ws.send(JSON.stringify({ type: "pong", seq: parsed.seq, serverAt: Date.now(), clientSentAt: parsed.clientSentAt }));
@@ -226,6 +260,8 @@ export class CollabRoom extends DurableObject<Env> {
 
     const outbound = {
       ...parsed,
+      actor: attachment.userId,
+      device: attachment.deviceId,
       actorUserId: attachment.userId,
       roomId: attachment.roomId,
       serverAt: Date.now(),

@@ -1,12 +1,5 @@
 package com.norfold.app.collaboration.merge
 
-import com.norfold.app.collaboration.ops.SemanticOperation
-import com.norfold.app.collaboration.ops.OpaqueOperation
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.JsonPrimitive
-import java.util.UUID
 
 /**
  * No-op merge engine for infrastructure testing. Accepts all ops, tracks revision as a

@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * Ably Pub/Sub transport using the native ably-android SDK.
@@ -76,7 +79,6 @@ class AblyPubSubTransport(
         emit(TransportLifecycleEvent(providerId, roomId.value, TransportState.CONNECTING))
 
         val options = ClientOptions().apply {
-            clientId = actorId.value
             environment = this@AblyPubSubTransport.environment
             autoConnect = true
             // Short-lived scoped token via callback; SDK renews automatically.
@@ -121,7 +123,7 @@ class AblyPubSubTransport(
             }
         }
 
-        val ch = client.channels.get("collab:${roomId.value}")
+        val ch = client.channels.get(roomId.value)
         channel = ch
         ch.subscribe("env") { message ->
             val text = message.data as? String ?: return@subscribe
@@ -131,7 +133,10 @@ class AblyPubSubTransport(
                 try {
                     val wire = json.decodeFromString(CollabWireEnvelope.serializer(), text)
                     val serverAt = System.currentTimeMillis()
-                    val env = wire.toInbound(serverAt, serverAt - wire.clientSentAt)
+                    val env = when (val decoded = wire.decodeInbound(serverAt, serverAt - wire.clientSentAt)) {
+                        is WireDecodeResult.Accepted -> decoded.envelope
+                        else -> return@launch
+                    }
                     if (seqTracker.accept(env)) _inbound.emit(env)
                 } catch (_: Exception) {}
             }
@@ -143,14 +148,23 @@ class AblyPubSubTransport(
         kotlinx.coroutines.runBlocking(Dispatchers.IO) { tokenProvider.freshToken(roomId) }
 
     override suspend fun send(envelope: OutboundEnvelope) {
+        require(envelope.roomId.isBenchmark || envelope.eventClass != CollabEventClass.DURABLE) {
+            "Durable artifact operations must use the authorized persistence RPC"
+        }
         val ch = channel ?: return
         val encoded = json.encodeToString(CollabWireEnvelope.serializer(), envelope.toWire())
         bytesSent += encoded.length
         eventsSent++
-        ch.publish("env", encoded, object : CompletionListener {
-            override fun onSuccess() {}
-            override fun onError(reason: ErrorInfo?) {}
-        })
+        suspendCancellableCoroutine { continuation ->
+            ch.publish("env", encoded, object : CompletionListener {
+                override fun onSuccess() { if (continuation.isActive) continuation.resume(Unit) }
+                override fun onError(reason: ErrorInfo?) {
+                    if (continuation.isActive) continuation.resumeWithException(
+                        IllegalStateException(reason?.message ?: "Ably publish failed"),
+                    )
+                }
+            })
+        }
     }
 
     override suspend fun close() {

@@ -7,12 +7,10 @@ import io.github.jan.supabase.realtime.realtime
 /**
  * Factory that wires a [CollaborationSession] for a given provider and capability set.
  *
- * Swapping providers requires only changing which transport this factory instantiates —
- * [CollaborationSession], the merge engine, and the editor layer are unaffected.
- * This is the single point guaranteed by the architecture contract in PROVIDER_DECISION.md.
- *
- * Provider selection is PENDING device-side benchmark results. Until then, the factory
- * defaults to Supabase Broadcast (lowest lock-in, no extra SDK, same auth token).
+ * Provider selection remains pending device-side benchmark results. Supabase is the only
+ * enabled artifact path because its durable RPC and realtime notification share one server
+ * transaction. Alternative transports remain available for isolated benchmark rooms until
+ * an equally durable relay path is certified.
  */
 object CollaborationSessionFactory {
 
@@ -33,6 +31,10 @@ object CollaborationSessionFactory {
         cloudflareWorkerUrl: String? = null,
         capabilities: CollabCapabilities = CollabCapabilities.BETA,
         crypto: CollabEnvelopeCrypto = ManagedCollabEnvelopeCrypto,
+        cryptoContextProvider: CollabCryptoContextProvider? = null,
+        outbox: OfflineOutbox,
+        durableGateway: DurableOperationGateway? = null,
+        deviceId: DeviceId = DeviceId("unknown-device"),
     ): CollaborationSession {
         val transport: RealtimeCollaborationTransport = when (provider) {
             Provider.SUPABASE -> {
@@ -41,14 +43,21 @@ object CollaborationSessionFactory {
             }
             Provider.CLOUDFLARE -> {
                 requireNotNull(cloudflareWorkerUrl) { "cloudflareWorkerUrl required for CLOUDFLARE provider" }
-                CloudflareDurableObjectTransport(workerBaseUrl = cloudflareWorkerUrl)
+                CloudflareDurableObjectTransport(workerBaseUrl = cloudflareWorkerUrl, deviceId = deviceId)
             }
             Provider.ABLY -> AblyPubSubTransport()
         }
         return CollaborationSession(
             transport = transport,
             crypto = crypto,
+            cryptoContextProvider = cryptoContextProvider,
             capabilities = capabilities,
+            outbox = outbox,
+            durableGateway = durableGateway
+                ?: if (provider == Provider.SUPABASE) SupabaseDurableOperationGateway(requireNotNull(supabase))
+                else OfflineDurableOperationGateway,
+            deviceId = deviceId,
+            artifactDeliverySupported = provider == Provider.SUPABASE,
         )
     }
 
@@ -60,10 +69,17 @@ object CollaborationSessionFactory {
         supabase: SupabaseClient,
         capabilities: CollabCapabilities = CollabCapabilities.BETA,
         crypto: CollabEnvelopeCrypto = ManagedCollabEnvelopeCrypto,
+        cryptoContextProvider: CollabCryptoContextProvider? = null,
+        outbox: OfflineOutbox,
+        deviceId: DeviceId = DeviceId("unknown-device"),
     ): CollaborationSession = create(
         provider = Provider.SUPABASE,
         supabase = supabase,
         capabilities = capabilities,
         crypto = crypto,
+        cryptoContextProvider = cryptoContextProvider,
+        outbox = outbox,
+        durableGateway = SupabaseDurableOperationGateway(supabase),
+        deviceId = deviceId,
     )
 }

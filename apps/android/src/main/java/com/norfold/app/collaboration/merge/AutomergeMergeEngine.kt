@@ -1,13 +1,9 @@
 package com.norfold.app.collaboration.merge
 
-import com.norfold.app.collaboration.ops.SemanticOperation
-import com.norfold.app.collaboration.ops.TextOperation
-import com.norfold.app.collaboration.ops.SceneOperation
-import java.util.UUID
+import com.norfold.app.collaboration.protocol.SemanticMutation
 
 /**
- * Automerge Java pilot engine. Sits behind [CollaborationMergeEngine] — the production editor
- * never imports Automerge directly.
+ * Inactive Automerge benchmark adapter retained behind [CollaborationMergeEngine].
  *
  * BENCHMARK/PROTOTYPE status: do not migrate the production editor until ABI/memory/rich-text
  * performance is measured. This class is intentionally isolated in the merge package.
@@ -19,6 +15,7 @@ import java.util.UUID
  * This file compiles without the Automerge dependency by using a reflection-based shim that
  * fails fast at runtime if the library is absent, so the production build is never broken.
  */
+@Deprecated("Inactive benchmark candidate; use CollaborationMergeEngineFactory")
 class AutomergeMergeEngine : CollaborationMergeEngine {
     override val engineId = "automerge-java"
     override val supportsSelectiveUndo = false // measure first
@@ -103,23 +100,8 @@ private class AutomergeDocument(
         return currentRevision()
     }
 
-    private fun applySemanticOp(op: SemanticOperation) {
-        // Map semantic operations to Automerge mutations. This is a representative prototype —
-        // the full mapping is defined once the editor spec is finalized.
-        when (op) {
-            is TextOperation.Insert -> {
-                // Automerge text: doc.text(op.targetId).splice(anchor, 0, op.text)
-                // Anchor-to-index resolution is editor-spec-dependent; deferred.
-            }
-            is TextOperation.Delete -> { /* deferred */ }
-            is TextOperation.Mark -> { /* deferred */ }
-            is SceneOperation.SetProperty -> {
-                // doc.map(op.targetId).set(op.key, op.value)
-            }
-            is SceneOperation.Create, is SceneOperation.Delete,
-            is SceneOperation.Transform -> { /* deferred */ }
-            else -> { /* OpaqueOperation and other domains: deferred */ }
-        }
+    private fun applySemanticOp(op: SemanticMutation) {
+        require(op.isSupported) { "Pilot cannot reinterpret an unknown semantic mutation" }
         // Commit the transaction so heads advance.
         try { invokeDoc("commit") } catch (_: Exception) {}
     }
@@ -137,7 +119,7 @@ private class AutomergeDocument(
         private fun loadFrom(bytes: ByteArray): Any {
             val cls = Class.forName("org.automerge.Document")
             val method = cls.getMethod("load", ByteArray::class.java)
-            return method.invoke(null, bytes)
+            return requireNotNull(method.invoke(null, bytes)) { "Automerge returned a null document" }
         }
     }
 }

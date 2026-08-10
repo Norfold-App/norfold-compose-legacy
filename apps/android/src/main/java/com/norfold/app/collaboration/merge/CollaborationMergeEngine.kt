@@ -1,13 +1,8 @@
 package com.norfold.app.collaboration.merge
 
 /**
- * Provider-independent merge-engine SPI. LOCKED as an abstraction boundary; the concrete engine
- * (Automerge Java pilot, Yjs reference, or none) sits behind it. The production editor MUST NOT
- * import a concrete CRDT — only these types.
- *
- * This is IMPLEMENTATION-READY INFRASTRUCTURE + BENCHMARK/PROTOTYPE, not a final editor data-model
- * migration. Do not convert Norfold's production editor/database model onto one engine until
- * benchmarks (ABI/memory/rich-text/perf) justify it.
+ * Provider-independent merge-engine SPI. The production editor imports only this boundary;
+ * [SemanticOpSetMergeEngine] is selected by [CollaborationMergeEngineFactory].
  */
 
 /** Opaque revision identifier(s). For CRDTs this wraps heads/state-vector bytes. */
@@ -17,14 +12,16 @@ data class Revision(val heads: List<String>) {
 
 /**
  * A durable, semantic local operation produced by the editor. It is NOT a whole-document JSON
- * blob — it names a domain, a stable target, and an operation intent. See [SemanticOperation].
+ * blob — it names a domain, a stable target, and an operation intent.
  */
 data class LocalOperation(
     val opId: String,
     val actorId: String,
     /** Logical command this op belongs to — the unit of selective undo. */
     val commandId: String,
-    val op: com.norfold.app.collaboration.ops.SemanticOperation,
+    val deviceId: String = "unknown-device",
+    val logicalClock: Long = 0,
+    val op: com.norfold.app.collaboration.protocol.SemanticMutation,
 )
 
 /** A remote operation received from a peer, already decoded from the transport envelope. */
@@ -32,7 +29,9 @@ data class RemoteOperation(
     val opId: String,
     val actorId: String,
     val commandId: String,
-    val op: com.norfold.app.collaboration.ops.SemanticOperation,
+    val deviceId: String = "unknown-device",
+    val logicalClock: Long = 0,
+    val op: com.norfold.app.collaboration.protocol.SemanticMutation,
 )
 
 /** An opaque serialized snapshot of a merge document, for persistence/recovery. */
@@ -54,6 +53,26 @@ interface MergeDocument {
     val engineId: String
     fun currentRevision(): Revision
 
+    /** Preflight a complete atomic batch before the owning domain mutates live state. */
+    fun validateRemote(operations: List<RemoteOperation>): String? = null
+
+    /**
+     * Integrate one semantic transaction. [reconcile] must apply the projected domain state
+     * atomically or return false without changing it. The merge state commits only after it accepts.
+     */
+    fun integrateRemoteBatch(
+        operations: List<RemoteOperation>,
+        reconcile: (List<com.norfold.app.collaboration.protocol.SemanticMutation>) -> Boolean,
+    ): RemoteBatchResult {
+        validateRemote(operations)?.let { return RemoteBatchResult.Rejected(it) }
+        operations.forEach(::applyRemote)
+        return if (reconcile(canonicalOperations())) RemoteBatchResult.Applied(currentRevision())
+        else RemoteBatchResult.Rejected("domain_invariant_rejected")
+    }
+
+    /** Canonical winning semantic state, ordered for deterministic domain reconciliation. */
+    fun canonicalOperations(): List<com.norfold.app.collaboration.protocol.SemanticMutation> = emptyList()
+
     /** Apply a local semantic operation and return the resulting revision. */
     fun applyLocal(op: LocalOperation): Revision
 
@@ -71,6 +90,17 @@ interface MergeDocument {
 
     /** Merge a peer's sync payload; return the new revision after integration. */
     fun integrate(payload: SyncPayload): Revision
+
+    /** Recovery variant with the same validate/project/reconcile/commit boundary as live batches. */
+    fun integrateSnapshot(
+        payload: SyncPayload,
+        reconcile: (List<com.norfold.app.collaboration.protocol.SemanticMutation>) -> Boolean,
+    ): RemoteBatchResult = RemoteBatchResult.Rejected("atomic_snapshot_integration_unsupported")
+}
+
+sealed interface RemoteBatchResult {
+    data class Applied(val revision: Revision) : RemoteBatchResult
+    data class Rejected(val reason: String) : RemoteBatchResult
 }
 
 /**

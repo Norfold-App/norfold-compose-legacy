@@ -2,6 +2,7 @@ package com.norfold.app.collaboration
 
 import kotlin.math.min
 import kotlin.random.Random
+import java.util.LinkedHashMap
 
 /**
  * Deterministic exponential backoff with full jitter, shared by all transports so reconnect
@@ -38,8 +39,13 @@ class ReconnectPolicy(
  * DURABLE gaps are reported (the merge engine must reconcile). EPHEMERAL_LATEST gaps are
  * expected and ignored (older previews are meant to be dropped).
  */
-class SequenceTracker {
-    private val lastSeqByActor = HashMap<String, Long>()
+class SequenceTracker(private val maxStreams: Int = 2_048) {
+    private val lastSeqByActor = object : LinkedHashMap<String, Long>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean = size > maxStreams
+    }
+    private val durableOperationIds = object : LinkedHashMap<String, Unit>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?): Boolean = size > maxStreams * 8
+    }
     var duplicatesDropped: Long = 0; private set
     var gapsSeen: Long = 0; private set
 
@@ -47,13 +53,21 @@ class SequenceTracker {
      * @return true if the envelope is fresh and should be delivered; false if it is a duplicate
      *   or an obsolete EPHEMERAL_LATEST that a newer seq already superseded.
      */
+    @Synchronized
     fun accept(env: InboundEnvelope): Boolean {
-        val key = env.actorId.value + "|" + env.eventType + "|" + (env.targetId ?: "")
+        val stream = if (env.eventClass == CollabEventClass.DURABLE) "durable"
+            else env.eventType + "|" + (env.targetId ?: "")
+        val key = env.actorId.value + "|" + env.deviceId.value + "|" + stream
         val last = lastSeqByActor[key]
         val seq = env.seq.value
 
+        if (env.eventClass == CollabEventClass.DURABLE && durableOperationIds.put(env.operationId.value, Unit) != null) {
+            duplicatesDropped++
+            return false
+        }
+
         if (last != null) {
-            if (seq <= last) {
+            if (seq <= last && env.eventClass != CollabEventClass.DURABLE) {
                 // For EPHEMERAL_LATEST an out-of-order/older event is simply obsolete.
                 // For DURABLE/EPHEMERAL_EVENT a repeat is a duplicate.
                 duplicatesDropped++
@@ -63,12 +77,14 @@ class SequenceTracker {
                 gapsSeen++
             }
         }
-        lastSeqByActor[key] = seq
+        lastSeqByActor[key] = maxOf(last ?: Long.MIN_VALUE, seq)
         return true
     }
 
+    @Synchronized
     fun reset() {
         lastSeqByActor.clear()
+        durableOperationIds.clear()
         duplicatesDropped = 0
         gapsSeen = 0
     }
