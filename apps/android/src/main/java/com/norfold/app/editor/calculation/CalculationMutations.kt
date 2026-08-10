@@ -520,25 +520,19 @@ object CalculationMutations {
 
     fun applyFormat(workbook: CalculationWorkbook, sheetId: SheetId, addresses: List<GridAddress>, delta: CellFormat): CalculationWorkbook {
         val sheet = workbook.sheet(sheetId) ?: return workbook
-        var next = sheet
-        addresses.forEach { address ->
-            val coordinate = next.coordinateAt(address.row, address.column) ?: return@forEach
-            val existing = next.cell(coordinate.rowId, coordinate.columnId)
-            val cell = existing?.copy(format = existing.format.merge(delta))
+        val next = sheet.upsertAt(addresses) { coordinate, existing ->
+            existing?.copy(format = existing.format.merge(delta))
                 ?: CalculationCell(rowId = coordinate.rowId, columnId = coordinate.columnId, format = delta)
-            next = next.upsertCell(cell)
         }
         return workbook.withSheet(next)
     }
 
     fun setNumberFormat(workbook: CalculationWorkbook, sheetId: SheetId, addresses: List<GridAddress>, numberFormat: CellNumberFormat): CalculationWorkbook {
         val sheet = workbook.sheet(sheetId) ?: return workbook
-        var next = sheet
-        addresses.forEach { address ->
-            val coordinate = next.coordinateAt(address.row, address.column) ?: return@forEach
-            val existing = next.cell(coordinate.rowId, coordinate.columnId)
+        val next = sheet.upsertAt(addresses) { coordinate, existing ->
             val format = (existing?.format ?: CellFormat()).copy(numberFormat = numberFormat)
-            next = next.upsertCell(existing?.copy(format = format) ?: CalculationCell(rowId = coordinate.rowId, columnId = coordinate.columnId, format = format))
+            existing?.copy(format = format)
+                ?: CalculationCell(rowId = coordinate.rowId, columnId = coordinate.columnId, format = format)
         }
         return workbook.withSheet(next)
     }
@@ -653,6 +647,38 @@ object CalculationMutations {
         return if (changed) workbook.copy(sheets = sheets, revision = workbook.revision + 1) else workbook.copy(sheets = sheets)
     }
 
+}
+
+/**
+ * Writes one derived cell per address in a single pass over the sheet.
+ *
+ * The obvious spelling — fold [CalculationSheet.upsertCell] over the addresses — scans and copies the whole
+ * cell list once per address, so a selection-wide change costs O(addresses × cells). Formatting a column on a
+ * sheet near the §10.5 safety target of around 100,000 cells is minutes of work that way, for an operation the
+ * user expects to be instant. Staging the writes and applying them through [CalculationSheet.upsertCells] is
+ * linear in each.
+ *
+ * [derive] is handed the cell already staged for that coordinate when an address repeats, which is what the
+ * fold handed it: the second visit to a coordinate has to build on the first rather than discard it, or a
+ * caller merging two format deltas over one address would silently lose the earlier one.
+ */
+private fun CalculationSheet.upsertAt(
+    addresses: List<GridAddress>,
+    derive: (StableCellCoordinate, CalculationCell?) -> CalculationCell,
+): CalculationSheet {
+    if (addresses.isEmpty()) return this
+    val staged = mutableListOf<CalculationCell>()
+    val occupied = HashMap<Pair<RowId, ColumnId>, CalculationCell>(cells.size * 2)
+    // First occurrence wins, matching the `firstOrNull` the coordinate lookup does.
+    cells.forEach { occupied.putIfAbsent(it.rowId to it.columnId, it) }
+    addresses.forEach { address ->
+        val coordinate = coordinateAt(address.row, address.column) ?: return@forEach
+        val slot = coordinate.rowId to coordinate.columnId
+        val cell = derive(coordinate, occupied[slot])
+        if (cell.isDurablyEmpty()) occupied.remove(slot) else occupied[slot] = cell
+        staged += cell
+    }
+    return upsertCells(staged)
 }
 
 private fun compareForSort(a: CalculatedValue, b: CalculatedValue): Int {

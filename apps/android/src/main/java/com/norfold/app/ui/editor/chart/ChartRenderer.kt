@@ -46,6 +46,7 @@ import com.norfold.app.editor.chart.AccessibleChartTable
 import com.norfold.app.editor.chart.ChartAccessibility
 import com.norfold.app.editor.chart.ChartDataResolution
 import com.norfold.app.editor.chart.ChartDocument
+import com.norfold.app.editor.chart.ChartGeometryKey
 import com.norfold.app.editor.chart.ChartLayoutEngine
 import com.norfold.app.editor.chart.ChartHitTester
 import com.norfold.app.editor.chart.ChartLinePattern
@@ -117,7 +118,10 @@ private fun ReadyChart(
             val density = LocalDensity.current
             val widthPx = with(density) { maxWidth.toPx() }
             val heightPx = with(density) { maxHeight.toPx() }
-            val layout = remember(document, data, widthPx, heightPx) {
+            // Keyed on the geometry inputs rather than the whole document, so a title, caption or legend edit
+            // reuses the retained marks instead of re-projecting the series (§16.2).
+            val geometryKey = ChartGeometryKey.of(document)
+            val layout = remember(geometryKey, data, widthPx, heightPx) {
                 ChartLayoutEngine.layout(document, data, widthPx, heightPx)
             }
             val gestureModifier = if (directManipulation == null || !document.interaction.valueEditingEnabled) {

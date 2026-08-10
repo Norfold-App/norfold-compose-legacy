@@ -59,6 +59,32 @@ class CalculationEngine(
     private val calculated = mutableMapOf<CellId, CalculatedValue>()
     private val dependencies = mutableMapOf<CellId, Set<CellId>>()
     private val dependents = mutableMapOf<CellId, MutableSet<CellId>>()
+
+    /**
+     * For each formula, the coordinate rectangles it reads — recorded whether or not a cell exists at each
+     * one.
+     *
+     * [dependents] can only point at cells that already exist, so it cannot answer "which formulas read row
+     * 12, column 4?" while that coordinate is still blank. This index can, which is what lets the first write
+     * to a blank cell invalidate the formulas that actually read it instead of rebuilding the whole graph.
+     */
+    private val referenceSpans = mutableMapOf<CellId, List<ReferenceSpan>>()
+
+    /**
+     * Coordinate and id lookup indexes, built only for the sheet and workbook currently being read heavily.
+     *
+     * Held here rather than on [CalculationSheet] because the model is copied on every write and kept by
+     * History: an index living on the sheet would be rebuilt per keystroke and retained per undo step. The
+     * engine holds one workbook, so there is one of each of these at a time, and replacing the workbook
+     * discards them. See [cellAt] and [locateCell] for why they are earned rather than eager.
+     */
+    private var indexedSheet: CalculationSheet? = null
+    private var cellsBySlot: Map<Pair<RowId, ColumnId>, CalculationCell>? = null
+    private var slotLookups = 0
+    private var indexedWorkbook: CalculationWorkbook? = null
+    private var cellsById: Map<CellId, Pair<CalculationSheet, CalculationCell>>? = null
+    private var idLookups = 0
+
     private var metrics = CalculationInstrumentation()
 
     /**
@@ -111,7 +137,7 @@ class CalculationEngine(
     fun valueAt(sheetId: SheetId, row: Int, column: Int): CalculatedValue {
         val sheet = workbookState.sheet(sheetId)
             ?: return CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.REFERENCE, "Missing sheet"))
-        val cell = sheet.cellAt(row, column) ?: return CalculatedValue.Blank
+        val cell = cellAt(sheet, row, column) ?: return CalculatedValue.Blank
         return valueOf(cell.id)
     }
 
@@ -162,7 +188,7 @@ class CalculationEngine(
             ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "Missing sheet"))
         val coordinate = sheet.coordinateAt(row, column)
             ?: return CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "Cell outside sheet"))
-        val existing = sheet.cell(coordinate.rowId, coordinate.columnId)
+        val existing = cellAt(sheet, coordinate.rowId, coordinate.columnId)
         val candidate = existing?.copy(input = input) ?: CalculationCell(rowId = coordinate.rowId, columnId = coordinate.columnId, input = input)
         val validation = validate(sheet, coordinate, input)
         if (validation.reject != null) return CellCommitResult(false, error = validation.reject)
@@ -170,19 +196,38 @@ class CalculationEngine(
             return CellCommitResult(false, warning = validation.warning, requiresConfirmation = true)
         }
         val nextSheet = sheet.upsertCell(candidate)
-        // A previously sparse/blank coordinate had no CellId for dependency edges to target. Its first
-        // durable value therefore rebuilds the graph once; subsequent edits use the narrow closure.
-        replaceWorkbook(workbookState.withSheet(nextSheet), if (existing == null) null else setOf(candidate.id))
+        // A previously sparse/blank coordinate had no CellId, so no dependency edge points at it and the
+        // closure of the new cell alone would miss the formulas that read the coordinate. They are recovered
+        // from the span index instead of by rebuilding the graph: typing the first value into a blank cell is
+        // the most ordinary edit there is, and it must not recalculate the whole workbook.
+        val changed = if (existing == null) {
+            formulasReading(sheetId, row, column) + candidate.id
+        } else {
+            setOf(candidate.id)
+        }
+        replaceWorkbook(workbookState.withSheet(nextSheet), changed)
         return CellCommitResult(true, warning = validation.warning)
     }
 
     /** Applies a paste/fill-sized mutation set and rebuilds or invalidates the graph exactly once. */
     fun commitBatch(sheetId: SheetId, mutations: List<CellMutation>, confirmWarnings: Boolean = true): List<CellCommitResult> {
         if (mutations.isEmpty()) return emptyList()
-        var sheet = workbookState.sheet(sheetId)
+        val startingSheet = workbookState.sheet(sheetId)
             ?: return mutations.map { CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "Missing sheet")) }
+        var sheet = startingSheet
+        // Validation is the only step in this loop that reads the sheet's *contents*, and only through a
+        // CustomFormula condition — every other condition inspects the incoming value alone, and range
+        // targeting resolves against row/column identity, which a cell write cannot change. So unless such a
+        // rule is present, nothing here can observe the intermediate sheets a per-cell fold would build, and
+        // the writes can be staged and applied in one pass. That matters because upsertCell scans and copies
+        // the whole cell list, making the fold O(writes × cells): at the §10.5 safety target of around
+        // 100,000 cells, one paste measured in minutes rather than milliseconds.
+        val validationReadsCells = startingSheet.validations.any { it.condition is ValidationCondition.CustomFormula }
+        val staged = mutableListOf<CalculationCell>()
+        val occupied = HashMap<Pair<RowId, ColumnId>, CalculationCell>(startingSheet.cells.size * 2)
+        startingSheet.cells.forEach { occupied[it.rowId to it.columnId] = it }
         val changed = linkedSetOf<CellId>()
-        var introducedSparseCell = false
+        var newCoordinateCount = 0
         val results = mutations.map { mutation ->
             val coordinate = sheet.coordinateAt(mutation.row, mutation.column)
                 ?: return@map CellCommitResult(false, error = CalculationError(CalculationErrorKind.REFERENCE, "Cell outside sheet"))
@@ -191,15 +236,36 @@ class CalculationEngine(
             if (validation.warning != null && !confirmWarnings) {
                 return@map CellCommitResult(false, warning = validation.warning, requiresConfirmation = true)
             }
-            val existing = sheet.cell(coordinate.rowId, coordinate.columnId)
+            val slot = coordinate.rowId to coordinate.columnId
+            val existing = occupied[slot]
             val candidate = existing?.copy(input = mutation.input)
                 ?: CalculationCell(rowId = coordinate.rowId, columnId = coordinate.columnId, input = mutation.input)
-            if (existing == null) introducedSparseCell = true else changed += candidate.id
-            sheet = sheet.upsertCell(candidate)
+            // Same reasoning as commitInput: a coordinate that held no cell needs its readers found through
+            // the span index, because no edge points at an id that did not exist a moment ago. Past the
+            // threshold below the search is abandoned in favour of one rebuild, so it is skipped here too.
+            if (existing == null) {
+                newCoordinateCount++
+                if (newCoordinateCount <= REBUILD_OVER_NEW_COORDINATES) {
+                    changed += formulasReading(sheetId, mutation.row, mutation.column)
+                }
+            }
+            changed += candidate.id
+            // Mirrors what upsertCell would leave behind, so a second write to the same coordinate in one
+            // batch sees the first — including a write that empties a cell, which removes the slot.
+            if (candidate.isDurablyEmpty()) occupied.remove(slot) else occupied[slot] = candidate
+            staged += candidate
+            if (validationReadsCells) sheet = sheet.upsertCell(candidate)
             CellCommitResult(true, warning = validation.warning)
         }
         if (results.any(CellCommitResult::accepted)) {
-            replaceWorkbook(workbookState.withSheet(sheet), if (introducedSparseCell) null else changed)
+            val next = if (validationReadsCells) sheet else startingSheet.upsertCells(staged)
+            // Searching the span index costs a pass over every formula, per coordinate that did not exist
+            // before. For a paste that introduces thousands of them that is quadratic, and it converges on
+            // "every formula" anyway. One rebuild is O(formulas) regardless of the batch size and is always
+            // sound — it is what a structural mutation already does — so past the threshold it is both the
+            // cheaper and the more conservative choice.
+            val invalidate = if (newCoordinateCount > REBUILD_OVER_NEW_COORDINATES) null else changed
+            replaceWorkbook(workbookState.withSheet(next), invalidate)
         }
         return results
     }
@@ -242,7 +308,7 @@ class CalculationEngine(
         row: Int,
         column: Int,
     ): CellFormat {
-        val direct = sheet.cellAt(row, column)?.format ?: CellFormat()
+        val direct = cellAt(sheet, row, column)?.format ?: CellFormat()
         val table = workbookState.embeddedTables.firstOrNull { definition -> rangeContains(sheet, coordinate, definition.range) }
             ?: return direct
         val startRow = minOf(sheet.rowIndex(table.range.start.rowId), sheet.rowIndex(table.range.end.rowId))
@@ -275,6 +341,7 @@ class CalculationEngine(
         calculated.clear()
         dependencies.clear()
         dependents.clear()
+        referenceSpans.clear()
         volatileCells.clear()
         beginPass()
         var formulaCount = 0
@@ -284,10 +351,10 @@ class CalculationEngine(
                     formulaCount++
                     val parse = parser.parse(cell.input.source)
                     parsed[cell.id] = parse
-                    val refs = (parse as? FormulaParseResult.Success)
-                        ?.let { referencesOf(it.expression, sheet) }
-                        .orEmpty()
-                    setDependencies(cell.id, refs)
+                    val scan = (parse as? FormulaParseResult.Success)
+                        ?.let { scanReferences(it.expression, sheet) }
+                        ?: ReferenceScan.Empty
+                    setDependencies(cell.id, scan)
                     (parse as? FormulaParseResult.Success)?.let { recordVolatility(cell.id, it.expression) }
                 }
             }
@@ -328,7 +395,7 @@ class CalculationEngine(
                     is FormulaParseResult.Failure -> CalculatedValue.ErrorValue(parse.error)
                     is FormulaParseResult.Success -> {
                         metrics = metrics.copy(formulasRecalculated = metrics.formulasRecalculated + 1)
-                        val refs = referencesOf(parse.expression, sheet)
+                        val refs = scanReferences(parse.expression, sheet)
                         setDependencies(cell.id, refs)
                         recordVolatility(cell.id, parse.expression)
                         evaluate(parse.expression, sheet, cell, stack, budget).scalarOrError()
@@ -1014,7 +1081,7 @@ class CalculationEngine(
     private fun resolveReference(reference: A1Reference, currentSheet: CalculationSheet, stack: LinkedHashSet<CellId>, budget: EvaluationBudget): CalculatedValue {
         val sheet = sheetFor(reference.sheetName, currentSheet)
             ?: return CalculatedValue.ErrorValue(CalculationError(CalculationErrorKind.REFERENCE, "Missing sheet ${reference.sheetName}"))
-        val cell = sheet.cellAt(reference.row, reference.column) ?: return CalculatedValue.Blank
+        val cell = cellAt(sheet, reference.row, reference.column) ?: return CalculatedValue.Blank
         return calculateCell(sheet, cell, stack, budget)
     }
 
@@ -1032,7 +1099,7 @@ class CalculationEngine(
         return RuntimeValue.Range(rows.count(), columns.count(), sequence {
             for (row in rows) for (column in columns) {
                 budget.step()
-                val cell = sheet.cellAt(row, column)
+                val cell = cellAt(sheet, row, column)
                 yield(if (cell == null) CalculatedValue.Blank else calculateCell(sheet, cell, stack, budget))
             }
         })
@@ -1059,7 +1126,7 @@ class CalculationEngine(
         return RuntimeValue.Range(endRow - startRow + 1, 1, sequence {
             for (row in startRow..endRow) {
                 budget.step()
-                yield(sheet.cellAt(row, columnIndex)?.let { calculateCell(sheet, it, stack, budget) } ?: CalculatedValue.Blank)
+                yield(cellAt(sheet, row, columnIndex)?.let { calculateCell(sheet, it, stack, budget) } ?: CalculatedValue.Blank)
             }
         })
     }
@@ -1074,11 +1141,24 @@ class CalculationEngine(
         return rangeValues(A1Reference(sheet.name, startRow, startColumn), A1Reference(sheet.name, endRow, endColumn), currentSheet, stack, budget)
     }
 
-    private fun referencesOf(expression: FormulaExpression, currentSheet: CalculationSheet): Set<CellId> {
+    /**
+     * Collects both what a formula reads *now* and where it reads *from*.
+     *
+     * The [ReferenceScan.cellIds] half is the dependency graph as before. The [ReferenceScan.spans] half is
+     * the coordinate rectangles, recorded even where no cell exists yet — a reference to a blank coordinate
+     * resolves to no [CellId] and would otherwise leave no trace at all.
+     */
+    private fun scanReferences(expression: FormulaExpression, currentSheet: CalculationSheet): ReferenceScan {
         val result = linkedSetOf<CellId>()
+        val spans = mutableListOf<ReferenceSpan>()
         fun collect(node: FormulaExpression) {
             when (node) {
-                is FormulaExpression.CellReference -> resolveCellId(node.reference, currentSheet)?.let(result::add)
+                is FormulaExpression.CellReference -> {
+                    resolveCellId(node.reference, currentSheet)?.let(result::add)
+                    sheetFor(node.reference.sheetName, currentSheet)?.let { sheet ->
+                        spans += ReferenceSpan(sheet.id, node.reference.row, node.reference.row, node.reference.column, node.reference.column)
+                    }
+                }
                 is FormulaExpression.RangeReference -> {
                     // A range naming a sheet that does not exist has no dependencies to record; the
                     // evaluator reports the #REF! separately.
@@ -1090,11 +1170,20 @@ class CalculationEngine(
                     val columnEnd = maxOf(node.start.column, node.end.column)
                     val count = (rowEnd - rowStart + 1L) * (columnEnd - columnStart + 1L)
                     if (count <= limits.maximumRangeCells) {
-                        for (row in rowStart..rowEnd) for (column in columnStart..columnEnd) sheet.cellAt(row, column)?.id?.let(result::add)
+                        for (row in rowStart..rowEnd) for (column in columnStart..columnEnd) cellAt(sheet, row, column)?.id?.let(result::add)
                     }
+                    // Recorded even past the range-cell limit: an over-large range still *reads* these
+                    // coordinates, and a span costs four integers regardless of how many cells it spans.
+                    spans += ReferenceSpan(sheet.id, rowStart, rowEnd, columnStart, columnEnd)
                 }
-                is FormulaExpression.NamedReference -> workbookState.namedRange(node.name)?.target?.let { stableCells(it).forEach(result::add) }
-                is FormulaExpression.StructuredReference -> workbookState.embeddedTable(node.tableName)?.range?.let { stableCells(it).forEach(result::add) }
+                is FormulaExpression.NamedReference -> workbookState.namedRange(node.name)?.target?.let {
+                    stableCells(it).forEach(result::add)
+                    spanOf(it)?.let(spans::add)
+                }
+                is FormulaExpression.StructuredReference -> workbookState.embeddedTable(node.tableName)?.range?.let {
+                    stableCells(it).forEach(result::add)
+                    spanOf(it)?.let(spans::add)
+                }
                 is FormulaExpression.Unary -> collect(node.operand)
                 is FormulaExpression.Binary -> { collect(node.left); collect(node.right) }
                 is FormulaExpression.FunctionCall -> node.arguments.forEach(::collect)
@@ -1102,19 +1191,41 @@ class CalculationEngine(
             }
         }
         collect(expression)
-        return result
+        return ReferenceScan(result, spans)
     }
+
+    /** The index rectangle a stable (id-addressed) range currently occupies, or null if it no longer resolves. */
+    private fun spanOf(range: StableCellRange): ReferenceSpan? {
+        val sheet = workbookState.sheet(range.start.sheetId) ?: return null
+        val rows = sortedRange(sheet.rowIndex(range.start.rowId), sheet.rowIndex(range.end.rowId)) ?: return null
+        val columns = sortedRange(sheet.columnIndex(range.start.columnId), sheet.columnIndex(range.end.columnId)) ?: return null
+        return ReferenceSpan(sheet.id, rows.first, rows.last, columns.first, columns.last)
+    }
+
+    /**
+     * The formulas that read a coordinate which currently holds no cell.
+     *
+     * Used only on the first write to a blank coordinate. Scanning every formula's spans is O(formulas), but
+     * each step is an integer comparison rather than a parse and an evaluation, and the set it returns is
+     * what gets recalculated — so the recomputed-node count stays proportional to the readers of that
+     * coordinate rather than to the size of the workbook.
+     */
+    private fun formulasReading(sheetId: SheetId, row: Int, column: Int): Set<CellId> =
+        referenceSpans.asSequence()
+            .filter { (_, spans) -> spans.any { it.covers(sheetId, row, column) } }
+            .map { it.key }
+            .toCollection(linkedSetOf())
 
     private fun stableCells(range: StableCellRange): List<CellId> {
         val sheet = workbookState.sheet(range.start.sheetId) ?: return emptyList()
         val rows = sortedRange(sheet.rowIndex(range.start.rowId), sheet.rowIndex(range.end.rowId)) ?: return emptyList()
         val columns = sortedRange(sheet.columnIndex(range.start.columnId), sheet.columnIndex(range.end.columnId)) ?: return emptyList()
         if (rows.count().toLong() * columns.count().toLong() > limits.maximumRangeCells) return emptyList()
-        return buildList { rows.forEach { row -> columns.forEach { column -> sheet.cellAt(row, column)?.id?.let(::add) } } }
+        return buildList { rows.forEach { row -> columns.forEach { column -> cellAt(sheet, row, column)?.id?.let(::add) } } }
     }
 
     private fun resolveCellId(reference: A1Reference, currentSheet: CalculationSheet): CellId? =
-        sheetFor(reference.sheetName, currentSheet)?.cellAt(reference.row, reference.column)?.id
+        sheetFor(reference.sheetName, currentSheet)?.let { cellAt(it, reference.row, reference.column)?.id }
 
     /** Notes whether [expression] reads the evaluation instant, so the pass opener can invalidate it. */
     private fun recordVolatility(cellId: CellId, expression: FormulaExpression) {
@@ -1129,14 +1240,16 @@ class CalculationEngine(
         else -> false
     }
 
-    private fun setDependencies(cellId: CellId, refs: Set<CellId>) {
+    private fun setDependencies(cellId: CellId, scan: ReferenceScan) {
         removeDependencyEdges(cellId)
-        dependencies[cellId] = refs
-        refs.forEach { dependents.getOrPut(it) { linkedSetOf() }.add(cellId) }
-        metrics = metrics.copy(dependencyEdgesAdded = metrics.dependencyEdgesAdded + refs.size)
+        dependencies[cellId] = scan.cellIds
+        scan.cellIds.forEach { dependents.getOrPut(it) { linkedSetOf() }.add(cellId) }
+        if (scan.spans.isNotEmpty()) referenceSpans[cellId] = scan.spans
+        metrics = metrics.copy(dependencyEdgesAdded = metrics.dependencyEdgesAdded + scan.cellIds.size)
     }
 
     private fun removeDependencyEdges(cellId: CellId) {
+        referenceSpans.remove(cellId)
         val removed = dependencies.remove(cellId).orEmpty()
         removed.forEach { ref ->
             dependents[ref]?.remove(cellId)
@@ -1155,8 +1268,91 @@ class CalculationEngine(
         return result
     }
 
-    private fun locateCell(id: CellId): Pair<CalculationSheet, CalculationCell>? = workbookState.sheets.firstNotNullOfOrNull { sheet ->
-        sheet.cell(id)?.let { sheet to it }
+    /**
+     * A rectangle of coordinates one formula reads, held as indices rather than stable ids.
+     *
+     * Indices are safe here because every operation that can shift them — inserting or removing a row or
+     * column, renaming or reordering a sheet — arrives as a structural replacement that rebuilds the graph,
+     * and the rebuild rebuilds these spans with it.
+     */
+    private data class ReferenceSpan(
+        val sheetId: SheetId,
+        val firstRow: Int,
+        val lastRow: Int,
+        val firstColumn: Int,
+        val lastColumn: Int,
+    ) {
+        fun covers(sheetId: SheetId, row: Int, column: Int): Boolean =
+            this.sheetId == sheetId && row in firstRow..lastRow && column in firstColumn..lastColumn
+    }
+
+    /** What one formula reads: the cells that exist now, and the coordinates it reads either way. */
+    private data class ReferenceScan(val cellIds: Set<CellId>, val spans: List<ReferenceSpan>) {
+        companion object { val Empty = ReferenceScan(emptySet(), emptyList()) }
+    }
+
+    /**
+     * A cell by coordinate: scanning at first, then indexed once the scans have paid for an index.
+     *
+     * `CalculationSheet.cells` is sparse, so a lookup by coordinate walks it. That is the right shape for a
+     * single edit — hashing every cell to answer three questions costs more than three walks — and the wrong
+     * shape for a full recalculation, where every formula resolves its references through here and the walk
+     * makes the pass quadratic: at the §10.5 safety target of around 100,000 cells, recalculating a workbook
+     * of one-line sums took minutes.
+     *
+     * So the choice is counted rather than guessed. The first few lookups against a sheet scan; once one
+     * sheet has been asked often enough to cover the cost of building an index, it is built and kept until
+     * that sheet is replaced. A keystroke never reaches the threshold, and a rebuild passes it immediately.
+     *
+     * The sheet is tracked by identity, not equality: a sheet is immutable, so one instance always holds the
+     * same cells, and a pointer comparison is what keeps this check off the hot path. Ties resolve the way
+     * the scan resolves them — first occurrence wins — so a list that somehow held two cells for one
+     * coordinate answers identically either way.
+     */
+    private fun cellAt(sheet: CalculationSheet, row: Int, column: Int): CalculationCell? {
+        val rowId = sheet.row(row)?.id ?: return null
+        val columnId = sheet.column(column)?.id ?: return null
+        return cellAt(sheet, rowId, columnId)
+    }
+
+    private fun cellAt(sheet: CalculationSheet, rowId: RowId, columnId: ColumnId): CalculationCell? {
+        if (sheet !== indexedSheet) {
+            indexedSheet = sheet
+            cellsBySlot = null
+            slotLookups = 0
+        }
+        cellsBySlot?.let { return it[rowId to columnId] }
+        if (++slotLookups < INDEX_AFTER_LOOKUPS || sheet.cells.size < INDEX_OVER_CELLS) {
+            return sheet.cell(rowId, columnId)
+        }
+        val built = HashMap<Pair<RowId, ColumnId>, CalculationCell>(sheet.cells.size * 2)
+        sheet.cells.forEach { built.putIfAbsent(it.rowId to it.columnId, it) }
+        cellsBySlot = built
+        return built[rowId to columnId]
+    }
+
+    /**
+     * The sheet a cell belongs to, found by id — same adaptive shape as [cellAt], keyed on the workbook.
+     *
+     * Called once per invalidated cell, so a keystroke whose closure is a handful of cells scans and a
+     * rebuild-sized closure indexes. Sheets are searched in workbook order and the first match wins, which
+     * is what the scan it replaces did.
+     */
+    private fun locateCell(id: CellId): Pair<CalculationSheet, CalculationCell>? {
+        if (workbookState !== indexedWorkbook) {
+            indexedWorkbook = workbookState
+            cellsById = null
+            idLookups = 0
+        }
+        cellsById?.let { return it[id] }
+        fun scan() = workbookState.sheets.firstNotNullOfOrNull { sheet -> sheet.cell(id)?.let { sheet to it } }
+        if (++idLookups < INDEX_AFTER_LOOKUPS) return scan()
+        val total = workbookState.sheets.sumOf { it.cells.size }
+        if (total < INDEX_OVER_CELLS) return scan()
+        val built = HashMap<CellId, Pair<CalculationSheet, CalculationCell>>(total * 2)
+        workbookState.sheets.forEach { sheet -> sheet.cells.forEach { built.putIfAbsent(it.id, sheet to it) } }
+        cellsById = built
+        return built[id]
     }
 
     private data class ValidationOutcome(val reject: CalculationError? = null, val warning: String? = null)
@@ -1239,6 +1435,36 @@ class CalculationEngine(
             if (condition == ConditionalCondition.Duplicate) count > 1 else count == 1
         }
         is ConditionalCondition.ColorScale -> value.coerceNumber() != null
+    }
+
+    private companion object {
+        /**
+         * How many first-writes one batch may resolve through the span index before the graph is rebuilt
+         * instead.
+         *
+         * A coordinate that held no cell has no id for a dependency edge to point at, so its readers are
+         * found by scanning every formula's reference spans — a pass over all formulas, per such coordinate.
+         * For a paste that introduces thousands of them that is quadratic, and the accumulated set converges
+         * on "every formula" regardless. One rebuild is a single pass over the formulas whatever the batch
+         * size, and is the same operation a structural mutation already performs, so past this point it is
+         * both cheaper and the more conservative choice.
+         *
+         * The value is a shape rather than a tuned constant: below it the targeted path is unambiguously
+         * cheaper, above it the rebuild is, and anywhere near it the two cost about the same — so a
+         * misplaced boundary costs a little time and never correctness.
+         */
+        const val REBUILD_OVER_NEW_COORDINATES = 64
+
+        /**
+         * How many lookups against one sheet, and how many cells in it, before an index is worth building.
+         *
+         * Building an index hashes every cell; scanning walks them. So the index only pays once the number of
+         * lookups is comparable to the cost of building it, and only when the list is long enough for the
+         * walk to matter at all — below the cell floor a scan is already a few microseconds and the index
+         * would be pure overhead on a small sheet's every edit.
+         */
+        const val INDEX_AFTER_LOOKUPS = 8
+        const val INDEX_OVER_CELLS = 256
     }
 }
 

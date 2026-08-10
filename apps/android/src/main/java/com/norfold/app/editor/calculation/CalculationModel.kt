@@ -127,6 +127,58 @@ data class CalculationSheet(
         return copy(cells = next)
     }
 
+    /**
+     * Applies many writes in one pass, leaving the cell list in the order a fold of [upsertCell] would.
+     *
+     * [upsertCell] scans for its target and copies the whole list, so folding it across a paste-sized
+     * mutation set costs O(writes × cells): at the §10.5 safety target of around 100,000 cells that is
+     * minutes of work for one paste. Here the coordinate index is built once and the list is copied once.
+     *
+     * Order is preserved rather than merely the contents, because the cell list is serialized: a batch that
+     * reordered it would rewrite storage for every affected sheet and make otherwise-identical documents
+     * compare unequal. A write to an existing coordinate replaces it in place and a new coordinate is
+     * appended, exactly as the fold does. The one input where this deliberately answers differently is a cell
+     * whose id is already in the sheet at another coordinate; see the comment on `slotById` below.
+     */
+    fun upsertCells(incoming: List<CalculationCell>): CalculationSheet {
+        if (incoming.isEmpty()) return this
+        val rowIds = rows.mapTo(HashSet(rows.size)) { it.id }
+        val columnIds = columns.mapTo(HashSet(columns.size)) { it.id }
+        val slots = LinkedHashMap<Pair<RowId, ColumnId>, CalculationCell>(cells.size + incoming.size)
+        cells.forEach { slots[it.rowId to it.columnId] = it }
+        // A cell carrying an id already in the sheet to a *different* coordinate moves rather than duplicates.
+        // No caller does this today — each derives its candidate from the coordinate it is writing, so the id
+        // and the slot always agree — but this is public API, and it is the one input where this deliberately
+        // does not reproduce a fold of [upsertCell]: that scans for `id == cell.id || coordinate matches` and
+        // replaces whichever it meets first, which for a moved id overwrites the cell at the *old* slot and
+        // leaves the occupant of the new one beside it, two cells at one coordinate. Here the old slot is
+        // vacated and the new one replaced, so the invariant every id-keyed and coordinate-keyed lookup
+        // downstream relies on survives an input the fold would have corrupted.
+        val slotById = HashMap<CellId, Pair<RowId, ColumnId>>(cells.size * 2)
+        cells.forEach { slotById[it.id] = it.rowId to it.columnId }
+        incoming.forEach { cell ->
+            require(cell.rowId in rowIds && cell.columnId in columnIds) { "Cell identity is outside this sheet" }
+            val key = cell.rowId to cell.columnId
+            val previousKey = slotById[cell.id]
+            if (cell.isDurablyEmpty()) {
+                // An empty moved cell removes the cell carrying that id; it must not also erase an unrelated
+                // resident at the coordinate carried by the empty value.
+                val removed = slots.remove(previousKey ?: key)
+                removed?.let { slotById.remove(it.id) }
+            } else {
+                previousKey?.takeIf { it != key }?.let { oldKey ->
+                    slots.remove(oldKey)?.let { removed -> slotById.remove(removed.id) }
+                }
+                // Replacing a coordinate also retires the displaced id. Leaving it in slotById would let a
+                // later move of that id remove the replacement that now occupies this coordinate.
+                slots[key]?.takeIf { it.id != cell.id }?.let { displaced -> slotById.remove(displaced.id) }
+                slots[key] = cell
+                slotById[cell.id] = key
+            }
+        }
+        return copy(cells = slots.values.toList())
+    }
+
     companion object {
         const val DEFAULT_ROWS = 100
         const val DEFAULT_COLUMNS = 26

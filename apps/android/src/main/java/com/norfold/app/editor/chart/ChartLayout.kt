@@ -89,6 +89,21 @@ data class ChartLayout(
     }
 }
 
+/**
+ * Everything about a [ChartDocument] that can move a mark.
+ *
+ * §16.2 asks charts for *retained geometry* with layer/mark invalidation. Memoizing a layout on the whole
+ * document defeats that: retitling a chart, editing its caption or moving its legend would re-sample and
+ * re-project every mark, which on a 50,000-point series (§11.10) is the whole cost of drawing the chart paid
+ * again for a change that cannot move anything. This key holds only the inputs [ChartLayoutEngine.layout]
+ * actually reads, so text and legend edits reuse the geometry and data or type changes rebuild it.
+ */
+data class ChartGeometryKey(val type: ChartType, val palette: List<ColorValue>) {
+    companion object {
+        fun of(document: ChartDocument): ChartGeometryKey = ChartGeometryKey(document.type, document.style.palette)
+    }
+}
+
 object ChartLayoutEngine {
     fun layout(
         document: ChartDocument,
