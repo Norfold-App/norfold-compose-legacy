@@ -14,6 +14,9 @@ import com.norfold.app.editor.calculation.SpreadsheetViewportPlanner
 import com.norfold.app.editor.document.DocumentHostRuntime
 import com.norfold.app.editor.document.DocumentSceneController
 import com.norfold.app.editor.document.PageVirtualizer
+import com.norfold.app.editor.flow.FlowEditController
+import com.norfold.app.editor.flow.FlowHostRuntime
+import com.norfold.app.editor.flow.RecordingFlowHostInstrumentation
 import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.presentation.FormFactor
 import org.junit.Assert.assertEquals
@@ -58,6 +61,30 @@ class EditorVirtualizationStressTest {
         rows = List(rows) { CalculationRow() },
         columns = List(columns) { CalculationColumn() },
     )
+
+    // ── Flow: the actual composed-range instrumentation seam ───────────────────────────────────────
+
+    @Test
+    fun aLargeFlowArtifactReportsTheViewportRangeRatherThanItsWholeBlockCount() {
+        val blocks = List(10_000) { index ->
+            ParagraphBlock(id = "b$index", content = listOf(InlineText("Synthetic block $index")))
+        }
+        val instrumentation = RecordingFlowHostInstrumentation()
+        val runtime = FlowHostRuntime(
+            controller = FlowEditController(EditTarget("note:flow"), BlockDocument(blocks)),
+            initialFormFactor = FormFactor(400, 800),
+            instrumentation = instrumentation,
+        )
+
+        // Compose reports this range from LazyListState.layoutInfo; the runtime must preserve both the
+        // bounded visible range and the authoritative total rather than expanding the event to all blocks.
+        runtime.reportVisibleRange(firstIndex = 5_000, lastIndex = 5_020)
+
+        assertTrue(
+            "the actual composition hook must report 21 visible blocks out of 10000",
+            instrumentation.events().contains("visible:5000-5020/10000"),
+        )
+    }
 
     // ── Documents: pages ────────────────────────────────────────────────────────────────────────────
 
