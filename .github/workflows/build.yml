@@ -150,8 +150,8 @@ jobs:
 
           keystore_sha1="$(normalize_digest "$(printf '%s\n' "$keystore_report" | sed -n 's/^[[:space:]]*SHA1:[[:space:]]*//p' | head -n 1)")"
           keystore_sha256="$(normalize_digest "$(printf '%s\n' "$keystore_report" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -n 1)")"
-          apk_sha1="$(normalize_digest "$(printf '%s\n' "$apk_report" | sed -n 's/^Signer #1 certificate SHA-1 digest:[[:space:]]*//p' | head -n 1)")"
-          apk_sha256="$(normalize_digest "$(printf '%s\n' "$apk_report" | sed -n 's/^Signer #1 certificate SHA-256 digest:[[:space:]]*//p' | head -n 1)")"
+          apk_sha1="$(normalize_digest "$(printf '%s\n' "$apk_report" | sed -n 's/^.*certificate SHA-1 digest:[[:space:]]*//p' | head -n 1)")"
+          apk_sha256="$(normalize_digest "$(printf '%s\n' "$apk_report" | sed -n 's/^.*certificate SHA-256 digest:[[:space:]]*//p' | head -n 1)")"
 
           [[ "$package_name" == "com.norfold.app" ]] \
             || { echo "::error::Unexpected Android package in the certified APK."; exit 1; }
