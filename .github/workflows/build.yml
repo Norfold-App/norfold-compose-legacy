@@ -127,45 +127,45 @@ jobs:
           set -euo pipefail
 
           apk="apps/android/build/outputs/apk/debug/android-debug.apk"
-          first_apk="$RUNNER_TEMP/norfold-debug-build-a.apk"
-          cp "$apk" "$first_apk"
-          rm -f "$apk"
-          ./gradlew :apps:android:assembleDebug
-
           apksigner="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
           aapt2="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name aapt2 -print | sort -V | tail -n 1)"
-          if [[ -z "$apksigner" || -z "$aapt2" ]]; then
+          if [[ -z "$apksigner" || -z "$aapt2" ]] || ! command -v keytool >/dev/null; then
             echo "::error::Android signing verification tools were not found in the configured SDK."
             exit 1
           fi
 
-          package_name() {
-            "$aapt2" dump badging "$1" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1
+          normalize_digest() {
+            printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]'
           }
-          certificate_digest() {
-            local algorithm="$1"
-            local source="$2"
-            "$apksigner" verify --print-certs "$source" \
-              | sed -n "s/^Signer #1 certificate ${algorithm} digest: //p" \
-              | head -n 1
+          format_digest() {
+            printf '%s' "$1" | sed 's/../&:/g; s/:$//'
           }
 
-          package_a="$(package_name "$first_apk")"
-          package_b="$(package_name "$apk")"
-          sha1_a="$(certificate_digest SHA-1 "$first_apk")"
-          sha1_b="$(certificate_digest SHA-1 "$apk")"
-          sha256_a="$(certificate_digest SHA-256 "$first_apk")"
-          sha256_b="$(certificate_digest SHA-256 "$apk")"
+          package_name="$("$aapt2" dump badging "$apk" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
+          keystore_report="$(LC_ALL=C keytool -list -v \
+            -keystore "$ANDROID_CI_KEYSTORE_PATH" \
+            -alias "$ANDROID_CI_KEY_ALIAS" \
+            -storepass:env ANDROID_CI_KEYSTORE_PASSWORD)"
+          apk_report="$("$apksigner" verify --print-certs "$apk")"
 
-          [[ "$package_a" == "com.norfold.app" && "$package_b" == "com.norfold.app" ]] \
-            || { echo "::error::Unexpected Android package in one of the certified APKs."; exit 1; }
-          [[ -n "$sha1_a" && "$sha1_a" == "$sha1_b" ]] \
-            || { echo "::error::SHA-1 signing certificate identity changed between builds."; exit 1; }
-          [[ -n "$sha256_a" && "$sha256_a" == "$sha256_b" ]] \
-            || { echo "::error::SHA-256 signing certificate identity changed between builds."; exit 1; }
+          keystore_sha1="$(normalize_digest "$(printf '%s\n' "$keystore_report" | sed -n 's/^[[:space:]]*SHA1:[[:space:]]*//p' | head -n 1)")"
+          keystore_sha256="$(normalize_digest "$(printf '%s\n' "$keystore_report" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -n 1)")"
+          apk_sha1="$(normalize_digest "$(printf '%s\n' "$apk_report" | sed -n 's/^Signer #1 certificate SHA-1 digest:[[:space:]]*//p' | head -n 1)")"
+          apk_sha256="$(normalize_digest "$(printf '%s\n' "$apk_report" | sed -n 's/^Signer #1 certificate SHA-256 digest:[[:space:]]*//p' | head -n 1)")"
 
-          echo "::notice::Stable Android development certificate SHA-1: $sha1_a"
-          echo "::notice::Stable Android development certificate SHA-256: $sha256_a"
+          [[ "$package_name" == "com.norfold.app" ]] \
+            || { echo "::error::Unexpected Android package in the certified APK."; exit 1; }
+          [[ "$keystore_sha1" =~ ^[0-9A-F]{40}$ && "$apk_sha1" =~ ^[0-9A-F]{40}$ ]] \
+            || { echo "::error::Could not derive valid SHA-1 certificate fingerprints."; exit 1; }
+          [[ "$keystore_sha256" =~ ^[0-9A-F]{64}$ && "$apk_sha256" =~ ^[0-9A-F]{64}$ ]] \
+            || { echo "::error::Could not derive valid SHA-256 certificate fingerprints."; exit 1; }
+          [[ "$apk_sha1" == "$keystore_sha1" ]] \
+            || { echo "::error::APK signer SHA-1 does not match the configured keystore certificate."; exit 1; }
+          [[ "$apk_sha256" == "$keystore_sha256" ]] \
+            || { echo "::error::APK signer SHA-256 does not match the configured keystore certificate."; exit 1; }
+
+          echo "::notice::Stable Android development certificate SHA-1: $(format_digest "$apk_sha1")"
+          echo "::notice::Stable Android development certificate SHA-256: $(format_digest "$apk_sha256")"
 
       - name: Upload Android debug APK
         uses: actions/upload-artifact@v6
