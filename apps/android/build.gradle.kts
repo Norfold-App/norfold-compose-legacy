@@ -13,6 +13,28 @@ fun publicConfig(name: String): String =
 
 fun buildConfigString(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
+val ciSigningVariableNames = listOf(
+    "ANDROID_CI_KEYSTORE_PATH",
+    "ANDROID_CI_KEYSTORE_PASSWORD",
+    "ANDROID_CI_KEY_ALIAS",
+    "ANDROID_CI_KEY_PASSWORD",
+)
+val ciSigningValues = ciSigningVariableNames.associateWith { name ->
+    providers.environmentVariable(name).orNull?.takeIf(String::isNotBlank)
+}
+val ciSigningConfigured = ciSigningValues.values.all { it != null }
+val ciSigningPartiallyConfigured = ciSigningValues.values.any { it != null } && !ciSigningConfigured
+
+if (ciSigningPartiallyConfigured) {
+    val missing = ciSigningValues.filterValues { it == null }.keys.sorted().joinToString()
+    throw GradleException("Android CI signing is incomplete; missing environment variables: $missing")
+}
+
+val ciSigningKeystore = ciSigningValues["ANDROID_CI_KEYSTORE_PATH"]?.let(rootProject::file)
+if (ciSigningConfigured && ciSigningKeystore?.isFile != true) {
+    throw GradleException("Android CI signing keystore does not exist at the configured path")
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -60,8 +82,22 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    signingConfigs {
+        if (ciSigningConfigured) {
+            create("ciDevelopment") {
+                storeFile = ciSigningKeystore
+                storePassword = ciSigningValues.getValue("ANDROID_CI_KEYSTORE_PASSWORD")
+                keyAlias = ciSigningValues.getValue("ANDROID_CI_KEY_ALIAS")
+                keyPassword = ciSigningValues.getValue("ANDROID_CI_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
+            if (ciSigningConfigured) {
+                signingConfig = signingConfigs.getByName("ciDevelopment")
+            }
             // PRE_BETA only: schema mismatches may reset developer/test data. This must be false
             // before any Beta/RC build leaves the development environment.
             buildConfigField("boolean", "ALLOW_DESTRUCTIVE_SCHEMA_RESET", "true")
@@ -77,7 +113,7 @@ android {
         }
         create("benchmark") {
             initWith(getByName("release"))
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (ciSigningConfigured) "ciDevelopment" else "debug")
             matchingFallbacks += listOf("release")
         }
     }
