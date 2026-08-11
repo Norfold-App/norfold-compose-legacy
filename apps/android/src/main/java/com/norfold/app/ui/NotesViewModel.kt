@@ -53,15 +53,12 @@ import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.ChatScope
 import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.domain.Destination
-import com.norfold.app.domain.DocLayerOrder
-import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocSectionAction
 import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.SettingsProfileCategory
-import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.EditorLineWidth
@@ -106,6 +103,7 @@ import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.domain.VaultCrypto
+import com.norfold.app.editor.EditorRoute
 import com.norfold.app.editor.flow.FlowSessionRegistry
 import com.norfold.app.editor.document.DocumentSessionRegistry
 import com.norfold.app.branding.palette
@@ -2996,7 +2994,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         selectedObjectId.value = state.value.workspaceObjects.firstOrNull {
             it.objectType == WorkspaceObjectType.Note && it.sourceId == note.id
         }?.id
-        navigateTo(if (note.overlapMode == DocOverlapMode.Reflow) Destination.NoteEditor else Destination.DocumentEditor)
+        navigateTo(EditorRoute.forLayoutMode(note.overlapMode))
     }
     fun clearMessage() = Unit
     fun showMessage(value: String) = emitInfo(value)
@@ -4115,62 +4113,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         return job
     }
 
-    fun updateActiveDocumentLayout(
-        owner: DocumentOwner,
-        document: BlockDocument,
-        mode: DocOverlapMode,
-        layout: Map<String, FreeformPlacement>,
-        canvasSpec: DocCanvasSpec,
-    ) = viewModelScope.launch {
-        repository.updateOwnedDocumentLayout(owner, document, mode, layout, canvasSpec)
-        if (owner.type == DocumentOwnerType.Note && mode == DocOverlapMode.Bounded) {
-            runCatching { publishSharedDocument(owner.id, emptySet()) }
-                .onFailure {
-                    if (it is CancellationException) throw it
-                    _documentPresenceStatus.value = if (networkOnline.value) "Saved locally · layout sync failed" else "Offline · layout saved locally"
-                }
-        }
-    }
-
     fun togglePin(note: Note) = viewModelScope.launch { repository.setPinned(note) }
     fun toggleStar(note: Note) = viewModelScope.launch { repository.setStarred(note) }
     fun toggleLock(note: Note) = viewModelScope.launch { repository.setLocked(note) }
-
-    fun setOverlapMode(note: Note, mode: DocOverlapMode) = viewModelScope.launch { repository.setOverlapMode(note, mode) }
-
-    fun setCanvasSpec(note: Note, canvasSpec: DocCanvasSpec) = viewModelScope.launch {
-        repository.setCanvasSpec(note, canvasSpec)
-    }
-
-    fun updateCanvasLayout(
-        note: Note,
-        layout: Map<String, FreeformPlacement>,
-        canvasSpec: DocCanvasSpec,
-    ) = viewModelScope.launch { repository.setCanvasLayout(note, layout, canvasSpec) }
-
-    fun updateBlockPlacement(note: Note, blockId: String, placement: FreeformPlacement) = viewModelScope.launch {
-        repository.setFreeformLayout(note, note.freeformLayout + (blockId to placement))
-    }
-
-    fun updateFreeformLayout(note: Note, layout: Map<String, FreeformPlacement>) = viewModelScope.launch {
-        repository.setFreeformLayout(note, layout)
-    }
-
-    fun bringBlockToFront(note: Note, blockId: String) = viewModelScope.launch {
-        repository.setFreeformLayout(note, DocLayerOrder.bringToFront(note.freeformLayout, blockId))
-    }
-
-    fun bringBlockForward(note: Note, blockId: String) = viewModelScope.launch {
-        repository.setFreeformLayout(note, DocLayerOrder.bringForward(note.freeformLayout, blockId))
-    }
-
-    fun sendBlockBackward(note: Note, blockId: String) = viewModelScope.launch {
-        repository.setFreeformLayout(note, DocLayerOrder.sendBackward(note.freeformLayout, blockId))
-    }
-
-    fun sendBlockToBack(note: Note, blockId: String) = viewModelScope.launch {
-        repository.setFreeformLayout(note, DocLayerOrder.sendToBack(note.freeformLayout, blockId))
-    }
 
     /** Sidebar ToC → editor scroll. The serial retriggers the editor even for repeated same-heading taps. */
     fun scrollToBlock(blockId: String) {

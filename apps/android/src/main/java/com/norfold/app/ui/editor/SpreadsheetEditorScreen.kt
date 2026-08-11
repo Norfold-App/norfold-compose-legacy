@@ -32,17 +32,19 @@ fun SpreadsheetEditorScreen(
     modifier: Modifier = Modifier,
     onOpenSidebar: () -> Unit,
 ) {
-    // The route's own gate. Every *entry* is flag-gated too, but a restored destination or a deep link
-    // arrives without passing through one of those, so the destination refuses on its own authority
-    // rather than trusting that no caller found a way in.
-    if (!editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
-        LaunchedEffect(Unit) { viewModel.handleBack() }
-        return
-    }
     val ownedDocument by viewModel.activeDocument.collectAsState()
     val active = ownedDocument ?: return
     val owner = active.owner
     val tableBlockId = viewModel.spreadsheetTableBlockId
+    // The route's own precondition. The sidebar gates the entry on the host flag, but the flag is the
+    // product decision, not the document's fitness: a restored or re-entered destination can still arrive
+    // at a document whose workbook this host cannot open (no TableBlock, or a stale table id), and
+    // [SpreadsheetHostRuntime] treats that as programmer error. Every entry passes through here, so the
+    // destination checks the actual precondition rather than trusting that no caller found a way in.
+    if (!SpreadsheetHostRuntime.canOpen(active.document, tableBlockId)) {
+        LaunchedEffect(Unit) { viewModel.handleBack() }
+        return
+    }
     val configuration = LocalConfiguration.current
     val guideEnabled = editorFlags.isEnabled(EditorFeatureFlag.GUIDE)
     val historyUiEnabled = editorFlags.isEnabled(EditorFeatureFlag.HISTORY_UI)

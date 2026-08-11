@@ -1415,8 +1415,8 @@ class DocumentHostRuntime(
      *
      * Held rather than merely returned, because the *host* has to act on it: a refused migration means this
      * runtime has no pages, and rendering it anyway would show the user a blank bounded document where their
-     * content used to be. The host reads this and falls back to the legacy editor, which can still open the
-     * original document unchanged.
+     * content used to be. The host reads this and renders a recovery surface over the untouched original
+     * instead — readable, exportable, and explicit about what stopped.
      *
      * `allowLossy` is deliberately never set automatically anywhere in this class. Forcing a migration that
      * was refused is a decision only the owner of the content can make.
@@ -1425,7 +1425,7 @@ class DocumentHostRuntime(
         private set
 
     /** True when this runtime holds no usable bounded document because a migration was refused. */
-    fun requiresLegacyFallback(): Boolean = migrationRefusal != null && pages().isEmpty()
+    fun requiresRecoverySurface(): Boolean = migrationRefusal != null && pages().isEmpty()
 
     /**
      * Migrates the open legacy document to a bounded scene, protected by a recovery snapshot.

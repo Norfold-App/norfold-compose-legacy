@@ -750,8 +750,8 @@ private fun FlowEditableLine(
  * Maps [FlowInlineText]'s toolkit-independent runs onto Compose spans.
  *
  * Kept beside the renderer rather than in [FlowInlineText] so the run model stays unit-testable without
- * Compose, and reuses the legacy editor's [highlightColor] and [NorfoldFontFamilies] so the same note looks
- * the same in both hosts.
+ * Compose, and resolves colour through the shared [highlightColor] and [NorfoldFontFamilies] so the same
+ * note looks the same in every host.
  */
 @Composable
 private fun flowInlineSpans(nodes: List<InlineNode>): AnnotatedString {

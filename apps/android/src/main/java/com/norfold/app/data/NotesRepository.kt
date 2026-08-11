@@ -16,7 +16,6 @@ import com.norfold.app.domain.ChatReceiptStatus
 import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.WorkspaceMember
 import com.norfold.app.domain.ChartBlock
-import com.norfold.app.domain.DocLayerOrder
 import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocLayoutJson
 import com.norfold.app.domain.DocOverlapMode
@@ -1370,6 +1369,12 @@ class DocsRepository(private val database: NorfoldDatabase) {
     ): OwnedDocument {
         val existing = dao.documentByOwner(owner.type.storageValue, owner.id)?.toDomain()
         val normalized = document.normalized()
+        // `layout_mode` and `layout_json` are legacy *format*, not live product state. No editor writes
+        // them any more — they are set once when an artifact is born and re-supplied verbatim by backup
+        // restore and shared-document import. Every other save passes null and lands here, where the
+        // stored values are carried forward unchanged: a document that has already been converted to a
+        // bounded scene keeps its original placements on disk, so the pre-conversion geometry survives
+        // as the last legacy copy rather than being erased by the first save after the conversion.
         val resolvedMode = layoutMode ?: existing?.layoutMode ?: DocOverlapMode.Reflow
         val resolvedLayout = freeformLayout ?: existing?.freeformLayout.orEmpty()
         val resolvedCanvas = canvasSpec ?: existing?.canvasSpec ?: DocCanvasSpec()
@@ -3081,40 +3086,6 @@ class DocsRepository(private val database: NorfoldDatabase) {
     suspend fun setStarred(note: Note) = dao.setStarred(note.id, !note.starred, System.currentTimeMillis())
     suspend fun setArchived(note: Note, value: Boolean = !note.archived) = dao.setArchived(note.id, value, System.currentTimeMillis())
     suspend fun setLocked(note: Note) = dao.setLocked(note.id, !note.locked, System.currentTimeMillis())
-    suspend fun setOverlapMode(note: Note, mode: DocOverlapMode) = updateNoteDocumentLayout(note, mode, note.freeformLayout, note.canvasSpec)
-    suspend fun setFreeformLayout(note: Note, layout: Map<String, FreeformPlacement>) =
-        updateNoteDocumentLayout(note, note.overlapMode, layout, note.canvasSpec)
-    suspend fun setCanvasSpec(note: Note, canvasSpec: DocCanvasSpec) =
-        updateNoteDocumentLayout(note, note.overlapMode, note.freeformLayout, canvasSpec)
-    suspend fun setCanvasLayout(
-        note: Note,
-        layout: Map<String, FreeformPlacement>,
-        canvasSpec: DocCanvasSpec,
-    ) = updateNoteDocumentLayout(note, note.overlapMode, layout, canvasSpec)
-
-    private suspend fun updateNoteDocumentLayout(
-        note: Note,
-        mode: DocOverlapMode,
-        layout: Map<String, FreeformPlacement>,
-        canvasSpec: DocCanvasSpec,
-    ) =
-        updateOwnedDocumentLayout(DocumentOwner.note(note.id), note.document, mode, layout, canvasSpec)
-
-    suspend fun updateOwnedDocumentLayout(
-        owner: DocumentOwner,
-        document: BlockDocument,
-        mode: DocOverlapMode,
-        layout: Map<String, FreeformPlacement>,
-        canvasSpec: DocCanvasSpec,
-    ) = database.withTransaction {
-        val now = System.currentTimeMillis()
-        persistDocument(owner, document, emptySet(), mode, layout, canvasSpec, now)
-        when (owner.type) {
-            DocumentOwnerType.Note -> dao.touchNote(owner.id, now)
-            DocumentOwnerType.Task -> dao.touchTask(owner.id, now)
-            DocumentOwnerType.CalendarEvent -> dao.touchCalendarEvent(owner.id, now)
-        }
-    }
 
     suspend fun deleteNote(note: Note) = database.withTransaction {
         dao.noteById(note.id)?.let { row ->

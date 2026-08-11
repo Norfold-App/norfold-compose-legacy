@@ -32,17 +32,18 @@ import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.editor.flow.FlowHostScreen
 import com.norfold.app.ui.editor.flow.rememberFlowHostPresenter
 import com.norfold.app.ui.editor.interchange.InterchangeHostBridge
-import com.norfold.app.ui.screens.EditorSurface
-import com.norfold.app.ui.screens.StructuredBlockEditorHost
 import kotlinx.coroutines.CompletableDeferred
 
 /**
  * The Notes entry point.
  *
- * Two genuinely separate hosts sit behind this one function: the legacy [StructuredBlockEditorHost], and the
- * new FlowHost built on the Phase-0 shared engines. FlowHost is *not* a wrapper — it renders its own surface
- * from [FlowHostRuntime] and shares no code path with the legacy composable, which is what makes the flag a
- * real switch between two implementations rather than a cosmetic branch inside one.
+ * FlowHost is the only Note host. It renders its own surface from [FlowHostRuntime] over the shared
+ * engines; there is no second implementation to choose between and no way for a person to select
+ * one, because a product is not a preference.
+ *
+ * This function stays as the route rather than collapsing into [FlowHostRoute] so that every entry —
+ * the destination graph, the two multi-pane layouts, a restored destination — passes through one
+ * place that binds a note to a host.
  */
 @Composable
 fun FlowNoteEditorScreen(
@@ -51,17 +52,7 @@ fun FlowNoteEditorScreen(
     modifier: Modifier = Modifier,
     onOpenSidebar: () -> Unit,
 ) {
-    if (editorFlags.isEnabled(EditorFeatureFlag.FLOW_HOST)) {
-        FlowHostRoute(state, viewModel, modifier, onOpenSidebar)
-    } else {
-        StructuredBlockEditorHost(
-            state = state,
-            viewModel = viewModel,
-            modifier = modifier,
-            onOpenSidebar = onOpenSidebar,
-            surface = EditorSurface.FlowNote,
-        )
-    }
+    FlowHostRoute(state, viewModel, modifier, onOpenSidebar)
 }
 
 /**

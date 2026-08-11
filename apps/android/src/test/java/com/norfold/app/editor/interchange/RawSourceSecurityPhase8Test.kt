@@ -77,9 +77,9 @@ class RawSourceSecurityPhase8Test {
         assertFails { SecureXml.parse(deep.toByteArray(), ImportSecurityLimits(maxXmlDepth = 16)) }
     }
 
-    @Test fun commandFeatureGateDefaultsOffAndRegistersWhenEnabled() {
-        assertFalse(com.norfold.app.editor.flags.EditorFeatureFlag.IMPORT_EXPORT_RAW.defaultEnabled)
-        assertFalse(com.norfold.app.editor.flags.EditorFeatureFlags.productionDefaults().isEnabled(com.norfold.app.editor.flags.EditorFeatureFlag.IMPORT_EXPORT_RAW))
+    @Test fun commandFeatureGateShipsOnAndOnlyRegistersWhenTheRuntimeIsGivenIt() {
+        assertTrue(com.norfold.app.editor.flags.EditorFeatureFlag.IMPORT_EXPORT_RAW.defaultEnabled)
+        assertTrue(com.norfold.app.editor.flags.EditorFeatureFlags.productionDefaults().isEnabled(com.norfold.app.editor.flags.EditorFeatureFlag.IMPORT_EXPORT_RAW))
         val controller = FlowEditController(EditTarget("note:commands"), document)
         val off = com.norfold.app.editor.flow.FlowHostRuntime(controller, com.norfold.app.editor.presentation.FormFactor(390, 844))
         assertNull(off.registry.get(InterchangeCommandIds.RAW_OPEN))

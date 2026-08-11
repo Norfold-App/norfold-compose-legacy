@@ -70,8 +70,8 @@ class GuidePhase9Test {
         modality: GuideInputModality = GuideInputModality.TOUCH,
     ) = updateContext(GuideContext(GuideHost.FLOW, blockers = blockers, modality = modality))
 
-    @Test fun guideFlagDefaultsOff_andDisabledIntegrationConstructsNothing() {
-        assertFalse(EditorFeatureFlag.GUIDE.defaultEnabled)
+    @Test fun guideFlagShipsOn_andDisabledIntegrationConstructsNothing() {
+        assertTrue(EditorFeatureFlag.GUIDE.defaultEnabled)
         var constructed = false
         assertNull(GuideIntegration.create(false) { constructed = true; fixture().runtime })
         assertFalse(constructed)

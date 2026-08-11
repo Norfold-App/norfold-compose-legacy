@@ -207,24 +207,27 @@ class HistoryBoundaryTest {
         assertFalse("asking for only-mine is not the default view", local.isDefault)
     }
 
-    // ── 80. Flag defaults are unchanged ─────────────────────────────────────────────────────────────
+    // ── 80. Flag defaults describe the shipped product ──────────────────────────────────────────────
 
     @Test
-    fun everyEditorFeatureFlagStillDefaultsOff() {
-        val enabledByDefault = EditorFeatureFlag.entries.filter { it.defaultEnabled }
-        assertEquals("no editor flag may ship enabled", emptyList<EditorFeatureFlag>(), enabledByDefault)
+    fun collaborationIsTheOnlyFlagStillDefaultingOff() {
+        val disabledByDefault = EditorFeatureFlag.entries.filterNot { it.defaultEnabled }
+        // Every other flag gates finished, offline-capable work, so shipping it off would be a lie
+        // about the product. COLLABORATION gates live network transport that has no deployed
+        // backend, so shipping it on would open a connection that cannot succeed.
+        assertEquals(listOf(EditorFeatureFlag.COLLABORATION), disabledByDefault)
     }
 
     @Test
-    fun thePhase10FlagIsNarrowlyScopedAndOffAndDoesNotDisturbTheEngineFlags() {
+    fun thePhase10FlagIsNarrowlyScopedAndDoesNotDisturbTheEngineFlags() {
         assertEquals("editor.domain.history.ui", EditorFeatureFlag.HISTORY_UI.key)
-        assertFalse(EditorFeatureFlag.HISTORY_UI.defaultEnabled)
+        assertTrue(EditorFeatureFlag.HISTORY_UI.defaultEnabled)
 
-        // The two flags Phase 10 depends on but must not change.
+        // The two flags the history UI depends on. Keys are load-bearing; defaults must agree.
         assertEquals("editor.engine.history", EditorFeatureFlag.HISTORY_ENGINE.key)
-        assertFalse(EditorFeatureFlag.HISTORY_ENGINE.defaultEnabled)
+        assertTrue(EditorFeatureFlag.HISTORY_ENGINE.defaultEnabled)
         assertEquals("editor.engine.recovery", EditorFeatureFlag.RECOVERY_SNAPSHOTS.key)
-        assertFalse(EditorFeatureFlag.RECOVERY_SNAPSHOTS.defaultEnabled)
+        assertTrue(EditorFeatureFlag.RECOVERY_SNAPSHOTS.defaultEnabled)
 
         // Keys are the persisted identity of a flag; a duplicate would silently alias two features together.
         val keys = EditorFeatureFlag.entries.map { it.key }
@@ -232,13 +235,15 @@ class HistoryBoundaryTest {
     }
 
     @Test
-    fun aDefaultFlagSetEnablesNothingSoNoSurfaceAppearsUnasked() {
+    fun aDefaultFlagSetOverridesNothingAndReachesEveryShippedHost() {
         val flags = EditorFeatureFlags.productionDefaults()
-        EditorFeatureFlag.entries.forEach { flag ->
-            assertFalse("${flag.name} must be off in a default set", flags.isEnabled(flag))
-        }
         assertTrue("the shipped configuration overrides nothing", flags.isDefaultConfiguration())
-        assertTrue("and so no Phase-10 surface can appear unasked", flags.allDisabled())
+        assertTrue("all three hosts are reachable without an override", flags.allHostsEnabled())
+        assertFalse(
+            "collaboration transport stays closed until a backend is deployed",
+            flags.isEnabled(EditorFeatureFlag.COLLABORATION),
+        )
+        assertFalse("a shipped build is never the all-off configuration", flags.allDisabled())
     }
 
     // ── 81. Phase 11 is untouched ───────────────────────────────────────────────────────────────────

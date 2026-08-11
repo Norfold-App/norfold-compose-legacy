@@ -444,15 +444,16 @@ class ImageFocusPhase6Test {
     }
 
     @Test
-    fun imageFocusShipsOffAndReadOnlySessionsRejectEveryMutation() {
+    fun imageFocusShipsEnabledAndReadOnlySessionsRejectEveryMutation() {
         val defaults = EditorFeatureFlags.productionDefaults()
-        assertFalse(defaults.isEnabled(EditorFeatureFlag.IMAGE_FOCUS))
-        assertFalse(defaults.isEnabled(EditorFeatureFlag.FLOW_HOST))
-        assertFalse(defaults.isEnabled(EditorFeatureFlag.DOCUMENT_HOST))
-        assertFalse(defaults.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST))
-        assertFalse(defaults.isEnabled(EditorFeatureFlag.CHART_STUDIO))
-        assertTrue(EditorFeatureFlags.withOverrides(EditorFeatureFlag.IMAGE_FOCUS to true).isEnabled(EditorFeatureFlag.IMAGE_FOCUS))
+        assertTrue(defaults.isEnabled(EditorFeatureFlag.IMAGE_FOCUS))
+        assertTrue(defaults.isEnabled(EditorFeatureFlag.FLOW_HOST))
+        assertTrue(defaults.isEnabled(EditorFeatureFlag.DOCUMENT_HOST))
+        assertTrue(defaults.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST))
+        assertTrue(defaults.isEnabled(EditorFeatureFlag.CHART_STUDIO))
+        assertFalse(EditorFeatureFlags.withOverrides(EditorFeatureFlag.IMAGE_FOCUS to false).isEnabled(EditorFeatureFlag.IMAGE_FOCUS))
 
+        // Reachability is not permission: a read-only session refuses every mutation regardless.
         val runtime = ImageFocusRuntime(ImageBlock(source = "s"), ImageFocusCommitHost { _, _ -> error("must not commit") }, readOnly = true)
         assertFalse(runtime.edit { it.copy(mask = ImageMask(ImageMaskKind.ELLIPSE)) })
         assertFalse(runtime.replaceSource("other"))

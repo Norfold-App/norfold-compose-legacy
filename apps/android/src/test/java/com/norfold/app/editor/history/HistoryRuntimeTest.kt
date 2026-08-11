@@ -113,10 +113,10 @@ class HistoryRuntimeTest {
         engine.commit(tx("text2", insert(para("p2"), index = 2), label = "Typing"))
     }
 
-    // --- The flag is off in production, and off means nothing is constructed --------------------------
+    // --- Disabled means nothing is constructed, independent of the shipped default --------------------
 
-    @Test fun historyUiFlagDefaultsOffAndDisabledIntegrationConstructsNothing() {
-        assertFalse(EditorFeatureFlag.HISTORY_UI.defaultEnabled)
+    @Test fun historyUiFlagShipsOnAndDisabledIntegrationConstructsNothing() {
+        assertTrue(EditorFeatureFlag.HISTORY_UI.defaultEnabled)
         var constructed = false
         assertNull(HistoryIntegration.create(false) { constructed = true; fixture().runtime })
         assertFalse("A disabled History UI builds no runtime at all", constructed)

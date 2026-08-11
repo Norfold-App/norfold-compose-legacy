@@ -101,7 +101,7 @@ object LegacyDocumentMigration {
                 append(if (orphanedPlacements.size == 1) "" else "s")
                 append(" no longer matches any content ($shown")
                 if (rest > 0) append(", +$rest more")
-                append("). Your document is unchanged and open in the classic editor.")
+                append("). Your document is unchanged — nothing was converted or removed.")
             }
         }
     }

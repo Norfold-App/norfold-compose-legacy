@@ -629,8 +629,10 @@ class Phase4RequiredValidationTest {
         val persisted = TableCalculationBridge.persist(upgraded.block, workbook.copy(activeSheetId = sheet.id), upgraded.view.tableId)
         case(166, CalculationEngine(TableCalculationBridge.view(BlockDocumentJson.decode(BlockDocumentJson.encode(BlockDocument(listOf(persisted)))).blocks.single() as TableBlock).workbook).displayAt(sheet.id, 1, 1) == "2")
         case(167, "calculated" !in persisted.calculationPayload.orEmpty())
+        // The spreadsheet host now ships reachable, and a table still decodes to readable text
+        // whether or not anyone opens it in that host.
         val flags = EditorFeatureFlags.productionDefaults()
-        case(168, !flags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST) && decoded.plainText().contains("Alpha"))
+        case(168, flags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST) && decoded.plainText().contains("Alpha"))
         assertEquals((151..168).toSet(), exercised)
     }
 

@@ -1,15 +1,7 @@
 package com.norfold.app.ui.editor
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -18,10 +10,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.editor.document.DocumentHostRuntime
@@ -39,23 +29,21 @@ import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.editor.document.DocumentHostScreen
+import com.norfold.app.ui.editor.document.UnsupportedDocumentRecovery
 import com.norfold.app.ui.editor.document.rememberDocumentHostPresenter
 import com.norfold.app.ui.editor.interchange.InterchangeHostBridge
-import com.norfold.app.ui.screens.EditorSurface
-import com.norfold.app.ui.screens.StructuredBlockEditorHost
 import kotlinx.coroutines.CompletableDeferred
 
 /**
- * Fixed-page Document entry point.
+ * The fixed-page Document entry point.
  *
- * Two genuinely separate hosts sit behind this one function: the legacy [StructuredBlockEditorHost] in its
- * `EditorSurface.Document` configuration, and the new DocumentHost built on the Phase-0 shared engines.
- * DocumentHost is not a wrapper — it renders its own bounded-page surface from [DocumentHostRuntime] and
- * shares no code path with the legacy composable, which is what makes the flag a real switch between two
- * implementations rather than another layout branch inside one host.
+ * DocumentHost is the only Document host. It renders its own bounded-page surface from
+ * [DocumentHostRuntime] over the shared engines; there is no second implementation to choose between and
+ * no way for a person to select one, because a product is not a preference.
  *
- * [EditorFeatureFlag.DOCUMENT_HOST] defaults **off**, so this resolves to the legacy editor until an
- * internal build or a test flips it. The legacy Document editor is deliberately not removed in Phase 2.
+ * This function stays as the route rather than collapsing into [DocumentHostRoute] so that every entry —
+ * the destination graph, the two multi-pane layouts, a restored destination — passes through one place
+ * that binds a document to a host.
  */
 @Composable
 fun BoundedDocumentEditorScreen(
@@ -64,17 +52,7 @@ fun BoundedDocumentEditorScreen(
     modifier: Modifier = Modifier,
     onOpenSidebar: () -> Unit,
 ) {
-    if (editorFlags.isEnabled(EditorFeatureFlag.DOCUMENT_HOST)) {
-        DocumentHostRoute(state, viewModel, modifier, onOpenSidebar)
-    } else {
-        StructuredBlockEditorHost(
-            state = state,
-            viewModel = viewModel,
-            modifier = modifier,
-            onOpenSidebar = onOpenSidebar,
-            surface = EditorSurface.Document,
-        )
-    }
+    DocumentHostRoute(state, viewModel, modifier, onOpenSidebar)
 }
 
 /**
@@ -92,7 +70,9 @@ fun BoundedDocumentEditorScreen(
  * protected by a recovery snapshot taken *before* any work starts — and the conversion is refused rather
  * than forced when it would discard content, so the owner's document is never rewritten to make the new
  * host happy. The candidate replaces the workspace document through the canonical History Engine, so the
- * conversion is one undoable transaction like any other edit.
+ * conversion is one undoable transaction like any other edit. A refusal routes to
+ * [UnsupportedDocumentRecovery], which reads the untouched original — never a blank page, never a second
+ * editor.
  *
  * **Ownership.** The runtime and its coordinator live in the ViewModel's registry, not in a `remember`
  * here: a retry loop must outlive the screen, and anything keyed to the composition is rebuilt on
@@ -185,39 +165,23 @@ private fun DocumentHostRoute(
     val runtime = session.runtime
     val saves = session.saves
 
-    // A refused migration means this runtime has no bounded document. Rendering it anyway would show the
-    // owner a blank page where their content used to be, so the *usable* editor is what they get: the legacy
-    // host opens the original document unchanged. Nothing here sets `allowLossy` — forcing a conversion that
-    // was refused is a decision only the owner of the content can make.
-    if (runtime.requiresLegacyFallback()) {
-        val report = runtime.migrationRefusal
-        var explained by remember(session) { mutableStateOf(false) }
-        Column(modifier) {
-            // Shown above the working editor, dismissible, and never a blocking dialog: the owner came here
-            // to write, and the document they came to write in is already open below.
-            if (!explained && report != null) {
-                Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Page layout was not converted. ${report.refusalDetail()}",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { explained = true }) { Text("OK") }
-                    }
-                }
-            }
-            StructuredBlockEditorHost(
-                state = state,
-                viewModel = viewModel,
-                modifier = Modifier,
-                onOpenSidebar = onOpenSidebar,
-                surface = EditorSurface.Document,
-            )
-        }
+    // A refused migration means this runtime has no bounded document, so there is nothing here to draw and
+    // drawing it anyway would show a blank page where the owner's content used to be. The recovery surface
+    // reads the untouched original instead: readable, selectable, exportable, and specific about what
+    // stopped. Nothing on it sets `allowLossy` — forcing a conversion that was refused is a decision only
+    // the owner of the content can make, and not one to offer at the moment of failure.
+    val refusal = runtime.migrationRefusal
+    if (refusal != null && runtime.requiresRecoverySurface()) {
+        UnsupportedDocumentRecovery(
+            title = storedTitle,
+            // The controller's document, not the report's: on a refusal the candidate was never committed,
+            // so this is the original exactly as it was found on disk.
+            document = runtime.controller.document(),
+            report = refusal,
+            onOpenSidebar = onOpenSidebar,
+            onExit = viewModel::handleBack,
+            modifier = modifier,
+        )
         return
     }
 

@@ -340,11 +340,11 @@ class RecoveryRestoreTest {
         )
     }
 
-    // --- The browser is gated, and gated means nothing is built (§20) ---------------------------------
+    // --- Disabled means nothing is built, whatever the shipped default happens to be (§20) -----------
 
     @Test fun aDisabledRecoveryBrowserConstructsNothingAtAll() {
-        assertFalse(EditorFeatureFlag.HISTORY_UI.defaultEnabled)
-        assertFalse("Phase 10 must not turn the recovery engine on", EditorFeatureFlag.RECOVERY_SNAPSHOTS.defaultEnabled)
+        assertTrue(EditorFeatureFlag.HISTORY_UI.defaultEnabled)
+        assertTrue("the recovery engine ships on, so migrations are always snapshotted", EditorFeatureFlag.RECOVERY_SNAPSHOTS.defaultEnabled)
         var constructed = false
         assertNull(RecoveryBrowserIntegration.create(false) { constructed = true; browser().runtime })
         assertFalse("A disabled browser reads no index and registers no surface", constructed)

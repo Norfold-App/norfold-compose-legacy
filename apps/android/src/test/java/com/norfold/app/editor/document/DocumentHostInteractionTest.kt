@@ -767,7 +767,7 @@ class DocumentHostInteractionTest {
     // ── 11. Migration refusal ───────────────────────────────────────────────────────────────────────
 
     @Test
-    fun aRefusedMigrationLeavesTheDocumentUsableAndAsksForTheLegacyHost() {
+    fun aRefusedMigrationLeavesTheDocumentUsableAndAsksForTheRecoverySurface() {
         val legacy = BlockDocument(listOf(ParagraphBlock(id = "b1", content = listOf(InlineText("keep me")))))
         val rt = DocumentHostRuntime(
             controller = DocumentSceneController(EditTarget("note:1"), legacy),
@@ -781,7 +781,7 @@ class DocumentHostInteractionTest {
 
         assertNotNull(report)
         assertFalse(report!!.isLossless)
-        assertTrue("the host must fall back rather than render a blank document", rt.requiresLegacyFallback())
+        assertTrue("the host must recover rather than render a blank document", rt.requiresRecoverySurface())
         assertEquals("the original document is untouched", legacy.normalized(), rt.controller.document())
         assertTrue("no pages were created", rt.pages().isEmpty())
         assertTrue(
@@ -789,6 +789,10 @@ class DocumentHostInteractionTest {
             report.orphanedPlacements.contains("ghost"),
         )
         assertTrue("and it is stated in terms the owner can act on", report.refusalDetail().contains("ghost"))
+        // The refusal text is what the recovery surface prints. It must not promise an editor that no
+        // longer exists — there is one Document host now, and the refusal is the reason this one cannot
+        // open the document, not an invitation to open it somewhere else.
+        assertFalse(report.refusalDetail().contains("classic editor"))
     }
 
     @Test
@@ -801,7 +805,7 @@ class DocumentHostInteractionTest {
 
         rt.migrateLegacyDocument()
 
-        assertFalse(rt.requiresLegacyFallback())
+        assertFalse(rt.requiresRecoverySurface())
         assertNull(rt.migrationRefusal)
         assertTrue(rt.pages().isNotEmpty())
         assertTrue(rt.controller.document().plainText().contains("hello"))

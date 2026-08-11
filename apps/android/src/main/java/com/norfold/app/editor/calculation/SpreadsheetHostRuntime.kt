@@ -1230,6 +1230,20 @@ class SpreadsheetHostRuntime(
         (tableSession.selection.state as? TableSelectionState.Editing)?.let { tableSession.selection.selectCell(it.cell) }
         revision++
     }
+
+    companion object {
+        /**
+         * True when [document] holds the workbook this host would open.
+         *
+         * The constructor treats a missing workbook as programmer error and throws, because a spreadsheet
+         * host with no workbook has nothing to be. That makes the check a *precondition*, and a precondition
+         * belongs where the caller can act on it — so the route asks this before constructing, rather than
+         * constructing and catching. It resolves exactly as [resync] and the constructor do: the same
+         * function, so the answer cannot drift from what construction will actually find.
+         */
+        fun canOpen(document: BlockDocument, tableBlockId: String? = null): Boolean =
+            document.firstTableBlock(tableBlockId) != null
+    }
 }
 
 private fun BlockDocument.firstTableBlock(preferredId: String? = null): TableBlock? {

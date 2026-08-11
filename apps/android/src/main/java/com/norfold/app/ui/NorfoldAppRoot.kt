@@ -83,7 +83,6 @@ import com.norfold.app.cloud.GoogleIdentityClient
 import com.norfold.app.cloud.NorfoldSupabase
 import com.google.android.gms.auth.api.identity.Identity
 import com.norfold.app.domain.Destination
-import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.SyncFolderRequest
 import com.norfold.app.domain.TaskItem
 import com.norfold.app.ui.components.ComposeLoadingScreen

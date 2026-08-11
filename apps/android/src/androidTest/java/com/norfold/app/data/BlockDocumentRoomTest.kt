@@ -10,11 +10,13 @@ import com.norfold.app.domain.BlockEditorSession
 import com.norfold.app.domain.BoldInline
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.CalendarEventSource
+import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.FileBlock
+import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.HeadingBlock
 import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.ParagraphBlock
@@ -94,12 +96,48 @@ class BlockDocumentRoomTest {
         val stored = dao.noteById(20)!!.toDomain()
         assertEquals(DocOverlapMode.Reflow, stored.overlapMode)
 
-        DocsRepository(database).setOverlapMode(stored, DocOverlapMode.Overlap)
+        // No editor writes this any more — the legacy layout tag is set when an artifact is born and
+        // re-supplied verbatim by backup restore and shared-document import, both of which reach Room
+        // through `saveDocument`. That is the path under test; the mode is stored format, not live state.
+        DocsRepository(database).saveDocument(
+            owner = DocumentOwner.note(20),
+            document = stored.document,
+            layoutMode = DocOverlapMode.Overlap,
+        )
 
         assertEquals(DocOverlapMode.Overlap, dao.noteById(20)!!.toDomain().overlapMode)
         // The stored literal is the lowercase enum name — the compat contract docOverlapModeOf
         // decodes ("reflow"/"overlap"), never the UI labels ("Page"/"Infinite page").
         assertEquals("overlap", dao.documentByOwner(DocumentOwnerType.Note.storageValue, 20)!!.document.layoutMode)
+    }
+
+    @Test
+    fun savingAConvertedDocumentKeepsTheLegacyLayoutOnDisk() = runBlocking {
+        // A bounded conversion writes the scene through the normal save path, which passes no layout
+        // arguments. The legacy placements must survive that save: they are the last copy of the
+        // pre-conversion geometry, and erasing them on the first save would make the conversion
+        // irreversible in a way no recovery snapshot could undo.
+        dao.insertNote(note(id = 21, searchText = ""))
+        val repository = DocsRepository(database)
+        val legacyLayout = mapOf("block" to FreeformPlacement(x = 12f, y = 340f, width = 200f, height = 90f))
+        repository.saveDocument(
+            owner = DocumentOwner.note(21),
+            document = BlockDocument(listOf(ParagraphBlock(id = "block", content = listOf(InlineText("legacy"))))),
+            layoutMode = DocOverlapMode.Bounded,
+            freeformLayout = legacyLayout,
+            canvasSpec = DocCanvasSpec.letter(),
+        )
+
+        repository.saveDocument(
+            owner = DocumentOwner.note(21),
+            document = BlockDocument(listOf(ParagraphBlock(id = "converted", content = listOf(InlineText("scene"))))),
+        )
+
+        val reloaded = dao.noteById(21)!!.toDomain()
+        assertEquals(DocOverlapMode.Bounded, reloaded.overlapMode)
+        assertEquals(legacyLayout.keys, reloaded.freeformLayout.keys)
+        assertEquals(340f, reloaded.freeformLayout.getValue("block").y)
+        assertEquals(DocCanvasSpec.letter().normalized(), reloaded.canvasSpec)
     }
 
     @Test
