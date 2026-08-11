@@ -73,7 +73,7 @@ import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.WorkspaceIconKind
 import com.norfold.app.domain.HomeTab
 import com.norfold.app.domain.Note
-import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.domain.NoteGestureAction
 import com.norfold.app.domain.Tag
 import com.norfold.app.domain.Destination
@@ -110,8 +110,8 @@ fun NotesHome(
         item { HomeTabs(state, viewModel, libraryKind) }
         val libraryNotes = state.notes.filter { note ->
             when (libraryKind) {
-                LibraryKind.Notes -> note.overlapMode == DocOverlapMode.Reflow
-                LibraryKind.Documents -> note.overlapMode == DocOverlapMode.Bounded
+                LibraryKind.Notes -> note.artifactKind == DocumentArtifactKind.Flow
+                LibraryKind.Documents -> note.artifactKind == DocumentArtifactKind.Document
             }
         }
         val tabNotes = when (state.tab) {
@@ -237,8 +237,8 @@ private fun WorkspaceHomeHeader(state: DocsUiState, onEdit: () -> Unit) {
             // Centered workspace name + counts (icon and edit affordance flank it).
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Black, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                val noteCount = state.notes.count { it.overlapMode == DocOverlapMode.Reflow }
-                val documentCount = state.notes.count { it.overlapMode == DocOverlapMode.Bounded }
+                val noteCount = state.notes.count { it.artifactKind == DocumentArtifactKind.Flow }
+                val documentCount = state.notes.count { it.artifactKind == DocumentArtifactKind.Document }
                 Text("$noteCount notes · $documentCount documents · ${state.tasks.size} tasks", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, textAlign = TextAlign.Center)
             }
             Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
@@ -398,7 +398,7 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, availableTags
                             contentColor = accent,
                         ) {
                             Text(
-                                if (note.overlapMode == DocOverlapMode.Reflow) "Note" else "Document",
+                                if (note.artifactKind == DocumentArtifactKind.Flow) "Note" else "Document",
                                 Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
@@ -437,7 +437,7 @@ private fun NoteQuickActionsDialog(note: Note, availableTags: List<Tag>, viewMod
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(note.title, fontWeight = FontWeight.Black, fontSize = 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(if (note.overlapMode == DocOverlapMode.Reflow) "Note actions" else "Document actions", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Text(if (note.artifactKind == DocumentArtifactKind.Flow) "Note actions" else "Document actions", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 if (editingTags) {
                     Text("Choose tags", fontWeight = FontWeight.Bold)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {

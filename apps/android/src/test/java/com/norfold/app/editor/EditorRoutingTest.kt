@@ -1,7 +1,11 @@
 package com.norfold.app.editor
 
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentArtifactKind
+import com.norfold.app.domain.TableBlock
+import com.norfold.app.editor.calculation.SpreadsheetWorkbookFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -21,6 +25,28 @@ import org.junit.Test
  * examples, so a mode added later is a failure here rather than an untested path in production.
  */
 class EditorRoutingTest {
+
+    @Test
+    fun persistedArtifactIdentityRoutesToExactlyItsOwningHost() {
+        assertEquals(Destination.NoteEditor, EditorRoute.forArtifact(DocumentArtifactKind.Flow))
+        assertEquals(Destination.DocumentEditor, EditorRoute.forArtifact(DocumentArtifactKind.Document))
+        assertEquals(Destination.SpreadsheetEditor, EditorRoute.forArtifact(DocumentArtifactKind.Spreadsheet))
+    }
+
+    @Test
+    fun legacyInferenceDistinguishesAFlowTableFromACalculationWorkbook() {
+        assertEquals(
+            DocumentArtifactKind.Flow,
+            DocumentArtifactKind.inferredFrom(DocOverlapMode.Reflow, BlockDocument(listOf(TableBlock("plain-table")))),
+        )
+        assertEquals(
+            DocumentArtifactKind.Spreadsheet,
+            DocumentArtifactKind.inferredFrom(
+                DocOverlapMode.Reflow,
+                BlockDocument(listOf(SpreadsheetWorkbookFactory.createBlock("Workbook"))),
+            ),
+        )
+    }
 
     @Test
     fun aReflowRowOpensTheFlowHost() {

@@ -58,6 +58,7 @@ import com.norfold.app.domain.DocSectionAction
 import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.domain.SettingsProfileCategory
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorIconFamily
@@ -2946,8 +2947,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     fun openNotesLibrary() {
         selectedNotebookFilterId.value = null
         selectedTagFilterId.value = null
-        val note = state.value.selectedNote?.takeIf { it.overlapMode == DocOverlapMode.Reflow }
-            ?: state.value.notes.firstOrNull { it.overlapMode == DocOverlapMode.Reflow }
+        val note = state.value.selectedNote?.takeIf { it.artifactKind == DocumentArtifactKind.Flow }
+            ?: state.value.notes.firstOrNull { it.artifactKind == DocumentArtifactKind.Flow }
         selectedNoteId.value = note?.id
         selectedDocumentOwner.value = note?.let { DocumentOwner.note(it.id) }
         navigateTo(Destination.NotesHome)
@@ -2957,8 +2958,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         selectedNotebookFilterId.value = null
         selectedTagFilterId.value = null
         tab.value = HomeTab.AllNotes
-        val document = state.value.selectedNote?.takeIf { it.overlapMode == DocOverlapMode.Bounded }
-            ?: state.value.notes.firstOrNull { it.overlapMode == DocOverlapMode.Bounded }
+        val document = state.value.selectedNote?.takeIf { it.artifactKind == DocumentArtifactKind.Document }
+            ?: state.value.notes.firstOrNull { it.artifactKind == DocumentArtifactKind.Document }
         selectedNoteId.value = document?.id
         selectedDocumentOwner.value = document?.let { DocumentOwner.note(it.id) }
         navigateTo(Destination.DocumentsHome)
@@ -2994,7 +2995,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         selectedObjectId.value = state.value.workspaceObjects.firstOrNull {
             it.objectType == WorkspaceObjectType.Note && it.sourceId == note.id
         }?.id
-        navigateTo(EditorRoute.forLayoutMode(note.overlapMode))
+        navigateTo(EditorRoute.forArtifact(note.artifactKind))
     }
     fun clearMessage() = Unit
     fun showMessage(value: String) = emitInfo(value)
@@ -3599,7 +3600,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             val settings = repository.settingsValue()
             val remoteWorkspaceId = repository.remoteWorkspaceId(settings.activeWorkspaceId) ?: return@withLock
             var note = repository.noteById(noteId) ?: return@withLock
-            if (note.overlapMode != DocOverlapMode.Bounded) return@withLock
+            if (note.artifactKind != DocumentArtifactKind.Document) return@withLock
             val syncId = repository.ensureRemoteDocumentSyncId(settings.activeWorkspaceId, noteId)
             val binding = repository.remoteDocumentBinding(settings.activeWorkspaceId, noteId)
             var dirty = locallyDirtyBlockIds
@@ -3627,6 +3628,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     put("documentJson", BlockDocumentJson.encode(merged))
                     put("layoutMode", note.overlapMode.name.lowercase())
                     put("layoutJson", DocLayoutJson.encode(note.freeformLayout, note.canvasSpec))
+                    put("artifactKind", note.artifactKind.storageValue)
                     put("updatedAt", note.updatedAt)
                 }
                 val result = runCatching {
@@ -3886,7 +3888,13 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val folderId = selectedNotebookFilterId.value?.takeIf { selectedId ->
             state.value.notebooks.any { it.id == selectedId && it.scope == "notes" }
         }
-        val id = repository.createNote(title = "Untitled note", body = "", notebookId = folderId, layoutMode = DocOverlapMode.Reflow)
+        val id = repository.createNote(
+            title = "Untitled note",
+            body = "",
+            notebookId = folderId,
+            layoutMode = DocOverlapMode.Reflow,
+            artifactKind = DocumentArtifactKind.Flow,
+        )
         draftNoteIds += id
         persistDraftIds()
         selectedNoteId.value = id
@@ -3898,7 +3906,13 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val folderId = selectedNotebookFilterId.value?.takeIf { selectedId ->
             state.value.notebooks.any { it.id == selectedId && it.scope == "documents" }
         }
-        val id = repository.createNote(title = "Untitled document", body = "", notebookId = folderId, layoutMode = DocOverlapMode.Bounded)
+        val id = repository.createNote(
+            title = "Untitled document",
+            body = "",
+            notebookId = folderId,
+            layoutMode = DocOverlapMode.Bounded,
+            artifactKind = DocumentArtifactKind.Document,
+        )
         draftNoteIds += id
         persistDraftIds()
         selectedNoteId.value = id
@@ -3909,9 +3923,20 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     fun createSpreadsheet() = viewModelScope.launch {
         val block = com.norfold.app.editor.calculation.SpreadsheetWorkbookFactory.createBlock("Untitled spreadsheet")
         val document = BlockDocument(listOf(block))
-        val id = repository.createNote(title = "Untitled spreadsheet", body = "", layoutMode = DocOverlapMode.Reflow)
+        val id = repository.createNote(
+            title = "Untitled spreadsheet",
+            body = "",
+            layoutMode = DocOverlapMode.Reflow,
+            artifactKind = DocumentArtifactKind.Spreadsheet,
+        )
         repository.noteById(id)?.let { note ->
-            repository.updateNote(note, "Untitled spreadsheet", document, setOf(block.id))
+            repository.updateNote(
+                note,
+                "Untitled spreadsheet",
+                document,
+                setOf(block.id),
+                artifactKind = DocumentArtifactKind.Spreadsheet,
+            )
         }
         draftNoteIds += id
         persistDraftIds()
@@ -4085,13 +4110,20 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         repository.updateNote(note, title, document, dirtyBlockIds)
     }
 
-    fun updateActiveDocument(owner: DocumentOwner, title: String, document: BlockDocument, dirtyBlockIds: Set<String>): Job {
+    fun updateActiveDocument(
+        owner: DocumentOwner,
+        title: String,
+        document: BlockDocument,
+        dirtyBlockIds: Set<String>,
+        layoutMode: DocOverlapMode? = null,
+        artifactKind: DocumentArtifactKind? = null,
+    ): Job {
         val job = viewModelScope.launch {
             when (owner.type) {
                 DocumentOwnerType.Note -> state.value.notes.firstOrNull { it.id == owner.id }
                     ?.let { note ->
-                        repository.updateNote(note, title, document, dirtyBlockIds)
-                        if (note.overlapMode == DocOverlapMode.Bounded) {
+                        repository.updateNote(note, title, document, dirtyBlockIds, layoutMode, artifactKind)
+                        if ((artifactKind ?: note.artifactKind) == DocumentArtifactKind.Document) {
                             viewModelScope.launch {
                                 runCatching { publishSharedDocument(owner.id, dirtyBlockIds) }
                                     .onFailure {

@@ -350,6 +350,7 @@ class BackupCodecTest {
             canvasSpec = DocCanvasSpec.letter(),
             createdAt = 10,
             updatedAt = 20,
+            artifactKind = DocumentArtifactKind.Document,
         )
         val snapshot = BackupSnapshot(
             notes = emptyList(),
@@ -367,6 +368,43 @@ class BackupCodecTest {
         assertEquals(DocOverlapMode.Bounded, restored.layoutMode)
         assertEquals(document.freeformLayout, restored.freeformLayout)
         assertEquals(DocPagePreset.Letter, restored.canvasSpec.preset)
+        assertEquals(DocumentArtifactKind.Document, restored.artifactKind)
+    }
+
+    @Test
+    fun noteBackupPreservesSpreadsheetIdentityIndependentlyOfLayout() {
+        val table = TableBlock(
+            id = "sheet",
+            rows = listOf(listOf(TableCell(listOf(InlineText("1"))))),
+        )
+        val note = Note(
+            id = 101,
+            title = "Budget",
+            document = BlockDocument(listOf(table)),
+            notebookId = null,
+            pinned = false,
+            starred = false,
+            archived = false,
+            locked = false,
+            createdAt = 1,
+            updatedAt = 2,
+            overlapMode = DocOverlapMode.Reflow,
+            artifactKind = DocumentArtifactKind.Spreadsheet,
+        )
+
+        val restored = BackupCodec.decode(
+            BackupCodec.encode(
+                BackupSnapshot(
+                    notes = listOf(note),
+                    notebooks = emptyList(),
+                    tags = emptyList(),
+                    attachments = emptyList(),
+                ),
+            ),
+        ).notes.single()
+
+        assertEquals(DocumentArtifactKind.Spreadsheet, restored.artifactKind)
+        assertEquals(DocOverlapMode.Reflow, restored.overlapMode)
     }
 
     @Test

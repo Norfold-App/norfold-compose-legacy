@@ -67,7 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.Destination
-import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.domain.TaskStatus
 import com.norfold.app.domain.WorkspaceActivity
 import com.norfold.app.domain.WorkspaceFileItem
@@ -196,8 +196,8 @@ private fun HubSearchBar(viewModel: DocsViewModel) {
 @Composable
 private fun HubStats(state: DocsUiState, viewModel: DocsViewModel) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatCard("Notes", state.notes.count { it.overlapMode == DocOverlapMode.Reflow }.toString(), SemanticActionId.AppNotes, Modifier.weight(1f)) { viewModel.openNotesLibrary() }
-        StatCard("Documents", state.notes.count { it.overlapMode == DocOverlapMode.Bounded }.toString(), SemanticActionId.AppDocuments, Modifier.weight(1f)) { viewModel.openDocumentsLibrary() }
+        StatCard("Notes", state.notes.count { it.artifactKind == DocumentArtifactKind.Flow }.toString(), SemanticActionId.AppNotes, Modifier.weight(1f)) { viewModel.openNotesLibrary() }
+        StatCard("Documents", state.notes.count { it.artifactKind == DocumentArtifactKind.Document }.toString(), SemanticActionId.AppDocuments, Modifier.weight(1f)) { viewModel.openDocumentsLibrary() }
         StatCard("Tasks", state.tasks.size.toString(), SemanticActionId.AppTasks, Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
     }
 }

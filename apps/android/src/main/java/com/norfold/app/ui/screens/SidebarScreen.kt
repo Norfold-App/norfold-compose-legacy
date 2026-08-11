@@ -107,7 +107,7 @@ import androidx.compose.ui.zIndex
 import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.Destination
-import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.domain.BlockDocument
@@ -238,8 +238,8 @@ private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
             )
             Column(Modifier.weight(1f)) {
                 Text(active?.name ?: state.settings.workspaceName.ifBlank { "Workspace" }, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val noteCount = state.notes.count { it.overlapMode == DocOverlapMode.Reflow }
-                val documentCount = state.notes.count { it.overlapMode == DocOverlapMode.Bounded }
+                val noteCount = state.notes.count { it.artifactKind == DocumentArtifactKind.Flow }
+                val documentCount = state.notes.count { it.artifactKind == DocumentArtifactKind.Document }
                 Text("$noteCount notes · $documentCount documents", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = { viewModel.go(Destination.Inbox) }, modifier = Modifier.size(40.dp)) {
@@ -561,7 +561,7 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                         }
                     }
                     SideNavItem("Tags", SemanticActionId.AppTags, state.destination == Destination.Tags) { viewModel.go(Destination.Tags) }
-                    val recents = state.notes.filter { it.overlapMode == DocOverlapMode.Reflow }.sortedByDescending { it.updatedAt }
+                    val recents = state.notes.filter { it.artifactKind == DocumentArtifactKind.Flow }.sortedByDescending { it.updatedAt }
                     val shown = if (notesShowAll) recents else recents.take(3)
                     shown.forEach { note ->
                         SideNavItem(note.title.ifBlank { "Untitled note" }, SemanticActionId.AppNotes, state.destination == Destination.NoteEditor && state.selectedNote?.id == note.id) {
@@ -594,7 +594,7 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                             viewModel.filterByNotebook(notebook.id)
                         }
                     }
-                    val recents = state.notes.filter { it.overlapMode == DocOverlapMode.Bounded }.sortedByDescending { it.updatedAt }
+                    val recents = state.notes.filter { it.artifactKind == DocumentArtifactKind.Document }.sortedByDescending { it.updatedAt }
                     val shown = if (documentsShowAll) recents else recents.take(3)
                     shown.forEach { note ->
                         SideNavItem(note.title.ifBlank { "Untitled document" }, SemanticActionId.AppDocuments, state.destination == Destination.DocumentEditor && state.selectedNote?.id == note.id) {

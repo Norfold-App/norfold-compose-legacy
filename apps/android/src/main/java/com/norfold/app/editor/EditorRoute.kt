@@ -2,6 +2,7 @@ package com.norfold.app.editor
 
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.DocOverlapMode
+import com.norfold.app.domain.DocumentArtifactKind
 
 /**
  * The one place that decides which editor host opens a stored document.
@@ -11,11 +12,8 @@ import com.norfold.app.domain.DocOverlapMode
  * pure function of stored state: no view model, no Compose, no Android. That is what lets the rule be
  * asserted directly rather than inferred from the behaviour of a screen.
  *
- * **Why the stored layout mode still decides this.** [DocOverlapMode] is a persistence tag, not a
- * product. Reading it here is not a layout flag choosing an editor — it is the router asking what a row
- * on disk says it is, which is the only question available before the document is open. The retired
- * arrangement was different in kind: one host that changed its own behaviour according to the same tag,
- * so the tag was the product. Here the tag selects between hosts that do not know it exists.
+ * Product identity is now stored explicitly. [DocOverlapMode] remains only as a compatibility router
+ * for rows written before that identity existed and as input to the one-time legacy conversion path.
  *
  * **Why `Overlap` opens the bounded host.** The Overlap product is retired; its stored rows are not.
  * A row tagged Overlap is a bounded-geometry document written by an editor that no longer ships, so it
@@ -25,8 +23,15 @@ import com.norfold.app.domain.DocOverlapMode
  */
 object EditorRoute {
 
+    /** Product identity is authoritative; layout mode is retained only for legacy format conversion. */
+    fun forArtifact(kind: DocumentArtifactKind): Destination = when (kind) {
+        DocumentArtifactKind.Flow -> Destination.NoteEditor
+        DocumentArtifactKind.Document -> Destination.DocumentEditor
+        DocumentArtifactKind.Spreadsheet -> Destination.SpreadsheetEditor
+    }
+
     /**
-     * The editor destination for a document whose stored layout mode is [mode].
+     * Compatibility-only destination for a row that predates explicit artifact identity.
      *
      * Total by construction: [DocOverlapMode] is exhaustive here with no `else` arm, so a mode added
      * later fails to compile rather than silently falling through to the flow host — which is how a

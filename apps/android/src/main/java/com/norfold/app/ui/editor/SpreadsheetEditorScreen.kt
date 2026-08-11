@@ -86,7 +86,13 @@ fun SpreadsheetEditorScreen(
                     controller = runtime.controller,
                     persister = { request ->
                         val outcome = CompletableDeferred<Result<Unit>>()
-                        val job = viewModel.updateActiveDocument(owner, request.title, request.document, request.dirtyBlockIds)
+                        val job = viewModel.updateActiveDocument(
+                            owner,
+                            request.title,
+                            request.document,
+                            request.dirtyBlockIds,
+                            artifactKind = com.norfold.app.domain.DocumentArtifactKind.Spreadsheet,
+                        )
                         job.invokeOnCompletion { error ->
                             outcome.complete(if (error == null) Result.success(Unit) else Result.failure(error))
                         }

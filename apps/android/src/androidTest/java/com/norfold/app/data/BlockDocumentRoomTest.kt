@@ -14,6 +14,7 @@ import com.norfold.app.domain.DocCanvasSpec
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.FileBlock
 import com.norfold.app.domain.FreeformPlacement
@@ -112,7 +113,7 @@ class BlockDocumentRoomTest {
     }
 
     @Test
-    fun savingAConvertedDocumentKeepsTheLegacyLayoutOnDisk() = runBlocking {
+    fun savingAConvertedDocumentAdvancesIdentityAndModeButKeepsLegacyLayoutOnDisk() = runBlocking {
         // A bounded conversion writes the scene through the normal save path, which passes no layout
         // arguments. The legacy placements must survive that save: they are the last copy of the
         // pre-conversion geometry, and erasing them on the first save would make the conversion
@@ -123,18 +124,22 @@ class BlockDocumentRoomTest {
         repository.saveDocument(
             owner = DocumentOwner.note(21),
             document = BlockDocument(listOf(ParagraphBlock(id = "block", content = listOf(InlineText("legacy"))))),
-            layoutMode = DocOverlapMode.Bounded,
+            layoutMode = DocOverlapMode.Overlap,
             freeformLayout = legacyLayout,
             canvasSpec = DocCanvasSpec.letter(),
+            artifactKind = DocumentArtifactKind.Document,
         )
 
         repository.saveDocument(
             owner = DocumentOwner.note(21),
             document = BlockDocument(listOf(ParagraphBlock(id = "converted", content = listOf(InlineText("scene"))))),
+            layoutMode = DocOverlapMode.Bounded,
+            artifactKind = DocumentArtifactKind.Document,
         )
 
         val reloaded = dao.noteById(21)!!.toDomain()
         assertEquals(DocOverlapMode.Bounded, reloaded.overlapMode)
+        assertEquals(DocumentArtifactKind.Document, reloaded.artifactKind)
         assertEquals(legacyLayout.keys, reloaded.freeformLayout.keys)
         assertEquals(340f, reloaded.freeformLayout.getValue("block").y)
         assertEquals(DocCanvasSpec.letter().normalized(), reloaded.canvasSpec)

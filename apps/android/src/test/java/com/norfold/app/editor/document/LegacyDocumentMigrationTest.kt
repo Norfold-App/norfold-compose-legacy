@@ -116,7 +116,9 @@ class LegacyDocumentMigrationTest {
         // Legacy y runs continuously across pages; failing to subtract the page origin would put page
         // two's content thousands of points below the sheet it belongs to.
         val spec = DocCanvasSpec(pageCount = 2).normalized()
-        val secondPageY = spec.pageOrigin(1) + 100f
+        // FreeformPlacement is persisted in Compose dp while DocCanvasSpec uses document points.
+        // Convert the page origin back to dp before adding a 100dp in-page offset.
+        val secondPageY = spec.pageOrigin(1) * 160f / 72f + 100f
         val report = LegacyDocumentMigration.migrate(
             legacy("a"),
             mapOf("a" to placement(0f, secondPageY)),

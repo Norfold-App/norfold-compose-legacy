@@ -20,6 +20,7 @@ data class Note(
     val freeformLayout: Map<String, FreeformPlacement> = emptyMap(),
     val canvasSpec: DocCanvasSpec = DocCanvasSpec(),
     val workspaceId: Long = 1,
+    val artifactKind: DocumentArtifactKind = DocumentArtifactKind.inferredFrom(overlapMode, document),
 ) {
     val bodyMarkdown: String get() = MarkdownBlockCodec.export(document)
 

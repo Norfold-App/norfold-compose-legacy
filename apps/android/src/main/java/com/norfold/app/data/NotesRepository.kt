@@ -22,6 +22,7 @@ import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.docOverlapModeOf
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.domain.DeviceSettingsImportPreview
 import com.norfold.app.domain.DeviceSettingsProfile
 import com.norfold.app.domain.SettingsProfileCategory
@@ -105,6 +106,7 @@ data class ImportedSharedDocument(
     val layoutMode: DocOverlapMode,
     val freeformLayout: Map<String, FreeformPlacement>,
     val canvasSpec: DocCanvasSpec,
+    val artifactKind: DocumentArtifactKind,
     val remoteVersion: Long,
     val changed: Boolean,
 )
@@ -120,6 +122,7 @@ private data class SharedDocumentPayload(
     val layoutMode: DocOverlapMode,
     val freeformLayout: Map<String, FreeformPlacement>,
     val canvasSpec: DocCanvasSpec,
+    val artifactKind: DocumentArtifactKind,
 )
 
 private fun chatSecurityModeName(raw: String): String = when (raw.lowercase()) {
@@ -134,12 +137,16 @@ private fun RemoteWorkspaceObject.decodeSharedDocument(): SharedDocumentPayload?
     val documentJson = body["documentJson"]?.jsonPrimitive?.contentOrNull.orEmpty()
     require(documentJson.isNotBlank() && documentJson.length <= 4 * 1024 * 1024) { "Invalid shared document payload" }
     val layoutJson = body["layoutJson"]?.jsonPrimitive?.contentOrNull
+    val layoutMode = docOverlapModeOf(body["layoutMode"]?.jsonPrimitive?.contentOrNull)
+    val document = BlockDocumentJson.decode(documentJson)
     SharedDocumentPayload(
         title = body["title"]?.jsonPrimitive?.contentOrNull.orEmpty().trim().take(500).ifBlank { "Untitled document" },
-        document = BlockDocumentJson.decode(documentJson),
-        layoutMode = docOverlapModeOf(body["layoutMode"]?.jsonPrimitive?.contentOrNull),
+        document = document,
+        layoutMode = layoutMode,
         freeformLayout = DocLayoutJson.decode(layoutJson),
         canvasSpec = DocLayoutJson.decodeCanvas(layoutJson),
+        artifactKind = DocumentArtifactKind.fromStorage(body["artifactKind"]?.jsonPrimitive?.contentOrNull)
+            ?: DocumentArtifactKind.inferredFrom(layoutMode, document),
     )
 }.getOrNull()
 
@@ -950,6 +957,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 layoutMode = existing.overlapMode,
                 freeformLayout = existing.freeformLayout,
                 canvasSpec = existing.canvasSpec,
+                artifactKind = existing.artifactKind,
                 remoteVersion = existingBinding.remoteVersion,
                 changed = false,
             )
@@ -961,6 +969,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 title = payload.title,
                 body = MarkdownBlockCodec.export(payload.document),
                 layoutMode = payload.layoutMode,
+                artifactKind = payload.artifactKind,
             ).also { noteId ->
                 persistDocument(
                     owner = DocumentOwner.note(noteId),
@@ -969,6 +978,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     layoutMode = payload.layoutMode,
                     freeformLayout = payload.freeformLayout,
                     canvasSpec = payload.canvasSpec,
+                    artifactKind = payload.artifactKind,
                 )
             }
         } else {
@@ -980,6 +990,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     layoutMode = payload.layoutMode,
                     freeformLayout = payload.freeformLayout,
                     canvasSpec = payload.canvasSpec,
+                    artifactKind = payload.artifactKind,
                 )
                 dao.updateNoteContent(
                     existingBinding.localId,
@@ -1008,6 +1019,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
             layoutMode = payload.layoutMode,
             freeformLayout = payload.freeformLayout,
             canvasSpec = payload.canvasSpec,
+            artifactKind = payload.artifactKind,
             remoteVersion = remote.serverVersion,
             changed = true,
         )
@@ -1354,8 +1366,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
         layoutMode: DocOverlapMode? = null,
         freeformLayout: Map<String, FreeformPlacement>? = null,
         canvasSpec: DocCanvasSpec? = null,
+        artifactKind: DocumentArtifactKind? = null,
     ): OwnedDocument = database.withTransaction {
-        persistDocument(owner, document, dirtyBlockIds, layoutMode, freeformLayout, canvasSpec)
+        persistDocument(owner, document, dirtyBlockIds, layoutMode, freeformLayout, canvasSpec, artifactKind)
     }
 
     private suspend fun persistDocument(
@@ -1365,6 +1378,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         layoutMode: DocOverlapMode?,
         freeformLayout: Map<String, FreeformPlacement>?,
         canvasSpec: DocCanvasSpec?,
+        artifactKind: DocumentArtifactKind? = null,
         updatedAt: Long = System.currentTimeMillis(),
     ): OwnedDocument {
         val existing = dao.documentByOwner(owner.type.storageValue, owner.id)?.toDomain()
@@ -1378,6 +1392,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val resolvedMode = layoutMode ?: existing?.layoutMode ?: DocOverlapMode.Reflow
         val resolvedLayout = freeformLayout ?: existing?.freeformLayout.orEmpty()
         val resolvedCanvas = canvasSpec ?: existing?.canvasSpec ?: DocCanvasSpec()
+        val resolvedArtifactKind = artifactKind ?: existing?.artifactKind
+            ?: DocumentArtifactKind.inferredFrom(resolvedMode, normalized)
         dao.upsertDocument(
             DocumentEntity(
                 id = owner.documentId,
@@ -1387,6 +1403,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 layoutJson = DocLayoutJson.encode(resolvedLayout, resolvedCanvas),
                 createdAt = existing?.createdAt ?: updatedAt,
                 updatedAt = updatedAt,
+                artifactKind = resolvedArtifactKind.storageValue,
             ),
         )
         val existingRows = dao.blocksForDocument(owner.documentId).associateBy(DocumentBlockEntity::blockId)
@@ -1400,7 +1417,16 @@ class DocsRepository(private val database: NorfoldDatabase) {
         if (changed.isNotEmpty()) dao.upsertDocumentBlocks(changed)
         val removed = existingRows.keys - next.mapTo(hashSetOf(), DocumentBlockEntity::blockId)
         if (removed.isNotEmpty()) dao.deleteDocumentBlocks(owner.documentId, removed.toList())
-        return OwnedDocument(owner, normalized, resolvedMode, resolvedLayout, resolvedCanvas, existing?.createdAt ?: updatedAt, updatedAt)
+        return OwnedDocument(
+            owner = owner,
+            document = normalized,
+            layoutMode = resolvedMode,
+            freeformLayout = resolvedLayout,
+            canvasSpec = resolvedCanvas,
+            createdAt = existing?.createdAt ?: updatedAt,
+            updatedAt = updatedAt,
+            artifactKind = resolvedArtifactKind,
+        )
     }
 
     suspend fun createNote(
@@ -1411,9 +1437,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
         pinned: Boolean = false,
         starred: Boolean = false,
         layoutMode: DocOverlapMode = DocOverlapMode.Reflow,
+        artifactKind: DocumentArtifactKind? = null,
     ): Long {
         val now = System.currentTimeMillis()
         val document = MarkdownBlockCodec.import(body)
+        val resolvedArtifactKind = artifactKind ?: DocumentArtifactKind.inferredFrom(layoutMode, document)
         val id = database.withTransaction {
             val noteId = dao.insertNote(
                 NoteEntity(
@@ -1431,12 +1459,21 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     workspaceId = activeWs(),
                 ),
             )
-            persistDocument(DocumentOwner.note(noteId), document, document.blocks.mapTo(linkedSetOf()) { it.id }, layoutMode, null, null, now)
+            persistDocument(
+                DocumentOwner.note(noteId),
+                document,
+                document.blocks.mapTo(linkedSetOf()) { it.id },
+                layoutMode,
+                null,
+                null,
+                resolvedArtifactKind,
+                updatedAt = now,
+            )
             noteId
         }
         setTags(id, tagNames)
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Note, id, title.ifBlank { "Untitled doc" }, body.take(160), tagNames.joinToString(","), "note", 0xFF9D6CFF, pinned)
-        val typeLabel = if (layoutMode == DocOverlapMode.Reflow) "note" else "document"
+        val typeLabel = resolvedArtifactKind.storageValue
         recordActivity(WorkspaceActivityType.Created, "You", "Created $typeLabel", title.ifBlank { "Untitled $typeLabel" }, objectType = WorkspaceObjectType.Note, sourceId = id)
         recordHistory(WorkspaceHistoryType.Created, objectId, "You", "Created $typeLabel", afterValue = title.ifBlank { "Untitled $typeLabel" })
         return id
@@ -1451,10 +1488,21 @@ class DocsRepository(private val database: NorfoldDatabase) {
         title: String,
         document: BlockDocument,
         dirtyBlockIds: Set<String> = document.blocks.mapTo(linkedSetOf()) { it.id },
+        layoutMode: DocOverlapMode? = null,
+        artifactKind: DocumentArtifactKind? = null,
     ) {
         val now = System.currentTimeMillis()
         val normalized = database.withTransaction {
-            val persisted = persistDocument(DocumentOwner.note(note.id), document, dirtyBlockIds, null, null, null, now)
+            val persisted = persistDocument(
+                DocumentOwner.note(note.id),
+                document,
+                dirtyBlockIds,
+                layoutMode,
+                null,
+                null,
+                artifactKind,
+                now,
+            )
             dao.updateNoteContent(note.id, title.ifBlank { "Untitled doc" }, persisted.document.plainText(), now)
             persisted.document
         }
@@ -1622,7 +1670,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     sortOrder = order,
                 ),
             )
-            persistDocument(DocumentOwner.task(taskId), initialDocument, initialDocument.blocks.mapTo(linkedSetOf()) { it.id }, null, null, null, now)
+            persistDocument(
+                DocumentOwner.task(taskId),
+                initialDocument,
+                initialDocument.blocks.mapTo(linkedSetOf()) { it.id },
+                null,
+                null,
+                null,
+                updatedAt = now,
+            )
             taskId
         }
         val objectId = upsertWorkspaceObject(WorkspaceObjectType.Task, id, title.ifBlank { "New task" }, summary, "", "task", 0xFF56CC98)
@@ -1946,7 +2002,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
     ) {
         val now = System.currentTimeMillis()
         val normalized = database.withTransaction {
-            val persisted = persistDocument(DocumentOwner.task(task.id), document, dirtyBlockIds, null, null, null, now)
+            val persisted = persistDocument(
+                DocumentOwner.task(task.id),
+                document,
+                dirtyBlockIds,
+                null,
+                null,
+                null,
+                updatedAt = now,
+            )
             dao.updateTaskDetails(
                 task.id,
                 title.ifBlank { "Untitled task" },
@@ -3011,7 +3075,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 null,
                 null,
                 null,
-                now,
+                updatedAt = now,
             )
             eventId
         }
@@ -3031,7 +3095,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val now = System.currentTimeMillis()
         val summary = document.plainText()
         database.withTransaction {
-            persistDocument(DocumentOwner.calendarEvent(event.id), document, document.blocks.mapTo(linkedSetOf()) { it.id }, null, null, null, now)
+            persistDocument(
+                DocumentOwner.calendarEvent(event.id),
+                document,
+                document.blocks.mapTo(linkedSetOf()) { it.id },
+                null,
+                null,
+                null,
+                updatedAt = now,
+            )
             dao.updateCalendarEvent(event.id, event.title, summary, event.startAt, event.endAt, event.allDay, event.color, now)
         }
         upsertWorkspaceObject(WorkspaceObjectType.CalendarEvent, event.id, event.title, summary, event.source.name, "calendar", event.color)
@@ -3051,7 +3123,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
     ) {
         val now = System.currentTimeMillis()
         val normalized = database.withTransaction {
-            val persisted = persistDocument(DocumentOwner.calendarEvent(event.id), document, dirtyBlockIds, null, null, null, now)
+            val persisted = persistDocument(
+                DocumentOwner.calendarEvent(event.id),
+                document,
+                dirtyBlockIds,
+                null,
+                null,
+                null,
+                updatedAt = now,
+            )
             dao.updateCalendarEvent(
                 event.id,
                 title.ifBlank { "Untitled event" },
@@ -3368,6 +3448,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     layoutMode = note.overlapMode,
                     freeformLayout = note.freeformLayout,
                     canvasSpec = note.canvasSpec,
+                    artifactKind = note.artifactKind,
                     updatedAt = note.updatedAt,
                 )
                 setTags(note.id, note.tags.map { it.name })
@@ -3432,6 +3513,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     layoutMode = owned.layoutMode,
                     freeformLayout = owned.freeformLayout,
                     canvasSpec = owned.canvasSpec,
+                    artifactKind = owned.artifactKind,
                     updatedAt = owned.updatedAt,
                 )
             }

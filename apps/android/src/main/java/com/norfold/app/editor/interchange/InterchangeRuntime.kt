@@ -5,6 +5,7 @@ import com.norfold.app.domain.DocxExporter
 import com.norfold.app.domain.MarkdownBlockCodec
 import com.norfold.app.domain.MarkdownExporter
 import com.norfold.app.domain.NoteDocument
+import com.norfold.app.domain.interchangeDataBlock
 import com.norfold.app.editor.command.ApplicabilityPolicy
 import com.norfold.app.editor.command.Capability
 import com.norfold.app.editor.command.CommandContext
@@ -40,8 +41,13 @@ data class InterchangeUiState(
 
 /** Presentation-independent state shared by phone sheets and expanded inspector panes. */
 class InterchangeRuntime(private val documentProvider: () -> BlockDocument) {
-    var state: InterchangeUiState = InterchangeUiState()
+    var state: InterchangeUiState = InterchangeUiState(fidelity = persistedFidelity())
         private set
+
+    private fun persistedFidelity(): FidelityReport? = documentProvider()
+        .interchangeDataBlock()
+        ?.payload
+        ?.let { payload -> runCatching { InterchangeMetadataCodec.decode(payload).fidelity }.getOrNull() }
 
     fun request(action: InterchangeAction) { state = state.copy(requestedAction = action, notice = null) }
     fun clearRequest() { state = state.copy(requestedAction = null) }

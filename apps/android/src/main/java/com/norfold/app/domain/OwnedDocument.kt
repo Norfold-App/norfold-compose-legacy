@@ -12,6 +12,27 @@ enum class DocumentOwnerType(val storageValue: String) {
     }
 }
 
+/** Persisted product identity. Layout metadata describes format, never which editor owns a row. */
+enum class DocumentArtifactKind(val storageValue: String) {
+    Flow("flow"),
+    Document("document"),
+    Spreadsheet("spreadsheet"),
+    ;
+
+    companion object {
+        fun fromStorage(raw: String?): DocumentArtifactKind? =
+            entries.firstOrNull { it.storageValue.equals(raw, ignoreCase = true) }
+
+        fun inferredFrom(layoutMode: DocOverlapMode, document: BlockDocument): DocumentArtifactKind =
+            when {
+                document.blocks.size == 1 &&
+                    (document.blocks.single() as? TableBlock)?.calculationPayload != null -> Spreadsheet
+                layoutMode == DocOverlapMode.Reflow -> Flow
+                else -> Document
+            }
+    }
+}
+
 data class DocumentOwner(
     val type: DocumentOwnerType,
     val id: Long,
@@ -38,4 +59,5 @@ data class OwnedDocument(
     val canvasSpec: DocCanvasSpec = DocCanvasSpec(),
     val createdAt: Long,
     val updatedAt: Long,
+    val artifactKind: DocumentArtifactKind = DocumentArtifactKind.inferredFrom(layoutMode, document),
 )

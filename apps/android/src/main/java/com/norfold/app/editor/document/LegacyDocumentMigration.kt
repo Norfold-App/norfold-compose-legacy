@@ -225,7 +225,10 @@ object LegacyDocumentMigration {
         pageIndex: Int,
     ): SceneGeometry = SceneGeometry(
         x = placement.x * POINTS_PER_DP,
-        y = (placement.y - spec.pageOrigin(pageIndex)) * POINTS_PER_DP,
+        // Placement coordinates are Compose dp; page origins are physical document points.
+        // Convert first, then subtract, otherwise later-page objects inherit most of the page
+        // origin as a false in-page offset.
+        y = placement.y * POINTS_PER_DP - spec.pageOrigin(pageIndex),
         width = placement.width * POINTS_PER_DP,
         height = placement.height * POINTS_PER_DP,
     ).normalized()

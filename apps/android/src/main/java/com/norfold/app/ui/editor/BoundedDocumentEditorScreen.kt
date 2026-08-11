@@ -150,6 +150,8 @@ private fun DocumentHostRoute(
                             request.title,
                             request.document,
                             request.dirtyBlockIds,
+                            layoutMode = com.norfold.app.domain.DocOverlapMode.Bounded,
+                            artifactKind = com.norfold.app.domain.DocumentArtifactKind.Document,
                         )
                         job.invokeOnCompletion { error ->
                             outcome.complete(

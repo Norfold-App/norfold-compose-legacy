@@ -103,7 +103,15 @@ class DocLayoutTest {
         val spec = DocCanvasSpec.a4()
         assertEquals(1, spec.pagesRequiredFor(emptyMap()))
         assertEquals(1, spec.pagesRequiredFor(mapOf("a" to FreeformPlacement(y = 20f, height = 200f))))
-        assertEquals(3, spec.pagesRequiredFor(mapOf("a" to FreeformPlacement(y = 1700f, height = 100f))))
+        assertEquals(3, spec.pagesRequiredFor(mapOf("a" to FreeformPlacement(y = 3_900f, height = 100f))))
+    }
+
+    @Test
+    fun `page lookup converts compose dp placements to persisted page points`() {
+        val spec = DocCanvasSpec.a4().copy(pageCount = 4)
+        assertEquals(0, spec.rawPageIndexOf(FreeformPlacement(y = 1_800f)))
+        assertEquals(1, spec.rawPageIndexOf(FreeformPlacement(y = 2_000f)))
+        assertEquals(2, spec.rawPageIndexOf(FreeformPlacement(y = 3_900f)))
     }
 
     // --- Layer order -------------------------------------------------------------------------

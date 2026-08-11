@@ -47,7 +47,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SecureChatUserHiddenEntity::class,
         PrivateChatArchiveManifestEntity::class,
     ],
-    version = 50,
+    version = 51,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -109,6 +109,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_47_48,
                     MIGRATION_48_49,
                     MIGRATION_49_50,
+                    MIGRATION_50_51,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -278,6 +279,26 @@ abstract class NorfoldDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_chat_messages_expiresAt ON chat_messages(expiresAt)")
                 db.execSQL("ALTER TABLE chat_channels ADD COLUMN defaultLifespanSeconds INTEGER")
                 db.execSQL("ALTER TABLE secure_chat_outbox ADD COLUMN expiresAt INTEGER")
+            }
+        }
+        internal val MIGRATION_50_51 = object : Migration(50, 51) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE documents ADD COLUMN artifact_kind TEXT NOT NULL DEFAULT 'flow'")
+                db.execSQL(
+                    "UPDATE documents SET artifact_kind = 'document' " +
+                        "WHERE lower(layout_mode) IN ('bounded', 'document', 'document_canvas', 'overlap', 'infinite', 'infinite_canvas')",
+                )
+                // Pre-cutover spreadsheets were encoded as one calculation-backed table under a
+                // reflow tag. A plain one-table Flow note is not a spreadsheet, so the durable
+                // calculation payload—not the superficial block count—is the discriminator.
+                db.execSQL(
+                    "UPDATE documents SET artifact_kind = 'spreadsheet' WHERE id IN (" +
+                        "SELECT document_id FROM document_blocks GROUP BY document_id " +
+                        "HAVING COUNT(*) = 1 " +
+                        "AND MAX(payload_json) LIKE '%\"kind\":\"table\"%' " +
+                        "AND MAX(payload_json) LIKE '%\"calculationPayload\"%'" +
+                        ")",
+                )
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds

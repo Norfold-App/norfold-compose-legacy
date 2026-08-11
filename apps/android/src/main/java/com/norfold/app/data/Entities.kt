@@ -27,6 +27,7 @@ import com.norfold.app.domain.DocLayoutJson
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocumentOwner
 import com.norfold.app.domain.DocumentOwnerType
+import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.EditorLineWidth
@@ -156,6 +157,7 @@ data class DocumentEntity(
     @ColumnInfo(name = "layout_json") val layoutJson: String? = null,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
+    @ColumnInfo(name = "artifact_kind") val artifactKind: String = "flow",
 )
 
 @Entity(
@@ -1135,16 +1137,20 @@ fun DocumentWithBlocks.toDomain(): OwnedDocument {
     val ownerType = requireNotNull(DocumentOwnerType.fromStorage(document.ownerType)) {
         "Unsupported document owner type: ${document.ownerType}"
     }
+    val blockDocument = BlockDocument(
+        blocks.sortedBy(DocumentBlockEntity::position).map { BlockDocumentJson.decodeBlock(it.payloadJson) },
+    ).normalized()
+    val layoutMode = docOverlapModeOf(document.layoutMode)
     return OwnedDocument(
         owner = DocumentOwner(ownerType, document.ownerId),
-        document = BlockDocument(
-            blocks.sortedBy(DocumentBlockEntity::position).map { BlockDocumentJson.decodeBlock(it.payloadJson) },
-        ).normalized(),
-        layoutMode = docOverlapModeOf(document.layoutMode),
+        document = blockDocument,
+        layoutMode = layoutMode,
         freeformLayout = DocLayoutJson.decode(document.layoutJson),
         canvasSpec = DocLayoutJson.decodeCanvas(document.layoutJson),
         createdAt = document.createdAt,
         updatedAt = document.updatedAt,
+        artifactKind = DocumentArtifactKind.fromStorage(document.artifactKind)
+            ?: DocumentArtifactKind.inferredFrom(layoutMode, blockDocument),
     )
 }
 
@@ -1171,6 +1177,8 @@ fun NoteEntity.toDomain(
     freeformLayout = ownedDocument?.freeformLayout.orEmpty(),
     canvasSpec = ownedDocument?.canvasSpec ?: DocCanvasSpec(),
     workspaceId = workspaceId,
+    artifactKind = ownedDocument?.artifactKind
+        ?: DocumentArtifactKind.inferredFrom(ownedDocument?.layoutMode ?: DocOverlapMode.Reflow, ownedDocument?.document ?: BlockDocument()),
 )
 
 data class DocumentWithBlocks(

@@ -11,6 +11,8 @@ import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.MarkdownBlockCodec
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.TableBlock
+import com.norfold.app.domain.TableCell
+import com.norfold.app.domain.InlineText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -204,6 +206,63 @@ class BlockDocumentMigrationTest {
             ).use { cursor ->
                 assertTrue(cursor.moveToFirst())
                 assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
+    @Test
+    fun documentArtifactIdentityIsRecoveredFromLegacyRowsAtVersion50() {
+        val name = "document-artifact-kind-migration-test"
+        helper.createDatabase(name, 50).apply {
+            val tablePayload = BlockDocumentJson.encodeBlock(
+                TableBlock(
+                    id = "table",
+                    rows = listOf(listOf(TableCell(listOf(InlineText("1"))))),
+                    calculationPayload = "{}",
+                    calculationTableId = "legacy-workbook-table",
+                    calculationSchemaVersion = 1,
+                ),
+            )
+            val plainTablePayload = BlockDocumentJson.encodeBlock(
+                TableBlock(
+                    id = "plain-table",
+                    rows = listOf(listOf(TableCell(listOf(InlineText("A normal Flow table"))))),
+                ),
+            )
+            execSQL(
+                "INSERT INTO documents(id, owner_type, owner_id, layout_mode, layout_json, created_at, updated_at) " +
+                    "VALUES('note:1', 'note', 1, 'overlap', NULL, 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO documents(id, owner_type, owner_id, layout_mode, layout_json, created_at, updated_at) " +
+                    "VALUES('note:2', 'note', 2, 'reflow', NULL, 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO documents(id, owner_type, owner_id, layout_mode, layout_json, created_at, updated_at) " +
+                    "VALUES('note:3', 'note', 3, 'reflow', NULL, 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO document_blocks(block_id, document_id, position, payload_json, updated_at) VALUES('table', 'note:2', 0, ?, 1)",
+                arrayOf(tablePayload),
+            )
+            execSQL(
+                "INSERT INTO document_blocks(block_id, document_id, position, payload_json, updated_at) VALUES('plain-table', 'note:3', 0, ?, 1)",
+                arrayOf(plainTablePayload),
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(name, 51, true, NorfoldDatabase.MIGRATION_50_51).use { db ->
+            db.query("SELECT id, artifact_kind FROM documents ORDER BY id").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("note:1", cursor.getString(0))
+                assertEquals("document", cursor.getString(1))
+                assertTrue(cursor.moveToNext())
+                assertEquals("note:2", cursor.getString(0))
+                assertEquals("spreadsheet", cursor.getString(1))
+                assertTrue(cursor.moveToNext())
+                assertEquals("note:3", cursor.getString(0))
+                assertEquals("flow", cursor.getString(1))
             }
         }
     }

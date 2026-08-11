@@ -118,6 +118,7 @@ object BackupCodec {
                     it.overlapMode.name,
                     b64(DocLayoutJson.encode(it.freeformLayout, it.canvasSpec)),
                     it.workspaceId,
+                    it.artifactKind.storageValue,
                 ).joinToString("|"),
             )
         }
@@ -185,6 +186,7 @@ object BackupCodec {
                         b64(DocLayoutJson.encode(it.freeformLayout, it.canvasSpec)),
                         it.createdAt,
                         it.updatedAt,
+                        it.artifactKind.storageValue,
                     ).joinToString("|"),
                 )
             }
@@ -360,10 +362,13 @@ object BackupCodec {
                     color = cells[3].toLong(),
                     scope = unb64(cells.getOrElse(4) { "" }).ifBlank { "notes" },
                 )
-                "NOTE" -> notes += Note(
+                "NOTE" -> {
+                    val document = BlockDocumentJson.decodeDocumentPayload(unb64(cells[3]))
+                    val layoutMode = docOverlapModeOf(cells.getOrNull(14))
+                    notes += Note(
                     id = cells[1].toLong(),
                     title = unb64(cells[2]),
-                    document = BlockDocumentJson.decodeDocumentPayload(unb64(cells[3])),
+                    document = document,
                     notebookId = cells[4].takeIf { it.isNotBlank() }?.toLong(),
                     coverUri = unb64(cells.getOrElse(5) { "" }).takeIf { it.isNotBlank() },
                     coverMimeType = unb64(cells.getOrElse(6) { "" }).takeIf { it.isNotBlank() },
@@ -376,11 +381,14 @@ object BackupCodec {
                     tags = unb64(cells[13]).split(",").filter { it.isNotBlank() }.mapIndexed { index, name ->
                         Tag(id = index.toLong() + 1, name = name, color = 0xFF8B5CF6)
                     },
-                    overlapMode = docOverlapModeOf(cells.getOrNull(14)),
+                    overlapMode = layoutMode,
                     freeformLayout = DocLayoutJson.decode(unb64(cells.getOrElse(15) { "" })),
                     canvasSpec = DocLayoutJson.decodeCanvas(unb64(cells.getOrElse(15) { "" })),
                     workspaceId = cells.getOrElse(16) { "1" }.toLong(),
-                )
+                    artifactKind = DocumentArtifactKind.fromStorage(cells.getOrNull(17))
+                        ?: DocumentArtifactKind.inferredFrom(layoutMode, document),
+                    )
+                }
                 "ATTACHMENT" -> attachments += Attachment(
                     id = cells[1].toLong(),
                     noteId = cells[2].toLong(),
@@ -470,14 +478,18 @@ object BackupCodec {
                 "OWNED_DOCUMENT" -> {
                     val ownerType = DocumentOwnerType.fromStorage(cells[1])
                         ?: error("Unsupported document owner type: ${cells[1]}")
+                    val document = BlockDocumentJson.decodeDocumentPayload(unb64(cells[3]))
+                    val layoutMode = docOverlapModeOf(cells.getOrNull(4))
                     ownedDocuments += OwnedDocument(
                         owner = DocumentOwner(ownerType, cells[2].toLong()),
-                        document = BlockDocumentJson.decodeDocumentPayload(unb64(cells[3])),
-                        layoutMode = docOverlapModeOf(cells.getOrNull(4)),
+                        document = document,
+                        layoutMode = layoutMode,
                         freeformLayout = DocLayoutJson.decode(unb64(cells.getOrElse(5) { "" })),
                         canvasSpec = DocLayoutJson.decodeCanvas(unb64(cells.getOrElse(5) { "" })),
                         createdAt = cells.getOrElse(6) { "0" }.toLong(),
                         updatedAt = cells.getOrElse(7) { "0" }.toLong(),
+                        artifactKind = DocumentArtifactKind.fromStorage(cells.getOrNull(8))
+                            ?: DocumentArtifactKind.inferredFrom(layoutMode, document),
                     )
                 }
                 // Legacy PROJECT rows from pre-v24 backups are ignored (feature removed).

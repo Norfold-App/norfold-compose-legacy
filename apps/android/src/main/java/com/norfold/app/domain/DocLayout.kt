@@ -111,16 +111,17 @@ data class DocCanvasSpec(
     fun pageOrigin(pageIndex: Int): Float = pageIndex.coerceIn(0, pageCount - 1) * (height + pageGap)
 
     fun rawPageIndexOf(placement: FreeformPlacement): Int =
-        (placement.y / (height + pageGap)).toInt().coerceAtLeast(0)
+        ((placement.y * POINTS_PER_DP) / (height + pageGap)).toInt().coerceAtLeast(0)
 
     fun pageIndexOf(placement: FreeformPlacement): Int = rawPageIndexOf(placement).coerceIn(0, pageCount - 1)
 
     fun pagesRequiredFor(layout: Map<String, FreeformPlacement>): Int {
-        val bottom = layout.values.maxOfOrNull { it.y + it.height } ?: 0f
+        val bottom = (layout.values.maxOfOrNull { it.y + it.height } ?: 0f) * POINTS_PER_DP
         return ceil((bottom + pageGap) / (height + pageGap)).toInt().coerceIn(1, 100)
     }
 
     companion object {
+        private const val POINTS_PER_DP = 72f / 160f
         fun a4() = DocCanvasSpec()
         fun letter() = DocCanvasSpec(DocPagePreset.Letter, width = 612f, height = 792f)
         fun legal() = DocCanvasSpec(DocPagePreset.Legal, width = 612f, height = 1008f)
