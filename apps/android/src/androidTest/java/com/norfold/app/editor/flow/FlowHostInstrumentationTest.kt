@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -26,8 +27,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
+import com.norfold.app.domain.ContainerAxis
+import com.norfold.app.domain.ContainerBlock
 import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.ListItem
+import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.plainText
@@ -95,7 +99,12 @@ class FlowHostInstrumentationTest {
      * Renders every block of [runtime]'s document, re-reading the snapshot on each recomposition so a runtime
      * change is visible to the assertions exactly as it would be on screen.
      */
-    private fun setContent(runtime: FlowHostRuntime, selectionMode: Boolean = false) {
+    private fun setContent(
+        runtime: FlowHostRuntime,
+        selectionMode: Boolean = false,
+        compact: Boolean = false,
+        editing: Boolean = true,
+    ) {
         compose.setContent {
             var revision by remember { mutableStateOf(0) }
             invalidateComposition = { revision++ }
@@ -118,6 +127,8 @@ class FlowHostInstrumentationTest {
                         context = FlowBlockContext(
                             caretRequest = state.caretRequest,
                             selectionMode = selectionMode,
+                            compact = compact,
+                            editing = editing,
                         ),
                     )
                 }
@@ -355,5 +366,67 @@ class FlowHostInstrumentationTest {
 
         assertEquals("i1", runtime.scope.caretItemId)
         assertNotNull(runtime.scope.caret())
+    }
+
+    @Test
+    fun readingMode_hasNoEditableTextOrPermanentCalloutAction() {
+        val runtime = runtimeOf(
+            BlockDocument(
+                listOf(
+                    ParagraphBlock("p0", listOf(InlineText("Quiet reading"))),
+                    CalloutBlock("c0", title = "Reference", collapsed = false),
+                ),
+            ),
+        )
+        setContent(runtime, editing = false)
+
+        compose.onNodeWithText("Quiet reading").assert(
+            SemanticsMatcher.keyNotDefined(SemanticsActions.SetText),
+        )
+        assertTrue(
+            "Reading mode must not expose a permanent callout control",
+            compose.onAllNodesWithContentDescription("Collapse callout").fetchSemanticsNodes().isEmpty(),
+        )
+    }
+
+    @Test
+    fun compactRowContainer_stacksChildrenInReadingOrder() {
+        val runtime = runtimeOf(
+            BlockDocument(
+                listOf(
+                    ContainerBlock(
+                        id = "columns",
+                        axis = ContainerAxis.Row,
+                        children = listOf(
+                            ParagraphBlock("left", listOf(InlineText("First column"))),
+                            ParagraphBlock("right", listOf(InlineText("Second column"))),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        setContent(runtime, compact = true, editing = false)
+        compose.waitForIdle()
+
+        val first = compose.onNodeWithText("First column").fetchSemanticsNode().boundsInRoot
+        val second = compose.onNodeWithText("Second column").fetchSemanticsNode().boundsInRoot
+        assertTrue("The second nested child must be below the first on phone", second.top >= first.bottom)
+    }
+
+    @Test
+    fun mermaid_hasOneSourceOrPreviewRepresentationRegion() {
+        val runtime = runtimeOf(
+            BlockDocument(
+                listOf(
+                    MermaidBlock("diagram", "flowchart TD\n  Start --> Finish", editorHeightDp = 180f),
+                ),
+            ),
+        )
+        setContent(runtime, compact = true, editing = false)
+
+        compose.onNodeWithText("Source").assertIsDisplayed()
+        compose.onNodeWithText("Preview").assertIsDisplayed()
+        compose.onNodeWithText("Start").assertIsDisplayed()
+        compose.onNodeWithText("Finish").assertIsDisplayed()
     }
 }

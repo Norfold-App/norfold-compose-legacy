@@ -49,6 +49,10 @@ import com.norfold.app.domain.BoldInline
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.ChartBlock
+import com.norfold.app.domain.ChartBuilderModel
+import com.norfold.app.domain.ChartDataRow
+import com.norfold.app.domain.ChartSpecCodec
+import com.norfold.app.domain.ChartType
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
@@ -65,6 +69,7 @@ import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.ListItem
 import com.norfold.app.domain.LinkInline
+import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.PageGeometry
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
@@ -163,7 +168,7 @@ class QaHarnessActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         integrationSeamConfigured = QaIntegrationCredentials.from(intent.extras) != null
-        showMenu()
+        QaEntry.fromRoute(intent.getStringExtra(QaEntry.RouteExtra))?.let(::runEntry) ?: showMenu()
     }
 
     private fun showMenu() {
@@ -251,6 +256,7 @@ private enum class QaEntry(
     val scenario: QaScenario,
     val surface: QaSurface,
     val noteTitle: String? = null,
+    val route: String? = null,
 ) {
     Demo("Enter Demo Workspace", "Complete local corpus; no account, cloud, or network", QaScenario.Demo, QaSurface.Workspace),
     Empty("Fresh / Empty Workspace", "A completed setup with no user content", QaScenario.Empty, QaSurface.Workspace),
@@ -259,11 +265,41 @@ private enum class QaEntry(
     Legacy("Legacy Compatibility", "A positioned pre-cutover row routed through bounded conversion", QaScenario.Demo, QaSurface.Document, QaDemoCorpus.LegacyTitle),
     ResetDemo("Reset Demo Data", "Delete mutations and restore the exact QA baseline", QaScenario.Demo, QaSurface.Workspace),
     Flow("Open Flow", "Rich long-form block corpus", QaScenario.Demo, QaSurface.Flow, QaDemoCorpus.FlowTitle),
+    FlowResponsiveNested(
+        "Flow · Responsive Nested",
+        "Phone golden: nested columns stack into one writing-first stream",
+        QaScenario.Demo,
+        QaSurface.Flow,
+        QaDemoCorpus.FlowResponsiveNestedTitle,
+        "flow-phone-responsive-nested",
+    ),
+    FlowMermaidPreview(
+        "Flow · Mermaid Preview",
+        "Phone golden: one source-or-preview representation area",
+        QaScenario.Demo,
+        QaSurface.Flow,
+        QaDemoCorpus.FlowMermaidTitle,
+        "flow-phone-mermaid-preview",
+    ),
+    FlowReadingMode(
+        "Flow · Reading Mode",
+        "Phone golden: content only until an explicit edit interaction",
+        QaScenario.Demo,
+        QaSurface.Flow,
+        QaDemoCorpus.FlowReadingTitle,
+        "flow-phone-reading-mode",
+    ),
     Document("Open Document", "Two pages with text, table, image, shape, overlap, and chart", QaScenario.Demo, QaSurface.Document, QaDemoCorpus.DocumentTitle),
     Spreadsheet("Open Spreadsheet", "Multi-sheet values, formulas, and chart binding", QaScenario.Demo, QaSurface.Spreadsheet, QaDemoCorpus.SpreadsheetTitle),
     Review("Open Review", "Comments and object review surface", QaScenario.Demo, QaSurface.Review),
     History("Open History", "Deterministic activity and version trail", QaScenario.Demo, QaSurface.History),
-    Interchange("Open Interchange", "Seeded fidelity, import, export, and raw-source editor controls", QaScenario.Demo, QaSurface.Interchange),
+    Interchange("Open Interchange", "Seeded fidelity, import, export, and raw-source editor controls", QaScenario.Demo, QaSurface.Interchange);
+
+    companion object {
+        const val RouteExtra = "com.norfold.qa.ROUTE"
+
+        fun fromRoute(route: String?): QaEntry? = entries.firstOrNull { it.route == route }
+    }
 }
 
 @Composable
@@ -331,6 +367,9 @@ private object QaDemoCorpus {
     const val WorkspaceId = 1L
     const val DocumentObjectId = 1_001L
     const val FlowTitle = "QA Field Notes"
+    const val FlowResponsiveNestedTitle = "Daily Log"
+    const val FlowMermaidTitle = "Architecture Notes"
+    const val FlowReadingTitle = "Product Design Principles"
     const val DocumentTitle = "QA Editorial Brief"
     const val SpreadsheetTitle = "QA Launch Workbook"
     const val LegacyTitle = "QA Legacy Positioned Document"
@@ -370,6 +409,9 @@ private object QaDemoCorpus {
 
     private suspend fun seedDemo(dao: com.norfold.app.data.NotesDao) {
         storeNote(dao, 100L, FlowTitle, flowDocument(), DocOverlapMode.Reflow, DocumentArtifactKind.Flow)
+        storeNote(dao, 110L, FlowResponsiveNestedTitle, flowResponsiveNestedDocument(), DocOverlapMode.Reflow, DocumentArtifactKind.Flow)
+        storeNote(dao, 111L, FlowMermaidTitle, flowMermaidDocument(), DocOverlapMode.Reflow, DocumentArtifactKind.Flow)
+        storeNote(dao, 112L, FlowReadingTitle, flowReadingDocument(), DocOverlapMode.Reflow, DocumentArtifactKind.Flow)
         storeNote(
             dao,
             101L,
@@ -570,6 +612,108 @@ private object QaDemoCorpus {
             ChartBlock("flow-chart", "{\"mark\":\"line\",\"data\":{\"values\":[{\"day\":\"Mon\",\"score\":74},{\"day\":\"Tue\",\"score\":88},{\"day\":\"Wed\",\"score\":93}]},\"encoding\":{\"x\":{\"field\":\"day\"},\"y\":{\"field\":\"score\",\"type\":\"quantitative\"}}}"),
         ),
     ).withReviewCorpus(noteId = 100L, sourceId = "flow-intro", targetId = "flow-findings")
+
+    private fun flowResponsiveNestedDocument() = BlockDocument(
+        listOf(
+            HeadingBlock("nested-title", 1, listOf(InlineText("Project Aurora"))),
+            ParagraphBlock("nested-date", listOf(InlineText("Wednesday, April 24 · Product design"))),
+            CalloutBlock(
+                "nested-callout",
+                "note",
+                "Focus for today",
+                false,
+                listOf(ParagraphBlock("nested-callout-body", listOf(InlineText("Refine the onboarding flow and prepare the prototype for the weekly review.")))),
+            ),
+            HeadingBlock("nested-progress", 2, listOf(InlineText("Progress"))),
+            ContainerBlock(
+                id = "nested-two-columns",
+                axis = ContainerAxis.Row,
+                weights = listOf(1f, 1f),
+                children = listOf(
+                    ContainerBlock(
+                        "nested-progress-left",
+                        ContainerAxis.Column,
+                        children = listOf(
+                            HeadingBlock("nested-left-heading", 3, listOf(InlineText("Completed"))),
+                            BulletListBlock("nested-left-list", listOf(
+                                ListItem("nested-left-1", listOf(InlineText("Mapped the first-run journey"))),
+                                ListItem("nested-left-2", listOf(InlineText("Aligned empty-state language"))),
+                            )),
+                        ),
+                    ),
+                    ContainerBlock(
+                        "nested-progress-right",
+                        ContainerAxis.Column,
+                        children = listOf(
+                            HeadingBlock("nested-right-heading", 3, listOf(InlineText("Next"))),
+                            BulletListBlock("nested-right-list", listOf(
+                                ListItem("nested-right-1", listOf(InlineText("Prototype account recovery"))),
+                                ListItem("nested-right-2", listOf(InlineText("Review accessibility notes"))),
+                            )),
+                        ),
+                    ),
+                ),
+            ),
+            HeadingBlock("nested-insight", 2, listOf(InlineText("Weekly signal"))),
+            ChartBlock(
+                "nested-chart",
+                ChartSpecCodec.encode(
+                    ChartBuilderModel(
+                        type = ChartType.Line,
+                        title = "Weekly signal",
+                        xAxis = "Day",
+                        yAxis = "Progress",
+                        showLegend = false,
+                        rows = listOf(
+                            ChartDataRow("nested-chart-mon", "Mon", "42"),
+                            ChartDataRow("nested-chart-tue", "Tue", "58"),
+                            ChartDataRow("nested-chart-wed", "Wed", "76"),
+                            ChartDataRow("nested-chart-thu", "Thu", "84"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    private fun flowMermaidDocument() = BlockDocument(
+        listOf(
+            HeadingBlock("mermaid-title", 1, listOf(InlineText("Authentication flow"))),
+            ParagraphBlock("mermaid-intro", listOf(InlineText("The client keeps one durable representation and switches between editable source and a derived preview."))),
+            MermaidBlock(
+                id = "mermaid-preview",
+                code = "flowchart TD\n  Start[Open app] --> Session{Valid session?}\n  Session -->|Yes| Home[Workspace]\n  Session -->|No| SignIn[Sign in]\n  SignIn --> Home",
+                editorHeightDp = 270f,
+            ),
+            HeadingBlock("mermaid-notes", 2, listOf(InlineText("Implementation notes"))),
+            BulletListBlock("mermaid-notes-list", listOf(
+                ListItem("mermaid-note-1", listOf(InlineText("Source remains canonical and exportable"))),
+                ListItem("mermaid-note-2", listOf(InlineText("Unsupported syntax stays intact in source mode"))),
+                ListItem("mermaid-note-3", listOf(InlineText("Preview never duplicates the source below it"))),
+            )),
+        ),
+    )
+
+    private fun flowReadingDocument() = BlockDocument(
+        listOf(
+            HeadingBlock("reading-title", 1, listOf(InlineText("Designing for calm"))),
+            ParagraphBlock("reading-deck", listOf(InlineText("A content-first approach to interfaces that support focus instead of competing for it."))),
+            ImageBlock(
+                "reading-image",
+                "android.resource://com.norfold.app/drawable/cover_coastal_light",
+                "Soft coastal light across a quiet landscape",
+                displayHeightDp = 230f,
+            ),
+            ParagraphBlock("reading-body", listOf(InlineText("Calm software makes its structure understandable without leaving every control on screen. The document leads; tools arrive only when the reader asks to change something."))),
+            HeadingBlock("reading-principles", 2, listOf(InlineText("Principles"))),
+            BulletListBlock("reading-list", listOf(
+                ListItem("reading-1", listOf(BoldInline(listOf(InlineText("Prioritize content."))), InlineText(" Keep the reading path continuous and predictable."))),
+                ListItem("reading-2", listOf(BoldInline(listOf(InlineText("Reveal tools in context."))), InlineText(" Editing controls should follow intent."))),
+                ListItem("reading-3", listOf(BoldInline(listOf(InlineText("Preserve orientation."))), InlineText(" Local scroll regions must not steal the document scroll."))),
+            )),
+            QuoteBlock("reading-quote", listOf(ParagraphBlock("reading-quote-body", listOf(InlineText("Good tools become visible at the moment they are useful, then leave the work undisturbed."))))),
+        ),
+    )
 
     private fun boundedDocument(): BlockDocument {
         val pageOne = DocumentPageBlock(
