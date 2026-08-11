@@ -32,12 +32,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.focusable
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -67,6 +75,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.CollectionItemInfo
@@ -144,6 +153,10 @@ fun SpreadsheetHostScreen(
     var refresh by remember { mutableIntStateOf(0) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
     val state = remember(refresh) { runtime.state() }
+    val configuration = LocalConfiguration.current
+    // A phone in landscape can be wider than the tablet breakpoint while remaining far too short
+    // for the expanded inline sheet manager. Treat either constrained axis as compact.
+    val compact = configuration.screenWidthDp < 600 || configuration.screenHeightDp < 600
     val context = LocalContext.current
     val clipboard = remember(context) { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     val rootFocus = remember { FocusRequester() }
@@ -193,10 +206,11 @@ fun SpreadsheetHostScreen(
             onOpenGuide = guide.runtime?.let { { guide.open() } },
             onOpenHistory = history.runtime?.let { { history.open() } },
             onOpenRecovery = recovery.runtime?.let { { recovery.open() } },
+            compact = compact,
         )
         if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val existingCharts = runtime.controller.document().blocks.filterIsInstance<ChartBlock>()
-            if (existingCharts.isNotEmpty()) {
+            if (existingCharts.isNotEmpty() || runtime.selectedChartBinding() != null) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -209,21 +223,19 @@ fun SpreadsheetHostScreen(
                             Text(loaded.document.title.ifBlank { "Chart ${index + 1}" })
                         }
                     }
+                    TextButton(
+                        onClick = {
+                            runtime.createChartFromSelection()?.let { id ->
+                                chartEditingId = id
+                                guide.signal(GuideSignal.CHART_STUDIO_OPENED)
+                                refresh++
+                                onChanged()
+                            }
+                        },
+                        enabled = runtime.selectedChartBinding() != null,
+                        modifier = Modifier.height(48.dp),
+                    ) { Text("New chart from selection") }
                 }
-            }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
-                TextButton(
-                    onClick = {
-                        runtime.createChartFromSelection()?.let { id ->
-                            chartEditingId = id
-                            guide.signal(GuideSignal.CHART_STUDIO_OPENED)
-                            refresh++
-                            onChanged()
-                        }
-                    },
-                    enabled = runtime.selectedChartBinding() != null,
-                    modifier = Modifier.height(48.dp),
-                ) { Text("Chart from selection") }
             }
         }
         FormulaBar(
@@ -248,7 +260,7 @@ fun SpreadsheetHostScreen(
                 }
             }
         }
-        Box(Modifier.weight(1f)) {
+        Box(Modifier.weight(1f).clipToBounds()) {
             VirtualSpreadsheetGrid(
                 runtime = runtime,
                 refresh = refresh,
@@ -352,6 +364,7 @@ fun SpreadsheetHostScreen(
             onDelete = { if (runtime.deleteActiveSheet()) { refresh++; onChanged() } },
             onMove = { if (runtime.reorderActiveSheet(it)) { refresh++; onChanged() } },
             onSetHidden = { if (runtime.setActiveSheetHidden(it)) { refresh++; onChanged() } },
+            compact = compact,
         )
     }
 
@@ -402,27 +415,54 @@ private fun SpreadsheetTopBar(
     onOpenGuide: (() -> Unit)?,
     onOpenHistory: (() -> Unit)?,
     onOpenRecovery: (() -> Unit)?,
+    compact: Boolean,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        TextButton(onClick = onOpenSidebar, modifier = Modifier.size(48.dp)) { Text("☰") }
-        BasicTextField(
-            value = title,
-            onValueChange = onTitleChange,
-            textStyle = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-            singleLine = true,
-        )
-        TextButton(onClick = onUndo, enabled = canUndo, modifier = Modifier.size(48.dp)) { Text("↶") }
-        TextButton(onClick = onRedo, enabled = canRedo, modifier = Modifier.size(48.dp)) { Text("↷") }
-        TextButton(onClick = onAdvanced, modifier = Modifier.height(48.dp)) { Text("Tools") }
-        onOpenGuide?.let { GuideEntryButton("Spreadsheet editor", it) }
-        onOpenHistory?.let { HistoryEntryButton(it) }
-        onOpenRecovery?.let { RecoveryEntryButton(it) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            TextButton(onClick = onOpenSidebar, modifier = Modifier.size(48.dp)) { Text("☰") }
+            BasicTextField(
+                value = title,
+                onValueChange = onTitleChange,
+                textStyle = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                singleLine = true,
+            )
+            if (!compact) {
+                IconButton(onClick = onUndo, enabled = canUndo) {
+                    Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo")
+                }
+                IconButton(onClick = onRedo, enabled = canRedo) {
+                    Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Redo")
+                }
+                TextButton(onClick = onAdvanced, modifier = Modifier.height(48.dp)) { Text("Tools") }
+                onOpenGuide?.let { GuideEntryButton("Spreadsheet editor", it) }
+                onOpenHistory?.let { HistoryEntryButton(it) }
+                onOpenRecovery?.let { RecoveryEntryButton(it) }
+            }
+        }
+        if (compact) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                IconButton(onClick = onUndo, enabled = canUndo) {
+                    Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo")
+                }
+                IconButton(onClick = onRedo, enabled = canRedo) {
+                    Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Redo")
+                }
+                TextButton(onClick = onAdvanced, modifier = Modifier.height(48.dp)) { Text("Tools") }
+                onOpenGuide?.let { GuideEntryButton("Spreadsheet editor", it) }
+                onOpenHistory?.let { HistoryEntryButton(it) }
+                onOpenRecovery?.let { RecoveryEntryButton(it) }
+            }
+        }
     }
     HorizontalDivider()
 }
@@ -516,26 +556,62 @@ private fun VirtualSpreadsheetGrid(
             // hit-testing wherever the scrolled body passes beneath a frozen pane.
             val rowsToCompose = (bodyRows + (0 until plan.frozenRows).filter { !sheet.rows[it].hidden }).distinct()
             val columnsToCompose = (bodyColumns + (0 until plan.frozenColumns).filter { !sheet.columns[it].hidden }).distinct()
+            val rowPrefixes = remember(state.workbook.revision, sheet.id) {
+                FloatArray(sheet.rowCount + 1).also { prefix ->
+                    sheet.rows.forEachIndexed { index, row ->
+                        prefix[index + 1] = prefix[index] + if (row.hidden) 0f else maxOf(row.heightPoints ?: 48f, 48f)
+                    }
+                }
+            }
+            val columnPrefixes = remember(state.workbook.revision, sheet.id) {
+                FloatArray(sheet.columnCount + 1).also { prefix ->
+                    sheet.columns.forEachIndexed { index, column ->
+                        prefix[index + 1] = prefix[index] + if (column.hidden) 0f else column.widthPoints ?: 96f
+                    }
+                }
+            }
+            // Formula display and conditional-format projection can inspect dependency/rule indexes.
+            // Cache those immutable results for the current visible address set so sub-cell scrolling
+            // only moves already-projected content instead of re-evaluating it on every pointer delta.
+            val cellSnapshots = remember(state.workbook.revision, sheet.id, rowsToCompose, columnsToCompose) {
+                buildMap {
+                    rowsToCompose.forEach { row ->
+                        columnsToCompose.forEach { column ->
+                            val presentation = engine.conditionalFormat(sheet.id, row, column)
+                            put(
+                                GridAddress(row, column),
+                                GridCellSnapshot(
+                                    value = engine.displayAt(sheet.id, row, column),
+                                    input = sheet.cellAt(row, column)?.input?.editorText().orEmpty(),
+                                    format = presentation.format,
+                                    conditionalDescriptions = presentation.descriptions,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
             for (row in rowsToCompose) {
-                val rowPrefix = sheet.rows.take(row).sumOf { if (it.hidden) 0.0 else maxOf(it.heightPoints ?: 48f, 48f).toDouble() }.toFloat()
+                val rowPrefix = rowPrefixes[row]
                 val y = rowHeader + rowPrefix - if (row < plan.frozenRows) 0f else verticalOffset
                 val height = maxOf(sheet.rows[row].heightPoints ?: 48f, 48f)
                 for (column in columnsToCompose) {
-                    val columnPrefix = sheet.columns.take(column).sumOf { if (it.hidden) 0.0 else (it.widthPoints ?: 96f).toDouble() }.toFloat()
+                    val columnPrefix = columnPrefixes[column]
                     val x = columnHeader + columnPrefix - if (column < plan.frozenColumns) 0f else horizontalOffset
                     val width = sheet.columns[column].widthPoints ?: 96f
                     val address = GridAddress(row, column)
                     val selected = address in selectedCells
-                    val presentation = engine.conditionalFormat(sheet.id, row, column)
+                    val snapshot = cellSnapshots.getValue(address)
                     // A live Color Studio preview paints the addressed cells without touching the workbook,
                     // so cancelling the gesture leaves no trace and no history entry.
                     val previewFill = runtime.previewFill?.representative()?.takeIf { selected }
                     GridCell(
                         address = address,
-                        value = engine.displayAt(sheet.id, row, column),
-                        input = sheet.cellAt(row, column)?.input?.editorText().orEmpty(),
-                        format = if (previewFill == null) presentation.format else presentation.format.copy(fillColor = previewFill),
-                        conditionalDescriptions = presentation.descriptions,
+                        value = snapshot.value,
+                        input = snapshot.input,
+                        format = if (previewFill == null) snapshot.format else snapshot.format.copy(fillColor = previewFill),
+                        conditionalDescriptions = snapshot.conditionalDescriptions,
+                        pinned = row < plan.frozenRows || column < plan.frozenColumns,
                         selected = selected,
                         editing = state.selection is TableSelectionState.Editing && state.selection.cell == address,
                         // The editor text is the runtime's draft while this cell is being typed into, and the
@@ -567,7 +643,7 @@ private fun VirtualSpreadsheetGrid(
                 )
             }
             for (column in columnsToCompose) {
-                val columnPrefix = sheet.columns.take(column).sumOf { if (it.hidden) 0.0 else (it.widthPoints ?: 96f).toDouble() }.toFloat()
+                val columnPrefix = columnPrefixes[column]
                 val x = columnHeader + columnPrefix - if (column < plan.frozenColumns) 0f else horizontalOffset
                 val width = sheet.columns[column].widthPoints ?: 96f
                 GridHeader(
@@ -591,8 +667,8 @@ private fun VirtualSpreadsheetGrid(
                 modifier = Modifier.size(columnHeader.dp, rowHeader.dp),
             )
             selectedAddress(state.selection)?.takeIf { it.row in sheet.rows.indices && it.column in sheet.columns.indices }?.let { focus ->
-                val rowPrefix = sheet.rows.take(focus.row + 1).sumOf { if (it.hidden) 0.0 else maxOf(it.heightPoints ?: 48f, 48f).toDouble() }.toFloat()
-                val columnPrefix = sheet.columns.take(focus.column + 1).sumOf { if (it.hidden) 0.0 else (it.widthPoints ?: 96f).toDouble() }.toFloat()
+                val rowPrefix = rowPrefixes[focus.row + 1]
+                val columnPrefix = columnPrefixes[focus.column + 1]
                 // The parentheses matter: `a - if (c) 0f else b - 24f` would fold the centring offset into the
                 // *unfrozen* branch only, so a handle on a frozen row would sit 24dp away from where the same
                 // handle sits one row lower. Centring applies to both branches; only the scroll offset differs.
@@ -655,6 +731,13 @@ private fun VirtualSpreadsheetGrid(
     }
 
 }
+
+private data class GridCellSnapshot(
+    val value: String,
+    val input: String,
+    val format: CellFormat,
+    val conditionalDescriptions: List<String>,
+)
 
 private enum class ResizeAxis { HORIZONTAL, VERTICAL }
 
@@ -785,6 +868,8 @@ private fun GridCell(
     input: String,
     format: CellFormat,
     conditionalDescriptions: List<String>,
+    /** Frozen cells must be opaque so the moving body cannot show through a pinned pane. */
+    pinned: Boolean,
     selected: Boolean,
     editing: Boolean,
     /** The uncommitted text while this cell is being typed into, or null. Runtime-owned. */
@@ -797,7 +882,8 @@ private fun GridCell(
     modifier: Modifier,
 ) {
     val editorText = draft ?: input
-    val cellFill = format.fillColor?.let { Color(it.toArgb()) } ?: Color.Transparent
+    val cellFill = format.fillColor?.let { Color(it.toArgb()) }
+        ?: if (pinned) MaterialTheme.colorScheme.surface else Color.Transparent
     val textColor = format.textColor?.let { Color(it.toArgb()) } ?: MaterialTheme.colorScheme.onSurface
     val alignment = when (format.horizontalAlignment) {
         HorizontalCellAlignment.CENTER -> Alignment.Center
@@ -1163,6 +1249,7 @@ private fun AdvancedTableBar(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun SheetTabs(
     sheets: List<Triple<com.norfold.app.editor.calculation.SheetId, String, Boolean>>,
     active: com.norfold.app.editor.calculation.SheetId,
@@ -1173,10 +1260,18 @@ private fun SheetTabs(
     onDelete: () -> Unit,
     onMove: (Int) -> Unit,
     onSetHidden: (Boolean) -> Unit,
+    compact: Boolean,
 ) {
     var rename by remember(active) { mutableStateOf(sheets.firstOrNull { it.first == active }?.second.orEmpty()) }
+    var manageOpen by remember { mutableStateOf(false) }
+    val currentIndex = sheets.indexOfFirst { it.first == active }
+    val activeHidden = sheets.firstOrNull { it.first == active }?.third == true
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 4.dp),
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         sheets.forEach { (id, name, hidden) ->
@@ -1187,15 +1282,47 @@ private fun SheetTabs(
             ) { Box(Modifier.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) { Text(if (hidden) "$name (hidden)" else name) } }
         }
         TextButton(onClick = onAdd, modifier = Modifier.size(48.dp)) { Text("+") }
-        OutlinedTextField(rename, { rename = it }, singleLine = true, label = { Text("Sheet name") }, modifier = Modifier.width(160.dp))
-        TextButton(onClick = { onRename(rename) }, enabled = rename.isNotBlank(), modifier = Modifier.height(48.dp)) { Text("Rename") }
-        TextButton(onClick = onDuplicate, modifier = Modifier.height(48.dp)) { Text("Duplicate") }
-        TextButton(onClick = onDelete, enabled = sheets.size > 1, modifier = Modifier.height(48.dp)) { Text("Delete") }
-        val currentIndex = sheets.indexOfFirst { it.first == active }
-        val activeHidden = sheets.firstOrNull { it.first == active }?.third == true
-        TextButton(onClick = { onMove(currentIndex - 1) }, enabled = currentIndex > 0, modifier = Modifier.height(48.dp)) { Text("Move left") }
-        TextButton(onClick = { onMove(currentIndex + 1) }, enabled = currentIndex in 0 until sheets.lastIndex, modifier = Modifier.height(48.dp)) { Text("Move right") }
-        TextButton(onClick = { onSetHidden(!activeHidden) }, enabled = activeHidden || sheets.count { !it.third } > 1, modifier = Modifier.height(48.dp)) { Text(if (activeHidden) "Show" else "Hide") }
+        if (compact) {
+            TextButton(onClick = { manageOpen = true }, modifier = Modifier.height(48.dp)) { Text("Manage") }
+        } else {
+            OutlinedTextField(rename, { rename = it }, singleLine = true, label = { Text("Sheet name") }, modifier = Modifier.width(160.dp))
+            TextButton(onClick = { onRename(rename) }, enabled = rename.isNotBlank(), modifier = Modifier.height(48.dp)) { Text("Rename") }
+            TextButton(onClick = onDuplicate, modifier = Modifier.height(48.dp)) { Text("Duplicate") }
+            TextButton(onClick = onDelete, enabled = sheets.size > 1, modifier = Modifier.height(48.dp)) { Text("Delete") }
+            TextButton(onClick = { onMove(currentIndex - 1) }, enabled = currentIndex > 0, modifier = Modifier.height(48.dp)) { Text("Move left") }
+            TextButton(onClick = { onMove(currentIndex + 1) }, enabled = currentIndex in 0 until sheets.lastIndex, modifier = Modifier.height(48.dp)) { Text("Move right") }
+            TextButton(onClick = { onSetHidden(!activeHidden) }, enabled = activeHidden || sheets.count { !it.third } > 1, modifier = Modifier.height(48.dp)) { Text(if (activeHidden) "Show" else "Hide") }
+        }
+    }
+    if (compact && manageOpen) {
+        ModalBottomSheet(onDismissRequest = { manageOpen = false }) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Manage sheet", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    rename,
+                    { rename = it },
+                    singleLine = true,
+                    label = { Text("Sheet name") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onRename(rename); manageOpen = false }, enabled = rename.isNotBlank()) { Text("Rename") }
+                    TextButton(onClick = { onDuplicate(); manageOpen = false }) { Text("Duplicate") }
+                    TextButton(onClick = { onDelete(); manageOpen = false }, enabled = sheets.size > 1) { Text("Delete") }
+                }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { onMove(currentIndex - 1); manageOpen = false }, enabled = currentIndex > 0) { Text("Move left") }
+                    TextButton(onClick = { onMove(currentIndex + 1); manageOpen = false }, enabled = currentIndex in 0 until sheets.lastIndex) { Text("Move right") }
+                    TextButton(
+                        onClick = { onSetHidden(!activeHidden); manageOpen = false },
+                        enabled = activeHidden || sheets.count { !it.third } > 1,
+                    ) { Text(if (activeHidden) "Show sheet" else "Hide sheet") }
+                }
+            }
+        }
     }
 }
 

@@ -1215,12 +1215,47 @@ class FlowHostRuntime(
         withTemporarySelection(blockId) { accessibilityActions() }
 
     /**
+     * The actions safe to project onto one Android accessibility node.
+     *
+     * Android rejects a node with more than 32 custom actions. The command registry intentionally contains
+     * more than that because it also feeds the insert palette, command explorer, menus and keyboard routes.
+     * A block row therefore exposes the contextual structural commands first, followed by any remaining
+     * non-insertion commands, while block-kind insertion stays available from the adjacent, labelled Insert
+     * button. The complete registry remains unchanged; this is only the bounded Android-node projection.
+     */
+    fun accessibilityActionsForNode(blockId: String): List<FlowCommandItem> {
+        val priority = (FlowIds.DOCK_ORDER + RelationshipCommandIds.contextual + FlowIds.INSERT_ABOVE)
+            .distinct()
+            .withIndex()
+            .associate { it.value to it.index }
+        return accessibilityActionsFor(blockId)
+            .asSequence()
+            .filterNot { it.id.startsWith(FlowIds.INSERT_PREFIX) && it.id != FlowIds.INSERT_ABOVE }
+            .sortedWith(
+                compareBy<FlowCommandItem> { priority[it.id] ?: Int.MAX_VALUE }
+                    .thenByDescending { it.enabled }
+                    .thenBy { it.label },
+            )
+            .take(FLOW_ROW_CUSTOM_ACTION_LIMIT)
+            .toList()
+    }
+
+    /**
      * Runs an accessibility action against [blockId]. Selects the row *first* and leaves it selected, because
      * the command genuinely operated on it and the post-command selection rule (§4.14) applies to it.
      */
     fun invokeAccessibilityOn(blockId: String, commandId: String): CommandResult {
         if (!selectionModeActive) scope.selectBlocks(listOf(blockId))
         return invoke(commandId, CommandSurface.ACCESSIBILITY)
+    }
+
+    private companion object {
+        /**
+         * Keep row-owned actions below Android's ceiling because clickable descendants can contribute actions
+         * when Compose builds the merged accessibility node. The remaining commands stay reachable through
+         * their labelled toolbar, Insert, and command-explorer controls.
+         */
+        const val FLOW_ROW_CUSTOM_ACTION_LIMIT = 16
     }
 
     private fun <T> withTemporarySelection(blockId: String, body: () -> T): T {

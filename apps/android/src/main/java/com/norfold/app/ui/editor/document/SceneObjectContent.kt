@@ -734,14 +734,19 @@ private fun SceneTableCell(
     modifier: Modifier = Modifier,
 ) {
     val style = renderScale.pointTextStyle(if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall)
+    val rowHeight = renderScale.pointToDp(24f)
+    val minimumHeight = if (editing) maxOf(48.dp, rowHeight) else rowHeight
     // Focus loss commits, matching every grid the user has met. The draft itself lives in the runtime.
     var hadFocus by remember { mutableStateOf(false) }
     Box(
         modifier
-            .heightIn(min = 48.dp)
+            // Read/Adaptive is a scaled physical page, not a grid of touch controls. A fixed 48dp
+            // minimum there clips rows as the page shrinks. Edit mode retains the full touch target;
+            // read mode retains the authored 24pt row footprint.
+            .heightIn(min = minimumHeight)
             .clickable(enabled = editing && !active, onClick = onActivate)
             .semantics {
-                role = Role.Button
+                if (editing) role = Role.Button
                 contentDescription = "${if (header) "Header" else "Table"} cell, ${text.ifBlank { "blank" }}${if (active) ", selected and editable" else ""}"
             }
             .padding(horizontal = renderScale.pointToDp(6f), vertical = renderScale.pointToDp(4f)),

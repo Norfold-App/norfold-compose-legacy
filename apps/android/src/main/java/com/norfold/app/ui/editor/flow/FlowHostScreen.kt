@@ -34,6 +34,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -689,7 +691,7 @@ private fun FlowBlockRow(
                 // Actions are resolved against *this* block, so the availability and reason a screen reader
                 // announces describe the row it is on rather than whatever happened to be selected
                 // (correction item 14). Execution re-selects the row and runs the same registry command.
-                customActions = presenter.runtime.accessibilityActionsFor(block.id).map { item ->
+                customActions = presenter.runtime.accessibilityActionsForNode(block.id).map { item ->
                     CustomAccessibilityAction(item.accessibilityLabel()) {
                         if (!item.enabled) {
                             onNotice(item.disabledReason ?: "'${item.label}' is not available here")
@@ -830,17 +832,36 @@ private fun FlowTopBar(
                 .weight(1f)
                 .padding(horizontal = 8.dp),
         )
-        TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
-        TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
-        onOpenGuide?.let { GuideEntryButton("Flow editor", it) }
-        onOpenHistory?.let { HistoryEntryButton(it) }
-        onOpenRecovery?.let { RecoveryEntryButton(it) }
         if (compact) {
+            IconButton(onClick = onUndo, enabled = state.canUndo) {
+                Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo")
+            }
+            IconButton(onClick = onRedo, enabled = state.canRedo) {
+                Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Redo")
+            }
             Box {
                 IconButton(onClick = { overflow = true }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "More actions")
                 }
                 DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
+                    onOpenGuide?.let { open ->
+                        DropdownMenuItem(
+                            text = { Text("Guide") },
+                            onClick = { overflow = false; open() },
+                        )
+                    }
+                    onOpenHistory?.let { open ->
+                        DropdownMenuItem(
+                            text = { Text("History") },
+                            onClick = { overflow = false; open() },
+                        )
+                    }
+                    onOpenRecovery?.let { open ->
+                        DropdownMenuItem(
+                            text = { Text("Recovery") },
+                            onClick = { overflow = false; open() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(if (state.showMultiSelectHint) "Select blocks" else "Select") },
                         onClick = {
@@ -851,6 +872,11 @@ private fun FlowTopBar(
                 }
             }
         } else {
+            TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
+            TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
+            onOpenGuide?.let { GuideEntryButton("Flow editor", it) }
+            onOpenHistory?.let { HistoryEntryButton(it) }
+            onOpenRecovery?.let { RecoveryEntryButton(it) }
             // The multi-select entry is a permanent, labelled control — not a hidden long-press. The hint
             // appears until the affordance has been used once (GUIDE_DISCOVERY, not a user setting).
             TextButton(onClick = onEnterSelection) {
@@ -1294,7 +1320,8 @@ private val FLOW_CONTENT_MAX_WIDTH = 760.dp
 private val FLOW_PANE_WIDTH = 360.dp
 
 /** Below this the header sheds its secondary control into an overflow menu rather than squeezing. */
-private const val FLOW_COMPACT_WIDTH_DP = 400
+/** Match the shared phone/tablet breakpoint so ordinary 411dp phones never receive tablet chrome. */
+private const val FLOW_COMPACT_WIDTH_DP = FormFactor.TABLET_MIN_WIDTH_DP
 
 /** Roughly five rows: enough to choose from, little enough that the document stays visible behind. */
 private val FLOW_COMPACT_LIST_MAX_HEIGHT = 260.dp

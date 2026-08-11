@@ -3,6 +3,7 @@ package com.norfold.app.ui.editor.guide
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -173,13 +174,31 @@ private fun GuideTipCard(
         ) {
             Text(topic.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
             Text(step?.instruction ?: topic.explanation, style = MaterialTheme.typography.bodyMedium)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)) {
-                TextButton(onClick = onLater, modifier = Modifier.heightIn(min = 48.dp)) { Text("Later") }
-                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Dismiss tip") }
-                if (topic.target != null || step?.target != null) {
-                    TextButton(onClick = onShowMe, modifier = Modifier.heightIn(min = 48.dp)) { Text("Show me") }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val canShowTarget = topic.target != null || step?.target != null
+                if (maxWidth < 400.dp) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = onLater, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Later") }
+                            TextButton(onClick = onDismiss, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Dismiss tip") }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (canShowTarget) {
+                                TextButton(onClick = onShowMe, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Show me") }
+                            }
+                            Button(onClick = onComplete, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Got it") }
+                        }
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)) {
+                        TextButton(onClick = onLater, modifier = Modifier.heightIn(min = 48.dp)) { Text("Later") }
+                        TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Dismiss tip") }
+                        if (canShowTarget) {
+                            TextButton(onClick = onShowMe, modifier = Modifier.heightIn(min = 48.dp)) { Text("Show me") }
+                        }
+                        Button(onClick = onComplete, modifier = Modifier.heightIn(min = 48.dp)) { Text("Got it") }
+                    }
                 }
-                Button(onClick = onComplete, modifier = Modifier.heightIn(min = 48.dp)) { Text("Got it") }
             }
         }
     }

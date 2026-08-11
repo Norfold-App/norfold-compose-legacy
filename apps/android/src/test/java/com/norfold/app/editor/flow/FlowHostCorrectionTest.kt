@@ -690,6 +690,19 @@ class FlowHostCorrectionTest {
         assertTrue(moveUp.accessibilityLabel().contains("unavailable"))
     }
 
+    /** Android crashes accessibility-tree traversal when a single node exposes more than 32 actions. */
+    @Test
+    fun accessibilityActionsForNode_isBoundedAndKeepsContextualCommandsFirst() {
+        val runtime = runtimeOf(paragraphs("first", "second"))
+
+        val actions = runtime.accessibilityActionsForNode("p1")
+
+        assertTrue(actions.size <= 16)
+        assertEquals(FlowIds.MOVE_UP, actions.first().id)
+        assertTrue(actions.none { it.id.startsWith(FlowIds.INSERT_PREFIX) && it.id != FlowIds.INSERT_ABOVE })
+        assertTrue(actions.any { it.id == FlowIds.DELETE })
+    }
+
     // ── Item 15: inline formatting is preserved and representable ───────────────────────────────────
 
     @Test

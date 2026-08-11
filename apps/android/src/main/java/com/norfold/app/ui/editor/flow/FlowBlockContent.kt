@@ -726,6 +726,12 @@ private fun FlowEditableLine(
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focus)
+                .onFocusChanged { focusState ->
+                    // A tap can focus a field without changing its TextFieldValue. Report that focus
+                    // transition explicitly so structural Enter/Backspace and list-item edits address
+                    // the field the user actually entered rather than a stale or absent runtime caret.
+                    if (focusState.isFocused) callbacks.onCaret(blockId, itemId, value.selection.start)
+                }
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (event.key) {
@@ -826,6 +832,7 @@ private fun resolvedFlowTextStyle(
     previewRole = context.previewRole,
     previewPaint = context.previewPaint,
     previewTargetIds = context.previewTargetIds,
+    adaptThemeTextTokens = true,
 )
 
 @Composable

@@ -27,6 +27,8 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -34,7 +36,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +65,7 @@ import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -67,7 +74,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -311,25 +317,32 @@ fun DocumentHostScreen(
             }
         }
 
-        if (state.dock.isNotEmpty()) {
-            HorizontalDivider()
-            DocumentDock(state.dock) { item ->
-                if (!item.enabled) {
-                    notice = item.disabledReason ?: "'${item.label}' is not available here"
-                } else {
-                    presenter.act { invoke(item.id, CommandSurface.DOCK) }
-                }
+        val hasStyleDock = state.editorStyle.textTargetCount > 0 || state.editorStyle.shapeTargetCount > 0 ||
+            state.editorStyle.pageTargetCount > 0
+        val invokeDockItem: (DocumentCommandItem) -> Unit = { item ->
+            if (!item.enabled) {
+                notice = item.disabledReason ?: "'${item.label}' is not available here"
+            } else {
+                presenter.act { invoke(item.id, CommandSurface.DOCK) }
             }
         }
-        if (state.editorStyle.textTargetCount > 0 || state.editorStyle.shapeTargetCount > 0 ||
-            state.editorStyle.pageTargetCount > 0
-        ) {
+        val invokeStyleItem: (String) -> Unit = { id ->
+            when (val result = presenter.act { invoke(id, CommandSurface.DOCK) }) {
+                is com.norfold.app.editor.command.CommandResult.Failure -> notice = result.reason
+                else -> Unit
+            }
+        }
+        if (state.formFactor.isPhone && (state.dock.isNotEmpty() || hasStyleDock)) {
             HorizontalDivider()
-            DocumentStyleDock(state) { id ->
-                when (val result = presenter.act { invoke(id, CommandSurface.DOCK) }) {
-                    is com.norfold.app.editor.command.CommandResult.Failure -> notice = result.reason
-                    else -> Unit
-                }
+            DocumentCompactDock(state.dock, state, invokeDockItem, invokeStyleItem)
+        } else {
+            if (state.dock.isNotEmpty()) {
+                HorizontalDivider()
+                DocumentDock(state.dock, invokeDockItem)
+            }
+            if (hasStyleDock) {
+                HorizontalDivider()
+                DocumentStyleDock(state, invokeStyleItem)
             }
         }
     }
@@ -452,8 +465,10 @@ private fun DocumentPageStack(
     BoxWithConstraints(modifier) {
         // maxHeight/maxWidth are already dp, so only the pt↔dp factor applies — dividing by density as well
         // would report a viewport a few times too small and virtualize away pages that are on screen.
+        val canvasGutter = if (maxWidth < 600.dp) 12.dp else 32.dp
+        val usableWidth = (maxWidth - canvasGutter * 2).coerceAtLeast(1.dp)
         val viewportHeightPt = maxHeight.value / DP_PER_POINT
-        val viewportWidthPt = maxWidth.value / DP_PER_POINT
+        val viewportWidthPt = usableWidth.value / DP_PER_POINT
 
         // Adaptive View fits the widest page to the viewport; Original View honours the user's zoom. Both are
         // draw-time scales — neither is ever written back into stored geometry.
@@ -468,6 +483,7 @@ private fun DocumentPageStack(
         }
 
         val scrollOffsetPt = with(density) { scroll.value.toDp().value } / DP_PER_POINT / scale
+        val pageDensity = remember(density.density) { Density(density = density.density, fontScale = 1f) }
         val window = remember(state.revision, scrollOffsetPt, viewportHeightPt, scale) {
             presenter.runtime.pageWindow(scrollOffsetPt, viewportHeightPt / scale)
         }
@@ -477,6 +493,7 @@ private fun DocumentPageStack(
                 .fillMaxWidth()
                 .verticalScroll(scroll)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = canvasGutter, vertical = 12.dp)
                 // Pinch to zoom and drag to pan, in Original View only: Adaptive View's scale is derived from
                 // the viewport, so a pinch there would fight the fit it exists to maintain.
                 .then(
@@ -502,20 +519,26 @@ private fun DocumentPageStack(
 
             for (index in window.firstIndex..window.lastIndex) {
                 val page = state.pages.getOrNull(index) ?: continue
-                PageSheet(
-                    page = page,
-                    pageIndex = index,
-                    topPt = window.topOf(index),
-                    scale = scale,
-                    // The band of this page that is actually on screen, in the page's own coordinates. Object
-                    // virtualization is resolved against it.
-                    visibleTopPt = scrollOffsetPt - window.topOf(index),
-                    visibleBottomPt = scrollOffsetPt + viewportHeightPt / scale - window.topOf(index),
-                    presenter = presenter,
-                    onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
-                    onOpenChart = onOpenChart,
-                    onOpenImage = onOpenImage,
-                )
+                // Android's font scale belongs to editor chrome. Page typography is stored in document
+                // points and has its own explicit style controls; applying both would enlarge text inside
+                // fixed scene geometry and clip otherwise-valid content. The dp density stays identical, so
+                // page/object geometry is unchanged while sp no longer receives the UI-only multiplier.
+                CompositionLocalProvider(LocalDensity provides pageDensity) {
+                    PageSheet(
+                        page = page,
+                        pageIndex = index,
+                        topPt = window.topOf(index),
+                        scale = scale,
+                        // The band of this page that is actually on screen, in the page's own coordinates. Object
+                        // virtualization is resolved against it.
+                        visibleTopPt = scrollOffsetPt - window.topOf(index),
+                        visibleBottomPt = scrollOffsetPt + viewportHeightPt / scale - window.topOf(index),
+                        presenter = presenter,
+                        onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
+                        onOpenChart = onOpenChart,
+                        onOpenImage = onOpenImage,
+                    )
+                }
             }
         }
     }
@@ -572,7 +595,7 @@ private fun PageSheet(
             .backgroundPaint(
                 state.editorStyle.previewPaint.takeIf {
                     state.editorStyle.colorStudio.target?.role == com.norfold.app.domain.style.ColorRole.PAGE_BACKGROUND &&
-                        page.id in state.editorStyle.colorStudio.target?.targetIds.orEmpty()
+                        page.id in state.editorStyle.colorStudio.target.targetIds
                 } ?: resolvedPageBackground(page, state.document.stylesheet()),
             )
             .drawBehind {
@@ -1313,6 +1336,7 @@ private fun DocumentTopBar(
     onOpenHistory: (() -> Unit)?,
     onOpenRecovery: (() -> Unit)?,
 ) {
+    val compact = state.formFactor.isPhone
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onOpenSidebar) { Text("Menu") }
@@ -1322,16 +1346,30 @@ private fun DocumentTopBar(
                 onFocusChange = onTitleFocusChange,
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
-            TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
-            TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
-            onOpenGuide?.let { GuideEntryButton("Document editor", it) }
-            onOpenHistory?.let { HistoryEntryButton(it) }
-            onOpenRecovery?.let { RecoveryEntryButton(it) }
+            if (!compact) {
+                TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
+                TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
+                onOpenGuide?.let { GuideEntryButton("Document editor", it) }
+                onOpenHistory?.let { HistoryEntryButton(it) }
+                onOpenRecovery?.let { RecoveryEntryButton(it) }
+            }
         }
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (compact) {
+                IconButton(onClick = onUndo, enabled = state.canUndo) {
+                    Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo")
+                }
+                IconButton(onClick = onRedo, enabled = state.canRedo) {
+                    Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Redo")
+                }
+                onOpenGuide?.let { GuideEntryButton("Document editor", it) }
+                onOpenHistory?.let { HistoryEntryButton(it) }
+                onOpenRecovery?.let { RecoveryEntryButton(it) }
+            }
             AssistChip(
                 onClick = {
                     onRepresentation(
@@ -1678,6 +1716,45 @@ private fun DocumentStyleDock(state: DocumentHostUiState, invoke: (String) -> Un
             state.editorStyle.pageTargetCount > 0
         ) {
             AssistChip({ invoke(EditorStyleCommandIds.PAGE_BACKGROUND) }, label = { Text("Page color") })
+        }
+    }
+}
+
+/** Phone dock: one scrollable action rail instead of two stacked toolbars obscuring the page. */
+@Composable
+private fun DocumentCompactDock(
+    items: List<DocumentCommandItem>,
+    state: DocumentHostUiState,
+    onInvoke: (DocumentCommandItem) -> Unit,
+    invokeStyle: (String) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        items.forEach { item ->
+            AssistChip(
+                onClick = { onInvoke(item) },
+                enabled = item.enabled,
+                label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
+            )
+        }
+        if (state.editorStyle.textTargetCount > 0) {
+            AssistChip({ invokeStyle(EditorStyleCommandIds.NAMED_STYLES) }, label = { Text("Style") })
+            AssistChip({ invokeStyle(EditorStyleCommandIds.FONT_BROWSER) }, label = { Text("Font") })
+            AssistChip({ invokeStyle(EditorStyleCommandIds.TEXT_COLOR) }, label = { Text("Color") })
+            AssistChip({ invokeStyle(EditorStyleCommandIds.HIGHLIGHT) }, label = { Text("Highlight") })
+        }
+        if (state.editorStyle.shapeTargetCount > 0) {
+            AssistChip({ invokeStyle(EditorStyleCommandIds.FILL) }, label = { Text("Fill") })
+            AssistChip({ invokeStyle(EditorStyleCommandIds.STROKE) }, label = { Text("Stroke") })
+            AssistChip({ invokeStyle(EditorStyleCommandIds.NAMED_STYLES) }, label = { Text("Object style") })
+        }
+        if (state.editorStyle.textTargetCount == 0 && state.editorStyle.shapeTargetCount == 0 &&
+            state.editorStyle.pageTargetCount > 0
+        ) {
+            AssistChip({ invokeStyle(EditorStyleCommandIds.PAGE_BACKGROUND) }, label = { Text("Page color") })
         }
     }
 }

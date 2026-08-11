@@ -1,6 +1,7 @@
 package com.norfold.app.ui.editor.style
 
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
@@ -20,6 +21,7 @@ import com.norfold.app.domain.style.FontIdentity
 import com.norfold.app.domain.style.StyleCategory
 import com.norfold.app.domain.style.StyleProperty
 import com.norfold.app.domain.style.StyleResolver
+import com.norfold.app.domain.style.StyleValue
 import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 import kotlin.math.max
@@ -88,6 +90,7 @@ fun resolvedTextStyle(
     previewRole: ColorRole? = null,
     previewPaint: ColorPaint? = null,
     previewTargetIds: Set<String> = emptySet(),
+    adaptThemeTextTokens: Boolean = false,
 ): TextStyle {
     val values = resolvedTextValues(block, sheet, wrappersNearestFirst)
     val weight = values[StyleProperty.FONT_WEIGHT]?.toIntOrNull()?.coerceIn(100, 900)
@@ -100,6 +103,18 @@ fun resolvedTextStyle(
         fontSizeValue ?: Float.NaN,
     )?.sp ?: base.lineHeight
     val previewApplies = previewAffectsTextBlock(block.id, wrappersNearestFirst, previewTargetIds)
+    val rawTextColor = StyleResolver.rawValueCascaded(
+        sheet = sheet,
+        child = block.styleAssignment(),
+        implicitStyleId = block.semanticStyleRole()?.let(Stylesheet::defaultStyleIdFor),
+        wrappersNearestFirst = wrappersNearestFirst.map(WrapperStyleSource::assignment),
+        property = StyleProperty.TEXT_COLOR,
+    )
+    val adaptiveThemeColor = if (!adaptThemeTextTokens) null else when ((rawTextColor as? StyleValue.TokenRef)?.tokenId) {
+        Stylesheet.TOKEN_TEXT_PRIMARY -> MaterialTheme.colorScheme.onSurface
+        Stylesheet.TOKEN_TEXT_SECONDARY -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> null
+    }
     val decorations = buildList {
         if (values[StyleProperty.UNDERLINE].toBoolean()) add(TextDecoration.Underline)
         if (values[StyleProperty.STRIKETHROUGH].toBoolean()) add(TextDecoration.LineThrough)
@@ -108,6 +123,7 @@ fun resolvedTextStyle(
         color = previewPaint?.representative()
             ?.takeIf { previewApplies && previewRole == ColorRole.TEXT }
             ?.let { Color(it.toArgb()) }
+            ?: adaptiveThemeColor
             ?: values[StyleProperty.TEXT_COLOR]?.let(ColorValue::parse)?.let { Color(it.toArgb()) }
             ?: base.color,
         background = previewPaint?.representative()
