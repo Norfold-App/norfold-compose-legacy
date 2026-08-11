@@ -286,6 +286,21 @@ class DocumentHostRuntime(
         return changed
     }
 
+    /**
+     * Replaces one shape while preserving its scene object's geometry, z-order and page ownership.
+     *
+     * Shape Builder edits the shape's *interior* in a 100×100 local canvas; the object's placement on the
+     * page belongs to [SceneGeometry] and is deliberately untouched here. That split is what lets a shape be
+     * rebuilt without moving, and lets it be moved without rebuilding.
+     */
+    fun updateShape(blockId: String, after: ShapeBlock): Boolean {
+        val before = controller.document().findById(blockId) as? ShapeBlock ?: return false
+        if (after.id != before.id || after == before) return false
+        val changed = controller.mutateDocument("Edit shape") { it.replaceBlock(after) }
+        if (changed) revision++
+        return changed
+    }
+
     fun chartCalculationProvider(): ChartCalculationDataProvider = ChartCalculationDataProvider { binding ->
         var workbook: com.norfold.app.editor.calculation.CalculationWorkbook? = null
         controller.document().walk { block ->

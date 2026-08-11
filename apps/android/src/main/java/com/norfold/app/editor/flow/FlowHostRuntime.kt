@@ -358,6 +358,18 @@ class FlowHostRuntime(
         return changed
     }
 
+    /** Replaces one shape through the canonical Flow history as the single Shape Builder transaction. */
+    fun updateShape(blockId: String, after: ShapeBlock): Boolean {
+        val before = controller.document().findById(blockId) as? ShapeBlock ?: return false
+        if (after.id != before.id || after == before) return false
+        val changed = controller.mutate("Edit shape") { session ->
+            session.replaceBlock(after)
+            BlockCursor(blockId, 0)
+        } != null
+        if (changed) revision++
+        return changed
+    }
+
     fun chartCalculationProvider(): ChartCalculationDataProvider = ChartCalculationDataProvider { binding ->
         var workbook: com.norfold.app.editor.calculation.CalculationWorkbook? = null
         controller.document().walk { block ->

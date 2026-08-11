@@ -73,6 +73,10 @@ import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
+import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.editor.shape.LoadedShapeDocument
+import com.norfold.app.editor.shape.ShapeBlockAdapter
+import com.norfold.app.ui.editor.shape.ShapeDocumentPreview
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
@@ -160,6 +164,7 @@ class FlowBlockCallbacks(
     val onToggleCollapsed: (blockId: String) -> Unit = {},
     val onOpenChart: (blockId: String) -> Unit = {},
     val onOpenImage: (blockId: String) -> Unit = {},
+    val onOpenShape: (blockId: String) -> Unit = {},
 )
 
 /**
@@ -415,6 +420,30 @@ fun FlowBlockContent(
             FlowPlaceholder("Chart", block.plainText().take(120).ifBlank { "empty" }, modifier)
         }
 
+        // Flow has no shape insert surface, but a shape reaches a Flow document through interchange, and
+        // Flow has always drawn it as a text placeholder. Only a shape that has actually been built draws its
+        // own geometry; anything else keeps that placeholder unchanged, so turning the flag on cannot alter a
+        // single existing Flow document. The Edit action is offered either way — it is what promotes a legacy
+        // shape into a document in the first place.
+        is ShapeBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.SHAPE_BUILDER)) {
+            val loaded = remember(block) { ShapeBlockAdapter.load(block) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (loaded.origin == LoadedShapeDocument.Origin.CANONICAL) {
+                    ShapeDocumentPreview(
+                        document = loaded.document,
+                        modifier = Modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(120f, 560f).dp),
+                    )
+                } else {
+                    FlowShapePlaceholder(block, Modifier.fillMaxWidth())
+                }
+                if (!context.selectionMode && loaded.isEditable) {
+                    TextButton(onClick = { callbacks.onOpenShape(block.id) }) { Text("Edit shape") }
+                }
+            }
+        } else {
+            FlowShapePlaceholder(block, modifier)
+        }
+
         is MathBlock -> FlowPlaceholder("Equation", block.tex.ifBlank { "empty" }, modifier)
         is MermaidBlock -> FlowPlaceholder("Diagram", block.code.ifBlank { "empty" }, modifier)
 
@@ -430,6 +459,22 @@ fun FlowBlockContent(
             modifier = modifier,
         )
     }
+}
+
+/**
+ * The rendering a shape had in Flow before Shape Builder existed, kept exactly.
+ *
+ * Extracted rather than reimplemented: a shape used to reach the `else` branch below, so this reproduces that
+ * branch's title and detail for [ShapeBlock] specifically. A shape that has never been built must look
+ * identical whether the feature flag is on or off, and identical to what it looked like before the flag existed.
+ */
+@Composable
+private fun FlowShapePlaceholder(block: ShapeBlock, modifier: Modifier = Modifier) {
+    FlowPlaceholder(
+        title = "Shape",
+        detail = block.plainText().take(120).ifBlank { "Editing arrives with a later phase." },
+        modifier = modifier,
+    )
 }
 
 @Composable

@@ -90,6 +90,7 @@ enum class EditorFeatureFlag(
     CALC_ENGINE(key = "editor.domain.calc", defaultEnabled = true, description = "Shared calculation/data engine."),
     CHART_STUDIO(key = "editor.domain.chart", defaultEnabled = true, description = "ChartDocument model + Chart Studio."),
     IMAGE_FOCUS(key = "editor.domain.image", defaultEnabled = true, description = "Image Focus workspace."),
+    SHAPE_BUILDER(key = "editor.domain.shape", defaultEnabled = true, description = "ShapeDocument model + Shape Builder."),
     RELATIONSHIPS(key = "editor.domain.relationships", defaultEnabled = true, description = "Relationship engine + Connect mode + comments/review."),
     IMPORT_EXPORT_RAW(key = "editor.domain.io", defaultEnabled = true, description = "Import/Export/Fidelity/Raw Source."),
     GUIDE(key = "editor.domain.guide", defaultEnabled = true, description = "Guide / progressive discovery."),

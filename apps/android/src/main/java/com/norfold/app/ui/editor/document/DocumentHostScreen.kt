@@ -76,6 +76,7 @@ import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.ResizeCorner
 import com.norfold.app.domain.SceneGeometry
+import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.SceneLock
 import com.norfold.app.domain.SceneObject
 import com.norfold.app.editor.command.CommandSurface
@@ -108,6 +109,7 @@ import com.norfold.app.ui.editor.style.backgroundPaint
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
 import com.norfold.app.ui.editor.image.ImageFocusSheet
+import com.norfold.app.ui.editor.shape.ShapeBuilderSheet
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.relationship.CommentAuthorRef
@@ -165,6 +167,7 @@ fun DocumentHostScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
     var imageEditingId by remember { mutableStateOf<String?>(null) }
+    var shapeEditingId by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
     val guide = rememberGuideUiController(presenter.runtime.guide)
     val history = rememberHistoryUiController(presenter.runtime.history)
@@ -177,6 +180,7 @@ fun DocumentHostScreen(
             when {
                 chartEditingId != null -> add(GuideDomain.CHART)
                 imageEditingId != null -> add(GuideDomain.IMAGE)
+                shapeEditingId != null -> add(GuideDomain.SHAPE)
                 state.activeSurfaceId in setOf(DocumentSurfaces.COLOR_STUDIO, DocumentSurfaces.FONT_BROWSER, DocumentSurfaces.NAMED_STYLES) -> add(GuideDomain.STYLES)
                 state.activeSurfaceId in setOf(DocumentSurfaces.RELATIONSHIP_MANAGER, DocumentSurfaces.COMMENTS, DocumentSurfaces.REVIEW) -> add(GuideDomain.RELATIONSHIPS)
             }
@@ -278,6 +282,7 @@ fun DocumentHostScreen(
                 onOpenTableInSpreadsheet,
                 { chartEditingId = it; guide.signal(GuideSignal.CHART_STUDIO_OPENED) },
                 { imageEditingId = it; guide.signal(GuideSignal.IMAGE_FOCUS_OPENED) },
+                { shapeEditingId = it; guide.signal(GuideSignal.SHAPE_BUILDER_OPENED) },
                 Modifier.fillMaxSize(),
             )
         }
@@ -421,6 +426,24 @@ fun DocumentHostScreen(
             )
         }
     }
+
+    shapeEditingId?.takeIf { editorFlags.isEnabled(EditorFeatureFlag.SHAPE_BUILDER) }?.let { blockId ->
+        val block = state.document.findById(blockId) as? ShapeBlock
+        if (block == null) {
+            shapeEditingId = null
+        } else {
+            ShapeBuilderSheet(
+                block = block,
+                readOnly = state.intent != WorkingIntent.EDIT,
+                onCommit = { edited -> presenter.act { updateShape(blockId, edited) } },
+                onDismiss = { shapeEditingId = null },
+                onDone = { shapeEditingId = null },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onCommitted = { guide.signal(GuideSignal.SHAPE_BUILDER_COMMITTED) },
+                onFocusHistoryOwner = { presenter.runtime.setFocusHistoryOwner(it) },
+            )
+        }
+    }
     if (state.interchange.requestedAction == null && state.interchange.rawDraft == null) {
         GuideHostLayer(guide, guideContext)
     }
@@ -443,6 +466,7 @@ private fun DocumentPageStack(
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    onOpenShape: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state = presenter.state
@@ -515,6 +539,7 @@ private fun DocumentPageStack(
                     onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                     onOpenChart = onOpenChart,
                     onOpenImage = onOpenImage,
+                    onOpenShape = onOpenShape,
                 )
             }
         }
@@ -534,6 +559,7 @@ private fun PageSheet(
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    onOpenShape: (String) -> Unit,
 ) {
     val state = presenter.state
     val editing = state.representation == LayoutRepresentation.ORIGINAL && state.intent == WorkingIntent.EDIT
@@ -609,7 +635,10 @@ private fun PageSheet(
 
         // Back-to-front: the front-most object is drawn last, so it is the one that overlaps the others.
         visible.sortedBy { it.z }.forEach { obj ->
-            SceneObjectBox(obj, page, scale, presenter, onOpenTableInSpreadsheet, onOpenChart, onOpenImage)
+            SceneObjectBox(
+                obj, page, scale, presenter,
+                onOpenTableInSpreadsheet, onOpenChart, onOpenImage, onOpenShape,
+            )
         }
     }
 }
@@ -693,6 +722,7 @@ private fun SceneObjectBox(
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    onOpenShape: (String) -> Unit,
 ) {
     val state = presenter.state
     val geometry = state.manipulation?.previewFor(obj.id) ?: obj.geometry
@@ -885,6 +915,7 @@ private fun SceneObjectBox(
                     onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                     onOpenChart = onOpenChart,
                     onOpenImage = onOpenImage,
+                    onOpenShape = onOpenShape,
                 )
             },
             modifier = Modifier.fillMaxWidth().padding(
