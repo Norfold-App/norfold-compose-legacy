@@ -7,9 +7,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -64,6 +67,8 @@ class FlowHostInstrumentationTest {
     @get:Rule
     val compose = createComposeRule()
 
+    private var invalidateComposition: (() -> Unit)? = null
+
     @Before
     fun setUp() {
         setEditorFlagsForTesting(
@@ -73,6 +78,7 @@ class FlowHostInstrumentationTest {
 
     @After
     fun tearDown() {
+        invalidateComposition = null
         setEditorFlagsForTesting(null)
     }
 
@@ -92,6 +98,7 @@ class FlowHostInstrumentationTest {
     private fun setContent(runtime: FlowHostRuntime, selectionMode: Boolean = false) {
         compose.setContent {
             var revision by remember { mutableStateOf(0) }
+            invalidateComposition = { revision++ }
             // Read `revision` so a runtime mutation recomposes this subtree exactly as the real screen does.
             val state = remember(revision) { runtime.uiState() }
             Column {
@@ -135,7 +142,10 @@ class FlowHostInstrumentationTest {
 
         // A real structural route: Backspace at the start of "beta" merges it into "alpha", so the caret
         // belongs in the surviving block. Focus must follow it there.
-        compose.runOnUiThread { runtime.backspaceAtStart() }
+        compose.runOnUiThread {
+            runtime.backspaceAtStart()
+            invalidateComposition?.invoke()
+        }
         compose.waitForIdle()
 
         compose.onNodeWithText("alphabeta").assertIsFocused()
@@ -151,6 +161,7 @@ class FlowHostInstrumentationTest {
             runtime.setCaret("p0", 5)
             runtime.editText("p0", "alpha", "alpha more")
             runtime.undo()
+            invalidateComposition?.invoke()
         }
         compose.waitForIdle()
         compose.onNodeWithText("alpha").assertIsFocused()
@@ -230,17 +241,21 @@ class FlowHostInstrumentationTest {
     fun selectionMode_textFieldDoesNotTakeFocusOrTheCaret() {
         val runtime = runtimeOf(paragraphs("alpha", "beta"))
         runtime.enterSelectionMode("p0")
+        val caretBeforeTap = runtime.scope.caret()
         setContent(runtime, selectionMode = true)
 
         compose.onNodeWithText("beta").performClick()
         compose.waitForIdle()
 
-        compose.onNodeWithText("beta").assertIsNotFocused()
+        compose.onNodeWithText("beta").assert(
+            SemanticsMatcher.keyNotDefined(SemanticsProperties.Focused),
+        )
         assertEquals(
             "The caret must not be re-pointed by a tap in selection mode",
-            "p0",
-            runtime.scope.caret()?.targetId,
+            caretBeforeTap,
+            runtime.scope.caret(),
         )
+        assertEquals("p0", runtime.scope.primaryBlockId())
     }
 
     /** Read-only means read-only: a keystroke in selection mode must not change the document. */
@@ -251,8 +266,9 @@ class FlowHostInstrumentationTest {
         setContent(runtime, selectionMode = true)
         val before = runtime.controller.document()
 
-        compose.onNodeWithText("alpha").performTextInput("x")
-        compose.waitForIdle()
+        compose.onNodeWithText("alpha").assert(
+            SemanticsMatcher.keyNotDefined(SemanticsActions.SetText),
+        )
 
         assertEquals(before, runtime.controller.document())
     }
