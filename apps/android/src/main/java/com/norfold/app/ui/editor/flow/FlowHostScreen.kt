@@ -695,7 +695,10 @@ private fun FlowBlockRow(
                 when {
                     // The source keeps a visible placeholder tint so its origin stays legible during the drag.
                     dragging -> MaterialTheme.colorScheme.surfaceVariant
-                    selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                    // `selectedIds` also contains the ordinary caret owner. Tinting that whole row made
+                    // transparent controls and captions look like one overlapping surface after a tap.
+                    // Structural selection is the only state that needs a full-row selection treatment.
+                    rowSelectable && selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
                     else -> Color.Transparent
                 },
             )
