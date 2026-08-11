@@ -34,8 +34,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Redo
 import androidx.compose.material.icons.automirrored.outlined.Undo
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -171,11 +173,14 @@ fun FlowHostScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
     var imageEditingId by remember { mutableStateOf<String?>(null) }
+    var editingBlockId by remember { mutableStateOf<String?>(null) }
 
     // ── Adaptive presentation: the window drives the mode, never the other way round (§2.6) ──
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
+    val compact = configuration.screenWidthDp < FLOW_COMPACT_WIDTH_DP
+    var imeWasOpen by remember { mutableStateOf(false) }
     LaunchedEffect(configuration.screenWidthDp, configuration.screenHeightDp, imeBottom > 0) {
         presenter.act {
             onFormFactorChanged(
@@ -185,6 +190,14 @@ fun FlowHostScreen(
                     keyboardOpen = imeBottom > 0,
                 ),
             )
+        }
+    }
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0) {
+            imeWasOpen = true
+        } else if (imeWasOpen) {
+            editingBlockId = null
+            imeWasOpen = false
         }
     }
 
@@ -257,7 +270,8 @@ fun FlowHostScreen(
                 onOpenGuide = guide.runtime?.let { { guide.open() } },
                 onOpenHistory = history.runtime?.let { { history.open() } },
                 onOpenRecovery = recovery.runtime?.let { { recovery.open() } },
-                compact = configuration.screenWidthDp < FLOW_COMPACT_WIDTH_DP,
+                compact = compact,
+                editing = editingBlockId != null || state.formFactor.keyboardOpen || state.selectionMode,
             )
             HorizontalDivider()
             Box(Modifier.weight(1f)) {
@@ -321,6 +335,12 @@ fun FlowHostScreen(
                                 onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                                 onOpenChart = { chartEditingId = it; guide.signal(GuideSignal.CHART_STUDIO_OPENED) },
                                 onOpenImage = { imageEditingId = it; guide.signal(GuideSignal.IMAGE_FOCUS_OPENED) },
+                                compact = compact,
+                                editing = editingBlockId == block.id,
+                                onActivateEditor = { editingBlockId = it },
+                                onEditorFocusChanged = { blockId, focused ->
+                                    editingBlockId = if (focused) blockId else editingBlockId.takeUnless { it == blockId }
+                                },
                                 modifier = Modifier.widthIn(max = FLOW_CONTENT_MAX_WIDTH),
                             )
                         }
@@ -390,20 +410,22 @@ fun FlowHostScreen(
                     onDone = { presenter.act { finishSelectionMode() } },
                 )
             }
-            FlowContextDock(
-                state = state,
-                onCommand = { item -> presenter.invokeItem(item, CommandSurface.DOCK) { notice = it } },
-                onOpenInsert = { presenter.act { openInsertPalette(state.primaryId) } },
-                onOpenConvert = {
-                    presenter.act { openSurface(FlowSurfaces.CONVERT_MENU, SurfaceClass.COMMAND_MENU) }
-                },
-                onStyleCommand = { id ->
-                    when (val result = presenter.act { invoke(id, CommandSurface.DOCK) }) {
-                        is com.norfold.app.editor.command.CommandResult.Failure -> notice = result.reason
-                        else -> Unit
-                    }
-                },
-            )
+            if (editingBlockId != null || state.formFactor.keyboardOpen || state.selectionMode) {
+                FlowContextDock(
+                    state = state,
+                    onCommand = { item -> presenter.invokeItem(item, CommandSurface.DOCK) { notice = it } },
+                    onOpenInsert = { presenter.act { openInsertPalette(state.primaryId) } },
+                    onOpenConvert = {
+                        presenter.act { openSurface(FlowSurfaces.CONVERT_MENU, SurfaceClass.COMMAND_MENU) }
+                    },
+                    onStyleCommand = { id ->
+                        when (val result = presenter.act { invoke(id, CommandSurface.DOCK) }) {
+                            is com.norfold.app.editor.command.CommandResult.Failure -> notice = result.reason
+                            else -> Unit
+                        }
+                    },
+                )
+            }
         }
 
         FlowPaletteSurface(
@@ -603,6 +625,10 @@ private fun FlowBlockRow(
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    compact: Boolean,
+    editing: Boolean,
+    onActivateEditor: (String) -> Unit,
+    onEditorFocusChanged: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val selected = block.id in state.selectedIds
@@ -644,6 +670,7 @@ private fun FlowBlockRow(
             onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },
             onOpenChart = onOpenChart,
             onOpenImage = onOpenImage,
+            onEditorFocusChanged = onEditorFocusChanged,
         )
     }
 
@@ -675,13 +702,18 @@ private fun FlowBlockRow(
             .combinedClickable(
                 onClick = {
                     if (state.selectionMode) presenter.act { toggleSelection(block.id) }
-                    else presenter.act { setCaret(block.id, 0) }
+                    else {
+                        onActivateEditor(block.id)
+                        presenter.act { setCaret(block.id, 0) }
+                    }
                 },
                 // Long-press is the second, gesture-native way into multi-select; the top bar's Select
                 // button is the first. Both call the same runtime entry point.
                 onLongClick = {
-                    if (state.relationshipReview.connectMode != null) presenter.act { setCaret(block.id, 0) }
-                    else presenter.act { enterSelectionMode(block.id) }
+                    if (state.relationshipReview.connectMode != null) {
+                        onActivateEditor(block.id)
+                        presenter.act { setCaret(block.id, 0) }
+                    } else presenter.act { enterSelectionMode(block.id) }
                 },
             )
             .semantics {
@@ -708,16 +740,18 @@ private fun FlowBlockRow(
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Tap inserts; long-press starts a reorder. Both live on the handle so an ordinary long-press in the
-        // text still means multi-select. Disabled during structural selection: the handle's own gestures would
-        // otherwise compete with the row's select/toggle tap for the same touch.
-        IconButton(
-            onClick = { presenter.act { openInsertPalette(block.id) } },
-            enabled = !rowSelectable && state.relationshipReview.connectMode == null,
-            modifier = Modifier
-                .width(36.dp)
-                .pointerInput(block.id, state.document.blocks.count { it !is StylesheetBlock && it !is RelationshipDataBlock && it !is InterchangeDataBlock }, rowSelectable) {
-                    if (rowSelectable || state.relationshipReview.connectMode != null) return@pointerInput
+        // Reorder is intentionally a temporary selected-state affordance. Normal reading has no gutter
+        // handle and no per-block plus; insertion remains available through the contextual dock and semantic
+        // actions, while pointer reordering appears only after long-press selection.
+        if (rowSelectable && selected && state.relationshipReview.connectMode == null) {
+            IconButton(
+                onClick = { onNotice("Press and hold, then drag to move this block") },
+                modifier = Modifier.pointerInput(
+                    block.id,
+                    state.document.blocks.count {
+                        it !is StylesheetBlock && it !is RelationshipDataBlock && it !is InterchangeDataBlock
+                    },
+                ) {
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
                             drag.begin(block.id)
@@ -757,8 +791,9 @@ private fun FlowBlockRow(
                         },
                     )
                 },
-        ) {
-            Text("+", style = MaterialTheme.typography.titleMedium)
+            ) {
+                Icon(Icons.Filled.DragHandle, contentDescription = "Move selected block")
+            }
         }
         Box(Modifier.weight(1f)) {
             FlowBlockContent(
@@ -776,6 +811,8 @@ private fun FlowBlockRow(
                     previewTargetIds = state.editorStyle.colorStudio.target?.targetIds.orEmpty().toSet(),
                     chartCalculationProvider = presenter.runtime.chartCalculationProvider(),
                     chartDataRevision = state.revision,
+                    compact = compact,
+                    editing = editing,
                 ),
             )
             if (selected && state.relationshipReview.relationships.isNotEmpty()) {
@@ -815,6 +852,7 @@ private fun FlowTopBar(
     onOpenHistory: (() -> Unit)?,
     onOpenRecovery: (() -> Unit)?,
     compact: Boolean,
+    editing: Boolean,
 ) {
     var overflow by remember { mutableStateOf(false) }
     Row(
@@ -824,7 +862,9 @@ private fun FlowTopBar(
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onOpenSidebar) { Text("Notes") }
+        IconButton(onClick = onOpenSidebar) {
+            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to notes")
+        }
         FlowTitleField(
             title = title,
             onTitleChange = onTitleChange,
@@ -833,11 +873,13 @@ private fun FlowTopBar(
                 .padding(horizontal = 8.dp),
         )
         if (compact) {
-            IconButton(onClick = onUndo, enabled = state.canUndo) {
-                Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo")
-            }
-            IconButton(onClick = onRedo, enabled = state.canRedo) {
-                Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Redo")
+            if (editing) {
+                IconButton(onClick = onUndo, enabled = state.canUndo) {
+                    Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo")
+                }
+                IconButton(onClick = onRedo, enabled = state.canRedo) {
+                    Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Redo")
+                }
             }
             Box {
                 IconButton(onClick = { overflow = true }) {
@@ -872,8 +914,10 @@ private fun FlowTopBar(
                 }
             }
         } else {
-            TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
-            TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
+            if (editing) {
+                TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
+                TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
+            }
             onOpenGuide?.let { GuideEntryButton("Flow editor", it) }
             onOpenHistory?.let { HistoryEntryButton(it) }
             onOpenRecovery?.let { RecoveryEntryButton(it) }
@@ -973,8 +1017,9 @@ private fun FlowContextDock(
         tonalElevation = 2.dp,
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .widthIn(max = FLOW_CONTENT_MAX_WIDTH)
+            .fillMaxWidth(),
     ) {
         Row(
             Modifier

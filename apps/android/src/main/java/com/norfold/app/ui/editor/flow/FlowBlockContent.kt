@@ -1,6 +1,7 @@
 package com.norfold.app.ui.editor.flow
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -35,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +48,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -53,6 +59,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -113,6 +120,9 @@ import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.ui.editor.chart.ChartRenderer
 import com.norfold.app.editor.image.ImageBlockAdapter
 import com.norfold.app.ui.editor.image.ImageFocusRenderer
+import com.norfold.app.ui.components.DiagramKind
+import com.norfold.app.ui.components.FlowDirection
+import com.norfold.app.ui.components.MermaidDiagramCodec
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -160,6 +170,8 @@ class FlowBlockCallbacks(
     val onToggleCollapsed: (blockId: String) -> Unit = {},
     val onOpenChart: (blockId: String) -> Unit = {},
     val onOpenImage: (blockId: String) -> Unit = {},
+    /** Reports real field focus so the host can keep editing chrome contextual. */
+    val onEditorFocusChanged: (blockId: String, focused: Boolean) -> Unit = { _, _ -> },
 )
 
 /**
@@ -197,6 +209,10 @@ data class FlowBlockContext(
     val wrapperStyles: List<WrapperStyleSource> = emptyList(),
     val chartCalculationProvider: ChartCalculationDataProvider? = null,
     val chartDataRevision: Long = 0,
+    /** Phone layouts stack authored columns; expanded layouts preserve their authored axis. */
+    val compact: Boolean = false,
+    /** False renders a quiet reading surface. Tapping the owning row activates the editor. */
+    val editing: Boolean = true,
 )
 
 /**
@@ -219,7 +235,7 @@ fun FlowBlockContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge.copy(lineHeight = 28.sp)),
+            style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp)),
             placeholder = "Write something…",
             callbacks = callbacks,
             context = context,
@@ -322,14 +338,16 @@ fun FlowBlockContent(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Disabled in structural selection so a tap meant to select the callout block cannot instead
                 // expand/collapse it (correction item 6) — the same reason the Todo checkbox above is disabled.
-                IconButton(
-                    onClick = { callbacks.onToggleCollapsed(block.id) },
-                    enabled = !context.selectionMode,
-                ) {
-                    Icon(
-                        imageVector = if (block.collapsed) Icons.Filled.ChevronRight else Icons.Filled.ExpandMore,
-                        contentDescription = if (block.collapsed) "Expand callout" else "Collapse callout",
-                    )
+                if (context.editing) {
+                    IconButton(
+                        onClick = { callbacks.onToggleCollapsed(block.id) },
+                        enabled = !context.selectionMode,
+                    ) {
+                        Icon(
+                            imageVector = if (block.collapsed) Icons.Filled.ChevronRight else Icons.Filled.ExpandMore,
+                            contentDescription = if (block.collapsed) "Expand callout" else "Collapse callout",
+                        )
+                    }
                 }
                 Text(
                     block.title.ifBlank { "Callout" },
@@ -344,34 +362,18 @@ fun FlowBlockContent(
 
         // A code block holds a plain string, not inline nodes. Wrapping it in a single [InlineText] is the
         // honest description of that: one run, no styling, same editing path as every other line.
-        is CodeBlock -> FlowEditableLine(
-            blockId = block.id,
-            itemId = null,
-            nodes = listOf(InlineText(block.code)),
-            style = resolvedFlowTextStyle(
-                block,
-                context,
-                MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-            ),
-            placeholder = "Code",
-            callbacks = callbacks,
-            context = context,
-            modifier = modifier
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(12.dp),
-        )
+        is CodeBlock -> FlowCodeBlock(block, callbacks, context, modifier)
 
         is DividerBlock -> HorizontalDivider(modifier.padding(vertical = 12.dp))
 
-        is ContainerBlock -> if (block.axis == ContainerAxis.Row) {
+        is ContainerBlock -> if (block.axis == ContainerAxis.Row && !context.compact) {
             Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 block.children.forEach { child ->
                     Box(Modifier.weight(1f)) { FlowBlockContent(child, callbacks, context = context) }
                 }
             }
         } else {
-            Column(modifier) {
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(if (block.axis == ContainerAxis.Row) 12.dp else 0.dp)) {
                 FlowStyledChildren(block.children, callbacks, context)
             }
         }
@@ -385,7 +387,7 @@ fun FlowBlockContent(
                     block = block,
                     modifier = Modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(120f, 560f).dp),
                 )
-                if (!context.selectionMode && loaded.isEditable) {
+                if (context.editing && !context.selectionMode && loaded.isEditable) {
                     TextButton(onClick = { callbacks.onOpenImage(block.id) }) { Text("Edit image") }
                 }
                 if (block.caption.isNotBlank()) {
@@ -407,7 +409,7 @@ fun FlowBlockContent(
                     modifier = Modifier.fillMaxWidth(),
                     heightDp = block.editorHeightDp.toInt().coerceIn(120, 560),
                 )
-                if (!context.selectionMode && loaded.isEditable) {
+                if (context.editing && !context.selectionMode && loaded.isEditable) {
                     TextButton(onClick = { callbacks.onOpenChart(block.id) }) { Text("Edit chart") }
                 }
             }
@@ -415,8 +417,12 @@ fun FlowBlockContent(
             FlowPlaceholder("Chart", block.plainText().take(120).ifBlank { "empty" }, modifier)
         }
 
-        is MathBlock -> FlowPlaceholder("Equation", block.tex.ifBlank { "empty" }, modifier)
-        is MermaidBlock -> FlowPlaceholder("Diagram", block.code.ifBlank { "empty" }, modifier)
+        is MathBlock -> FlowWideSource(
+            title = "Equation",
+            source = block.tex.ifBlank { "empty" },
+            modifier = modifier,
+        )
+        is MermaidBlock -> FlowMermaidBlock(block, callbacks, context, modifier)
 
         is UnknownBlock -> FlowPlaceholder(
             title = "Preserved content",
@@ -428,6 +434,286 @@ fun FlowBlockContent(
             title = block::class.simpleName?.removeSuffix("Block") ?: "Block",
             detail = block.plainText().take(120).ifBlank { "Editing arrives with a later phase." },
             modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun FlowCodeBlock(
+    block: CodeBlock,
+    callbacks: FlowBlockCallbacks,
+    context: FlowBlockContext,
+    modifier: Modifier = Modifier,
+) {
+    val scroll = rememberScrollState()
+    Column(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f))
+            .horizontalScroll(scroll)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        FlowEditableLine(
+            blockId = block.id,
+            itemId = null,
+            nodes = listOf(InlineText(block.code)),
+            style = resolvedFlowTextStyle(
+                block,
+                context,
+                MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 20.sp,
+                ),
+            ),
+            placeholder = "Code",
+            callbacks = callbacks,
+            context = context,
+            structuralEnter = false,
+            modifier = Modifier.widthIn(min = 360.dp),
+        )
+    }
+}
+
+@Composable
+private fun FlowWideSource(title: String, source: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f))
+            .padding(vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Text(
+                source,
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+        }
+    }
+}
+
+private enum class FlowRenderableMode { Source, Preview }
+
+/**
+ * One lightweight representation shell for renderable Mermaid source.
+ *
+ * Source and Preview occupy the same region; switching never duplicates the source below the rendering.
+ * The preview is derived from the supported Mermaid codec used by Diagram Builder. Unsupported Mermaid is
+ * preserved and stays editable in Source rather than being presented as a renderer success.
+ */
+@Composable
+private fun FlowMermaidBlock(
+    block: MermaidBlock,
+    callbacks: FlowBlockCallbacks,
+    context: FlowBlockContext,
+    modifier: Modifier = Modifier,
+) {
+    var mode by rememberSaveable(block.id) { mutableStateOf(FlowRenderableMode.Preview) }
+    val defaultColor = MaterialTheme.colorScheme.primary.toArgb().let { color -> "#%06X".format(color and 0xFFFFFF) }
+    val model = remember(block.code, defaultColor) {
+        MermaidDiagramCodec.decodeOrNull(block.code, defaultColor)
+    }
+    val effectiveMode = if (model == null) FlowRenderableMode.Source else mode
+
+    Column(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Mermaid diagram",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (model == null) "Source only" else "Renderable",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)),
+        ) {
+            FlowRenderableTab(
+                label = "Source",
+                selected = effectiveMode == FlowRenderableMode.Source,
+                onClick = { mode = FlowRenderableMode.Source },
+                modifier = Modifier.weight(1f),
+            )
+            FlowRenderableTab(
+                label = "Preview",
+                selected = effectiveMode == FlowRenderableMode.Preview,
+                enabled = model != null,
+                onClick = { mode = FlowRenderableMode.Preview },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 156.dp, max = block.editorHeightDp.coerceIn(156f, 360f).dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
+                .padding(12.dp),
+        ) {
+            when (effectiveMode) {
+                FlowRenderableMode.Source -> FlowEditableLine(
+                    blockId = block.id,
+                    itemId = null,
+                    nodes = listOf(InlineText(block.code)),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 18.sp,
+                    ),
+                    placeholder = "Mermaid source",
+                    callbacks = callbacks,
+                    context = context,
+                    structuralEnter = false,
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                )
+                FlowRenderableMode.Preview -> FlowMermaidPreview(requireNotNull(model))
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlowRenderableTab(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Box(
+        modifier
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) MaterialTheme.colorScheme.surface else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics {
+                role = Role.Button
+                stateDescription = if (selected) "$label selected" else "$label not selected"
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = when {
+                !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                selected -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
+}
+
+@Composable
+private fun FlowMermaidPreview(model: com.norfold.app.ui.components.DiagramBuilderModel) {
+    when (model.kind) {
+        DiagramKind.Flowchart -> {
+            val nodesById = model.nodes.associateBy { it.id }
+            val visibleIds = nodesById.keys.take(8).toSet()
+            val visibleEdges = model.edges.filter { it.from in visibleIds && it.to in visibleIds }
+            val targets = visibleEdges.mapTo(mutableSetOf()) { it.to }
+            val roots = model.nodes.map { it.id }.filter { it in visibleIds && it !in targets }
+            val levels = buildList {
+                val visited = mutableSetOf<String>()
+                var frontier = (roots.ifEmpty { visibleIds.take(1) }).distinct()
+                while (frontier.isNotEmpty() && visited.size < visibleIds.size) {
+                    val level = frontier.filter { it in visibleIds && visited.add(it) }
+                    if (level.isEmpty()) break
+                    add(level)
+                    frontier = level
+                        .flatMap { from -> visibleEdges.filter { it.from == from }.map { it.to } }
+                        .filterNot(visited::contains)
+                        .distinct()
+                }
+                val disconnected = model.nodes.map { it.id }.filter { it in visibleIds && it !in visited }
+                disconnected.forEach { add(listOf(it)) }
+            }
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                levels.forEachIndexed { levelIndex, level ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    ) {
+                        level.take(3).forEach { id ->
+                            val node = nodesById.getValue(id)
+                            Box(
+                                Modifier
+                                    .weight(1f, fill = false)
+                                    .widthIn(min = 88.dp, max = 180.dp)
+                                    .clip(RoundedCornerShape(if (node.shape.name == "Rounded") 8.dp else 4.dp))
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(node.label, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    if (levelIndex != levels.lastIndex) {
+                        val outgoingLabels = level
+                            .flatMap { from -> visibleEdges.filter { it.from == from }.map { it.label.trim() } }
+                            .filter(String::isNotEmpty)
+                            .distinct()
+                        Text(
+                            buildString {
+                                append(if (model.direction == FlowDirection.TD) "↓" else "→")
+                                if (outgoingLabels.isNotEmpty()) append("  ${outgoingLabels.joinToString(" / ")}")
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+            }
+        }
+        DiagramKind.Sequence -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                model.participants.forEach { participant ->
+                    Text(
+                        participant.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                }
+            }
+            model.messages.take(6).forEach { message ->
+                Text(
+                    "${message.from} → ${message.to}: ${message.text}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        else -> Text(
+            "Preview is not available for this Mermaid type yet. Source remains preserved.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -472,11 +758,14 @@ private fun FlowTablePreview(
     modifier: Modifier = Modifier,
 ) {
     val cursor = context.tableCursor?.takeIf { it.blockId == block.id }
-    Column(
-        modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-    ) {
+    val columnCount = maxOf(block.headers.size, block.rows.maxOfOrNull { it.size } ?: 0, 1)
+    Box(modifier.horizontalScroll(rememberScrollState())) {
+        Column(
+            Modifier
+                .width((columnCount * 120).coerceAtLeast(336).dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f)),
+        ) {
         // Gated on the same flag as the route itself: an escape hatch into a host the build has not
         // enabled would make the flag decorative. §25 — this opens the *same* table identity, so it is a
         // deeper surface, not a conversion.
@@ -484,7 +773,7 @@ private fun FlowTablePreview(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(
                     onClick = { callbacks.onOpenTableInSpreadsheet(block.id) },
-                    enabled = !context.selectionMode,
+                    enabled = context.editing && !context.selectionMode,
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) { Text("Open in Spreadsheet") }
             }
@@ -497,7 +786,7 @@ private fun FlowTablePreview(
                     addressed = cursor?.row == -1 && cursor.column == column,
                     // In structural selection a cell tap must select the table block, not address a cell
                     // (correction item 6); the click is disabled so the row's own gesture sees it instead.
-                    enabled = !context.selectionMode,
+                    enabled = context.editing && !context.selectionMode,
                     modifier = Modifier.weight(1f),
                     onClick = { callbacks.onTableCell(FlowTableCursor(block.id, row = -1, column = column)) },
                     editableText = if (cursor?.row == -1 && cursor.column == column) context.tableDraft else null,
@@ -506,21 +795,22 @@ private fun FlowTablePreview(
                 )
             }
         }
-        block.rows.forEachIndexed { rowIndex, row ->
-            HorizontalDivider()
-            Row(Modifier.fillMaxWidth()) {
-                row.forEachIndexed { column, cell ->
-                    FlowTableCell(
-                        text = cell.content.plainText(),
-                        header = false,
-                        addressed = cursor?.row == rowIndex && cursor.column == column,
-                        enabled = !context.selectionMode,
-                        modifier = Modifier.weight(1f),
-                        onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
-                        editableText = if (cursor?.row == rowIndex && cursor.column == column) context.tableDraft else null,
-                        onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, rowIndex, column), it) },
-                        onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, rowIndex, column), it) },
-                    )
+            block.rows.forEachIndexed { rowIndex, row ->
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth()) {
+                    row.forEachIndexed { column, cell ->
+                        FlowTableCell(
+                            text = cell.content.plainText(),
+                            header = false,
+                            addressed = cursor?.row == rowIndex && cursor.column == column,
+                            enabled = context.editing && !context.selectionMode,
+                            modifier = Modifier.weight(1f),
+                            onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
+                            editableText = if (cursor?.row == rowIndex && cursor.column == column) context.tableDraft else null,
+                            onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, rowIndex, column), it) },
+                            onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, rowIndex, column), it) },
+                        )
+                    }
                 }
             }
         }
@@ -645,11 +935,12 @@ private fun FlowEditableLine(
     callbacks: FlowBlockCallbacks,
     context: FlowBlockContext,
     modifier: Modifier = Modifier,
+    structuralEnter: Boolean = true,
 ) {
     val text = nodes.plainText()
     val styled = flowInlineSpans(nodes)
 
-    if (context.selectionMode) {
+    if (context.selectionMode || !context.editing) {
         Box(modifier) {
             Text(
                 text = if (text.isEmpty()) AnnotatedString(placeholder) else styled,
@@ -730,6 +1021,7 @@ private fun FlowEditableLine(
                     // A tap can focus a field without changing its TextFieldValue. Report that focus
                     // transition explicitly so structural Enter/Backspace and list-item edits address
                     // the field the user actually entered rather than a stale or absent runtime caret.
+                    callbacks.onEditorFocusChanged(blockId, focusState.isFocused)
                     if (focusState.isFocused) callbacks.onCaret(blockId, itemId, value.selection.start)
                 }
                 .onPreviewKeyEvent { event ->
@@ -740,7 +1032,7 @@ private fun FlowEditableLine(
                                 softBreak = true
                                 false
                             }
-                            else -> callbacks.onNewLine()
+                            else -> structuralEnter && callbacks.onNewLine()
                         }
                         Key.Backspace ->
                             value.selection.collapsed && value.selection.start == 0 &&
@@ -832,15 +1124,30 @@ private fun resolvedFlowTextStyle(
     previewRole = context.previewRole,
     previewPaint = context.previewPaint,
     previewTargetIds = context.previewTargetIds,
-    adaptThemeTextTokens = true,
+    // Semantic H2/H3 use the Flow accent by default. Stored explicit colour still wins inside
+    // resolvedTextStyle; only the implicit theme text token is prevented from flattening that hierarchy.
+    adaptThemeTextTokens = block !is HeadingBlock || block.level !in 2..3,
 )
 
 @Composable
 private fun headingStyle(level: Int): TextStyle = when (level) {
-    1 -> MaterialTheme.typography.headlineLarge
-    2 -> MaterialTheme.typography.headlineMedium
-    3 -> MaterialTheme.typography.headlineSmall
+    1 -> MaterialTheme.typography.headlineLarge.copy(
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 30.sp,
+        lineHeight = 36.sp,
+    )
+    2 -> MaterialTheme.typography.headlineMedium.copy(
+        color = MaterialTheme.colorScheme.primary,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
+    )
+    3 -> MaterialTheme.typography.headlineSmall.copy(
+        color = MaterialTheme.colorScheme.primary,
+        fontSize = 17.sp,
+        lineHeight = 23.sp,
+    )
     4 -> MaterialTheme.typography.titleLarge
     5 -> MaterialTheme.typography.titleMedium
     else -> MaterialTheme.typography.titleSmall
-}.copy(fontWeight = FontWeight.SemiBold)
+}.copy(fontWeight = if (level == 1) FontWeight.Medium else FontWeight.SemiBold)
