@@ -4,6 +4,7 @@ import com.norfold.app.domain.ShapeKind
 import kotlinx.serialization.Serializable
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.tan
@@ -13,7 +14,7 @@ import kotlin.math.tan
  *
  * A primitive is stored as *parameters*, never as its generated outline. That is what makes a star still a
  * star after it is saved and reopened: the point count remains a number the user can drag, instead of a
- * frozen set of ten vertices that can only be node-edited. Convert to Path ([ShapeLayer.convertedToPath])
+ * frozen set of ten vertices that can only be node-edited. Convert to Path ([ShapeLayerEditor.convertToPath])
  * is the deliberate, one-way door from the first form to the second, and it exists precisely so the user
  * chooses when to give up parametric control rather than discovering it was taken from them.
  *
@@ -128,7 +129,11 @@ data class ShapeParameters(
 /** Which knobs actually affect this kind, so the UI can hide the rest rather than show inert controls. */
 val ShapePrimitiveKind.parametersUsedBy: Set<ShapeParameterKey>
     get() = when (this) {
-        ShapePrimitiveKind.RECTANGLE -> setOf(ShapeParameterKey.WARP, ShapeParameterKey.ROTATION)
+        // No warp: a plain rectangle is four nodes with retracted handles, sitting exactly on the canvas
+        // corners — the farthest any point can be from the centre, and therefore the one radius
+        // [ShapePath.warped] leaves alone. There is nothing between them for a radial map to bow, so the
+        // slider could only ever be decoration. Rounded Rectangle has nodes along its edges and does warp.
+        ShapePrimitiveKind.RECTANGLE -> setOf(ShapeParameterKey.ROTATION)
         ShapePrimitiveKind.ROUNDED_RECTANGLE -> setOf(
             ShapeParameterKey.CORNER_RADIUS, ShapeParameterKey.WARP, ShapeParameterKey.ROTATION,
         )
@@ -192,6 +197,15 @@ object ShapePrimitives {
     /** Cubic approximation constant for a quarter circle: `4/3 · (√2 − 1)`. */
     const val KAPPA = 0.5522847f
 
+    /**
+     * Below this separation, on a 100-unit canvas, two generated points are the same point.
+     *
+     * Deliberately looser than float error: trims that meet do so exactly in theory, and a hair apart after
+     * rounding. A tenth of a canvas unit is still a twentieth of the smallest hit target, so nothing the user
+     * could aim at separately is merged away.
+     */
+    private const val COINCIDENT = 0.05f
+
     fun generate(kind: ShapePrimitiveKind, parameters: ShapeParameters = ShapeParameters()): ShapePath {
         val p = parameters.normalized()
         val path = when (kind) {
@@ -208,7 +222,12 @@ object ShapePrimitives {
             ShapePrimitiveKind.ARROW -> arrow()
             ShapePrimitiveKind.SPEECH_BUBBLE -> speechBubble(p.cornerRadius)
         }
-        return path.warped(p.warp).rotated(p.rotation).normalized().withDerivedIds()
+        // Warp is read through the same table the sheet reads its sliders from, so a kind that does not offer
+        // the control provably cannot be moved by it. One parameter set is shared across every kind, which
+        // means a value dialled in on a Star travels with the layer when the user switches it to Line; without
+        // this gate a hidden knob would go on quietly reshaping the kind that hides it.
+        val distorted = if (ShapeParameterKey.WARP in kind.parametersUsedBy) path.warped(p.warp) else path
+        return distorted.rotated(p.rotation).normalized().withDerivedIds()
     }
 
     /**
@@ -296,7 +315,7 @@ object ShapePrimitives {
             node(ShapePoint(0f, s - trim), ShapePoint(0f, handle), ShapePoint(0f, 0f)),
             node(ShapePoint(0f, trim), ShapePoint(0f, 0f), ShapePoint(0f, -handle)),
         )
-        return ShapePath.of(ShapeSubpath(nodes = nodes, closed = true))
+        return ShapePath.of(ShapeSubpath(nodes = mergeCoincident(nodes), closed = true))
     }
 
     private fun ellipse(): ShapePath {
@@ -455,7 +474,51 @@ object ShapePrimitives {
                 type = ShapeNodeType.CORNER,
             )
         }
-        return ShapeSubpath(nodes = nodes, closed = true)
+        return ShapeSubpath(nodes = mergeCoincident(nodes), closed = true)
+    }
+
+    /**
+     * Collapses consecutive nodes that landed on the same point into one node carrying both handles.
+     *
+     * Corner trims are clamped to half the shorter adjacent edge, so at full rounding the trims of two
+     * neighbouring corners meet exactly: a rectangle at the maximum corner radius has its four arcs touching
+     * at the edge midpoints, and the shipped Squircle preset — 0.42 radius, 0.7 smoothness — already reaches
+     * that cap on every edge. Emitting the pair verbatim leaves two nodes at one position joined by a
+     * zero-length segment. That is invisible in the filled outline and a trap in the editor: Edit points shows
+     * twice the nodes there are corners, and dragging one of a pair tears the shape open along a seam the user
+     * could not see. The arcs share a tangent where they meet, so the merged node is genuinely smooth.
+     */
+    private fun mergeCoincident(nodes: List<ShapeNode>): List<ShapeNode> {
+        if (nodes.size < 4) return nodes
+        val merged = ArrayList<ShapeNode>(nodes.size)
+        for (candidate in nodes) {
+            val previous = merged.lastOrNull()
+            if (previous != null && (candidate.point - previous.point).length <= COINCIDENT) {
+                merged[merged.lastIndex] = previous.joinedWith(candidate)
+            } else {
+                merged += candidate
+            }
+        }
+        // A closed ring wraps, and the seam is one edge like any other: the last corner's exit trim and the
+        // first corner's entry trim run along it from opposite ends and can meet in the middle too. Never
+        // below three, so a ring cannot collapse into something that is no longer a region.
+        if (merged.size > 3 && (merged.first().point - merged.last().point).length <= COINCIDENT) {
+            val tail = merged.removeAt(merged.lastIndex)
+            merged[0] = tail.joinedWith(merged[0]).copy(point = merged[0].point)
+        }
+        return merged
+    }
+
+    /** One node where two met: the handle arriving from the left, the handle leaving to the right. */
+    private fun ShapeNode.joinedWith(next: ShapeNode): ShapeNode {
+        val arriving = if (controlIn.length > COINCIDENT) controlIn else next.controlIn
+        val leaving = if (next.controlOut.length > COINCIDENT) next.controlOut else controlOut
+        val curved = arriving.length > COINCIDENT && leaving.length > COINCIDENT
+        return copy(
+            controlIn = arriving,
+            controlOut = leaving,
+            type = if (curved) ShapeNodeType.SMOOTH else ShapeNodeType.CORNER,
+        )
     }
 
     /**
@@ -498,12 +561,19 @@ object ShapePrimitives {
  * almost fixed, so a warped shape still fills its box rather than shrinking away from the handles the user
  * is holding. Negative pinches. Zero is exactly the identity, checked rather than computed, so the common
  * case costs nothing and cannot introduce rounding drift.
+ *
+ * The falloff is measured against the canvas's *half-diagonal*, which is the farthest a point can be from
+ * the centre and still be on the canvas. Measuring it against the half-side instead — the obvious reading of
+ * "how big is this canvas" — put the zero-displacement rim on the inscribed circle and clamped everything
+ * beyond it to no displacement at all. Generated primitives are built to fill the canvas, so that dead band
+ * covered the entire outline of a circle, a triangle, a diamond and every regular polygon: the Warp slider
+ * was visible on those shapes and moved nothing.
  */
 fun ShapePath.warped(amount: Float): ShapePath {
     val clamped = amount.finiteOr(0f).coerceIn(-1f, 1f)
     if (clamped == 0f) return this
     val center = ShapeCanvas.CENTER
-    val maxRadius = ShapeCanvas.SIDE / 2f
+    val maxRadius = hypot(ShapeCanvas.SIDE / 2f, ShapeCanvas.SIDE / 2f)
     return mapPoints { point ->
         val offset = point - center
         val radius = offset.length

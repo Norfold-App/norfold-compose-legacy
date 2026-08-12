@@ -11,26 +11,36 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Redo
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.BlurOn
-import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ChangeHistory
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Compress
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Flip
+import androidx.compose.material.icons.outlined.HorizontalRule
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.LayersClear
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
-import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.Merge
+import androidx.compose.material.icons.outlined.RoundedCorner
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,8 +59,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.style.ColorDomain
@@ -63,6 +75,7 @@ import com.norfold.app.editor.history.FocusHistoryOwner
 import com.norfold.app.editor.shape.ShapeBlendMode
 import com.norfold.app.editor.shape.ShapeBooleanLayer
 import com.norfold.app.editor.shape.ShapeBooleanOperation
+import com.norfold.app.editor.shape.ShapeBooleans
 import com.norfold.app.editor.shape.ShapeBooleanStatus
 import com.norfold.app.editor.shape.ShapeCanvas
 import com.norfold.app.editor.shape.ShapeDocument
@@ -107,6 +120,19 @@ private enum class ShapeBuilderSection(val label: String) {
 private const val FOCUS_ID_PREFIX = "shape.focus."
 
 /**
+ * How much of the window height the editing canvas takes, and the range it is held to.
+ *
+ * A third leaves room for the header, the history row, the section chips and the first rank of controls on a
+ * landscape phone. The floor is roughly where the overlay's hit radius — a fixed touch target divided by the
+ * canvas scale — reaches the clamp it is held to: shrink the canvas below it and the radius stops tracking
+ * the finger, so the slop can no longer widen to cover what a fingertip actually hides. The ceiling stops a
+ * tablet from turning the canvas into a wall with every control stranded beneath it.
+ */
+private const val CANVAS_SHARE = 0.34f
+private val CANVAS_MIN_HEIGHT = 180.dp
+private val CANVAS_MAX_HEIGHT = 360.dp
+
+/**
  * One local Shape Builder session. Done is the only route to the host's canonical history.
  *
  * Every control in this sheet goes through [ShapeFocusRuntime], which owns what becomes a step; a control
@@ -145,8 +171,18 @@ fun ShapeBuilderSheet(
     val colorStudio = remember(runtime) { ShapeColorStudioController(runtime) { revision++ } }
     val document = remember(runtime, revision) { runtime.document() }
     val controlsDisabled = runtime.isReadOnly() || runtime.isComparingOriginal()
+    // A locked layer refuses every geometry route in the document model, so the controls that drive those
+    // routes have to go with it. Leaving them live would make the lock look broken rather than respected:
+    // the button would press, the drag would start, and nothing would move.
+    val geometryLocked = runtime.activeLayer()?.locked == true
     val section = ShapeBuilderSection.entries[sectionIndex]
     val selection = runtime.selection()
+    // The canvas takes a share of the window rather than a fixed 300dp. A phone held sideways is about
+    // 360dp tall, and a fixed 300dp canvas left the sheet showing a shape and nothing to edit it with —
+    // every control, including the ones a drag needs, below the fold. Sharing keeps the canvas the largest
+    // thing on screen without letting it be the only thing.
+    val windowHeight = LocalConfiguration.current.screenHeightDp.dp
+    val canvasHeight = (windowHeight * CANVAS_SHARE).coerceIn(CANVAS_MIN_HEIGHT, CANVAS_MAX_HEIGHT)
 
     fun edit(transform: (ShapeDocument) -> ShapeDocument) {
         if (runtime.edit(transform)) revision++
@@ -209,17 +245,17 @@ fun ShapeBuilderSheet(
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) { Text("Reset entire edit") }
             }
-            Box(Modifier.fillMaxWidth().height(300.dp)) {
-                ShapeDocumentPreview(document, Modifier.fillMaxWidth().height(300.dp))
+            Box(Modifier.fillMaxWidth().height(canvasHeight)) {
+                ShapeDocumentPreview(document, Modifier.fillMaxWidth().height(canvasHeight))
                 if (section == ShapeBuilderSection.EDIT) {
                     ShapeCanvasOverlay(
                         runtime = runtime,
                         path = runtime.activePath(),
                         tool = tool,
                         settings = settings,
-                        disabled = controlsDisabled,
+                        disabled = controlsDisabled || geometryLocked,
                         onChanged = { revision++ },
-                        modifier = Modifier.fillMaxWidth().height(300.dp),
+                        modifier = Modifier.fillMaxWidth().height(canvasHeight),
                     )
                 }
             }
@@ -254,7 +290,6 @@ fun ShapeBuilderSheet(
             } else when (section) {
                 ShapeBuilderSection.PRESETS -> PresetsSection(document, controlsDisabled, runtime, { revision++ })
                 ShapeBuilderSection.EDIT -> EditSection(
-                    document,
                     controlsDisabled,
                     runtime,
                     selection,
@@ -324,7 +359,6 @@ private fun PresetsSection(
 
 @Composable
 private fun EditSection(
-    document: ShapeDocument,
     disabled: Boolean,
     runtime: ShapeFocusRuntime,
     selection: ShapeSelection,
@@ -344,22 +378,42 @@ private fun EditSection(
         )
         return
     }
+    // Two rows, because these are two different kinds of control that a single row of identical chips
+    // presents as one. The tool is a choice — picking Add point puts Select down. The aids are five
+    // independent switches — turning Grid on turns nothing off. Side by side in one row, styled the same,
+    // the only way to learn which is which was to tap one and watch what else moved.
+    Text("Tool", style = MaterialTheme.typography.labelLarge)
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ShapeCanvasTool.entries.forEach { candidate ->
+            ToolChip(candidate.label, tool == candidate, disabled) { onTool(candidate) }
+        }
+    }
+    Text("Editing aids", style = MaterialTheme.typography.labelLarge)
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ToolChip(ShapeCanvasTool.SELECT.label, tool == ShapeCanvasTool.SELECT) { onTool(ShapeCanvasTool.SELECT) }
-        ToolChip(ShapeCanvasTool.ADD_POINT.label, tool == ShapeCanvasTool.ADD_POINT) { onTool(ShapeCanvasTool.ADD_POINT) }
         ToggleChip("Snap", settings.snap, disabled) { onSettings(settings.copy(snap = it)) }
         ToggleChip("Grid", settings.grid, disabled) { onSettings(settings.copy(grid = it)) }
         ToggleChip("Axis lock", settings.axisLock, disabled) { onSettings(settings.copy(axisLock = it)) }
-    }
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ToggleChip("Show handles", settings.showHandles, disabled) { onSettings(settings.copy(showHandles = it)) }
         ToggleChip("Magnifier", settings.magnifier, disabled) { onSettings(settings.copy(magnifier = it)) }
     }
     Spacer(Modifier.height(4.dp))
+    // The lock covers geometry and existence, not appearance. So the outline controls below follow the
+    // lock and the style controls do not — otherwise a locked layer could never be recoloured, and the
+    // only way to restyle it would be to unlock it and risk the shape the lock was protecting.
+    val geometryDisabled = disabled || layer.locked
+    if (layer.locked) {
+        Text(
+            "This layer is locked. Its outline cannot be edited until you unlock it in the Layers tab. Colour, stroke and effects still apply.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     when (val content = layer.content) {
-        is ShapePrimitiveLayer -> PrimitiveControls(content, disabled, runtime, layer, changed, edit)
-        is ShapePathLayer -> PathControls(runtime, selection, disabled, changed, edit)
-        is ShapeBooleanLayer -> BooleanControls(document, content, disabled, runtime, changed)
+        is ShapePrimitiveLayer -> PrimitiveControls(content, geometryDisabled, runtime, layer, changed, edit)
+        is ShapePathLayer -> PathControls(runtime, selection, geometryDisabled, changed, edit)
+        is ShapeBooleanLayer -> BooleanControls(content, geometryDisabled, runtime, changed)
     }
     Spacer(Modifier.height(4.dp))
     StyleControls(disabled, runtime, colorStudio, changed)
@@ -436,7 +490,12 @@ private fun PrimitiveControls(
         OutlinedButton(
             onClick = { edit { document ->
                 val layerId = runtime.activeLayerId() ?: return@edit document
-                ShapeLayerEditor.setParameters(document, layerId, ShapeParameters(seed = nextSeed(parameters.seed)))
+                // `copy`, not a fresh `ShapeParameters`: a new variation reshuffles the blob, it does not
+                // reset the shape. Building the parameters from scratch here silently threw away the
+                // tension, warp, rotation and point count the user had already dialled in, so the button
+                // read as "randomise" and behaved as "start over".
+                val next = parameters.copy(seed = nextSeed(parameters.seed))
+                ShapeLayerEditor.setParameters(document, layerId, next)
             } },
             enabled = !disabled,
             modifier = Modifier.heightIn(min = 48.dp),
@@ -460,21 +519,23 @@ private fun PathControls(
         return
     }
     val single = selection.single
+    // Six verbs, six glyphs. Reusing one — Layers for Mirror, Edit for Round — put an icon next to a word
+    // it had nothing to do with, which is worse than no icon: the picture argues with the label.
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ToolButton("Add point", Icons.Outlined.Add, disabled) { if (runtime.addPointAt(ShapePointCenter())) changed() }
         ToolButton("Delete point", Icons.Outlined.Delete, disabled || selection.nodes.isEmpty()) {
             if (runtime.deleteSelectedNodes()) changed()
         }
-        ToolButton("Mirror", Icons.Outlined.Layers, disabled || selection.nodes.isEmpty()) {
+        ToolButton("Mirror", Icons.Outlined.Flip, disabled || selection.nodes.isEmpty()) {
             if (runtime.mirrorSelectedNodes()) changed()
         }
         ToolButton("Smooth", Icons.Outlined.BlurOn, disabled || selection.nodes.isEmpty()) {
             if (runtime.smoothSelectedNodes()) changed()
         }
-        ToolButton("Corner", Icons.Outlined.RadioButtonUnchecked, disabled || selection.nodes.isEmpty()) {
+        ToolButton("Corner", Icons.Outlined.ChangeHistory, disabled || selection.nodes.isEmpty()) {
             if (runtime.sharpenSelectedNodes()) changed()
         }
-        ToolButton("Round", Icons.Outlined.Edit, disabled || selection.nodes.isEmpty()) {
+        ToolButton("Round", Icons.Outlined.RoundedCorner, disabled || selection.nodes.isEmpty()) {
             if (runtime.roundSelectedNodes()) changed()
         }
     }
@@ -503,7 +564,6 @@ private fun ShapePointCenter() = ShapePoint(ShapeCanvas.SIDE / 2f, ShapeCanvas.S
 
 @Composable
 private fun BooleanControls(
-    document: ShapeDocument,
     content: ShapeBooleanLayer,
     disabled: Boolean,
     runtime: ShapeFocusRuntime,
@@ -511,8 +571,12 @@ private fun BooleanControls(
 ) {
     val group = content.group
     val layerId = runtime.activeLayerId() ?: return
-    val resolved = remember(document, group) { com.norfold.app.editor.shape.ShapeBooleans.compute(group) }
-    val status = resolved.status
+    // The resolve belongs to the group, not to this composition: `content` memoises it, so a fill change, a
+    // recolour or a re-entry into the sheet reuses the answer instead of re-running the most expensive thing
+    // in the editor. Keying a `remember` on the document here — the shape the code had — re-solved on every
+    // colour tap, and the operands cannot have changed unless `group` did.
+    val status = content.status()
+    val resolvedEmpty = content.toPath().isEmpty
     EnumChips("Boolean", ShapeBooleanOperation.entries, group.operation, disabled) { operation ->
         if (runtime.setBooleanOperation(layerId, operation)) changed()
     }
@@ -527,11 +591,15 @@ private fun BooleanControls(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         ShapeBooleanStatus.TOO_COMPLEX -> Text(
-            "These outlines are too complex to resolve; the first child is shown instead of a wrong region.",
+            if (resolvedEmpty) {
+                "This combination is nested deeper than the solver will resolve, so nothing is drawn for it. Ungroup a level, or flatten an inner group first."
+            } else {
+                "Part of this combination is past what the solver can resolve. The outline shown is an approximation, not the exact region."
+            },
             color = MaterialTheme.colorScheme.error,
         )
         ShapeBooleanStatus.PARTIAL -> Text(
-            "Part of the outline could not be closed, so part of it was dropped.",
+            "Part of the outline could not be closed and was dropped, so what is drawn is incomplete.",
             color = MaterialTheme.colorScheme.error,
         )
     }
@@ -546,10 +614,10 @@ private fun BooleanControls(
         }
     }
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ToolButton("Ungroup", Icons.Outlined.Layers, disabled) {
+        ToolButton("Ungroup", Icons.Outlined.LayersClear, disabled) {
             if (runtime.ungroup(layerId)) changed()
         }
-        ToolButton("Flatten to path", Icons.Outlined.ContentCopy, disabled) {
+        ToolButton("Flatten to path", Icons.Outlined.Compress, disabled) {
             if (runtime.flattenGroup(layerId)) changed()
         }
     }
@@ -572,27 +640,40 @@ private fun LayersSection(
     val activeLayerId = selection.layerId
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ToolButton("Add shape", Icons.Outlined.Add, disabled) { if (runtime.addLayer()) changed() }
-        ToolButton("Add line", Icons.Outlined.Edit, disabled) { if (runtime.addPrimitive(ShapePrimitiveKind.LINE)) changed() }
-        ToolButton("Add speech bubble", Icons.Outlined.BlurOn, disabled) { if (runtime.addPrimitive(ShapePrimitiveKind.SPEECH_BUBBLE)) changed() }
+        ToolButton("Add line", Icons.Outlined.HorizontalRule, disabled) { if (runtime.addPrimitive(ShapePrimitiveKind.LINE)) changed() }
+        ToolButton("Add speech bubble", Icons.Outlined.ChatBubbleOutline, disabled) {
+            if (runtime.addPrimitive(ShapePrimitiveKind.SPEECH_BUBBLE)) changed()
+        }
     }
     if (document.layers.isEmpty()) {
         Text("No layers yet. Add a shape above, or pick one from the Presets tab.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }
+    // Every button below mirrors a refusal the document model already makes, so that a refusal reads as
+    // "not available" rather than as a press that did nothing. Merge has two of them: a locked operand,
+    // and a nesting depth the Boolean solver would never resolve.
+    val mergeMembers = document.layers.takeLast(2)
+    val canMerge = mergeMembers.size == 2 && mergeMembers.none { it.locked } && ShapeBooleans.canNest(mergeMembers)
+    val activeLayer = document.layerById(activeLayerId ?: "")
+    val booleanSelected = activeLayer?.content is ShapeBooleanLayer
+    val activeLocked = activeLayer?.locked == true
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ToolButton("Merge last two", Icons.Outlined.Layers, disabled) {
-            if (runtime.groupAsBoolean(document.layers.map { it.id }.takeLast(2), ShapeBooleanOperation.UNION)) changed()
+        ToolButton("Merge last two", Icons.Outlined.Merge, disabled || !canMerge) {
+            if (runtime.groupAsBoolean(mergeMembers.map { it.id }, ShapeBooleanOperation.UNION)) changed()
         }
-        val booleanSelected = document.layerById(activeLayerId ?: "")?.content is ShapeBooleanLayer
-        ToolButton("Ungroup", Icons.Outlined.Layers, disabled || !booleanSelected) {
+        ToolButton("Ungroup", Icons.Outlined.LayersClear, disabled || !booleanSelected || activeLocked) {
             if (runtime.ungroup(activeLayerId ?: "")) changed()
         }
-        ToolButton("Flatten", Icons.Outlined.ContentCopy, disabled || !booleanSelected) {
+        ToolButton("Flatten", Icons.Outlined.Compress, disabled || !booleanSelected || activeLocked) {
             if (runtime.flattenGroup(activeLayerId ?: "")) changed()
         }
     }
     Text(
-        "Merge combines the bottom two layers with a Union. For Subtract, Intersect or Exclude, edit the merged layer's Boolean setting.",
+        if (mergeMembers.size == 2 && !canMerge) {
+            "Merge is unavailable: one of the bottom two layers is locked, or combining them would nest deeper than the Boolean solver resolves."
+        } else {
+            "Merge combines the bottom two layers with a Union. For Subtract, Intersect or Exclude, edit the merged layer's Boolean setting."
+        },
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     document.layers.asReversed().forEach { layer ->
@@ -615,22 +696,47 @@ private fun LayersSection(
                 modifier = Modifier.weight(1f),
             )
             if (selected) {
-                IconButton(onClick = { if (runtime.moveLayerUp(layer.id)) changed() }) { Icon(Icons.Outlined.Layers, "Move layer forward") }
-                IconButton(onClick = { if (runtime.moveLayerDown(layer.id)) changed() }) { Icon(Icons.Outlined.Layers, "Move layer backward") }
-                IconButton(onClick = { if (runtime.duplicateLayer(layer.id)) changed() }) { Icon(Icons.Outlined.ContentCopy, "Duplicate layer") }
-                IconButton(onClick = { if (runtime.setLayerVisible(layer.id, !layer.visible)) changed() }) {
+                // Reorder and delete change the stack the lock is holding still, so they follow the lock.
+                // Visibility, duplicate and the lock toggle do not: a lock that hid its own way out would
+                // be a trap, and duplicating produces a new layer rather than touching this one.
+                val frozen = disabled || layer.locked
+                // Forward and backward are opposite actions, so they get opposite arrows. Drawn with the
+                // same stack glyph — which is what they had — the only thing separating them was their
+                // order in the row, and a row of identical icons is a guess with a 50% failure rate.
+                IconButton(
+                    onClick = { if (runtime.moveLayerUp(layer.id)) changed() },
+                    enabled = !frozen,
+                ) { Icon(Icons.Outlined.KeyboardArrowUp, "Move layer forward") }
+                IconButton(
+                    onClick = { if (runtime.moveLayerDown(layer.id)) changed() },
+                    enabled = !frozen,
+                ) { Icon(Icons.Outlined.KeyboardArrowDown, "Move layer backward") }
+                IconButton(
+                    onClick = { if (runtime.duplicateLayer(layer.id)) changed() },
+                    enabled = !disabled,
+                ) { Icon(Icons.Outlined.ContentCopy, "Duplicate layer") }
+                IconButton(
+                    onClick = { if (runtime.setLayerVisible(layer.id, !layer.visible)) changed() },
+                    enabled = !disabled,
+                ) {
                     Icon(
                         if (layer.visible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
                         if (layer.visible) "Hide layer" else "Show layer",
                     )
                 }
-                IconButton(onClick = { if (runtime.setLayerLocked(layer.id, !layer.locked)) changed() }) {
+                IconButton(
+                    onClick = { if (runtime.setLayerLocked(layer.id, !layer.locked)) changed() },
+                    enabled = !disabled,
+                ) {
                     Icon(
                         if (layer.locked) Icons.Outlined.Lock else Icons.Outlined.LockOpen,
                         if (layer.locked) "Unlock layer" else "Lock layer",
                     )
                 }
-                IconButton(onClick = { if (runtime.removeLayer(layer.id)) changed() }) { Icon(Icons.Outlined.Delete, "Delete layer") }
+                IconButton(
+                    onClick = { if (runtime.removeLayer(layer.id)) changed() },
+                    enabled = !frozen && document.layers.size > 1,
+                ) { Icon(Icons.Outlined.Delete, "Delete layer") }
             }
         }
     }
@@ -822,14 +928,44 @@ private fun ToolButton(label: String, icon: androidx.compose.ui.graphics.vector.
     }
 }
 
+/** One of a set of mutually exclusive tools. Sits in a [selectableGroup] so the exclusivity is announced. */
 @Composable
-private fun ToolChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp))
+private fun ToolChip(label: String, selected: Boolean, disabled: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        enabled = !disabled,
+        label = { Text(label) },
+        modifier = Modifier.heightIn(min = 48.dp),
+    )
 }
 
+/**
+ * An independent on/off aid.
+ *
+ * The tick is the point: a filter chip's selected state is a filled container where an unselected one is
+ * outlined, which is enough to tell two states apart but not enough to tell a *switch* from a *choice* —
+ * and next to the tool chips, which look identical, that was the confusion. A screen reader had the same
+ * problem in words: "Snap, selected" describes a radio button, so the state is spelled On/Off instead.
+ *
+ * The slot the tick sits in is always there, empty when off. Handing the chip a leading icon only when it
+ * is on would widen it on the tap that turned it on, sliding every chip after it out from under the finger
+ * — so a second tap in the same place would land on the neighbour.
+ */
 @Composable
 private fun ToggleChip(label: String, checked: Boolean, disabled: Boolean, onChange: (Boolean) -> Unit) {
-    FilterChip(selected = checked, onClick = { onChange(!checked) }, enabled = !disabled, label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp))
+    FilterChip(
+        selected = checked,
+        onClick = { onChange(!checked) },
+        enabled = !disabled,
+        label = { Text(label) },
+        leadingIcon = {
+            Box(Modifier.size(FilterChipDefaults.IconSize)) {
+                if (checked) Icon(Icons.Outlined.Check, null, Modifier.size(FilterChipDefaults.IconSize))
+            }
+        },
+        modifier = Modifier.heightIn(min = 48.dp).semantics { stateDescription = if (checked) "On" else "Off" },
+    )
 }
 
 // ── Naming helpers ─────────────────────────────────────────────────────────────────────────────────

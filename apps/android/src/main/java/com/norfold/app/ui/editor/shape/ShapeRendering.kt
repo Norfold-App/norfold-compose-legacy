@@ -121,8 +121,8 @@ data class ShapeRenderLayer(
  * while it is being drawn, because the mask belongs to a layer that has not been reached yet. Resolving it
  * here, by looking at what sits above each layer, keeps the draw pass a single forward walk.
  *
- * Boolean layers resolve their whole group to produce an outline, which is real work, so callers should
- * hold the result across frames rather than rebuilding it per draw.
+ * Boolean layers resolve their whole group to produce an outline, which is real work — but the resolve is
+ * memoised on the content, so calling this again for an unchanged stack costs a walk and no geometry.
  */
 fun ShapeDocument.renderLayers(): List<ShapeRenderLayer> {
     val visible = layers.filter { it.visible }

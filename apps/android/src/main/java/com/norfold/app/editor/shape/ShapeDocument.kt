@@ -28,7 +28,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * The whole value lives in [ShapeBlock.shapeEditDocument], an additive field, so an unedited legacy shape
  * serializes byte-for-byte as it always did and every existing consumer of [ShapeBlock] keeps working
  * untouched. That is the §50 forward-compatibility contract: never reinterpret a payload this build does
- * not understand ([ShapeDocumentCodec.Origin.UNSUPPORTED_CANONICAL] preserves it verbatim for a later
+ * not understand ([LoadedShapeDocument.Origin.UNSUPPORTED_CANONICAL] preserves it verbatim for a later
  * build), and never silently lose one.
  */
 
@@ -176,7 +176,18 @@ data class ShapeMask(
 /** What a layer contributes to the composite. */
 @Serializable
 sealed interface ShapeLayerContent {
-    /** The outline geometry of this layer, in local canvas units. */
+    /**
+     * The outline geometry of this layer, in local canvas units.
+     *
+     * Implementations memoise this against their own instance, because deriving an outline is the expensive
+     * half of drawing a shape — a primitive runs trigonometry per point, a Boolean resolves its whole group —
+     * and the render walk, hit testing and the layer list each ask for it. Memoising per instance rather than
+     * per caller is what makes the invalidation right by construction: these are immutable data classes, so
+     * changing the geometry produces a different instance and therefore a different outline, while changing a
+     * fill produces a new *layer* around the same content and reuses it. Cached against a Compose key
+     * instead — which the preview used to do, keyed on the whole document — a colour tap rebuilds every
+     * outline in the stack for nothing.
+     */
     fun toPath(): ShapePath
 
     /**
@@ -200,7 +211,8 @@ data class ShapePrimitiveLayer(
     val kind: ShapePrimitiveKind = ShapePrimitiveKind.ROUNDED_RECTANGLE,
     val parameters: ShapeParameters = ShapeParameters(),
 ) : ShapeLayerContent {
-    override fun toPath(): ShapePath = ShapePrimitives.generate(kind, parameters)
+    private val outline by lazy { ShapePrimitives.generate(kind, parameters) }
+    override fun toPath(): ShapePath = outline
     override val hasGeometry: Boolean get() = true
     override fun normalized() = copy(parameters = parameters.normalized())
 }
@@ -210,7 +222,8 @@ data class ShapePrimitiveLayer(
 data class ShapePathLayer(
     val path: ShapePath = ShapePath(),
 ) : ShapeLayerContent {
-    override fun toPath(): ShapePath = path.normalized()
+    private val outline by lazy { path.normalized() }
+    override fun toPath(): ShapePath = outline
     override val hasGeometry: Boolean get() = !path.isEmpty
     override fun normalized() = copy(path = path.normalized())
 }
@@ -220,7 +233,18 @@ data class ShapePathLayer(
 data class ShapeBooleanLayer(
     val group: ShapeBooleanGroup = ShapeBooleanGroup(),
 ) : ShapeLayerContent {
-    override fun toPath(): ShapePath = ShapeBooleans.compute(group).path
+    /**
+     * The resolve, kept for the life of this group.
+     *
+     * The status is held alongside the outline because a caller that wants to tell the user their Boolean was
+     * too complex should not have to resolve it a second time to find out.
+     */
+    private val resolved by lazy { ShapeBooleans.compute(group) }
+    override fun toPath(): ShapePath = resolved.path
+
+    /** How the resolve went, for a caller that needs to be honest about a degraded result. */
+    fun status(): ShapeBooleanStatus = resolved.status
+
     override val hasGeometry: Boolean get() = group.children.any { it.visible && it.content.hasGeometry }
     override fun normalized() = copy(group = group.normalized())
 }
@@ -253,7 +277,7 @@ data class ShapeLayer(
         id = id.trim().take(MAX_ID).ifEmpty { shapeId("lyr") },
         name = name.trim().take(MAX_NAME),
         content = content.normalized(),
-        fill = fill,
+        fill = fill.normalized(),
         stroke = stroke.normalized(),
         opacity = opacity.finiteOr(1f).coerceIn(0f, 1f),
         blendMode = ShapeBlendMode.fromName(blendMode.name),
@@ -277,7 +301,7 @@ data class ShapeStroke(
     val join: ShapeStrokeJoin = ShapeStrokeJoin.ROUND,
 ) {
     fun normalized() = copy(
-        paint = paint,
+        paint = paint.normalized(),
         width = width.finiteOr(0f).coerceIn(0f, 100f),
         cap = ShapeStrokeCap.entries.firstOrNull { it.name == cap.name } ?: ShapeStrokeCap.ROUND,
         join = ShapeStrokeJoin.entries.firstOrNull { it.name == join.name } ?: ShapeStrokeJoin.ROUND,
@@ -290,11 +314,14 @@ enum class ShapeStrokeCap { BUTT, ROUND, SQUARE }
 enum class ShapeStrokeJoin { MITER, ROUND, BEVEL }
 
 /**
- * The whole editable document, one level deep: a layer stack plus shared accessibility.
+ * The whole editable document: a layer stack plus shared accessibility.
  *
- * "One level deep" is deliberate. A Boolean group's children are plain layers, never groups themselves,
- * so flattening a group never has to decide what a nested group means. If nested groups ever arrive they
- * arrive as a new schema version, not as a quietly expanded field.
+ * A Boolean group may hold another Boolean group as a child — `(A ∪ B) − C` is an ordinary thing to draw —
+ * but only down to [ShapeBooleans.MAX_DEPTH]. That ceiling is enforced where groups are *made*, by
+ * [ShapeLayerEditor.groupAsBoolean], so no interaction can build a stack the resolver will refuse. A
+ * payload from elsewhere may still arrive deeper than that; it is kept intact and reported
+ * [ShapeBooleanStatus.TOO_COMPLEX] rather than trimmed, because silently deleting someone's children is
+ * worse than telling them the combination cannot be resolved.
  */
 @Serializable
 data class ShapeDocument(
@@ -412,7 +439,7 @@ object ShapeLayerEditor {
 
     /** Removing the last layer is refused: a shape with no layers has nothing to edit or render. */
     fun remove(document: ShapeDocument, layerId: String): ShapeDocument {
-        if (document.layers.size <= 1) return document
+        if (document.layers.size <= 1 || isLocked(document, layerId)) return document
         val kept = document.layers.filterNot { it.id == layerId }
         if (kept.size == document.layers.size) return document
         return document.copy(layers = normalizeLayerStack(kept))
@@ -458,14 +485,14 @@ object ShapeLayerEditor {
     // ── Content ──────────────────────────────────────────────────────────────────────────────────
 
     fun setKind(document: ShapeDocument, layerId: String, kind: ShapePrimitiveKind): ShapeDocument =
-        replaceLayer(document, layerId) {
+        editGeometry(document, layerId) {
             val parameters = (it.content as? ShapePrimitiveLayer)?.parameters ?: ShapeParameters()
             it.copy(content = ShapePrimitiveLayer(kind, parameters))
         }
 
     /** Keeps a same-kind parameter when switching presets, so Star→Polygon retains the point count. */
     fun setParameters(document: ShapeDocument, layerId: String, parameters: ShapeParameters): ShapeDocument =
-        replaceLayer(document, layerId) { layer ->
+        editGeometry(document, layerId) { layer ->
             when (val content = layer.content) {
                 is ShapePrimitiveLayer -> layer.copy(content = content.copy(parameters = parameters.normalized()))
                 is ShapePathLayer -> layer
@@ -475,7 +502,7 @@ object ShapeLayerEditor {
 
     /** Set, or clear when null, the edited path of a path layer. */
     fun setPath(document: ShapeDocument, layerId: String, path: ShapePath?): ShapeDocument =
-        replaceLayer(document, layerId) { layer ->
+        editGeometry(document, layerId) { layer ->
             when (val content = layer.content) {
                 is ShapePathLayer -> if (path == null) layer else layer.copy(content = content.copy(path = path.normalized()))
                 is ShapePrimitiveLayer -> layer
@@ -484,7 +511,7 @@ object ShapeLayerEditor {
         }
 
     fun replaceContent(document: ShapeDocument, layerId: String, content: ShapeLayerContent): ShapeDocument =
-        replaceLayer(document, layerId) { it.copy(content = content.normalized()) }
+        editGeometry(document, layerId) { it.copy(content = content.normalized()) }
 
     // ── Paint ────────────────────────────────────────────────────────────────────────────────────
 
@@ -531,10 +558,15 @@ object ShapeLayerEditor {
      * position of the topmost of them — so the result sits where the user was looking rather than jumping
      * to the front of the stack. The group inherits the bottom child's paint, because for Subtract that is
      * the layer being cut and therefore the one whose appearance survives.
+     *
+     * Refused when a member is locked, and refused when the result would nest deeper than
+     * [ShapeBooleans.MAX_DEPTH] — a group past the resolver's ceiling can never produce a region, so
+     * building one would hand back a layer that draws nothing and cannot be told why.
      */
     fun groupAsBoolean(document: ShapeDocument, layerIds: List<String>, operation: ShapeBooleanOperation): ShapeDocument {
         val members = layerIds.distinct().mapNotNull { document.layerById(it) }
-        if (members.size < 2) return document
+        if (members.size < 2 || members.any { it.locked }) return document
+        if (!ShapeBooleans.canNest(members)) return document
         val ordered = document.layers.filter { layer -> members.any { it.id == layer.id } }
         val topIndex = ordered.maxOf { document.indexOf(it.id) }
         val remaining = document.layers.filterNot { layer -> ordered.any { it.id == layer.id } }
@@ -554,7 +586,7 @@ object ShapeLayerEditor {
     /** Explodes the group back into its children, in place; [flatten] collapses to one path layer instead. */
     fun ungroup(document: ShapeDocument, layerId: String): ShapeDocument {
         val index = document.indexOf(layerId)
-        if (index < 0) return document
+        if (index < 0 || document.layers[index].locked) return document
         val group = (document.layers[index].content as? ShapeBooleanLayer)?.group ?: return document
         val layers = document.layers.toMutableList()
         layers.removeAt(index)
@@ -570,14 +602,14 @@ object ShapeLayerEditor {
      * choice the user makes rather than something that happens to them when they node-edit a group.
      */
     fun flatten(document: ShapeDocument, layerId: String): ShapeDocument =
-        replaceLayer(document, layerId) { layer ->
-            val group = (layer.content as? ShapeBooleanLayer)?.group ?: return@replaceLayer layer
+        editGeometry(document, layerId) { layer ->
+            val group = (layer.content as? ShapeBooleanLayer)?.group ?: return@editGeometry layer
             layer.copy(content = ShapePathLayer(ShapeBooleans.compute(group).path))
         }
 
     fun setBooleanOperation(document: ShapeDocument, layerId: String, operation: ShapeBooleanOperation): ShapeDocument =
-        replaceLayer(document, layerId) { layer ->
-            val content = layer.content as? ShapeBooleanLayer ?: return@replaceLayer layer
+        editGeometry(document, layerId) { layer ->
+            val content = layer.content as? ShapeBooleanLayer ?: return@editGeometry layer
             layer.copy(content = content.copy(group = content.group.copy(operation = operation)))
         }
 
@@ -596,7 +628,7 @@ object ShapeLayerEditor {
      * gives up the parameters, not the outline.
      */
     fun convertToPath(document: ShapeDocument, layerId: String): ShapeDocument =
-        replaceLayer(document, layerId) { layer ->
+        editGeometry(document, layerId) { layer ->
             when (val content = layer.content) {
                 is ShapePrimitiveLayer ->
                     layer.copy(content = ShapePathLayer(ShapePrimitives.generate(content.kind, content.parameters)))
@@ -606,6 +638,24 @@ object ShapeLayerEditor {
         }
 
     // ── Internals ─────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The lock's scope: geometry and existence.
+     *
+     * A locked layer still answers to visibility, renaming, paint, effects and its own unlock — without
+     * those the lock would be a trap, because the layer list is the only way back to the layer. What it
+     * refuses is every route that would change the outline or remove the layer from the stack, which is the
+     * accident the lock is there to prevent. Reordering counts: a lock that let the stack be rearranged
+     * around it would not have kept anything still.
+     */
+    private fun isLocked(document: ShapeDocument, layerId: String): Boolean =
+        document.layerById(layerId)?.locked == true
+
+    /** [replaceLayer] for the routes the lock covers. */
+    private fun editGeometry(document: ShapeDocument, layerId: String, edit: (ShapeLayer) -> ShapeLayer): ShapeDocument {
+        if (isLocked(document, layerId)) return document
+        return replaceLayer(document, layerId, edit)
+    }
 
     private fun replaceLayer(document: ShapeDocument, layerId: String, edit: (ShapeLayer) -> ShapeLayer): ShapeDocument {
         val index = document.indexOf(layerId)

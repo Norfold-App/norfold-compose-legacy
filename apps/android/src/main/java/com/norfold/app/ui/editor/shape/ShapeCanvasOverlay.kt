@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -87,6 +89,15 @@ private const val MAGNIFIER_SCALE = 2.6f
  *
  * [path] is the active layer's resolved outline. It is passed in rather than read from the runtime so the
  * caller controls when the (potentially expensive) Boolean resolution happens.
+ *
+ * **Gesture keys.** The `pointerInput` blocks below are keyed on as little as possible, and never on the
+ * geometry they edit. A `pointerInput` key change tears the gesture coroutine down, and a torn-down
+ * gesture delivers *neither* `onDragEnd` nor `onDragCancel` — the cancellation unwinds past the callbacks.
+ * Keying on [path] would therefore break on the very first frame of a node drag: the preview changes the
+ * path, the key changes, the handler resets, and the drag that is still under the user's finger never
+ * ends. [ShapeFocusRuntime] would stay inside a gesture nobody can finish, which makes undo, redo and
+ * Done all refuse for the rest of the session. So the live values are read through `rememberUpdatedState`
+ * instead, and the viewport is measured inside each callback rather than captured once.
  */
 @Composable
 fun ShapeCanvasOverlay(
@@ -103,12 +114,32 @@ fun ShapeCanvasOverlay(
     var guides by remember { mutableStateOf<List<ShapeNodeSnap.Guide>>(emptyList()) }
     var touch by remember { mutableStateOf<Offset?>(null) }
     val selection = runtime.selection()
+    // Whether there is *something* to edit is a gesture key; which outline it currently is, is not. The
+    // gestures resolve hits through the runtime, so they always read the live path without keying on it.
+    val editable = path != null && !disabled
+    val currentTool by rememberUpdatedState(tool)
+    val currentSettings by rememberUpdatedState(settings)
+    val currentOnChanged by rememberUpdatedState(onChanged)
     val nodeColor = MaterialTheme.colorScheme.primary
     val selectedColor = MaterialTheme.colorScheme.tertiary
     val handleColor = MaterialTheme.colorScheme.secondary
     val guideColor = MaterialTheme.colorScheme.error
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val outlineColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    // The one place a torn-down gesture can still be released. `editable` is the gesture key, so when it
+    // flips — the layer becomes unselectable, the sheet disables editing, the composable leaves — the
+    // pointer handler is reset and the callbacks that would normally clean up never run. Releasing the
+    // runtime here is what keeps "the handler was replaced" from meaning "this shape can never be saved".
+    DisposableEffect(editable) {
+        onDispose {
+            if (drag !is ShapeDrag.Marquee && drag !is ShapeDrag.None) runtime.cancelGesture()
+            drag = ShapeDrag.None
+            marquee = null
+            guides = emptyList()
+            touch = null
+        }
+    }
 
     /** Nudges the selection by whole local units — the switch-access and keyboard route to node moves. */
     fun nudge(dx: Float, dy: Float): Boolean {
@@ -141,33 +172,33 @@ fun ShapeCanvasOverlay(
                 }
                 customActions = actions
             }
-            .pointerInput(disabled, tool, path, settings) {
-                if (disabled || path == null) return@pointerInput
-                val viewport = ShapeViewport(size.width.toFloat(), size.height.toFloat())
+            .pointerInput(editable) {
+                if (!editable) return@pointerInput
                 detectTapGestures { offset ->
+                    val viewport = ShapeViewport(size.width.toFloat(), size.height.toFloat())
                     val point = viewport.toCanvas(offset)
-                    val changed = when (tool) {
+                    val changed = when (currentTool) {
                         ShapeCanvasTool.ADD_POINT -> runtime.addPointAt(point, hitRadius(viewport))
                         ShapeCanvasTool.SELECT -> applyTapSelection(runtime, point, hitRadius(viewport))
                     }
-                    if (changed) onChanged()
+                    if (changed) currentOnChanged()
                 }
             }
-            .pointerInput(disabled, tool, path, settings) {
-                if (disabled || path == null) return@pointerInput
-                val viewport = ShapeViewport(size.width.toFloat(), size.height.toFloat())
+            .pointerInput(editable) {
+                if (!editable) return@pointerInput
                 detectDragGestures(
                     onDragStart = { offset ->
+                        val viewport = ShapeViewport(size.width.toFloat(), size.height.toFloat())
                         touch = offset
-                        drag = beginDrag(runtime, viewport, offset, tool)
+                        drag = beginDrag(runtime, viewport, offset, currentTool)
                         if (drag !is ShapeDrag.Marquee && drag !is ShapeDrag.None) runtime.beginGesture()
-                        onChanged()
+                        currentOnChanged()
                     },
                     onDragCancel = {
                         touch = null
                         marquee = null
                         guides = emptyList()
-                        if (drag !is ShapeDrag.Marquee && runtime.cancelGesture()) onChanged()
+                        if (drag !is ShapeDrag.Marquee && runtime.cancelGesture()) currentOnChanged()
                         drag = ShapeDrag.None
                     },
                     onDragEnd = {
@@ -178,35 +209,36 @@ fun ShapeCanvasOverlay(
                                 val hits = ShapePathEditor.nodesIn(runtime.activePath() ?: ShapePath(), rect)
                                 runtime.select(runtime.selection().copy(nodes = hits.toSet(), handle = null))
                             }
-                        } else if (runtime.endGesture()) onChanged()
+                        } else if (runtime.endGesture()) currentOnChanged()
                         marquee = null
                         guides = emptyList()
                         drag = ShapeDrag.None
-                        onChanged()
+                        currentOnChanged()
                     },
                     onDrag = { change, delta ->
                         change.consume()
+                        val viewport = ShapeViewport(size.width.toFloat(), size.height.toFloat())
                         touch = change.position
                         val point = viewport.toCanvas(change.position)
                         when (val active = drag) {
                             is ShapeDrag.Nodes -> {
-                                val resolved = resolveNodeTarget(runtime, active, point, settings)
+                                val resolved = resolveNodeTarget(runtime, active, point, currentSettings)
                                 guides = resolved.guides
                                 val step = resolved.point - active.applied
                                 if (!step.isZero && runtime.previewPath { ShapePathEditor.moveNodesBy(it, active.refs, step) }) {
                                     active.applied = resolved.point
-                                    onChanged()
+                                    currentOnChanged()
                                 }
                             }
                             is ShapeDrag.Handle -> {
                                 if (runtime.previewPath {
                                         ShapePathEditor.moveHandle(it, active.ref.node, active.ref.side, point)
                                     }
-                                ) onChanged()
+                                ) currentOnChanged()
                             }
                             is ShapeDrag.Marquee -> {
                                 marquee = ShapeRect.around(listOf(active.origin, point))
-                                onChanged()
+                                currentOnChanged()
                             }
                             ShapeDrag.None -> {
                                 // A drag that started on nothing pans nothing: the canvas is a fixed

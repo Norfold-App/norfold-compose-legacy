@@ -379,11 +379,21 @@ object ShapePathEditor {
      * grab. The order is what makes the same tap mean the same thing twice.
      */
     fun hitTest(path: ShapePath, point: ShapePoint, radius: Float = DEFAULT_HIT_RADIUS): ShapeHit {
-        nearestHandle(path, point, min(radius, HANDLE_HIT_RADIUS))?.let { return ShapeHit.Handle(it) }
+        nearestHandle(path, point, handleRadiusFor(radius))?.let { return ShapeHit.Handle(it) }
         nearestNode(path, point, radius)?.let { return ShapeHit.Node(it) }
         nearestSegment(path, point, radius)?.let { return ShapeHit.Segment(it) }
         return ShapeHit.None
     }
+
+    /**
+     * A handle's share of a given touch radius.
+     *
+     * Tighter than a node's, in the same proportion at every radius — a fixed ceiling would mean that the
+     * bigger the caller's finger target, the *smaller* a handle's share of it, so the one control that
+     * needs precision would end up the hardest thing on the canvas to grab. At [DEFAULT_HIT_RADIUS] this is
+     * exactly [HANDLE_HIT_RADIUS], so the priority the tests pin down is unchanged.
+     */
+    fun handleRadiusFor(radius: Float): Float = radius * (HANDLE_HIT_RADIUS / DEFAULT_HIT_RADIUS)
 
     /** Every node inside [rect], for a marquee selection. */
     fun nodesIn(path: ShapePath, rect: ShapeRect): List<ShapeNodeRef> =

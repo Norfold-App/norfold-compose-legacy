@@ -206,6 +206,146 @@ class GradientTest {
         assertEquals(0f, Gradient.normalizeAngle(Float.NaN), 0.001f)
     }
 
+    // ── The render stop list, and the conic angle it has to carry ────────────────────────────────
+
+    /**
+     * An angular gradient's angle must live in the stops it hands the renderer.
+     *
+     * The sweep gradient a renderer offers starts at three o'clock and takes no angle at all, so the angle
+     * has to be expressed some other way, and the obvious way — rotate the draw — only works for the one
+     * caller that fills a full rectangle. A vector outline cannot use it: rotating the draw rotates the path
+     * with it, so the shape would turn instead of its fill. Shape Builder offers angular gradients and shows
+     * a live Angle slider for them, so with the angle left at the draw the slider moved nothing at all.
+     *
+     * The contract tested here is the strong one: the stop list must *be* the rotated ramp, sampled the way
+     * a renderer samples it, not merely a different list than before.
+     */
+    @Test
+    fun `an angular gradient's angle rotates the ramp it hands the renderer`() {
+        val ramp = Gradient(
+            kind = GradientKind.CONIC,
+            stops = listOf(
+                GradientStop(id = "a", color = ColorValue(255, 0, 0), position = 0f),
+                GradientStop(id = "b", color = ColorValue(0, 255, 0), position = 0.3f),
+                GradientStop(id = "c", color = ColorValue(0, 0, 255), position = 1f),
+            ),
+        )
+
+        for (angle in listOf(15f, 45f, 90f, 137f, 180f, 270f, 359f)) {
+            val turned = ramp.withAngle(angle)
+            val shift = angle / 360f
+            val emitted = turned.renderStops()
+            assertEquals("the sweep must start somewhere for $angle°", 0f, emitted.first().first, 0.0001f)
+            assertEquals("and finish at the far end", 1f, emitted.last().first, 0.0001f)
+            assertTrue(
+                "a renderer needs non-decreasing positions in range, got ${emitted.map { it.first }}",
+                emitted.zipWithNext { a, b -> b.first >= a.first }.all { it } &&
+                    emitted.all { it.first in 0f..1f },
+            )
+            for (step in 0..64) {
+                val at = step / 64f
+                // The wrap from the last stop back to the first is a hard join, and after the turn it lands
+                // at `shift`. Sampling across a discontinuity is ambiguous by definition, so it is checked
+                // separately below rather than smeared into a tolerance here.
+                if (kotlin.math.abs(at - shift) < 0.02f) continue
+                val expected = ramp.colorAt(((at - shift) + 1f) % 1f)
+                assertSameColour("$angle° at $at", expected, emitted.sample(at))
+            }
+        }
+    }
+
+    /**
+     * Turning the ramp must not smear the wrap.
+     *
+     * The tempting one-liner — shift every position modulo one and re-sort — puts the two colours that meet
+     * at the wrap in whichever order the sort happened to leave them, so half the time the join is drawn
+     * backwards, and the arc that should carry the ramp is drawn as its reverse.
+     */
+    @Test
+    fun `the wrap between last stop and first stays a hard join after turning`() {
+        val ramp = Gradient(
+            kind = GradientKind.CONIC,
+            stops = listOf(
+                GradientStop(id = "a", color = ColorValue(255, 0, 0), position = 0f),
+                GradientStop(id = "b", color = ColorValue(0, 0, 255), position = 1f),
+            ),
+            angle = 90f,
+        )
+        val emitted = ramp.renderStops()
+        assertSameColour("approaching the join, the ramp has reached its last colour",
+            ColorValue(0, 0, 255), emitted.sample(0.25f))
+        assertSameColour("and leaves it on its first",
+            ColorValue(255, 0, 0), emitted.sample(0.2501f))
+        assertEquals(
+            "which needs two stops at the same position, or there is no join",
+            2, emitted.count { kotlin.math.abs(it.first - 0.25f) < 0.0001f },
+        )
+    }
+
+    @Test
+    fun `a ramp with no angle to apply is handed over untouched`() {
+        val stops = listOf(
+            GradientStop(id = "a", color = ColorValue(255, 0, 0), position = 0f),
+            GradientStop(id = "b", color = ColorValue(0, 0, 255), position = 1f),
+        )
+        // Zero and a full turn are the same angle, and both mean "no rotation".
+        for (angle in listOf(0f, 360f)) {
+            val emitted = Gradient(kind = GradientKind.CONIC, stops = stops, angle = angle).renderStops()
+            assertEquals(listOf(0f, 1f), emitted.map { it.first })
+            assertEquals(stops.map { it.effectiveColor() }, emitted.map { it.second })
+        }
+        // Linear and radial spend their angle on the brush geometry instead, so their stops never move.
+        for (kind in listOf(GradientKind.LINEAR, GradientKind.RADIAL)) {
+            val emitted = Gradient(kind = kind, stops = stops, angle = 137f).renderStops()
+            assertEquals("$kind must not rotate its stops", listOf(0f, 1f), emitted.map { it.first })
+        }
+    }
+
+    /** Stop opacity is applied on the way out, exactly once, for every kind. */
+    @Test
+    fun `render stops carry effective colour rather than raw stop colour`() {
+        for (kind in GradientKind.entries) {
+            val ramp = Gradient(
+                kind = kind,
+                stops = listOf(
+                    GradientStop(id = "a", color = ColorValue(255, 0, 0, 200), position = 0f, opacity = 0.5f),
+                    GradientStop(id = "b", color = ColorValue(0, 0, 255), position = 1f),
+                ),
+                angle = 0f,
+            )
+            val alpha = ramp.renderStops().first().second.alpha
+            assertTrue("$kind applied opacity $alpha times rather than once", alpha in 99..101)
+        }
+    }
+
+    /**
+     * How a renderer reads a stop list: piecewise-linear, skipping zero-width segments so a hard join is
+     * read as a join rather than as a division by zero.
+     */
+    private fun List<Pair<Float, ColorValue>>.sample(at: Float): ColorValue {
+        if (at <= first().first) return first().second
+        if (at >= last().first) return last().second
+        for (i in 0 until size - 1) {
+            val (from, before) = this[i]
+            val (to, after) = this[i + 1]
+            if (to <= from) continue
+            if (at in from..to) return Gradient.lerp(before, after, (at - from) / (to - from))
+        }
+        return last().second
+    }
+
+    private fun assertSameColour(message: String, expected: ColorValue, actual: ColorValue) {
+        // Interpolation rounds to whole channels twice over — once building the list, once reading it — so
+        // a channel is allowed to land a step away without that being a different colour.
+        val close = listOf(
+            expected.red - actual.red,
+            expected.green - actual.green,
+            expected.blue - actual.blue,
+            expected.alpha - actual.alpha,
+        ).all { kotlin.math.abs(it) <= 2 }
+        assertTrue("$message: expected $expected, got $actual", close)
+    }
+
     // ── §37.12 opacity and interpolation ─────────────────────────────────────────────────────────
 
     /** Stop opacity multiplies the colour's own alpha instead of replacing it. */
@@ -290,5 +430,54 @@ class GradientTest {
         val gradient = ramp().addStopAt(0.3f).addStopAt(0.6f).addStopAt(0.9f)
         assertEquals(gradient.stopCount, gradient.stops.map { it.id }.distinct().size)
         assertNull(gradient.stopById("nope"))
+    }
+
+    /**
+     * The insertion path stops at the cap instead of appending a stop that normalization would later drop.
+     *
+     * The failure this pins is not the allocation — it is the lie: a tap that adds a visible stop, and a
+     * save that silently removes it again, leaves the editor showing a ramp the document does not hold.
+     */
+    @Test
+    fun `inserting stops stops at the cap rather than growing without bound`() {
+        var gradient = ramp()
+        repeat(Gradient.MAX_STOPS * 2) { index ->
+            gradient = gradient.addStopAt(index / (Gradient.MAX_STOPS * 2f))
+        }
+        assertEquals(Gradient.MAX_STOPS, gradient.stopCount)
+
+        val atCap = gradient
+        assertEquals(atCap, atCap.addStop(GradientStop(color = ColorValue(0, 255, 0), position = 0.5f)))
+        assertEquals(atCap.stopCount, atCap.addStopAt(0.42f).stopCount)
+
+        // The cap must not become a trap: a stop can still be removed and then re-added.
+        val freed = atCap.removeStop(atCap.stops.last().id)
+        assertEquals(Gradient.MAX_STOPS - 1, freed.stopCount)
+        assertEquals(Gradient.MAX_STOPS, freed.addStopAt(0.42f).stopCount)
+    }
+
+    /**
+     * A stop list that arrived from bytes rather than from a gesture is truncated to the cap.
+     *
+     * A gradient is reachable from a persisted shape payload, so the stop count is attacker-chosen. Every
+     * other collection in the document model is bounded in exactly this place — `normalized()` — and this is
+     * the one that was not.
+     */
+    @Test
+    fun `a hostile stop list normalizes to the cap and still renders`() {
+        val hostile = Gradient(
+            stops = (0 until 5_000).map { index ->
+                GradientStop(color = ColorValue(index % 256, 0, 0), position = index / 5_000f)
+            },
+        )
+        val safe = hostile.normalized()
+        assertEquals(Gradient.MAX_STOPS, safe.stopCount)
+        assertTrue(safe.isRenderable)
+        // Authored order is preserved: truncation keeps the prefix, it does not resample or reorder.
+        assertEquals(hostile.stops.take(Gradient.MAX_STOPS).map { it.id }, safe.stops.map { it.id })
+        assertEquals(Gradient.MAX_STOPS, safe.renderStops().size)
+        assertTrue(safe.renderStops().all { it.first.isFinite() })
+        // Normalization is idempotent at the cap rather than eroding a stop per save.
+        assertEquals(safe, safe.normalized())
     }
 }

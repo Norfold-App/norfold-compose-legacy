@@ -7,7 +7,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.rotate
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.GradientKind
 import kotlin.math.cos
@@ -18,14 +17,15 @@ import kotlin.math.sqrt
  * The canonical paint-to-[Brush] mapping.
  *
  * One function, because a second one is how a gradient ends up looking different depending on whether it
- * was painted behind a block or into a vector outline. Callers that fill a path use it directly; callers
- * that fill a rectangle go through [backgroundPaint], which is this plus the conic draw-time rotation.
+ * was painted behind a block or into a vector outline. Every angle a ramp has is carried by the brush
+ * itself — see [com.norfold.app.domain.style.Gradient.renderStops] for why a conic ramp's angle cannot be
+ * applied by rotating the draw — so a caller only has to hand the brush to a fill.
  */
 fun ColorPaint.toBrush(size: Size): Brush {
     val flat = this as? ColorPaint.Flat
     if (flat != null) return SolidColor(Color(flat.color.toArgb()))
     val gradient = (this as ColorPaint.Ramp).gradient.normalized()
-    val stops = gradient.sortedStops.map { it.position to Color(it.effectiveColor().toArgb()) }.toTypedArray()
+    val stops = gradient.renderStops().map { (position, color) -> position to Color(color.toArgb()) }.toTypedArray()
     val center = gradientCenter(size)
     return when (gradient.kind) {
         GradientKind.LINEAR -> {
@@ -54,23 +54,8 @@ fun ColorPaint.gradientCenter(size: Size): Offset {
     return Offset(size.width * gradient.centerX, size.height * gradient.centerY)
 }
 
-/**
- * The draw-time rotation a paint needs, in degrees.
- *
- * Compose's sweep gradient has no angle, so a conic ramp's angle is applied by rotating the draw rather
- * than the brush. Every other paint needs none, and returns zero.
- */
-fun ColorPaint.sweepRotationDegrees(): Float {
-    val gradient = (this as? ColorPaint.Ramp)?.gradient?.normalized() ?: return 0f
-    return if (gradient.kind == GradientKind.CONIC) gradient.angle else 0f
-}
-
 /** Draws canonical flat/linear/radial/conic paint without leaking Compose Brush into persistence. */
 fun Modifier.backgroundPaint(paint: ColorPaint): Modifier = drawWithCache {
     val brush = paint.toBrush(size)
-    val rotation = paint.sweepRotationDegrees()
-    val center = paint.gradientCenter(size)
-    onDrawBehind {
-        if (rotation != 0f) rotate(rotation, center) { drawRect(brush) } else drawRect(brush)
-    }
+    onDrawBehind { drawRect(brush) }
 }

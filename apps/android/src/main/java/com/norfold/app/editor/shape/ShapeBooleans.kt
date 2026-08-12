@@ -41,7 +41,13 @@ enum class ShapeBooleanStatus {
     /** The operation ran and the regions cancelled out — a real, empty answer. */
     CANCELLED,
 
-    /** The outlines exceeded the resolver's budget; the first child is shown instead of a wrong region. */
+    /**
+     * The resolver gave up: the outlines exceeded its edge budget, or a nested group sat past [MAX_DEPTH].
+     *
+     * The accompanying path is whatever survived — often one operand, sometimes nothing at all — and is
+     * explicitly *not* the answer. A caller showing it must say so, because a partial union looks exactly
+     * like a finished one.
+     */
     TOO_COMPLEX,
 
     /** The operation ran but at least one boundary chain could not be closed, so part of it was dropped. */
@@ -96,22 +102,28 @@ object ShapeBooleans {
     fun compute(group: ShapeBooleanGroup, depth: Int = 0): ShapeBooleanResult {
         if (depth >= MAX_DEPTH) return ShapeBooleanResult.empty(ShapeBooleanStatus.TOO_COMPLEX)
 
-        val outlines = group.children
+        val children = group.children
             .filter { it.visible && it.content.hasGeometry }
             .map { child ->
                 when (val content = child.content) {
-                    is ShapeBooleanLayer -> compute(content.group, depth + 1).path
-                    else -> content.toPath()
+                    is ShapeBooleanLayer -> compute(content.group, depth + 1)
+                    else -> ShapeBooleanResult(content.toPath(), ShapeBooleanStatus.RESOLVED, 1)
                 }
             }
-            .filterNot { it.isEmpty }
+        // A child that could not be resolved makes this group's region wrong too, and this group is the one
+        // the user is looking at. Carrying the child's verdict up is what stops a parent from reporting a
+        // finished outline over geometry that quietly vanished on the way.
+        val nested = children.fold(ShapeBooleanStatus.RESOLVED) { carried, child -> worst(carried, child.status) }
+        val outlines = children.map { it.path }.filterNot { it.isEmpty }
         // Counted against the real outlines rather than the pre-flight filter, so a child that passes
         // `hasGeometry` and still resolves to nothing is reported as skipped instead of silently vanishing.
         val skipped = group.children.size - outlines.size
 
-        if (outlines.isEmpty()) return ShapeBooleanResult.empty(ShapeBooleanStatus.PASSTHROUGH, skipped)
+        if (outlines.isEmpty()) {
+            return ShapeBooleanResult.empty(worst(ShapeBooleanStatus.PASSTHROUGH, nested), skipped)
+        }
         if (outlines.size == 1) {
-            return ShapeBooleanResult(outlines.first(), ShapeBooleanStatus.PASSTHROUGH, 1, skipped)
+            return ShapeBooleanResult(outlines.first(), worst(ShapeBooleanStatus.PASSTHROUGH, nested), 1, skipped)
         }
 
         var accumulated = outlines.first()
@@ -133,7 +145,45 @@ object ShapeBooleans {
             accumulated.isEmpty -> ShapeBooleanStatus.CANCELLED
             else -> ShapeBooleanStatus.RESOLVED
         }
-        return ShapeBooleanResult(accumulated, resolvedStatus, outlines.size, skipped)
+        return ShapeBooleanResult(accumulated, worst(resolvedStatus, nested), outlines.size, skipped)
+    }
+
+    /**
+     * Nesting depth of [group]: zero when none of its children are groups themselves.
+     *
+     * Measured against a budget rather than against the data, so asking how deep a hostile payload goes
+     * cannot itself become the unbounded recursion [MAX_DEPTH] exists to prevent. A subtree deeper than the
+     * budget reports the budget, which is already past the ceiling and therefore enough to refuse on.
+     */
+    fun depthOf(group: ShapeBooleanGroup, budget: Int = MAX_DEPTH): Int {
+        if (budget <= 0) return 0
+        val deepest = group.children.maxOfOrNull { child ->
+            (child.content as? ShapeBooleanLayer)?.let { 1 + depthOf(it.group, budget - 1) } ?: 0
+        }
+        return deepest ?: 0
+    }
+
+    /**
+     * Whether [members] can become one group without putting a child past [MAX_DEPTH].
+     *
+     * A group is resolved at depth zero, so its deepest subtree may reach `MAX_DEPTH - 1` and no further.
+     * Asked *before* the group is built, so the ceiling is a refusal the editor can explain rather than an
+     * empty outline the user has to work out for themselves.
+     */
+    fun canNest(members: List<ShapeLayer>): Boolean {
+        val deepest = members.maxOfOrNull { member ->
+            (member.content as? ShapeBooleanLayer)?.let { 1 + depthOf(it.group) } ?: 0
+        } ?: 0
+        return deepest < MAX_DEPTH
+    }
+
+    /** The worse of two verdicts. TOO_COMPLEX outranks PARTIAL, and both outrank good news. */
+    private fun worst(first: ShapeBooleanStatus, second: ShapeBooleanStatus): ShapeBooleanStatus = when {
+        first == ShapeBooleanStatus.TOO_COMPLEX || second == ShapeBooleanStatus.TOO_COMPLEX ->
+            ShapeBooleanStatus.TOO_COMPLEX
+        first == ShapeBooleanStatus.PARTIAL || second == ShapeBooleanStatus.PARTIAL ->
+            ShapeBooleanStatus.PARTIAL
+        else -> first
     }
 
     /** Combines two outlines directly. [subject] is the left operand: `SUBTRACT` means subject minus clip. */
