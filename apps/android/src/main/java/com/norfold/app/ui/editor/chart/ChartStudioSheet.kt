@@ -52,6 +52,7 @@ import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
 import com.norfold.app.domain.style.ColorTarget
 import com.norfold.app.editor.chart.ChartAxisPosition
+import com.norfold.app.editor.chart.ChartAxis
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.editor.chart.ChartCommitHost
 import com.norfold.app.editor.chart.ChartDataRow
@@ -60,6 +61,7 @@ import com.norfold.app.editor.chart.ChartDocument
 import com.norfold.app.editor.chart.ChartDirectEditor
 import com.norfold.app.editor.chart.ChartLegendPosition
 import com.norfold.app.editor.chart.ChartLinePattern
+import com.norfold.app.editor.chart.ChartMarkOverride
 import com.norfold.app.editor.chart.ChartSeries
 import com.norfold.app.editor.chart.ChartStudioRuntime
 import com.norfold.app.editor.chart.ChartStyle
@@ -143,8 +145,11 @@ fun ChartStudioSheet(
                 onRebind = onRequestRangeBinding,
                 directManipulation = if (!readOnly && document.source is ChartDataSource.Manual) {
                     ChartDirectManipulationCallbacks(
-                        onStart = { seriesId, rowIndex ->
-                            val selected = runtime.selectMark(seriesId, rowIndex)
+                        onSelect = { seriesId, rowIndex, rowId ->
+                            if (runtime.selectMark(seriesId, rowIndex, rowId)) revision++
+                        },
+                        onStart = { seriesId, rowIndex, rowId ->
+                            val selected = runtime.selectMark(seriesId, rowIndex, rowId)
                             if (selected) revision++
                             selected && runtime.beginGesture()
                         },
@@ -156,6 +161,12 @@ fun ChartStudioSheet(
                         },
                         onEnd = { if (runtime.endGesture("Adjust chart value")) { revision++; onDirectManipulation?.invoke() } },
                         onCancel = { if (runtime.cancelGesture()) revision++ },
+                        onStyle = { seriesId, rowIndex, rowId ->
+                            if (runtime.selectMark(seriesId, rowIndex, rowId)) {
+                                revision++
+                                rowId?.let { colorStudio.openMark(seriesId, it) }
+                            }
+                        },
                     )
                 } else null,
             )
@@ -192,8 +203,9 @@ fun ChartStudioSheet(
                         cancel = { runtime.cancelGesture().also { if (it) revision++ } },
                     ),
                     onSelectSection = { rowIndex ->
+                        val rowId = (runtime.document().source as? ChartDataSource.Manual)?.rows?.getOrNull(rowIndex)?.id
                         val selected = runtime.document().series.firstOrNull()?.id
-                            ?.let { runtime.selectMark(it, rowIndex) } == true
+                            ?.let { runtime.selectMark(it, rowIndex, rowId) } == true
                         if (selected) revision++
                     },
                 ) { label, transform -> edit(label, transform) }
@@ -463,6 +475,73 @@ private fun SeriesSection(
                 )
             }
         }
+        Text("Mark type", style = MaterialTheme.typography.labelLarge)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(null, ChartType.BAR, ChartType.LINE, ChartType.AREA, ChartType.SCATTER).forEach { markType ->
+                FilterChip(
+                    selected = series.markType == markType,
+                    onClick = {
+                        onChange(document.copy(series = document.series.toMutableList().also { list ->
+                            list[index] = series.copy(markType = markType)
+                        }))
+                    },
+                    enabled = !readOnly,
+                    label = { Text(markType?.name?.lowercase()?.replaceFirstChar(Char::uppercase) ?: "Inherit") },
+                )
+            }
+        }
+        Text("Value axis", style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("y" to "Primary", "y2" to "Secondary").forEach { (id, label) ->
+                FilterChip(
+                    selected = series.axisId == id,
+                    onClick = {
+                        val axes = if (id == "y2" && document.axes.y2 == null) {
+                            document.axes.copy(y2 = ChartAxis("y2", "Value 2", ChartAxisPosition.RIGHT))
+                        } else document.axes
+                        onChange(document.copy(
+                            axes = axes,
+                            series = document.series.toMutableList().also { list -> list[index] = series.copy(axisId = id) },
+                        ))
+                    },
+                    enabled = !readOnly,
+                    label = { Text(label) },
+                )
+            }
+        }
+        Text("Series opacity ${(((series.opacity ?: 1f) * 100).toInt())}%")
+        Slider(
+            value = series.opacity ?: 1f,
+            onValueChange = { value -> onChange(document.copy(series = document.series.toMutableList().also { it[index] = series.copy(opacity = value) })) },
+            enabled = !readOnly,
+        )
+        if ((series.markType ?: document.type) in setOf(ChartType.LINE, ChartType.AREA)) {
+            Text("Stroke width ${series.strokeWidth ?: document.style.strokeWidth}")
+            Slider(
+                value = series.strokeWidth ?: document.style.strokeWidth,
+                onValueChange = { value -> onChange(document.copy(series = document.series.toMutableList().also { it[index] = series.copy(strokeWidth = value) })) },
+                valueRange = .5f..12f,
+                enabled = !readOnly,
+            )
+        }
+        if ((series.markType ?: document.type) in setOf(ChartType.LINE, ChartType.AREA, ChartType.SCATTER)) {
+            Text("Point radius ${series.pointRadius ?: 5f}")
+            Slider(
+                value = series.pointRadius ?: 5f,
+                onValueChange = { value -> onChange(document.copy(series = document.series.toMutableList().also { it[index] = series.copy(pointRadius = value) })) },
+                valueRange = 2f..32f,
+                enabled = !readOnly,
+            )
+        }
+        if ((series.markType ?: document.type) in setOf(ChartType.BAR, ChartType.STACKED_BAR)) {
+            Text("Bar width ${(((series.barWidthFraction ?: .86f) * 100).toInt())}%")
+            Slider(
+                value = series.barWidthFraction ?: .86f,
+                onValueChange = { value -> onChange(document.copy(series = document.series.toMutableList().also { it[index] = series.copy(barWidthFraction = value) })) },
+                valueRange = .1f..1f,
+                enabled = !readOnly,
+            )
+        }
         if (document.series.size > 1) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
@@ -513,6 +592,23 @@ private fun AxesSection(document: ChartDocument, readOnly: Boolean, onChange: (C
     Toggle("Show vertical axis", document.axes.y.visible, !readOnly) { onChange(document.copy(axes = document.axes.copy(y = document.axes.y.copy(visible = it)))) }
     Toggle("Horizontal gridlines", document.axes.x.showGrid, !readOnly) { onChange(document.copy(axes = document.axes.copy(x = document.axes.x.copy(showGrid = it)))) }
     Toggle("Vertical gridlines", document.axes.y.showGrid, !readOnly) { onChange(document.copy(axes = document.axes.copy(y = document.axes.y.copy(showGrid = it)))) }
+    Toggle("Secondary value axis", document.axes.y2 != null, !readOnly) { enabled ->
+        val axes = document.axes.copy(y2 = if (enabled) ChartAxis("y2", "Value 2", ChartAxisPosition.RIGHT) else null)
+        val series = if (enabled) document.series else document.series.map { it.copy(axisId = "y") }
+        onChange(document.copy(axes = axes, series = series))
+    }
+    document.axes.y2?.let { secondary ->
+        OutlinedTextField(
+            secondary.title,
+            { value -> onChange(document.copy(axes = document.axes.copy(y2 = secondary.copy(title = value)))) },
+            label = { Text("Secondary axis title") },
+            enabled = !readOnly,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Toggle("Show secondary axis", secondary.visible, !readOnly) {
+            onChange(document.copy(axes = document.axes.copy(y2 = secondary.copy(visible = it))))
+        }
+    }
 }
 
 @Composable
@@ -666,6 +762,12 @@ private class ChartColorStudioController(
     val interactions = ColorStudioInteractionController(engine)
 
     fun openSeries(series: ChartSeries) = open("series:${series.id}", series.color)
+    fun openMark(seriesId: String, rowId: String) {
+        val document = runtime.document()
+        val override = document.markOverrides.firstOrNull { it.seriesId == seriesId && it.sourceRowId == rowId }
+        val color = override?.color ?: document.series.firstOrNull { it.id == seriesId }?.color ?: return
+        open("mark:$seriesId:$rowId", color)
+    }
     fun openPaletteLead(color: ColorValue) = open("palette:0", color)
 
     fun close(commit: Boolean) {
@@ -695,6 +797,14 @@ private class ChartColorStudioController(
         targetId?.startsWith("series:") == true -> {
             val id = targetId.removePrefix("series:")
             document.copy(series = document.series.map { if (it.id == id) it.copy(color = color) else it })
+        }
+        targetId?.startsWith("mark:") == true -> {
+            val parts = targetId.removePrefix("mark:").split(':', limit = 2)
+            if (parts.size != 2) document else {
+                val (seriesId, rowId) = parts
+                val others = document.markOverrides.filterNot { it.seriesId == seriesId && it.sourceRowId == rowId }
+                document.copy(markOverrides = others + ChartMarkOverride(seriesId, rowId, color = color))
+            }
         }
         targetId == "palette:0" -> document.copy(style = document.style.copy(
             palette = listOf(color) + document.style.palette.drop(1),

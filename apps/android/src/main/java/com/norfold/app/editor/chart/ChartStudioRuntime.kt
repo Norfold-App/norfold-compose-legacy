@@ -55,18 +55,20 @@ class ChartStudioRuntime(
         committed = committed.copy(interaction = committed.interaction.copy(
             selectedSeriesId = seriesId,
             selectedSourceRowIndex = null,
+            selectedSourceRowId = null,
         ))
         preview = preview?.copy(interaction = committed.interaction)
         selection.select(SelectionTarget("${committed.id}:$seriesId", SelectionGranularity.CHART_SERIES))
         return true
     }
 
-    fun selectMark(seriesId: String, sourceRowIndex: Int): Boolean {
+    fun selectMark(seriesId: String, sourceRowIndex: Int, sourceRowId: String? = null): Boolean {
         if (gestureStart != null) return false
         if (sourceRowIndex < 0 || document().series.none { it.id == seriesId }) return false
         committed = committed.copy(interaction = committed.interaction.copy(
             selectedSeriesId = seriesId,
             selectedSourceRowIndex = sourceRowIndex,
+            selectedSourceRowId = sourceRowId,
         ))
         preview = preview?.copy(interaction = committed.interaction)
         selection.select(SelectionTarget("${committed.id}:$seriesId:$sourceRowIndex", SelectionGranularity.CHART_MARK))

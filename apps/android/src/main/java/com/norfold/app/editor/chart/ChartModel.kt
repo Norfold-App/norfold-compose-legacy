@@ -87,6 +87,14 @@ data class ChartSeries(
     val visible: Boolean = true,
     /** A redundant non-colour distinction for line/area/scatter series. */
     val linePattern: ChartLinePattern = ChartLinePattern.SOLID,
+    /** Null inherits [ChartDocument.type], preserving every existing chart payload. */
+    val markType: ChartType? = null,
+    /** `y` is the primary value axis; `y2` opts this series into the secondary axis. */
+    val axisId: String = "y",
+    val strokeWidth: Float? = null,
+    val pointRadius: Float? = null,
+    val barWidthFraction: Float? = null,
+    val opacity: Float? = null,
 )
 
 @Serializable
@@ -115,6 +123,16 @@ data class ChartAxis(
 data class ChartAxes(
     val x: ChartAxis = ChartAxis(id = "x", title = "Category", position = ChartAxisPosition.BOTTOM),
     val y: ChartAxis = ChartAxis(id = "y", title = "Value", position = ChartAxisPosition.LEFT),
+    val y2: ChartAxis? = null,
+)
+
+/** Authored presentation for one stable source mark. Removing an entry means inherit from its series. */
+@Serializable
+data class ChartMarkOverride(
+    val seriesId: String,
+    val sourceRowId: String,
+    val color: ColorValue? = null,
+    val opacity: Float? = null,
 )
 
 @Serializable
@@ -165,6 +183,8 @@ data class ChartInteraction(
     val showTooltips: Boolean = true,
     val selectedSeriesId: String? = null,
     val selectedSourceRowIndex: Int? = null,
+    /** Stable identity for authored mark styling; the index remains for legacy payloads and data writes. */
+    val selectedSourceRowId: String? = null,
 )
 
 /**
@@ -189,6 +209,7 @@ data class ChartDocument(
     val labels: ChartLabels = ChartLabels(),
     val style: ChartStyle = ChartStyle(),
     val interaction: ChartInteraction = ChartInteraction(),
+    val markOverrides: List<ChartMarkOverride> = emptyList(),
 ) {
     companion object {
         const val CURRENT_SCHEMA_VERSION = 1
@@ -196,6 +217,7 @@ data class ChartDocument(
         private const val MAX_PALETTE = 64
         private const val MAX_TEXT = 256
         private const val MAX_CAPTION = 2_048
+        private const val MAX_MARK_OVERRIDES = 20_000
     }
 
     /** A total, non-throwing normalization boundary for persisted or imported data. */
@@ -208,8 +230,17 @@ data class ChartDocument(
             caption = caption.take(MAX_CAPTION),
             description = description.take(MAX_CAPTION),
             series = cleanSeries.map { entry ->
-                entry.copy(name = entry.name.take(MAX_TEXT), color = entry.color)
+                entry.copy(
+                    name = entry.name.take(MAX_TEXT),
+                    color = entry.color,
+                    axisId = entry.axisId.takeIf { it == "y2" } ?: "y",
+                    strokeWidth = entry.strokeWidth?.takeIf(Float::isFinite)?.coerceIn(.5f, 12f),
+                    pointRadius = entry.pointRadius?.takeIf(Float::isFinite)?.coerceIn(2f, 32f),
+                    barWidthFraction = entry.barWidthFraction?.takeIf(Float::isFinite)?.coerceIn(.1f, 1f),
+                    opacity = entry.opacity?.takeIf(Float::isFinite)?.coerceIn(0f, 1f),
+                )
             },
+            axes = axes.copy(y2 = axes.y2?.copy(id = "y2", position = ChartAxisPosition.RIGHT)),
             style = style.copy(
                 palette = style.palette.distinct().take(MAX_PALETTE).ifEmpty { ChartStyle.defaultPalette() },
                 opacity = style.opacity.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 1f,
@@ -219,7 +250,13 @@ data class ChartDocument(
             interaction = interaction.copy(
                 selectedSeriesId = interaction.selectedSeriesId?.takeIf { id -> cleanSeries.any { it.id == id } },
                 selectedSourceRowIndex = interaction.selectedSourceRowIndex?.takeIf { it >= 0 },
+                selectedSourceRowId = interaction.selectedSourceRowId?.takeIf(String::isNotBlank),
             ),
+            markOverrides = markOverrides
+                .filter { entry -> cleanSeries.any { it.id == entry.seriesId } && entry.sourceRowId.isNotBlank() }
+                .distinctBy { it.seriesId to it.sourceRowId }
+                .take(MAX_MARK_OVERRIDES)
+                .map { it.copy(opacity = it.opacity?.takeIf(Float::isFinite)?.coerceIn(0f, 1f)) },
         )
     }
 

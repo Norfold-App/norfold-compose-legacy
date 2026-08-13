@@ -19,8 +19,10 @@ data class ChartRect(val left: Float, val top: Float, val right: Float, val bott
 
 sealed interface ChartMark {
     val seriesId: String
+    val sourceRowId: String?
     val sourceRowIndex: Int?
     val color: ColorValue
+    val opacity: Float
 
     data class Bar(
         override val seriesId: String,
@@ -29,6 +31,8 @@ sealed interface ChartMark {
         val bounds: ChartRect,
         val value: Double,
         val category: String,
+        override val sourceRowId: String? = null,
+        override val opacity: Float = 1f,
     ) : ChartMark
 
     data class Line(
@@ -37,7 +41,12 @@ sealed interface ChartMark {
         val points: List<ChartPoint>,
         val pattern: ChartLinePattern,
         val fillToBottom: Boolean,
-    ) : ChartMark { override val sourceRowIndex: Int? = null }
+        override val opacity: Float = 1f,
+        val strokeWidth: Float = 2f,
+    ) : ChartMark {
+        override val sourceRowId: String? = null
+        override val sourceRowIndex: Int? = null
+    }
 
     data class Point(
         override val seriesId: String,
@@ -47,6 +56,8 @@ sealed interface ChartMark {
         val radius: Float,
         val value: Double,
         val category: String,
+        override val sourceRowId: String? = null,
+        override val opacity: Float = 1f,
     ) : ChartMark
 
     data class Arc(
@@ -60,6 +71,8 @@ sealed interface ChartMark {
         val sweepDegrees: Float,
         val value: Double,
         val category: String,
+        override val sourceRowId: String? = null,
+        override val opacity: Float = 1f,
     ) : ChartMark
 }
 
@@ -77,12 +90,14 @@ data class ChartLayout(
     val sourcePointCount: Int,
     val xDomain: Pair<Double, Double>? = null,
     val yDomain: Pair<Double, Double>? = null,
+    val y2Ticks: List<ChartTick> = emptyList(),
+    val y2Domain: Pair<Double, Double>? = null,
 ) {
     val isEmpty: Boolean get() = marks.isEmpty()
 
     /** Inverse of the stable scaled Y transform, used by direct manipulation. */
-    fun valueAtY(y: Float): Double? {
-        val domain = yDomain ?: return null
+    fun valueAtY(y: Float, axisId: String = "y"): Double? {
+        val domain = (if (axisId == "y2") y2Domain else yDomain) ?: return null
         val fraction = ((plot.bottom - y) / plot.height).coerceIn(0f, 1f).toDouble()
         val scale = max(max(abs(domain.first), abs(domain.second)), 1.0)
         return ((domain.first / scale) + (domain.second / scale - domain.first / scale) * fraction) * scale
@@ -98,9 +113,21 @@ data class ChartLayout(
  * again for a change that cannot move anything. This key holds only the inputs [ChartLayoutEngine.layout]
  * actually reads, so text and legend edits reuse the geometry and data or type changes rebuild it.
  */
-data class ChartGeometryKey(val type: ChartType, val palette: List<ColorValue>) {
+data class ChartGeometryKey(
+    val type: ChartType,
+    val palette: List<ColorValue>,
+    val seriesGeometry: List<List<Any?>>,
+    val axes: ChartAxes,
+    val markOverrides: List<ChartMarkOverride>,
+) {
     companion object {
-        fun of(document: ChartDocument): ChartGeometryKey = ChartGeometryKey(document.type, document.style.palette)
+        fun of(document: ChartDocument): ChartGeometryKey = ChartGeometryKey(
+            document.type,
+            document.style.palette,
+            document.series.map { listOf(it.id, it.markType, it.axisId, it.strokeWidth, it.pointRadius, it.barWidthFraction, it.opacity) },
+            document.axes,
+            document.markOverrides,
+        )
     }
 }
 
@@ -114,7 +141,8 @@ object ChartLayoutEngine {
     ): ChartLayout {
         val safeWidth = width.takeIf { it.isFinite() && it > 0f } ?: 1f
         val safeHeight = height.takeIf { it.isFinite() && it > 0f } ?: 1f
-        val plot = ChartRect(52f, 20f, (safeWidth - 20f).coerceAtLeast(53f), (safeHeight - 42f).coerceAtLeast(21f))
+        val endInset = if (document.axes.y2?.visible == true) 52f else 20f
+        val plot = ChartRect(52f, 20f, (safeWidth - endInset).coerceAtLeast(53f), (safeHeight - 42f).coerceAtLeast(21f))
         val rawCount = data.series.sumOf { it.points.size }
         val renderBudget = maxRenderedPoints.coerceIn(1, 20_000)
         val perSeriesBudget = (renderBudget / data.series.size.coerceAtLeast(1)).coerceAtLeast(1)
@@ -123,15 +151,19 @@ object ChartLayoutEngine {
         val warnings = data.warnings.toMutableList()
         if (sampledCount < rawCount) warnings += "Showing $sampledCount of $rawCount points"
 
-        val built = when (document.type) {
-            ChartType.BAR -> bars(sampled, plot, stacked = false)
-            ChartType.STACKED_BAR -> bars(sampled, plot, stacked = true)
-            ChartType.LINE -> cartesian(sampled, plot, area = false, scatter = false)
-            ChartType.AREA -> cartesian(sampled, plot, area = true, scatter = false)
-            ChartType.SCATTER -> cartesian(sampled, plot, area = false, scatter = true)
-            ChartType.PIE -> arcs(sampled, plot, donut = false, document.style.palette)
-            ChartType.DONUT -> arcs(sampled, plot, donut = true, document.style.palette)
-            ChartType.HISTOGRAM -> histogram(sampled, plot)
+        val mixed = sampled.map { it.markType }.distinct().size > 1 ||
+            sampled.any { it.markType != document.type || it.axisId == "y2" }
+        val built = if (mixed) {
+            mixedCartesian(document, sampled, plot)
+        } else when (document.type) {
+            ChartType.BAR -> bars(document, sampled, plot, stacked = false)
+            ChartType.STACKED_BAR -> bars(document, sampled, plot, stacked = true)
+            ChartType.LINE -> cartesian(document, sampled, plot, area = false, scatter = false)
+            ChartType.AREA -> cartesian(document, sampled, plot, area = true, scatter = false)
+            ChartType.SCATTER -> cartesian(document, sampled, plot, area = false, scatter = true)
+            ChartType.PIE -> arcs(document, sampled, plot, donut = false, document.style.palette)
+            ChartType.DONUT -> arcs(document, sampled, plot, donut = true, document.style.palette)
+            ChartType.HISTOGRAM -> histogram(document, sampled, plot)
         }
         warnings += built.warnings
         return ChartLayout(
@@ -146,6 +178,8 @@ object ChartLayoutEngine {
             rawCount,
             built.xDomain,
             built.yDomain,
+            built.y2Ticks,
+            built.y2Domain,
         )
     }
 
@@ -156,9 +190,113 @@ object ChartLayoutEngine {
         val warnings: List<String> = emptyList(),
         val xDomain: Pair<Double, Double>? = null,
         val yDomain: Pair<Double, Double>? = null,
+        val y2Ticks: List<ChartTick> = emptyList(),
+        val y2Domain: Pair<Double, Double>? = null,
     )
 
-    private fun bars(series: List<ResolvedChartSeries>, plot: ChartRect, stacked: Boolean): Built {
+    private fun effectiveColor(document: ChartDocument, series: ResolvedChartSeries, point: ResolvedChartPoint): ColorValue =
+        document.markOverrides.firstOrNull { it.seriesId == series.id && it.sourceRowId == point.rowId }?.color
+            ?: series.color
+
+    private fun effectiveOpacity(document: ChartDocument, series: ResolvedChartSeries, point: ResolvedChartPoint): Float =
+        document.markOverrides.firstOrNull { it.seriesId == series.id && it.sourceRowId == point.rowId }?.opacity
+            ?: series.opacity
+            ?: 1f
+
+    /** Mixed cartesian charts share one category/domain and one hit-testable mark list. */
+    private fun mixedCartesian(document: ChartDocument, series: List<ResolvedChartSeries>, plot: ChartRect): Built {
+        val cartesianSeries = series.filter { it.markType !in setOf(ChartType.PIE, ChartType.DONUT, ChartType.HISTOGRAM) }
+        if (cartesianSeries.isEmpty()) return Built(emptyList(), warnings = listOf("Mixed charts require cartesian series"))
+        val categories = cartesianSeries.flatMap { it.points }.map { it.category }.distinct()
+        fun axisDomain(axisId: String): Pair<Double, Double> {
+            val values = cartesianSeries.filter { it.axisId == axisId }.flatMap { it.points }.map { it.y }
+            return numericDomain(min(0.0, values.minOrNull() ?: 0.0), max(0.0, values.maxOrNull() ?: 0.0))
+        }
+        val yDomain = axisDomain("y")
+        val hasY2 = cartesianSeries.any { it.axisId == "y2" }
+        val y2Domain = axisDomain("y2").takeIf { hasY2 }
+        val xDomain = 0.0 to (categories.lastIndex.coerceAtLeast(1)).toDouble()
+        val barSeries = cartesianSeries.filter { it.markType in setOf(ChartType.BAR, ChartType.STACKED_BAR) }
+        val marks = mutableListOf<ChartMark>()
+        cartesianSeries.forEach { entry ->
+            val entryDomain = if (entry.axisId == "y2") y2Domain ?: yDomain else yDomain
+            val projected = entry.points.map { point ->
+                val index = categories.indexOf(point.category).coerceAtLeast(0)
+                val x = plot.left + (plot.width / categories.size.coerceAtLeast(1)) * (index + .5f)
+                point to ChartPoint(x, yFor(point.y, entryDomain, plot))
+            }
+            when (entry.markType) {
+                ChartType.BAR, ChartType.STACKED_BAR -> projected.forEach { (point, rendered) ->
+                    val slot = plot.width / categories.size.coerceAtLeast(1)
+                    val group = slot * .72f
+                    val width = group / barSeries.size.coerceAtLeast(1) * (entry.barWidthFraction ?: .86f)
+                    val seriesIndex = barSeries.indexOf(entry).coerceAtLeast(0)
+                    val left = rendered.x - group / 2f + seriesIndex * (group / barSeries.size.coerceAtLeast(1))
+                    marks += ChartMark.Bar(
+                        entry.id,
+                        point.sourceRowIndex,
+                        effectiveColor(document, entry, point),
+                        ChartRect(left, min(rendered.y, yFor(0.0, entryDomain, plot)), left + width, max(rendered.y, yFor(0.0, entryDomain, plot))),
+                        point.y,
+                        point.category,
+                        sourceRowId = point.rowId,
+                        opacity = effectiveOpacity(document, entry, point),
+                    )
+                }
+                ChartType.LINE, ChartType.AREA -> {
+                    marks += ChartMark.Line(
+                        entry.id,
+                        entry.color,
+                        projected.map { it.second },
+                        entry.linePattern,
+                        entry.markType == ChartType.AREA,
+                        opacity = entry.opacity ?: 1f,
+                        strokeWidth = entry.strokeWidth ?: document.style.strokeWidth,
+                    )
+                    projected.forEach { (point, rendered) ->
+                        marks += ChartMark.Point(
+                            entry.id,
+                            point.sourceRowIndex,
+                            effectiveColor(document, entry, point),
+                            rendered,
+                            entry.pointRadius ?: 5f,
+                            point.y,
+                            point.category,
+                            sourceRowId = point.rowId,
+                            opacity = effectiveOpacity(document, entry, point),
+                        )
+                    }
+                }
+                ChartType.SCATTER -> projected.forEach { (point, rendered) ->
+                    marks += ChartMark.Point(
+                        entry.id,
+                        point.sourceRowIndex,
+                        effectiveColor(document, entry, point),
+                        rendered,
+                        entry.pointRadius ?: 5f,
+                        point.y,
+                        point.category,
+                        sourceRowId = point.rowId,
+                        opacity = effectiveOpacity(document, entry, point),
+                    )
+                }
+                else -> Unit
+            }
+        }
+        val slot = plot.width / categories.size.coerceAtLeast(1)
+        return Built(
+            marks = marks,
+            xTicks = categories.mapIndexed { index, label -> ChartTick(plot.left + slot * (index + .5f), label) },
+            yTicks = numericTicks(yDomain, plot),
+            xDomain = xDomain,
+            yDomain = yDomain,
+            y2Ticks = y2Domain?.let { numericTicks(it, plot) }.orEmpty(),
+            y2Domain = y2Domain,
+            warnings = if (cartesianSeries.size != series.size) listOf("Pie, donut, and histogram series cannot join a mixed cartesian chart") else emptyList(),
+        )
+    }
+
+    private fun bars(document: ChartDocument, series: List<ResolvedChartSeries>, plot: ChartRect, stacked: Boolean): Built {
         val categories = series.flatMap { it.points }.map { it.category }.distinct()
         if (categories.isEmpty()) return Built(emptyList())
         val bySeries = series.associateWith { entry -> entry.points.associateBy { it.category } }
@@ -199,7 +337,7 @@ object ChartLayoutEngine {
                     val groupWidth = slot * 0.76f
                     val barWidth = groupWidth / series.size.coerceAtLeast(1)
                     left = plot.left + categoryIndex * slot + slot * 0.12f + seriesIndex * barWidth
-                    right = left + barWidth * 0.86f
+                    right = left + barWidth * (entry.barWidthFraction ?: 0.86f)
                     start = 0.0
                     end = point.y
                 }
@@ -208,10 +346,12 @@ object ChartLayoutEngine {
                 marks += ChartMark.Bar(
                     entry.id,
                     point.sourceRowIndex,
-                    entry.color,
+                    effectiveColor(document, entry, point),
                     ChartRect(left, min(startY, endY), right, max(startY, endY)),
                     point.y,
                     category,
+                    sourceRowId = point.rowId,
+                    opacity = effectiveOpacity(document, entry, point),
                 )
             }
         }
@@ -224,6 +364,7 @@ object ChartLayoutEngine {
     }
 
     private fun cartesian(
+        document: ChartDocument,
         series: List<ResolvedChartSeries>,
         plot: ChartRect,
         area: Boolean,
@@ -238,9 +379,31 @@ object ChartLayoutEngine {
                 val points = entry.points.map { point ->
                     ChartPoint(xFor(point.x, xDomain, plot), yFor(point.y, yDomain, plot))
                 }
-                if (!scatter && points.isNotEmpty()) add(ChartMark.Line(entry.id, entry.color, points, entry.linePattern, area))
+                if (!scatter && points.isNotEmpty()) add(
+                    ChartMark.Line(
+                        entry.id,
+                        entry.color,
+                        points,
+                        entry.linePattern,
+                        area,
+                        opacity = entry.opacity ?: 1f,
+                        strokeWidth = entry.strokeWidth ?: document.style.strokeWidth,
+                    ),
+                )
                 entry.points.zip(points).forEach { (source, rendered) ->
-                    add(ChartMark.Point(entry.id, source.sourceRowIndex, entry.color, rendered, 5f, source.y, source.category))
+                    add(
+                        ChartMark.Point(
+                            entry.id,
+                            source.sourceRowIndex,
+                            effectiveColor(document, entry, source),
+                            rendered,
+                            entry.pointRadius ?: 5f,
+                            source.y,
+                            source.category,
+                            sourceRowId = source.rowId,
+                            opacity = effectiveOpacity(document, entry, source),
+                        ),
+                    )
                 }
             }
         }
@@ -248,6 +411,7 @@ object ChartLayoutEngine {
     }
 
     private fun arcs(
+        document: ChartDocument,
         series: List<ResolvedChartSeries>,
         plot: ChartRect,
         donut: Boolean,
@@ -267,7 +431,8 @@ object ChartLayoutEngine {
             ChartMark.Arc(
                 series.first().id,
                 point.sourceRowIndex,
-                palette[index % palette.size],
+                document.markOverrides.firstOrNull { it.seriesId == series.first().id && it.sourceRowId == point.rowId }?.color
+                    ?: palette[index % palette.size],
                 center,
                 if (donut) outer * .55f else 0f,
                 outer,
@@ -275,12 +440,14 @@ object ChartLayoutEngine {
                 sweep,
                 point.y,
                 point.category,
+                sourceRowId = point.rowId,
+                opacity = effectiveOpacity(document, series.first(), point),
             ).also { angle += sweep }
         }
         return Built(marks)
     }
 
-    private fun histogram(series: List<ResolvedChartSeries>, plot: ChartRect): Built {
+    private fun histogram(@Suppress("UNUSED_PARAMETER") document: ChartDocument, series: List<ResolvedChartSeries>, plot: ChartRect): Built {
         val values = series.flatMap { it.points }.map { it.y }.sorted()
         if (values.isEmpty()) return Built(emptyList())
         val minValue = values.first()

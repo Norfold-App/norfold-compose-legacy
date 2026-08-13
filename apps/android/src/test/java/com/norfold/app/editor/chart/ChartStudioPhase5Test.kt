@@ -452,6 +452,61 @@ class ChartStudioPhase5Test {
         assertEquals(palette, arcs.map { it.color })
     }
 
+    @Test
+    fun markOverridesUseStableRowIdsAndSurviveRowReorder() {
+        val red = com.norfold.app.domain.style.ColorValue(220, 30, 40)
+        val source = ChartDataSource.Manual(
+            rows = listOf(
+                ChartDataRow("stable-a", listOf("A", "5")),
+                ChartDataRow("stable-b", listOf("B", "8")),
+            ),
+        )
+        val document = ChartDocument(
+            source = source,
+            series = listOf(ChartSeries(id = "series-1")),
+            markOverrides = listOf(ChartMarkOverride("series-1", "stable-b", color = red)),
+        )
+        val reordered = document.copy(source = source.copy(rows = source.rows.reversed()))
+        val ready = assertIs<ChartDataResolution.Ready>(ChartDataResolver.resolve(reordered))
+        val marks = ChartLayoutEngine.layout(reordered, ready.data, 400f, 240f).marks
+            .map { assertIs<ChartMark.Bar>(it) }
+        assertEquals(red, marks.single { it.sourceRowId == "stable-b" }.color)
+    }
+
+    @Test
+    fun mixedChartUsesOneSharedLayoutWithPerSeriesMarkTypes() {
+        val columns = listOf(
+            ChartColumn("category", "Category", ChartColumnKind.TEXT),
+            ChartColumn("bars", "Bars", ChartColumnKind.NUMBER),
+            ChartColumn("line", "Line", ChartColumnKind.NUMBER),
+        )
+        val document = ChartDocument(
+            type = ChartType.BAR,
+            source = ChartDataSource.Manual(
+                columns,
+                listOf(ChartDataRow("q1", listOf("Q1", "4", "7")), ChartDataRow("q2", listOf("Q2", "6", "5"))),
+            ),
+            series = listOf(
+                ChartSeries("bars", "Bars", valueColumnId = "bars", markType = ChartType.BAR),
+                ChartSeries("line", "Line", valueColumnId = "line", markType = ChartType.LINE, strokeWidth = 5f),
+            ),
+        )
+        val ready = assertIs<ChartDataResolution.Ready>(ChartDataResolver.resolve(document))
+        val layout = ChartLayoutEngine.layout(document, ready.data, 480f, 280f)
+        assertTrue(layout.marks.any { it is ChartMark.Bar && it.seriesId == "bars" })
+        assertTrue(layout.marks.any { it is ChartMark.Line && it.seriesId == "line" && it.strokeWidth == 5f })
+        assertEquals(2, layout.xTicks.size)
+    }
+
+    @Test
+    fun legacyChartPayloadDecodesWithInheritedSeriesDefaults() {
+        val encoded = ChartDocumentCodec.encode(manual(listOf("A" to "2")))
+        val decoded = assertIs<ChartDecodeResult.Success>(ChartDocumentCodec.decode(encoded)).document
+        assertNull(decoded.series.single().markType)
+        assertEquals("y", decoded.series.single().axisId)
+        assertTrue(decoded.markOverrides.isEmpty())
+    }
+
     private fun manual(values: List<Pair<String, String>>): ChartDocument = ChartDocument(
         source = ChartDataSource.Manual(
             rows = values.mapIndexed { index, (label, value) -> ChartDataRow("r$index", listOf(label, value)) },

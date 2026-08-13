@@ -31,6 +31,12 @@ data class ResolvedChartSeries(
     val color: com.norfold.app.domain.style.ColorValue,
     val linePattern: ChartLinePattern,
     val points: List<ResolvedChartPoint>,
+    val markType: ChartType = ChartType.BAR,
+    val axisId: String = "y",
+    val strokeWidth: Float? = null,
+    val pointRadius: Float? = null,
+    val barWidthFraction: Float? = null,
+    val opacity: Float? = null,
 )
 
 data class ResolvedChartData(
@@ -155,14 +161,30 @@ object ChartDataResolver {
                 val x = xIndex?.let { row.getOrNull(it)?.number } ?: rowIndex.toDouble()
                 if (!x.isFinite() || !y.isFinite()) return@mapIndexedNotNull null
                 ResolvedChartPoint(
-                    rowId = "row-$rowIndex",
+                    rowId = when (val source = document.source) {
+                        is ChartDataSource.Manual -> source.rows.getOrNull(rowIndex)?.id ?: "row-$rowIndex"
+                        is ChartDataSource.CalculationRange ->
+                            "${source.binding.range.start.sheetId}:${source.binding.range.start.rowId}:$rowIndex"
+                    },
                     category = categoryIndex?.let { row.getOrNull(it)?.text }.orEmpty().ifBlank { (rowIndex + 1).toString() },
                     x = x,
                     y = y,
                     sourceRowIndex = rowIndex,
                 )
             }
-            ResolvedChartSeries(series.id, series.name, series.color, series.linePattern, points)
+            ResolvedChartSeries(
+                id = series.id,
+                name = series.name,
+                color = series.color,
+                linePattern = series.linePattern,
+                markType = series.markType ?: document.type,
+                axisId = series.axisId,
+                strokeWidth = series.strokeWidth,
+                pointRadius = series.pointRadius,
+                barWidthFraction = series.barWidthFraction,
+                opacity = series.opacity,
+                points = points,
+            )
         }
     }
 

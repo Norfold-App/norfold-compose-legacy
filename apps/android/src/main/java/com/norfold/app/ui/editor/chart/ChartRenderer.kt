@@ -3,6 +3,7 @@ package com.norfold.app.ui.editor.chart
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,14 +54,17 @@ import com.norfold.app.editor.chart.ChartHitTester
 import com.norfold.app.editor.chart.ChartLinePattern
 import com.norfold.app.editor.chart.ChartLegendPosition
 import com.norfold.app.editor.chart.ChartMark
+import com.norfold.app.editor.chart.ChartPoint
 import com.norfold.app.editor.chart.ResolvedChartData
 import com.norfold.app.ui.components.NorfoldBottomSheet
 
 data class ChartDirectManipulationCallbacks(
-    val onStart: (seriesId: String, sourceRowIndex: Int) -> Boolean,
+    val onSelect: (seriesId: String, sourceRowIndex: Int, sourceRowId: String?) -> Unit,
+    val onStart: (seriesId: String, sourceRowIndex: Int, sourceRowId: String?) -> Boolean,
     val onPreview: (seriesId: String, sourceRowIndex: Int, value: Double) -> Unit,
     val onEnd: () -> Unit,
     val onCancel: () -> Unit,
+    val onStyle: (seriesId: String, sourceRowIndex: Int, sourceRowId: String?) -> Unit,
 )
 
 /** Native, offline renderer. It consumes resolved immutable data and never opens a calculation engine. */
@@ -93,6 +98,7 @@ private fun ReadyChart(
     directManipulation: ChartDirectManipulationCallbacks?,
 ) {
     var showData by remember { mutableStateOf(false) }
+    var inspectedMark by remember(document.id) { mutableStateOf<ChartMark?>(null) }
     val scheme = MaterialTheme.colorScheme
     val background = document.style.background?.let { Color(it.toArgb()) } ?: scheme.surface
     val foregroundColor = document.style.foreground?.let { Color(it.toArgb()) } ?: scheme.onSurface
@@ -124,6 +130,26 @@ private fun ReadyChart(
             val layout = remember(geometryKey, data, widthPx, heightPx) {
                 ChartLayoutEngine.layout(document, data, widthPx, heightPx)
             }
+            val selectedMark = layout.marks.firstOrNull { mark ->
+                mark.seriesId == document.interaction.selectedSeriesId &&
+                    (document.interaction.selectedSourceRowId?.let { it == mark.sourceRowId }
+                        ?: (mark.sourceRowIndex == document.interaction.selectedSourceRowIndex))
+            }
+            val tapModifier = if (!document.interaction.selectionEnabled) Modifier else Modifier.pointerInput(layout, directManipulation) {
+                detectTapGestures { offset ->
+                    val hit = ChartHitTester.hit(layout, offset.x, offset.y)?.mark
+                    inspectedMark = hit
+                    val row = hit?.sourceRowIndex
+                    if (hit != null && row != null) {
+                        val styleHandle = markStyleHandle(hit)
+                        if (styleHandle != null && kotlin.math.hypot(offset.x - styleHandle.x, offset.y - styleHandle.y) <= 24f) {
+                            directManipulation?.onStyle(hit.seriesId, row, hit.sourceRowId)
+                        } else {
+                            directManipulation?.onSelect(hit.seriesId, row, hit.sourceRowId)
+                        }
+                    }
+                }
+            }
             val gestureModifier = if (directManipulation == null || !document.interaction.valueEditingEnabled) {
                 Modifier
             } else {
@@ -133,12 +159,18 @@ private fun ReadyChart(
                         onDragStart = { offset ->
                             val mark = ChartHitTester.hit(layout, offset.x, offset.y)?.mark
                             val row = mark?.sourceRowIndex
-                            active = mark?.takeIf { row != null && directManipulation.onStart(mark.seriesId, row) }
+                            val handle = mark?.let(::markDataHandle)
+                            active = mark?.takeIf {
+                                row != null && handle != null &&
+                                    kotlin.math.hypot(offset.x - handle.x, offset.y - handle.y) <= 28f &&
+                                    directManipulation.onStart(mark.seriesId, row, mark.sourceRowId)
+                            }
                         },
                         onDrag = { change, _ ->
                             val mark = active ?: return@detectDragGestures
                             val row = mark.sourceRowIndex ?: return@detectDragGestures
-                            layout.valueAtY(change.position.y)?.takeIf(Double::isFinite)?.let { value ->
+                            val axisId = data.series.firstOrNull { it.id == mark.seriesId }?.axisId ?: "y"
+                            layout.valueAtY(change.position.y, axisId)?.takeIf(Double::isFinite)?.let { value ->
                                 directManipulation.onPreview(mark.seriesId, row, value)
                             }
                             change.consume()
@@ -154,7 +186,7 @@ private fun ReadyChart(
                     )
                 }
             }
-            Canvas(Modifier.fillMaxWidth().height(heightDp.dp).then(gestureModifier)) {
+            Canvas(Modifier.fillMaxWidth().height(heightDp.dp).then(tapModifier).then(gestureModifier)) {
                 val grid = gridColor
                 val foreground = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                     color = foregroundColor.toArgb()
@@ -175,6 +207,15 @@ private fun ReadyChart(
                         }
                     }
                 }
+                document.axes.y2?.takeIf { it.visible }?.let {
+                    drawLine(grid, Offset(layout.plot.right, layout.plot.top), Offset(layout.plot.right, layout.plot.bottom), 1.5f)
+                    drawIntoCanvas { canvas ->
+                        layout.y2Ticks.forEach { tick ->
+                            foreground.textAlign = android.graphics.Paint.Align.LEFT
+                            canvas.nativeCanvas.drawText(tick.label.take(12), layout.plot.right + 6.dp.toPx(), tick.position + 4.dp.toPx(), foreground)
+                        }
+                    }
+                }
                 if (document.axes.x.visible) {
                     drawLine(grid, Offset(layout.plot.left, layout.plot.bottom), Offset(layout.plot.right, layout.plot.bottom), 1.5f)
                     val every = (layout.xTicks.size / 6).coerceAtLeast(1)
@@ -191,7 +232,7 @@ private fun ReadyChart(
                     }
                 }
                 layout.marks.forEach { mark ->
-                    val color = Color(mark.color.toArgb()).copy(alpha = document.style.opacity)
+                    val color = Color(mark.color.toArgb()).copy(alpha = document.style.opacity * mark.opacity)
                     when (mark) {
                     is ChartMark.Bar -> drawRoundRect(
                         color,
@@ -217,7 +258,7 @@ private fun ReadyChart(
                             ChartLinePattern.DASHED -> PathEffect.dashPathEffect(floatArrayOf(14f, 8f))
                             ChartLinePattern.DOTTED -> PathEffect.dashPathEffect(floatArrayOf(2f, 7f))
                         }
-                        drawPath(path, color, style = Stroke(document.style.strokeWidth, cap = StrokeCap.Round, pathEffect = effect))
+                        drawPath(path, color, style = Stroke(mark.strokeWidth, cap = StrokeCap.Round, pathEffect = effect))
                     }
                     is ChartMark.Arc -> drawArc(
                         color,
@@ -228,6 +269,28 @@ private fun ReadyChart(
                         size = androidx.compose.ui.geometry.Size(mark.outerRadius * 2, mark.outerRadius * 2),
                         style = if (mark.innerRadius == 0f) Fill else Stroke(mark.outerRadius - mark.innerRadius),
                     )
+                    }
+                }
+                selectedMark?.let { mark ->
+                    markDataHandle(mark)?.let { center ->
+                        val offset = Offset(center.x, center.y)
+                        drawCircle(scheme.surface, 10.dp.toPx(), offset)
+                        drawCircle(scheme.primary, 7.dp.toPx(), offset)
+                    }
+                    markStyleHandle(mark)?.let { center ->
+                        val size = 14.dp.toPx()
+                        drawRoundRect(
+                            scheme.surface,
+                            topLeft = Offset(center.x - size / 2f - 3f, center.y - size / 2f - 3f),
+                            size = androidx.compose.ui.geometry.Size(size + 6f, size + 6f),
+                            cornerRadius = CornerRadius(5f, 5f),
+                        )
+                        drawRoundRect(
+                            scheme.secondary,
+                            topLeft = Offset(center.x - size / 2f, center.y - size / 2f),
+                            size = androidx.compose.ui.geometry.Size(size, size),
+                            cornerRadius = CornerRadius(4f, 4f),
+                        )
                     }
                 }
                 if (document.labels.showValue || document.labels.showCategory || document.labels.showSeriesName) {
@@ -285,12 +348,41 @@ private fun ReadyChart(
             )
         }
         data.warnings.forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        inspectedMark?.let { mark ->
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+                Text(markSummary(mark, data), Modifier.padding(horizontal = 10.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
+            }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = { showData = true }) { Text("View data") }
         }
         if (document.caption.isNotBlank()) Text(document.caption, style = MaterialTheme.typography.bodySmall)
     }
     if (showData) ChartDataSheet(table) { showData = false }
+}
+
+private fun markDataHandle(mark: ChartMark): ChartPoint? = when (mark) {
+    is ChartMark.Bar -> ChartPoint((mark.bounds.left + mark.bounds.right) / 2f, mark.bounds.top)
+    is ChartMark.Point -> mark.center
+    is ChartMark.Arc -> null
+    is ChartMark.Line -> null
+}
+
+private fun markStyleHandle(mark: ChartMark): ChartPoint? = when (mark) {
+    is ChartMark.Bar -> ChartPoint(mark.bounds.right, mark.bounds.top)
+    is ChartMark.Point -> ChartPoint(mark.center.x + mark.radius + 12f, mark.center.y)
+    is ChartMark.Arc -> null
+    is ChartMark.Line -> null
+}
+
+private fun markSummary(mark: ChartMark, data: ResolvedChartData): String {
+    val series = data.series.firstOrNull { it.id == mark.seriesId }?.name ?: "Series"
+    return when (mark) {
+        is ChartMark.Bar -> "$series · ${mark.category}: ${formatChartValue(mark.value)}"
+        is ChartMark.Point -> "$series · ${mark.category}: ${formatChartValue(mark.value)}"
+        is ChartMark.Arc -> "$series · ${mark.category}: ${formatChartValue(mark.value)}"
+        is ChartMark.Line -> series
+    }
 }
 
 @Composable

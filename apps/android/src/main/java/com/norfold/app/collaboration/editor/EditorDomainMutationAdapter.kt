@@ -96,6 +96,7 @@ class EditorDomainMutationAdapter(
         val durable = normalized.copy(interaction = normalized.interaction.copy(
             selectedSeriesId = null,
             selectedSourceRowIndex = null,
+            selectedSourceRowId = null,
         ))
         return mutation(
             "chart", action, document.id,
