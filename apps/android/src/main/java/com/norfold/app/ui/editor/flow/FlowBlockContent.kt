@@ -143,6 +143,7 @@ data class FlowTextEdit(
 class FlowBlockCallbacks(
     val onEdit: (FlowTextEdit) -> Unit,
     val onCaret: (blockId: String, itemId: String?, caret: Int) -> Unit,
+    val onTextSelection: (blockId: String, itemId: String?, start: Int, end: Int) -> Unit = { _, _, _, _ -> },
     val onToggleTodo: (blockId: String, itemId: String) -> Unit,
     val onTableCell: (FlowTableCursor) -> Unit,
     /**
@@ -1005,6 +1006,11 @@ private fun FlowEditableLine(
                 value = next
                 if (next.text != before) {
                     callbacks.onEdit(FlowTextEdit(blockId, itemId, before, next.text, next.selection.start))
+                    if (!next.selection.collapsed) {
+                        callbacks.onTextSelection(blockId, itemId, next.selection.start, next.selection.end)
+                    }
+                } else if (!next.selection.collapsed) {
+                    callbacks.onTextSelection(blockId, itemId, next.selection.start, next.selection.end)
                 } else {
                     callbacks.onCaret(blockId, itemId, next.selection.start)
                 }
@@ -1022,7 +1028,10 @@ private fun FlowEditableLine(
                     // transition explicitly so structural Enter/Backspace and list-item edits address
                     // the field the user actually entered rather than a stale or absent runtime caret.
                     callbacks.onEditorFocusChanged(blockId, focusState.isFocused)
-                    if (focusState.isFocused) callbacks.onCaret(blockId, itemId, value.selection.start)
+                    if (focusState.isFocused) {
+                        if (value.selection.collapsed) callbacks.onCaret(blockId, itemId, value.selection.start)
+                        else callbacks.onTextSelection(blockId, itemId, value.selection.start, value.selection.end)
+                    }
                 }
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false

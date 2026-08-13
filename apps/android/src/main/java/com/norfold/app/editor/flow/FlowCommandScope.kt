@@ -3,6 +3,7 @@ package com.norfold.app.editor.flow
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DropTarget
+import com.norfold.app.domain.InlineTypingStyle
 import com.norfold.app.domain.allIds
 import com.norfold.app.domain.findById
 import com.norfold.app.editor.command.Capability
@@ -67,6 +68,14 @@ class FlowCommandScope(
      * reason and with the same rule: the host reports it, commands read it, nobody guesses it.
      */
     var caretItemId: String? = null
+
+    /**
+     * Character attributes applied to text inserted at a collapsed caret.
+     *
+     * This is editor-session state rather than document state. It is shared by every command surface and is
+     * cleared when the host returns to quiet reading, so a toolbar toggle never leaks into a later session.
+     */
+    var typingStyle: InlineTypingStyle? = null
 
     /**
      * The drop the host has resolved from an in-flight structural drag. `flow.move.drop` consumes it, so

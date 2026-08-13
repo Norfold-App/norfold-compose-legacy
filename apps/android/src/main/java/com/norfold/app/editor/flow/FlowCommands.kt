@@ -49,6 +49,8 @@ object FlowCommands {
         add(FlowSplitCommand(scope))
         add(FlowMergePreviousCommand(scope))
 
+        addAll(FlowInlineCommands.catalogue(scope))
+
         FlowTableDirection.entries.forEach { add(FlowTableInsertCommand(scope, it)) }
     }
 

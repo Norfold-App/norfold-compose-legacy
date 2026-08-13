@@ -44,8 +44,10 @@ import com.norfold.app.editor.presentation.PresentationMode
 import com.norfold.app.editor.presentation.PresentedTool
 import com.norfold.app.editor.presentation.ToolPresentationState
 import com.norfold.app.editor.selection.TextCaret
+import com.norfold.app.editor.selection.TextRange
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
+import com.norfold.app.domain.InlineTypingStyle
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartDocument
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
@@ -94,6 +96,7 @@ object FlowSurfaces {
 
     /** The "Turn into" child surface opened from the dock or block menu. */
     const val CONVERT_MENU = "flow.surface.convert"
+    const val MORE_ACTIONS = "flow.surface.more"
     const val COLOR_STUDIO = "editor.surface.colorStudio"
     const val FONT_BROWSER = "editor.surface.fontBrowser"
     const val NAMED_STYLES = "editor.surface.namedStyles"
@@ -182,6 +185,16 @@ data class FlowCaretRequest(
     val stamp: Long,
 )
 
+/** Canonical Flow interaction state. Compose renders this state; it does not maintain a competing copy. */
+enum class FlowInteractionMode {
+    READING,
+    TEXT_EDITING,
+    TEXT_SELECTION,
+    BLOCK_SELECTION,
+    MULTI_SELECTION,
+    DRAGGING,
+}
+
 /** The immutable snapshot the Compose shell renders. Rebuilt whenever [FlowHostRuntime.revision] changes. */
 data class FlowHostUiState(
     val revision: Long,
@@ -189,6 +202,10 @@ data class FlowHostUiState(
     val selectedIds: List<String>,
     val primaryId: String?,
     val caret: TextCaret?,
+    val textRange: TextRange?,
+    val caretItemId: String?,
+    val editingBlockId: String?,
+    val interactionMode: FlowInteractionMode,
     val caretRequest: FlowCaretRequest?,
     val tableCursor: FlowTableCursor?,
     /** The uncommitted text of the addressed cell, or null when no cell is mid-edit. */
@@ -204,6 +221,7 @@ data class FlowHostUiState(
     val insertPalette: List<FlowCommandItem>,
     val convertPalette: List<FlowCommandItem>,
     val tableActions: List<FlowCommandItem>,
+    val moreActions: List<FlowCommandItem>,
     val accessibilityActions: List<FlowCommandItem>,
     val recentInsertId: String?,
     val canUndo: Boolean,
@@ -543,6 +561,8 @@ class FlowHostRuntime(
 
     private var selectionModeActive = false
     private var selectionRestore: SelectionSnapshot? = null
+    private var editingBlockId: String? = null
+    private var dragSelectionRestore: SelectionSnapshot? = null
 
     private var slashBlockId: String? = null
     private var slashInput: FlowSlashInput? = null
@@ -564,6 +584,10 @@ class FlowHostRuntime(
         val ids: List<String>,
         val primary: String?,
         val caret: TextCaret?,
+        val textRange: TextRange?,
+        val caretItemId: String?,
+        val typingStyle: InlineTypingStyle?,
+        val editingBlockId: String?,
     )
 
     // ── Single invocation path ────────────────────────────────────────────────────────────────────────
@@ -776,7 +800,9 @@ class FlowHostRuntime(
     /** The context dock: the curated structural row, minus anything the current selection hides. */
     fun dockCommands(): List<FlowCommandItem> =
         itemsOf(
-            (FlowIds.DOCK_ORDER + RelationshipCommandIds.contextual).distinct().mapNotNull(registry::get),
+            (FlowIds.TEXT_DOCK_ORDER + FlowIds.DOCK_ORDER + RelationshipCommandIds.contextual)
+                .distinct()
+                .mapNotNull(registry::get),
             CommandSurface.DOCK,
         )
             .filter { it.status.isVisible }
@@ -803,6 +829,15 @@ class FlowHostRuntime(
     fun tableActions(): List<FlowCommandItem> =
         itemsOf(registry.all().filter { it.id.startsWith(FlowIds.TABLE_PREFIX) }, CommandSurface.DOCK)
             .filter { it.status.isVisible }
+
+    /** Full contextual command list shown only from the explicit More surface. */
+    fun moreActions(): List<FlowCommandItem> =
+        itemsOf(registry.all(), CommandSurface.POINTER_CONTEXT_MENU)
+            .filter { item ->
+                item.status.isVisible &&
+                    !item.id.startsWith(FlowIds.INSERT_PREFIX) &&
+                    !item.id.startsWith(FlowIds.CONVERT_PREFIX)
+            }
 
     /** The insertion the author last used in this note, for the palette's featured row. */
     fun recentInsertId(): String? = memory.get(MemoryScope.CONTEXT_PREFERENCE, FlowMemoryKeys.LAST_INSERT)
@@ -845,9 +880,9 @@ class FlowHostRuntime(
             afterTransform = { document -> relationshipReview.repairTextAnchors(document, blockId, singleTextEdit(before, after), after) },
         ) { session ->
             when {
-                itemId == null -> session.editText(blockId, before, after)
-                todo -> session.editTodoItem(blockId, itemId, before, after)
-                else -> session.editListItem(blockId, itemId, before, after)
+                itemId == null -> session.editText(blockId, before, after, scope.typingStyle)
+                todo -> session.editTodoItem(blockId, itemId, before, after, scope.typingStyle)
+                else -> session.editListItem(blockId, itemId, before, after, scope.typingStyle)
             }
         } ?: return false
         if (controller.document() == previous) return false
@@ -1025,6 +1060,48 @@ class FlowHostRuntime(
         // the caret before selecting would silently discard it.
         if (!selectionModeActive) scope.selectBlocks(listOf(blockId))
         scope.selection.setCaret(TextCaret(blockId, offset))
+        revision++
+    }
+
+    /** Enters text editing through the runtime so all surfaces observe the same active editor. */
+    fun enterTextEditing(blockId: String) {
+        if (controller.document().findById(blockId) == null) return
+        if (editingBlockId != blockId) {
+            controller.breakTypingGroup()
+            scope.typingStyle = null
+        }
+        editingBlockId = blockId
+        revision++
+    }
+
+    /** Returns to quiet reading and clears future-input formatting without altering document content. */
+    fun leaveTextEditing() {
+        if (editingBlockId == null && scope.typingStyle == null) return
+        controller.breakTypingGroup()
+        editingBlockId = null
+        scope.typingStyle = null
+        scope.caret()?.let { caret -> scope.selection.setCaret(caret) }
+        revision++
+    }
+
+    /** Records a real platform text range, distinct from structural block selection. */
+    fun setTextSelection(blockId: String, start: Int, end: Int, itemId: String? = null) {
+        val length = textLengthOf(blockId, itemId)
+        val normalizedStart = minOf(start, end).coerceIn(0, length)
+        val normalizedEnd = maxOf(start, end).coerceIn(normalizedStart, length)
+        if (normalizedStart == normalizedEnd) {
+            setCaret(blockId, normalizedStart, itemId)
+            return
+        }
+        val block = controller.document().findById(blockId) ?: return
+        scope.caretItemId = itemId?.takeIf { candidate ->
+            FlowInlineText.itemsOf(block)?.any { it.id == candidate } == true
+        }
+        if (!selectionModeActive) scope.selectBlocks(listOf(blockId))
+        scope.selection.setTextRange(TextRange(blockId, normalizedStart, normalizedEnd))
+        editingBlockId = blockId
+        controller.breakTypingGroup()
+        scope.typingStyle = null
         revision++
     }
 
@@ -1351,8 +1428,13 @@ class FlowHostRuntime(
                 ids = scope.selectedBlockIds(),
                 primary = scope.primaryBlockId(),
                 caret = scope.caret(),
+                textRange = scope.selection.textRange(),
+                caretItemId = scope.caretItemId,
+                typingStyle = scope.typingStyle,
+                editingBlockId = editingBlockId,
             )
             selectionModeActive = true
+            editingBlockId = null
         }
         anchorBlockId?.let { scope.selectBlocks(listOf(it)) }
         markMultiSelectHintShown()
@@ -1382,7 +1464,13 @@ class FlowHostRuntime(
         if (restore != null) {
             scope.selectBlocks(restore.ids)
             restore.primary?.takeIf { it in restore.ids }?.let { scope.selection.promote(it) }
-            restore.caret?.let { scope.selection.setCaret(it) }
+            when {
+                restore.textRange != null -> scope.selection.setTextRange(restore.textRange)
+                restore.caret != null -> scope.selection.setCaret(restore.caret)
+            }
+            scope.caretItemId = restore.caretItemId
+            scope.typingStyle = restore.typingStyle
+            editingBlockId = restore.editingBlockId
         }
         instrumentation.onSelectionModeChanged(false, selectedCount)
         revision++
@@ -1392,6 +1480,8 @@ class FlowHostRuntime(
     fun finishSelectionMode() {
         selectionModeActive = false
         selectionRestore = null
+        editingBlockId = null
+        scope.typingStyle = null
         instrumentation.onSelectionModeChanged(false, selectedCount)
         revision++
     }
@@ -1539,6 +1629,15 @@ class FlowHostRuntime(
     // ── Drag / drop (routed through the registry like every other move) ──────────────────────────────
 
     fun beginDrag(blockId: String) {
+        dragSelectionRestore = SelectionSnapshot(
+            ids = scope.selectedBlockIds(),
+            primary = scope.primaryBlockId(),
+            caret = scope.caret(),
+            textRange = scope.selection.textRange(),
+            caretItemId = scope.caretItemId,
+            typingStyle = scope.typingStyle,
+            editingBlockId = editingBlockId,
+        )
         memory.put(MemoryScope.TRANSIENT, FlowMemoryKeys.DRAG_SOURCE, blockId)
         scope.selectBlocks(listOf(blockId))
         revision++
@@ -1551,12 +1650,26 @@ class FlowHostRuntime(
         scope.pendingDrop = target
         val result = invoke(FlowIds.DROP, CommandSurface.POINTER_CONTEXT_MENU)
         memory.endInteraction()
+        dragSelectionRestore = null
         return result
     }
 
     fun cancelDrag() {
         scope.pendingDrop = null
         memory.endInteraction()
+        dragSelectionRestore?.let { restore ->
+            scope.selection.clear()
+            scope.selectBlocks(restore.ids)
+            restore.primary?.takeIf { it in restore.ids }?.let(scope.selection::promote)
+            when {
+                restore.textRange != null -> scope.selection.setTextRange(restore.textRange)
+                restore.caret != null -> scope.selection.setCaret(restore.caret)
+            }
+            scope.caretItemId = restore.caretItemId
+            scope.typingStyle = restore.typingStyle
+            editingBlockId = restore.editingBlockId
+        }
+        dragSelectionRestore = null
         revision++
     }
 
@@ -1576,12 +1689,25 @@ class FlowHostRuntime(
     /** Everything the Compose shell needs, resolved once per revision. */
     fun uiState(): FlowHostUiState {
         val document = controller.document()
+        val textRange = scope.selection.textRange()
+        val interactionMode = when {
+            memory.get<String>(MemoryScope.TRANSIENT, FlowMemoryKeys.DRAG_SOURCE) != null -> FlowInteractionMode.DRAGGING
+            selectionModeActive && selectedCount > 1 -> FlowInteractionMode.MULTI_SELECTION
+            selectionModeActive -> FlowInteractionMode.BLOCK_SELECTION
+            textRange != null && !textRange.isCollapsed -> FlowInteractionMode.TEXT_SELECTION
+            editingBlockId != null -> FlowInteractionMode.TEXT_EDITING
+            else -> FlowInteractionMode.READING
+        }
         return FlowHostUiState(
             revision = revision,
             document = document,
             selectedIds = scope.selectedBlockIds(),
             primaryId = scope.primaryBlockId(),
             caret = scope.caret(),
+            textRange = textRange,
+            caretItemId = scope.caretItemId,
+            editingBlockId = editingBlockId,
+            interactionMode = interactionMode,
             caretRequest = caretRequest,
             tableCursor = scope.tableCursor,
             tableDraft = scope.tableDraft,
@@ -1596,6 +1722,7 @@ class FlowHostRuntime(
             insertPalette = insertPalette(),
             convertPalette = convertPalette(),
             tableActions = tableActions(),
+            moreActions = moreActions(),
             accessibilityActions = accessibilityActions(),
             recentInsertId = recentInsertId(),
             canUndo = controller.canUndo(),

@@ -92,6 +92,10 @@ object FlowKeyboardMap {
 
         // Insertion: one chord for the most common block, plus the palette itself.
         put(FlowShortcut("enter", ctrl = true, shift = true), insertId(FlowBlockKind.PARAGRAPH))
+
+        put(FlowShortcut("b", ctrl = true), FlowIds.BOLD)
+        put(FlowShortcut("i", ctrl = true), FlowIds.ITALIC)
+        put(FlowShortcut("u", ctrl = true), FlowIds.UNDERLINE)
     }
 
     /** Command id bound to [shortcut], or null when the chord is unbound. */
@@ -112,6 +116,12 @@ object FlowKeyboardMap {
  * command breaks the build instead of silently producing an empty dock row.
  */
 object FlowIds {
+    const val TEXT_PREFIX = "flow.text."
+    const val BOLD = "flow.text.bold"
+    const val ITALIC = "flow.text.italic"
+    const val UNDERLINE = "flow.text.underline"
+    const val STRIKETHROUGH = "flow.text.strikethrough"
+    const val INLINE_CODE = "flow.text.code"
     const val DUPLICATE = "flow.duplicate"
     const val DELETE = "flow.delete"
     const val MOVE_UP = "flow.move.up"
@@ -153,4 +163,6 @@ object FlowIds {
         MERGE_PREVIOUS,
         DELETE,
     )
+
+    val TEXT_DOCK_ORDER: List<String> = listOf(BOLD, ITALIC, UNDERLINE, STRIKETHROUGH, INLINE_CODE)
 }

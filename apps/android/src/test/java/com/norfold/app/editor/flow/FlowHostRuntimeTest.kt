@@ -6,6 +6,8 @@ import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.HeadingBlock
 import com.norfold.app.domain.ParagraphBlock
+import com.norfold.app.domain.BoldInline
+import com.norfold.app.domain.plainText
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TableCell
 import com.norfold.app.domain.findById
@@ -661,6 +663,69 @@ class FlowHostRuntimeTest {
     fun typing_noOpEditIsNotRecorded() {
         val runtime = runtimeOf(paragraphs("alpha"))
         assertFalse(runtime.editText("p0", "alpha", "alpha"))
+        assertEquals(0, runtime.controller.undoDepth())
+    }
+
+    @Test
+    fun textSelection_boldUsesOneSemanticCommandAndOneHistoryTransaction() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        runtime.enterTextEditing("p0")
+        runtime.setTextSelection("p0", 0, 5)
+
+        assertEquals(FlowInteractionMode.TEXT_SELECTION, runtime.uiState().interactionMode)
+        assertEquals(CommandState.AVAILABLE, runtime.statusOf(FlowIds.BOLD).state)
+        assertTrue(runtime.invoke(FlowIds.BOLD, CommandSurface.DOCK) is CommandResult.Success)
+
+        val paragraph = runtime.controller.document().findById("p0") as ParagraphBlock
+        assertTrue(paragraph.content.single() is BoldInline)
+        assertEquals(CommandState.ACTIVE, runtime.statusOf(FlowIds.BOLD).state)
+        assertEquals(1, runtime.controller.undoDepth())
+    }
+
+    @Test
+    fun collapsedCaret_boldFormatsFutureTypingAndResetsWhenEditingEnds() {
+        val runtime = runtimeOf(paragraphs("a"))
+        runtime.enterTextEditing("p0")
+        runtime.setCaret("p0", 1)
+        assertTrue(runtime.invoke(FlowIds.BOLD, CommandSurface.KEYBOARD) is CommandResult.Success)
+
+        assertTrue(runtime.editText("p0", "a", "ab"))
+        val paragraph = runtime.controller.document().findById("p0") as ParagraphBlock
+        assertEquals("ab", paragraph.content.joinToString("") { it.plainText() })
+        assertTrue(paragraph.content.any { it is BoldInline })
+
+        runtime.leaveTextEditing()
+        assertEquals(FlowInteractionMode.READING, runtime.uiState().interactionMode)
+        assertNull(runtime.scope.typingStyle)
+    }
+
+    @Test
+    fun selectionMode_cancelRestoresTextRangeItemAndEditingMode() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.enterTextEditing("p0")
+        runtime.setTextSelection("p0", 1, 4)
+
+        runtime.enterSelectionMode("p1")
+        runtime.cancelSelectionMode()
+
+        assertEquals(com.norfold.app.editor.selection.TextRange("p0", 1, 4), runtime.uiState().textRange)
+        assertEquals("p0", runtime.uiState().editingBlockId)
+        assertEquals(FlowInteractionMode.TEXT_SELECTION, runtime.uiState().interactionMode)
+    }
+
+    @Test
+    fun drag_cancelRestoresTheExactPreDragSelectionAndTextRange() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.enterTextEditing("p0")
+        runtime.setTextSelection("p0", 1, 4)
+
+        runtime.beginDrag("p1")
+        assertEquals(FlowInteractionMode.DRAGGING, runtime.uiState().interactionMode)
+        runtime.cancelDrag()
+
+        assertEquals(listOf("p0"), runtime.scope.selectedBlockIds())
+        assertEquals(com.norfold.app.editor.selection.TextRange("p0", 1, 4), runtime.uiState().textRange)
+        assertEquals("p0", runtime.uiState().editingBlockId)
         assertEquals(0, runtime.controller.undoDepth())
     }
 
