@@ -404,10 +404,6 @@ fun FlowHostScreen(
                     onDismiss = { presenter.act { closeSlash(DismissTrigger.CANCEL) } },
                 )
             }
-            if (state.selectionMode) {
-                // Selection controls share the contextual dock below; a second stacked bar made the active
-                // block disappear behind two independent surfaces on compact screens.
-            }
             if (state.interactionMode != com.norfold.app.editor.flow.FlowInteractionMode.READING || state.formFactor.keyboardOpen) {
                 FlowContextDock(
                     state = state,
