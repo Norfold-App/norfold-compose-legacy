@@ -1,5 +1,10 @@
 package com.norfold.app.ui.editor.flow
 
+import android.annotation.SuppressLint
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
@@ -31,6 +37,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -76,6 +83,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.ChartBlock
@@ -123,6 +131,7 @@ import com.norfold.app.ui.editor.image.ImageFocusRenderer
 import com.norfold.app.ui.components.DiagramKind
 import com.norfold.app.ui.components.FlowDirection
 import com.norfold.app.ui.components.MermaidDiagramCodec
+import java.io.ByteArrayInputStream
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -386,11 +395,21 @@ fun FlowBlockContent(
             Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 ImageFocusRenderer(
                     block = block,
-                    modifier = Modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(120f, 560f).dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(block.displayHeightDp.coerceIn(120f, 560f).dp)
+                        .then(
+                            if (context.editing && !context.selectionMode && loaded.isEditable) {
+                                Modifier.clickable(
+                                    role = Role.Button,
+                                    onClickLabel = "Open Image Focus",
+                                ) { callbacks.onOpenImage(block.id) }
+                            } else Modifier
+                        )
+                        .semantics {
+                            contentDescription = "Image${block.caption.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}"
+                        },
                 )
-                if (context.editing && !context.selectionMode && loaded.isEditable) {
-                    TextButton(onClick = { callbacks.onOpenImage(block.id) }) { Text("Edit image") }
-                }
                 if (block.caption.isNotBlank()) {
                     Text(block.caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -407,12 +426,18 @@ fun FlowBlockContent(
                     resolution = remember(loaded.document, context.chartDataRevision) {
                         ChartDataResolver.resolve(loaded.document, context.chartCalculationProvider)
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (context.editing && !context.selectionMode && loaded.isEditable) {
+                                Modifier.clickable(
+                                    role = Role.Button,
+                                    onClickLabel = "Open Chart Studio",
+                                ) { callbacks.onOpenChart(block.id) }
+                            } else Modifier
+                        ),
                     heightDp = block.editorHeightDp.toInt().coerceIn(120, 560),
                 )
-                if (context.editing && !context.selectionMode && loaded.isEditable) {
-                    TextButton(onClick = { callbacks.onOpenChart(block.id) }) { Text("Edit chart") }
-                }
             }
         } else {
             FlowPlaceholder("Chart", block.plainText().take(120).ifBlank { "empty" }, modifier)
@@ -446,6 +471,10 @@ private fun FlowCodeBlock(
     context: FlowBlockContext,
     modifier: Modifier = Modifier,
 ) {
+    if (block.language.equals("html", ignoreCase = true) || block.language.equals("htm", ignoreCase = true)) {
+        FlowHtmlBlock(block, callbacks, context, modifier)
+        return
+    }
     val scroll = rememberScrollState()
     Column(
         modifier
@@ -473,6 +502,101 @@ private fun FlowCodeBlock(
             modifier = Modifier.widthIn(min = 360.dp),
         )
     }
+}
+
+/** Exact HTML source with an offline, script-free rendering projection. */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun FlowHtmlBlock(
+    block: CodeBlock,
+    callbacks: FlowBlockCallbacks,
+    context: FlowBlockContext,
+    modifier: Modifier = Modifier,
+) {
+    var mode by rememberSaveable(block.id) { mutableStateOf(FlowRenderableMode.Preview) }
+    Column(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .62f)),
+        ) {
+            FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
+            FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
+        }
+        Box(
+            Modifier.fillMaxWidth()
+                .heightIn(min = 180.dp, max = block.editorHeightDp.coerceIn(180f, 560f).dp)
+                .clip(RoundedCornerShape(8.dp)),
+        ) {
+            when (mode) {
+                FlowRenderableMode.Source -> FlowEditableLine(
+                    blockId = block.id,
+                    itemId = null,
+                    nodes = listOf(InlineText(block.code)),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, lineHeight = 18.sp),
+                    placeholder = "HTML source",
+                    callbacks = callbacks,
+                    context = context,
+                    structuralEnter = false,
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
+                )
+                FlowRenderableMode.Preview -> AndroidView(
+                    modifier = Modifier.fillMaxWidth().height(block.editorHeightDp.coerceIn(180f, 560f).dp)
+                        .semantics { contentDescription = "Sandboxed HTML preview" },
+                    factory = { androidContext ->
+                        WebView(androidContext).apply {
+                            settings.javaScriptEnabled = false
+                            settings.javaScriptCanOpenWindowsAutomatically = false
+                            settings.domStorageEnabled = false
+                            settings.databaseEnabled = false
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            settings.allowFileAccessFromFileURLs = false
+                            settings.allowUniversalAccessFromFileURLs = false
+                            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                            isLongClickable = false
+                            setNetworkAvailable(false)
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = true
+                                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                    val scheme = request?.url?.scheme?.lowercase()
+                                    return if (scheme in setOf("http", "https", "file", "content")) {
+                                        WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
+                                    } else null
+                                }
+                            }
+                        }
+                    },
+                    update = { webView ->
+                        webView.loadDataWithBaseURL(
+                            "about:blank",
+                            htmlSandboxDocument(block.code),
+                            "text/html",
+                            "UTF-8",
+                            null,
+                        )
+                    },
+                )
+            }
+        }
+        Text(
+            "Offline preview · scripts, navigation, files, and network requests are blocked",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+internal fun htmlSandboxDocument(source: String): String = buildString(source.length + 256) {
+    append("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; media-src data:;\">")
+    append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
+    append(source)
 }
 
 @Composable
@@ -517,6 +641,7 @@ private fun FlowMermaidBlock(
     modifier: Modifier = Modifier,
 ) {
     var mode by rememberSaveable(block.id) { mutableStateOf(FlowRenderableMode.Preview) }
+    var selectedNodeId by rememberSaveable(block.id) { mutableStateOf<String?>(null) }
     val defaultColor = MaterialTheme.colorScheme.primary.toArgb().let { color -> "#%06X".format(color and 0xFFFFFF) }
     val model = remember(block.code, defaultColor) {
         MermaidDiagramCodec.decodeOrNull(block.code, defaultColor)
@@ -585,7 +710,61 @@ private fun FlowMermaidBlock(
                     structuralEnter = false,
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 )
-                FlowRenderableMode.Preview -> FlowMermaidPreview(requireNotNull(model))
+                FlowRenderableMode.Preview -> FlowMermaidPreview(
+                    requireNotNull(model),
+                    selectedNodeId = selectedNodeId,
+                    onSelectNode = if (context.editing && !context.selectionMode) ({ selectedNodeId = it }) else null,
+                )
+            }
+        }
+        if (effectiveMode == FlowRenderableMode.Preview && model?.kind == DiagramKind.Flowchart && context.editing && !context.selectionMode) {
+            model.nodes.firstOrNull { it.id == selectedNodeId }?.let { selected ->
+                OutlinedTextField(
+                    value = selected.label,
+                    onValueChange = { label ->
+                        val next = model.copy(nodes = model.nodes.map { if (it.id == selected.id) it.copy(label = label) else it })
+                        val encoded = MermaidDiagramCodec.encode(next, defaultColor)
+                        callbacks.onEdit(FlowTextEdit(block.id, null, block.code, encoded, encoded.length))
+                    },
+                    label = { Text("Node label") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(defaultColor, "#00897B", "#1565C0", "#EF6C00").distinct().forEach { color ->
+                        Box(
+                            Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
+                                .background(Color(android.graphics.Color.parseColor(color)))
+                                .clickable {
+                                    val next = model.copy(nodes = model.nodes.map { if (it.id == selected.id) it.copy(color = color) else it })
+                                    val encoded = MermaidDiagramCodec.encode(next, defaultColor)
+                                    callbacks.onEdit(FlowTextEdit(block.id, null, block.code, encoded, encoded.length))
+                                }
+                                .semantics { contentDescription = "Set node color $color" },
+                        )
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = {
+                    val id = MermaidDiagramCodec.nextId(model.nodes.map { it.id }, "Node")
+                    val next = model.copy(nodes = model.nodes + com.norfold.app.ui.components.DiagramNodeInput(id, "New node", defaultColor))
+                    val encoded = MermaidDiagramCodec.encode(next, defaultColor)
+                    callbacks.onEdit(FlowTextEdit(block.id, null, block.code, encoded, encoded.length))
+                    selectedNodeId = id
+                }) { Text("Add node") }
+                val selected = selectedNodeId
+                if (selected != null && model.nodes.size > 1) {
+                    TextButton(onClick = {
+                        val next = model.copy(
+                            nodes = model.nodes.filterNot { it.id == selected },
+                            edges = model.edges.filterNot { it.from == selected || it.to == selected },
+                        )
+                        val encoded = MermaidDiagramCodec.encode(next, defaultColor)
+                        callbacks.onEdit(FlowTextEdit(block.id, null, block.code, encoded, encoded.length))
+                        selectedNodeId = null
+                    }) { Text("Remove") }
+                }
             }
         }
     }
@@ -624,7 +803,11 @@ private fun FlowRenderableTab(
 }
 
 @Composable
-private fun FlowMermaidPreview(model: com.norfold.app.ui.components.DiagramBuilderModel) {
+private fun FlowMermaidPreview(
+    model: com.norfold.app.ui.components.DiagramBuilderModel,
+    selectedNodeId: String? = null,
+    onSelectNode: ((String) -> Unit)? = null,
+) {
     when (model.kind) {
         DiagramKind.Flowchart -> {
             val nodesById = model.nodes.associateBy { it.id }
@@ -664,7 +847,16 @@ private fun FlowMermaidPreview(model: com.norfold.app.ui.components.DiagramBuild
                                     .weight(1f, fill = false)
                                     .widthIn(min = 88.dp, max = 180.dp)
                                     .clip(RoundedCornerShape(if (node.shape.name == "Rounded") 8.dp else 4.dp))
-                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                                    .border(
+                                        if (selectedNodeId == id) 3.dp else 1.dp,
+                                        if (selectedNodeId == id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .clickable(enabled = onSelectNode != null) { onSelectNode?.invoke(id) }
+                                    .semantics {
+                                        role = Role.Button
+                                        stateDescription = if (selectedNodeId == id) "Selected node" else "Diagram node"
+                                    }
                                     .padding(horizontal = 10.dp, vertical = 7.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -677,14 +869,26 @@ private fun FlowMermaidPreview(model: com.norfold.app.ui.components.DiagramBuild
                             .flatMap { from -> visibleEdges.filter { it.from == from }.map { it.label.trim() } }
                             .filter(String::isNotEmpty)
                             .distinct()
-                        Text(
-                            buildString {
-                                append(if (model.direction == FlowDirection.TD) "↓" else "→")
-                                if (outgoingLabels.isNotEmpty()) append("  ${outgoingLabels.joinToString(" / ")}")
-                            },
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelMedium,
-                        )
+                        Box(
+                            Modifier.height(28.dp).widthIn(min = 80.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                if (model.direction == FlowDirection.TD) {
+                                    Modifier.width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outline)
+                                } else {
+                                    Modifier.height(2.dp).fillMaxWidth().background(MaterialTheme.colorScheme.outline)
+                                },
+                            )
+                            if (outgoingLabels.isNotEmpty()) {
+                                Text(
+                                    outgoingLabels.joinToString(" / "),
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface).padding(horizontal = 5.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
                     }
                 }
             }

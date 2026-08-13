@@ -378,15 +378,17 @@ fun SceneObjectContent(
         // "fix" it by overwriting what is actually preserved intact.
         is ImageBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
             val loaded = remember(block.imageEditDocument) { ImageBlockAdapter.load(block) }
-            Box(modifier.fillMaxSize()) {
-                ImageFocusRenderer(block, Modifier.fillMaxSize())
-                if (editing && loaded.isEditable) {
-                    TextButton(
-                        onClick = { callbacks.onOpenImage(block.id) },
-                        modifier = Modifier.align(Alignment.BottomEnd),
-                    ) { Text("Edit image") }
-                }
-            }
+            ImageFocusRenderer(
+                block,
+                modifier.fillMaxSize().then(
+                    if (editing && loaded.isEditable) {
+                        Modifier.clickable(
+                            role = Role.Button,
+                            onClickLabel = "Open Image Focus",
+                        ) { callbacks.onOpenImage(block.id) }
+                    } else Modifier
+                ),
+            )
         } else {
             ScenePlaceholder("Image", block.caption.ifBlank { block.source }, renderScale, modifier)
         }
@@ -398,12 +400,16 @@ fun SceneObjectContent(
                     resolution = remember(loaded.document, chartDataRevision) {
                         ChartDataResolver.resolve(loaded.document, chartCalculationProvider)
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().then(
+                        if (editing && loaded.isEditable) {
+                            Modifier.clickable(
+                                role = Role.Button,
+                                onClickLabel = "Open Chart Studio",
+                            ) { callbacks.onOpenChart(block.id) }
+                        } else Modifier
+                    ),
                     heightDp = block.editorHeightDp.toInt().coerceIn(100, 560),
                 )
-                if (editing && loaded.isEditable) {
-                    TextButton(onClick = { callbacks.onOpenChart(block.id) }) { Text("Edit chart") }
-                }
             }
         } else {
             ScenePlaceholder("Chart", "Chart Studio is unavailable.", renderScale, modifier)
