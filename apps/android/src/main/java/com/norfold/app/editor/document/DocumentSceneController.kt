@@ -2,9 +2,12 @@ package com.norfold.app.editor.document
 
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BlockEditorSession
+import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.DocumentPageBlock
 import com.norfold.app.domain.DocumentSettingsBlock
+import com.norfold.app.domain.MathBlock
+import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.PageGeometry
 import com.norfold.app.domain.SceneGeometry
 import com.norfold.app.domain.SceneLock
@@ -352,6 +355,9 @@ class DocumentSceneController(
         // the model disagree about what is on screen, and guessing a target writes into the wrong content.
         val addressed = session.document.findById(blockId) ?: return false
         when {
+            itemId == null && addressed is CodeBlock -> session.replaceBlock(addressed.copy(code = after))
+            itemId == null && addressed is MathBlock -> session.replaceBlock(addressed.copy(tex = after))
+            itemId == null && addressed is MermaidBlock -> session.replaceBlock(addressed.copy(code = after))
             itemId == null -> session.editText(blockId, before, after)
             addressed is TodoListBlock -> session.editTodoItem(blockId, itemId, before, after)
             else -> session.editListItem(blockId, itemId, before, after)

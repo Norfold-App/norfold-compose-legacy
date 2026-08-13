@@ -320,13 +320,9 @@ fun SceneObjectContent(
             }
         }
 
-        // Rendered honestly, and **read-only**. A code block stores a plain `code` string, not inline nodes,
-        // so `BlockEditorSession.editText` — which edits `editableInline()` — has no path to it and returns
-        // the block untouched. Presenting a live caret over content no keystroke can reach is worse than
-        // showing it as not-yet-editable: the user would type a line, see it vanish, and reasonably conclude
-        // the document had lost it. Editing arrives with the code-block work, not by faking it here.
-        is CodeBlock -> SceneReadOnlyCode(
-            block, stylesheet, wrapperStyles, previewRole, previewPaint, previewTargetIds, renderScale, modifier,
+        is CodeBlock -> SceneCode(
+            block, objectId, editing, callbacks, stylesheet, wrapperStyles,
+            previewRole, previewPaint, previewTargetIds, renderScale, modifier,
         )
 
         is DividerBlock -> Box(modifier.fillMaxWidth().padding(vertical = renderScale.pointToDp(6f))) {
@@ -414,10 +410,17 @@ fun SceneObjectContent(
         } else {
             ScenePlaceholder("Chart", "Chart Studio is unavailable.", renderScale, modifier)
         }
-        is MathBlock -> ScenePlaceholder("Equation", block.tex.ifBlank { "empty" }, renderScale, modifier)
-        is MermaidBlock -> ScenePlaceholder("Diagram", block.code.ifBlank { "empty" }, renderScale, modifier)
-        is EmbedBlock -> ScenePlaceholder("Embed", block.url.ifBlank { "empty" }, renderScale, modifier)
-        is FileBlock -> ScenePlaceholder("File", block.name.ifBlank { "attachment" }, renderScale, modifier)
+        is MathBlock -> SceneSpecialSource("Equation", block.id, objectId, block.tex, editing, callbacks, renderScale, modifier)
+        is MermaidBlock -> SceneSpecialSource("Diagram", block.id, objectId, block.code, editing, callbacks, renderScale, modifier)
+        is EmbedBlock -> SceneCompactPreview(
+            block.metadata.title.ifBlank { "Embedded link" },
+            block.metadata.description.ifBlank { block.url }, renderScale, modifier,
+        )
+        is FileBlock -> SceneCompactPreview(
+            block.name.ifBlank { "Attachment" },
+            listOf(block.mimeType, sceneFileSize(block.sizeBytes)).filter(String::isNotBlank).joinToString(" · "),
+            renderScale, modifier,
+        )
 
         is UnknownBlock -> ScenePlaceholder(
             title = "Preserved content",
@@ -622,8 +625,11 @@ private fun SceneEditableLine(
  * field here would accept keystrokes the controller would silently discard.
  */
 @Composable
-private fun SceneReadOnlyCode(
+private fun SceneCode(
     block: CodeBlock,
+    objectId: String,
+    editing: Boolean,
+    callbacks: SceneContentCallbacks,
     stylesheet: Stylesheet,
     wrapperStyles: List<WrapperStyleSource>,
     previewRole: ColorRole?,
@@ -646,20 +652,75 @@ private fun SceneReadOnlyCode(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Text(
-            text = block.code.ifBlank { "Empty code block" },
+        SceneEditableLine(
+            objectId = objectId,
+            blockId = block.id,
+            itemId = null,
+            nodes = listOf(InlineText(block.code)),
             style = resolvedSceneTextStyle(
-                block,
-                stylesheet,
-                MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                wrapperStyles,
-                previewRole,
-                previewPaint,
-                previewTargetIds,
-                renderScale,
+                block, stylesheet, MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                wrapperStyles, previewRole, previewPaint, previewTargetIds, renderScale,
             ),
+            placeholder = "Empty code block",
+            editing = editing,
+            callbacks = callbacks,
+            renderScale = renderScale,
         )
     }
+}
+
+@Composable
+private fun SceneSpecialSource(
+    title: String,
+    blockId: String,
+    objectId: String,
+    source: String,
+    editing: Boolean,
+    callbacks: SceneContentCallbacks,
+    renderScale: DocumentRenderScale,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(renderScale.pointToDp(6f)))
+            .border(renderScale.pointToDp(1f), MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(renderScale.pointToDp(6f)))
+            .padding(renderScale.pointToDp(8f)),
+    ) {
+        Text(title, style = renderScale.pointTextStyle(MaterialTheme.typography.labelSmall), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SceneEditableLine(
+            objectId, blockId, null, listOf(InlineText(source)),
+            renderScale.pointTextStyle(
+                if (title == "Equation") MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Serif)
+                else MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            ),
+            if (title == "Equation") "Empty equation" else "Empty diagram",
+            editing, callbacks, renderScale,
+        )
+    }
+}
+
+@Composable
+private fun SceneCompactPreview(
+    title: String,
+    detail: String,
+    renderScale: DocumentRenderScale,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(renderScale.pointToDp(6f)))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f))
+            .padding(renderScale.pointToDp(8f)),
+    ) {
+        Text(title, style = renderScale.pointTextStyle(MaterialTheme.typography.titleSmall), maxLines = 1)
+        Text(detail, style = renderScale.pointTextStyle(MaterialTheme.typography.bodySmall), maxLines = 2, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private fun sceneFileSize(bytes: Long): String = when {
+    bytes <= 0L -> "Unknown size"
+    bytes < 1_024L -> "$bytes B"
+    bytes < 1_048_576L -> "${bytes / 1_024} KB"
+    bytes < 1_073_741_824L -> "${bytes / 1_048_576} MB"
+    else -> "${bytes / 1_073_741_824} GB"
 }
 
 /** A table placed on a page: readable at its real content. Cell editing belongs to the Phase-4 table work. */

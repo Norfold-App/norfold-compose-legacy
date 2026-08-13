@@ -642,16 +642,16 @@ class DocumentPhase2CorrectionTest {
     // ── 7. CodeBlock edit policy ────────────────────────────────────────────────────────────────────
 
     @Test
-    fun aCodeBlockIsNotPresentedAsEditableBecauseNoCorrectPathExists() {
-        // `code` is a plain string outside the inline-node vocabulary editText operates on, so the controller
-        // has no way to apply a keystroke to it. Refusing is honest; accepting and discarding is not.
+    fun aCodeBlockUsesTheCanonicalSceneHistoryPath() {
         val code = CodeBlock(id = "c-code", language = "kotlin", code = "fun main() {}")
         val rt = editing(page("p1", obj("code", content = code)))
 
-        assertFalse(
-            "a code edit must be refused rather than silently dropped",
+        assertTrue(
+            "a code edit must commit through the owning scene transaction",
             rt.editObjectText("code", "c-code", null, "fun main() {}", "fun main() { changed }"),
         )
+        assertEquals("fun main() { changed }", (contentOf(rt, "code") as CodeBlock).code)
+        assertTrue(rt.undo())
         assertEquals("fun main() {}", (contentOf(rt, "code") as CodeBlock).code)
     }
 
