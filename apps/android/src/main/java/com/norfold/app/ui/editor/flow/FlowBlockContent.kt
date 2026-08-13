@@ -958,7 +958,7 @@ private fun FlowMermaidPreview(
 ) {
     when (model.kind) {
         DiagramKind.Flowchart -> {
-            if (positions.isNotEmpty()) {
+            if (positions.isNotEmpty() || onMoveNode != null) {
                 FlowPositionedDiagram(model, positions, selectedNodeId, onSelectNode, onMoveNode)
                 return
             }
