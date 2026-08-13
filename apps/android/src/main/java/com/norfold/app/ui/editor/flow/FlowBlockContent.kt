@@ -93,6 +93,8 @@ import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.DocumentBlock
+import com.norfold.app.domain.EmbedBlock
+import com.norfold.app.domain.FileBlock
 import com.norfold.app.domain.HeadingBlock
 import com.norfold.app.domain.InlineNode
 import com.norfold.app.domain.InlineText
@@ -101,6 +103,7 @@ import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.NumberedListBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
+import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.effectiveStyleAssignment
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
@@ -131,6 +134,10 @@ import com.norfold.app.ui.editor.image.ImageFocusRenderer
 import com.norfold.app.ui.components.DiagramKind
 import com.norfold.app.ui.components.FlowDirection
 import com.norfold.app.ui.components.MermaidDiagramCodec
+import com.norfold.app.domain.style.resolvedShapeFill
+import com.norfold.app.domain.style.resolvedShapeStroke
+import com.norfold.app.ui.editor.style.backgroundPaint
+import com.norfold.app.ui.editor.style.resolvedShapeMetrics
 import java.io.ByteArrayInputStream
 
 /**
@@ -443,12 +450,11 @@ fun FlowBlockContent(
             FlowPlaceholder("Chart", block.plainText().take(120).ifBlank { "empty" }, modifier)
         }
 
-        is MathBlock -> FlowWideSource(
-            title = "Equation",
-            source = block.tex.ifBlank { "empty" },
-            modifier = modifier,
-        )
+        is MathBlock -> FlowMathBlock(block, callbacks, context, modifier)
         is MermaidBlock -> FlowMermaidBlock(block, callbacks, context, modifier)
+        is ShapeBlock -> FlowShapeBlock(block, context, modifier)
+        is EmbedBlock -> FlowEmbedPreview(block, modifier)
+        is FileBlock -> FlowFilePreview(block, modifier)
 
         is UnknownBlock -> FlowPlaceholder(
             title = "Preserved content",
@@ -461,6 +467,105 @@ fun FlowBlockContent(
             detail = block.plainText().take(120).ifBlank { "Editing arrives with a later phase." },
             modifier = modifier,
         )
+    }
+}
+
+@Composable
+private fun FlowShapeBlock(block: ShapeBlock, context: FlowBlockContext, modifier: Modifier = Modifier) {
+    val metrics = remember(block, context.stylesheet) { resolvedShapeMetrics(block, context.stylesheet) }
+    val shape = RoundedCornerShape(metrics.cornerRadiusDp.dp)
+    val previewApplies = block.id in context.previewTargetIds
+    val fill = context.previewPaint.takeIf { previewApplies && context.previewRole == ColorRole.FILL }
+        ?: resolvedShapeFill(block, context.stylesheet)
+    val stroke = context.previewPaint.takeIf { previewApplies && context.previewRole == ColorRole.STROKE }
+        ?: resolvedShapeStroke(block, context.stylesheet)
+    Box(
+        modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(72f, 560f).dp)
+            .clip(shape).backgroundPaint(fill)
+            .border(metrics.strokeWidthDp.dp, Color(stroke.representative().toArgb()), shape)
+            .semantics { contentDescription = "${block.kind.name.replace('_', ' ')} shape${block.text.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}" },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (block.text.isNotBlank()) Text(block.text, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@Composable
+private fun FlowEmbedPreview(block: EmbedBlock, modifier: Modifier = Modifier) {
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+            .padding(12.dp)
+            .semantics { contentDescription = "Embedded link ${block.metadata.title.ifBlank { block.url }}" },
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(block.metadata.title.ifBlank { "Embedded link" }, style = MaterialTheme.typography.titleSmall)
+        if (block.metadata.description.isNotBlank()) Text(block.metadata.description, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+        Text(block.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+    }
+}
+
+@Composable
+private fun FlowFilePreview(block: FileBlock, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f))
+            .padding(12.dp)
+            .semantics { contentDescription = "File ${block.name}, ${humanFileSize(block.sizeBytes)}" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center,
+        ) { Text(block.name.substringAfterLast('.', "FILE").take(4).uppercase(), style = MaterialTheme.typography.labelSmall) }
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Text(block.name.ifBlank { "Attachment" }, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+            Text(listOf(block.mimeType, humanFileSize(block.sizeBytes)).filter(String::isNotBlank).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private fun humanFileSize(bytes: Long): String = when {
+    bytes <= 0L -> "Unknown size"
+    bytes < 1_024L -> "$bytes B"
+    bytes < 1_048_576L -> "${bytes / 1_024} KB"
+    bytes < 1_073_741_824L -> "${bytes / 1_048_576} MB"
+    else -> "${bytes / 1_073_741_824} GB"
+}
+
+@Composable
+private fun FlowMathBlock(
+    block: MathBlock,
+    callbacks: FlowBlockCallbacks,
+    context: FlowBlockContext,
+    modifier: Modifier = Modifier,
+) {
+    var mode by rememberSaveable(block.id) { mutableStateOf(FlowRenderableMode.Preview) }
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (context.editing && !context.selectionMode) {
+            Row(Modifier.fillMaxWidth()) {
+                FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
+                FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
+            }
+        }
+        if (mode == FlowRenderableMode.Source && context.editing) {
+            FlowEditableLine(
+                block.id, null, listOf(InlineText(block.tex)),
+                MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                "TeX source", callbacks, context, structuralEnter = false,
+            )
+        } else {
+            Text(
+                block.tex.ifBlank { "Empty equation" },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp)
+                    .semantics { contentDescription = "Equation ${block.tex}" },
+                style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Serif),
+            )
+        }
     }
 }
 
