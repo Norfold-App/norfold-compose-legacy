@@ -268,6 +268,8 @@ data class MermaidBlock(
     override val id: String = blockId(),
     val code: String = "",
     val editorHeightDp: Float = 180f,
+    /** Additive visual geometry. Mermaid source remains the canonical semantic representation. */
+    val diagramEditDocument: String? = null,
 ) : DocumentBlock {
     override fun plainText() = code
 }

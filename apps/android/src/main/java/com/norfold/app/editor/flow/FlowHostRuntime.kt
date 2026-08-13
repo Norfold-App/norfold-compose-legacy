@@ -47,6 +47,7 @@ import com.norfold.app.editor.selection.TextCaret
 import com.norfold.app.editor.selection.TextRange
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
+import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.InlineTypingStyle
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartDocument
@@ -371,6 +372,19 @@ class FlowHostRuntime(
         val changed = controller.mutate("Edit image") { session ->
             session.replaceBlock(after)
             BlockCursor(blockId, 0)
+        } != null
+        if (changed) revision++
+        return changed
+    }
+
+    /** Commits one source-preserving Mermaid geometry gesture through canonical Flow history. */
+    fun updateMermaid(before: MermaidBlock, after: MermaidBlock): Boolean {
+        if (before.id != after.id || before == after) return false
+        val current = controller.document().findById(before.id) as? MermaidBlock ?: return false
+        if (current != before) return false
+        val changed = controller.mutate("Move diagram node") { session ->
+            session.replaceBlock(after)
+            BlockCursor(after.id, 0)
         } != null
         if (changed) revision++
         return changed

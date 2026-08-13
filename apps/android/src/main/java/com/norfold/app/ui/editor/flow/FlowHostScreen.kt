@@ -687,6 +687,7 @@ private fun FlowBlockRow(
             onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },
             onOpenChart = onOpenChart,
             onOpenImage = onOpenImage,
+            onUpdateMermaid = { before, after -> presenter.act { updateMermaid(before, after) } },
             onEditorFocusChanged = onEditorFocusChanged,
         )
     }

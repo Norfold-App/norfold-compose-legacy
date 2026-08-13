@@ -8,6 +8,8 @@ import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -62,6 +65,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -82,6 +86,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.norfold.app.domain.BulletListBlock
@@ -138,6 +143,8 @@ import com.norfold.app.domain.style.resolvedShapeFill
 import com.norfold.app.domain.style.resolvedShapeStroke
 import com.norfold.app.ui.editor.style.backgroundPaint
 import com.norfold.app.ui.editor.style.resolvedShapeMetrics
+import com.norfold.app.editor.diagram.DiagramEditDocumentJson
+import com.norfold.app.editor.diagram.DiagramNodePosition
 import java.io.ByteArrayInputStream
 
 /**
@@ -187,6 +194,7 @@ class FlowBlockCallbacks(
     val onToggleCollapsed: (blockId: String) -> Unit = {},
     val onOpenChart: (blockId: String) -> Unit = {},
     val onOpenImage: (blockId: String) -> Unit = {},
+    val onUpdateMermaid: (before: MermaidBlock, after: MermaidBlock) -> Unit = { _, _ -> },
     /** Reports real field focus so the host can keep editing chrome contextual. */
     val onEditorFocusChanged: (blockId: String, focused: Boolean) -> Unit = { _, _ -> },
 )
@@ -751,6 +759,10 @@ private fun FlowMermaidBlock(
     val model = remember(block.code, defaultColor) {
         MermaidDiagramCodec.decodeOrNull(block.code, defaultColor)
     }
+    val editDocument = remember(block.diagramEditDocument, model) {
+        DiagramEditDocumentJson.decodeOrDefault(block.diagramEditDocument)
+            .normalized(model?.nodes?.mapTo(mutableSetOf()) { it.id }.orEmpty())
+    }
     val effectiveMode = if (model == null) FlowRenderableMode.Source else mode
 
     Column(
@@ -817,8 +829,16 @@ private fun FlowMermaidBlock(
                 )
                 FlowRenderableMode.Preview -> FlowMermaidPreview(
                     requireNotNull(model),
+                    positions = editDocument.nodePositions,
                     selectedNodeId = selectedNodeId,
                     onSelectNode = if (context.editing && !context.selectionMode) ({ selectedNodeId = it }) else null,
+                    onMoveNode = if (context.editing && !context.selectionMode) ({ id, position ->
+                        val next = editDocument.copy(nodePositions = editDocument.nodePositions + (id to position))
+                        callbacks.onUpdateMermaid(
+                            block,
+                            block.copy(diagramEditDocument = DiagramEditDocumentJson.encode(next)),
+                        )
+                    }) else null,
                 )
             }
         }
@@ -871,6 +891,27 @@ private fun FlowMermaidBlock(
                     }) { Text("Remove") }
                 }
             }
+            val selected = selectedNodeId
+            if (selected != null && model.nodes.size > 1) {
+                val targets = model.nodes.filterNot { it.id == selected }
+                var targetIndex by remember(selected, targets.size) { mutableStateOf(0) }
+                val target = targets.getOrNull(targetIndex.coerceIn(0, targets.lastIndex.coerceAtLeast(0)))
+                if (target != null) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Connect to", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                        TextButton(onClick = { targetIndex = (targetIndex - 1 + targets.size) % targets.size }) { Text("Previous") }
+                        Text(target.label, style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { targetIndex = (targetIndex + 1) % targets.size }) { Text("Next") }
+                    }
+                    val exists = model.edges.any { it.from == selected && it.to == target.id }
+                    TextButton(onClick = {
+                        val edges = if (exists) model.edges.filterNot { it.from == selected && it.to == target.id }
+                        else model.edges + com.norfold.app.ui.components.DiagramEdgeInput(selected, target.id)
+                        val encoded = MermaidDiagramCodec.encode(model.copy(edges = edges), defaultColor)
+                        callbacks.onEdit(FlowTextEdit(block.id, null, block.code, encoded, encoded.length))
+                    }) { Text(if (exists) "Remove connection" else "Add connection") }
+                }
+            }
         }
     }
 }
@@ -910,11 +951,17 @@ private fun FlowRenderableTab(
 @Composable
 private fun FlowMermaidPreview(
     model: com.norfold.app.ui.components.DiagramBuilderModel,
+    positions: Map<String, DiagramNodePosition> = emptyMap(),
     selectedNodeId: String? = null,
     onSelectNode: ((String) -> Unit)? = null,
+    onMoveNode: ((String, DiagramNodePosition) -> Unit)? = null,
 ) {
     when (model.kind) {
         DiagramKind.Flowchart -> {
+            if (positions.isNotEmpty()) {
+                FlowPositionedDiagram(model, positions, selectedNodeId, onSelectNode, onMoveNode)
+                return
+            }
             val nodesById = model.nodes.associateBy { it.id }
             val visibleIds = nodesById.keys.take(8).toSet()
             val visibleEdges = model.edges.filter { it.from in visibleIds && it.to in visibleIds }
@@ -1025,6 +1072,69 @@ private fun FlowMermaidPreview(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun FlowPositionedDiagram(
+    model: com.norfold.app.ui.components.DiagramBuilderModel,
+    positions: Map<String, DiagramNodePosition>,
+    selectedNodeId: String?,
+    onSelectNode: ((String) -> Unit)?,
+    onMoveNode: ((String, DiagramNodePosition) -> Unit)?,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth().heightIn(min = 156.dp)) {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val widthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val heightPx = with(density) { 156.dp.toPx() }.coerceAtLeast(1f)
+        val halfNodeWidthPx = with(density) { 48.dp.toPx() }
+        val halfNodeHeightPx = with(density) { 22.dp.toPx() }
+        model.nodes.take(12).forEachIndexed { index, node ->
+            val fallback = DiagramNodePosition(
+                .14f + (index % 3) * .34f,
+                .16f + (index / 3) * .28f,
+            ).normalized()
+            var preview by remember(node.id, positions[node.id]) { mutableStateOf(positions[node.id] ?: fallback) }
+            Box(
+                Modifier
+                    .offset {
+                        IntOffset(
+                            (preview.x * widthPx - halfNodeWidthPx).toInt().coerceAtLeast(0),
+                            (preview.y * heightPx - halfNodeHeightPx).toInt().coerceAtLeast(0),
+                        )
+                    }
+                    .widthIn(min = 88.dp, max = 130.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        if (selectedNodeId == node.id) 3.dp else 1.dp,
+                        if (selectedNodeId == node.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        RoundedCornerShape(8.dp),
+                    )
+                    .pointerInput(node.id, onMoveNode) {
+                        detectDragGestures(
+                            onDragStart = { onSelectNode?.invoke(node.id) },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                preview = DiagramNodePosition(
+                                    preview.x + amount.x / widthPx,
+                                    preview.y + amount.y / heightPx,
+                                ).normalized()
+                            },
+                            onDragEnd = { onMoveNode?.invoke(node.id, preview) },
+                            onDragCancel = { preview = positions[node.id] ?: fallback },
+                        )
+                    }
+                    .clickable(enabled = onSelectNode != null) { onSelectNode?.invoke(node.id) }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .semantics {
+                        role = Role.Button
+                        contentDescription = "Diagram node ${node.label}"
+                        stateDescription = if (selectedNodeId == node.id) "Selected node" else "Diagram node"
+                    },
+                contentAlignment = Alignment.Center,
+            ) { Text(node.label, style = MaterialTheme.typography.bodySmall) }
+        }
     }
 }
 
