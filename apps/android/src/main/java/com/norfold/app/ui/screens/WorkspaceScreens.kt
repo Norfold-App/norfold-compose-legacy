@@ -137,6 +137,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -248,6 +249,9 @@ import com.norfold.app.domain.WorkspaceMember
 import com.norfold.app.domain.Note
 import com.norfold.app.cloud.NorfoldPresence
 import com.norfold.app.cloud.ChatBackend
+import com.norfold.app.editor.sticker.Sticker
+import com.norfold.app.editor.sticker.StickerCatalog
+import com.norfold.app.editor.sticker.StickerCategory
 import com.norfold.app.ui.ChatComposerAction
 import com.norfold.app.ui.components.NorfoldFullscreenDialog
 import com.norfold.app.ui.components.NorfoldBottomSheet
@@ -269,6 +273,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     // Phase 6: share-a-note picker (UI-only). Picking a note sends an inline note reference.
     var notePickerOpen by remember { mutableStateOf(false) }
     var gifPickerOpen by remember { mutableStateOf(false) }
+    var stickerPickerOpen by remember { mutableStateOf(false) }
     var messageActions by remember { mutableStateOf<ChatMessageItem?>(null) }
     var reportTarget by remember { mutableStateOf<ChatMessageItem?>(null) }
     var whoReacted by remember { mutableStateOf<ChatMessageItem?>(null) }
@@ -352,6 +357,15 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             onQueryChange = viewModel::searchChatGifs,
             onPick = { gif -> viewModel.sendChatGif(gif); gifPickerOpen = false },
             onDismiss = { gifPickerOpen = false },
+        )
+    }
+    if (stickerPickerOpen) {
+        ChatStickerPicker(
+            onDismiss = { stickerPickerOpen = false },
+            onPick = { sticker ->
+                viewModel.sendChat(stickerReferenceMarker(sticker.id))
+                stickerPickerOpen = false
+            },
         )
     }
     visibleWorkspaceSecurity?.takeIf { !it.acknowledged }?.let { security ->
@@ -1043,6 +1057,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                             onDismiss = { toolsExpanded = false },
                             onPickAttachment = onPickAttachment,
                             onGif = { toolsExpanded = false; gifPickerOpen = true },
+                            onSticker = { toolsExpanded = false; stickerPickerOpen = true },
                             onShareNote = { toolsExpanded = false; notePickerOpen = true },
                             onPaste = {
                                 toolsExpanded = false
@@ -1560,6 +1575,7 @@ private fun ChatAttachmentTray(
     onDismiss: () -> Unit,
     onPickAttachment: (ChatComposerAction) -> Unit,
     onGif: () -> Unit,
+    onSticker: () -> Unit,
     onPaste: () -> Unit,
     onShareNote: () -> Unit,
 ) {
@@ -1575,6 +1591,7 @@ private fun ChatAttachmentTray(
         Tool("File", Icons.Outlined.AttachFile, Color(0xFFF5B53D)) { onDismiss(); onPickAttachment(ChatComposerAction.File) },
         Tool("Audio", Icons.Outlined.Mic, Color(0xFF31D07A)) { onDismiss(); onPickAttachment(ChatComposerAction.Audio) },
         Tool("GIF", Icons.Outlined.GifBox, Color(0xFFFF7A59)) { onGif() },
+        Tool("Stickers", Icons.Outlined.GridView, Color(0xFF8C67FF)) { onSticker() },
         Tool("Note", Icons.AutoMirrored.Outlined.Note, Color(0xFF3DB2A0)) { onDismiss(); onShareNote() },
         Tool("Paste", Icons.Outlined.ContentPaste, Color(0xFFA86BFF)) { onPaste() },
     )
@@ -1606,6 +1623,57 @@ private fun ChatAttachmentTray(
             }
         }
         Spacer(Modifier.navigationBarsPadding())
+    }
+}
+
+/** The same fixed sticker manifest used by Image Focus; no GIF/search provider is involved. */
+@Composable
+private fun ChatStickerPicker(onDismiss: () -> Unit, onPick: (Sticker) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf(StickerCategory.POPULAR) }
+    val stickers = remember(category, query) { StickerCatalog.items(category, query) }
+    NorfoldBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(min = 360.dp, max = 680.dp).padding(16.dp).navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Stickers", style = MaterialTheme.typography.titleLarge)
+                    Text("Family-safe local collection", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Close, "Close stickers") }
+            }
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Search stickers") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StickerCategory.entries.forEach { candidate ->
+                    FilterChip(category == candidate, { category = candidate }, label = { Text(candidate.label) })
+                }
+            }
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(76.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            ) {
+                gridItems(stickers, key = { it.id }) { sticker ->
+                    Surface(
+                        onClick = { onPick(sticker) },
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(76.dp),
+                    ) {
+                        AsyncImage(sticker.assetUri, sticker.label, Modifier.padding(10.dp).fillMaxSize())
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2890,6 +2958,12 @@ private fun parseNoteReference(body: String): NoteReference? {
     return NoteReference(id, m.groupValues[2].ifBlank { "Untitled note" }, m.value)
 }
 
+private data class StickerReference(val id: String, val marker: String)
+private val STICKER_REF_REGEX = Regex("""\[\[sticker:([a-z0-9_]+)]]""")
+private fun stickerReferenceMarker(id: String): String = "[[sticker:$id]]"
+private fun parseStickerReference(body: String): StickerReference? =
+    STICKER_REF_REGEX.find(body)?.let { StickerReference(it.groupValues[1], it.value) }
+
 /** Builds the inline marker for a shared note. Kept next to the parser so they stay in sync. */
 private fun noteReferenceMarker(id: Long, title: String): String =
     "[[note:$id:${title.replace("]", " ").take(80)}]]"
@@ -3015,16 +3089,19 @@ private fun ChatBubble(
     // Phase 6: a shared-note reference is carried inline as [[note:<id>:<title>]] (UI-only, no
     // typed payload yet). Parse it out so it renders as a tappable card, not raw marker text.
     val noteRef = remember(chat.body) { parseNoteReference(chat.body) }
+    val stickerRef = remember(chat.body) { parseStickerReference(chat.body) }
     val displayBody = chat.body
         .let { if (noteRef != null) it.replace(noteRef.marker, "").trim() else it }
+        .let { if (stickerRef != null) it.replace(stickerRef.marker, "").trim() else it }
         .takeUnless { body ->
             body.isBlank() || chat.attachmentName?.let { body.equals("Shared $it", ignoreCase = true) } == true
         }
     val attachmentOnly = !chat.attachmentName.isNullOrBlank() && displayBody == null
+    val stickerOnly = stickerRef != null && displayBody == null && chat.attachmentName.isNullOrBlank()
     // A message that is nothing but emoji reads best "bare" — no bubble, oversized glyphs — the
     // way WhatsApp/Telegram/Messenger all render a lone 😮. Only when there's no attachment.
     val emojiOnly = displayBody != null && chat.attachmentName.isNullOrBlank() && isEmojiOnlyMessage(displayBody)
-    val chromeless = attachmentOnly || emojiOnly
+    val chromeless = attachmentOnly || emojiOnly || stickerOnly
     // Outgoing bubble = muted accent tint (primaryContainer), not full accent (primary).
     // primaryContainer is defined in NorfoldTheme as accent.mix(white,0.88f) light /
     // accent.mix(surface,0.72f) dark — calm on long threads, accent still reads clearly.
@@ -3187,6 +3264,15 @@ private fun ChatBubble(
                         }
                         if (noteRef != null) {
                             ChatNoteCard(noteRef, textColor) { onOpenNote(noteRef.id) }
+                        }
+                        stickerRef?.let { reference ->
+                            StickerCatalog.find(reference.id)?.let { sticker ->
+                                AsyncImage(
+                                    model = sticker.assetUri,
+                                    contentDescription = sticker.label,
+                                    modifier = Modifier.size(148.dp).padding(4.dp),
+                                )
+                            }
                         }
                         if (!chat.attachmentName.isNullOrBlank()) {
                             if (attachmentGroup.size > 1) {

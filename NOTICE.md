@@ -25,8 +25,9 @@ from any permission whatsoever.
 
 ## Third-party components
 
-Dependencies pulled in by Gradle, npm, or Deno remain under their own
-respective licenses and are not covered by this repository's license.
+Dependencies and explicitly identified third-party materials remain under
+their own respective licenses and are not covered by this repository's license.
+See THIRD_PARTY_NOTICES.md for bundled asset notices.
 
 ## Contact
 

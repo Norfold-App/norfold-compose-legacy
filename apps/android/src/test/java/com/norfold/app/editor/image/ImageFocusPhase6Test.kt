@@ -31,6 +31,30 @@ import org.junit.Test
 
 class ImageFocusPhase6Test {
     @Test
+    fun markupPersistsAsNormalizedSourceCoordinatesAndParticipatesInRendering() {
+        val hostile = ImageMarkup(
+            strokes = listOf(ImageMarkupStroke(
+                points = listOf(ImageMarkupPoint(Float.NaN, 4f)),
+                width = Float.POSITIVE_INFINITY,
+            )),
+            labels = listOf(ImageMarkupLabel(text = "x".repeat(300), x = -1f, y = 4f, size = Float.NaN)),
+        ).normalized()
+        assertEquals(0.5f, hostile.strokes.single().points.single().x)
+        assertEquals(1f, hostile.strokes.single().points.single().y)
+        assertEquals(0.014f, hostile.strokes.single().width)
+        assertEquals(ImageMarkupLabel.MAX_TEXT, hostile.labels.single().text.length)
+
+        val runtime = ImageFocusRuntime(ImageBlock(source = "source"), ImageFocusCommitHost { _, _ -> true })
+        assertTrue(runtime.edit { it.copy(markup = hostile) })
+        val saved = ImageBlockAdapter.save(ImageBlock(source = "source"), runtime.document())
+        assertEquals(hostile, ImageBlockAdapter.load(saved).document.markup)
+        assertNotEquals(
+            ImagePreviewPolicy.cacheKey("source", ImageEditDocument(), ImageDecodeTarget(200, 200, false)),
+            ImagePreviewPolicy.cacheKey("source", runtime.document(), ImageDecodeTarget(200, 200, false)),
+        )
+    }
+
+    @Test
     fun canonicalCodecRoundTripsDeterministicallyAndIgnoresUnknownFields() {
         val document = richDocument()
         val encoded = ImageEditDocumentCodec.encode(document)
@@ -276,7 +300,7 @@ class ImageFocusPhase6Test {
             listOf(
                 ImagePipelineStage.SOURCE, ImagePipelineStage.CROP, ImagePipelineStage.GEOMETRY,
                 ImagePipelineStage.FRAME, ImagePipelineStage.MASK, ImagePipelineStage.ADJUSTMENTS,
-                ImagePipelineStage.EFFECTS, ImagePipelineStage.BORDER, ImagePipelineStage.SHADOW,
+                ImagePipelineStage.EFFECTS, ImagePipelineStage.MARKUP, ImagePipelineStage.BORDER, ImagePipelineStage.SHADOW,
             ),
             ImageRenderPipeline.semanticOrder,
         )
@@ -301,7 +325,7 @@ class ImageFocusPhase6Test {
         assertNotEquals(document.effects, ImageEffects())
         assertNotEquals(document.border, ImageBorder())
         assertNotEquals(document.shadow, ImageShadow())
-        assertEquals(9, ImageRenderPipeline.semanticOrder.distinct().size)
+        assertEquals(10, ImageRenderPipeline.semanticOrder.distinct().size)
     }
 
     @Test
@@ -329,6 +353,46 @@ class ImageFocusPhase6Test {
     }
 
     @Test
+    fun rotationScaleKeepsAnySourceAspectInsideTheCropViewport() {
+        assertEquals(1f, ImageCropGeometry.rotationScaleToFitViewport(0f, 16f / 9f), 0.0001f)
+        assertEquals(9f / 16f, ImageCropGeometry.rotationScaleToFitViewport(90f, 16f / 9f), 0.0001f)
+        assertEquals(9f / 16f, ImageCropGeometry.rotationScaleToFitViewport(-90f, 9f / 16f), 0.0001f)
+        assertTrue(ImageCropGeometry.rotationScaleToFitViewport(45f, 4f / 3f) in 0.05f..1f)
+    }
+
+    @Test
+    fun cropZoomResizesTheFrameAroundItsCentreWithoutChangingSourceCoordinates() {
+        val original = NormalizedRect(0.1f, 0.2f, 0.8f, 0.6f)
+        val zoomed = ImageCropGeometry.zoom(original, 2f)
+
+        assertEquals(0.5f, zoomed.left + zoomed.width / 2f, 0.0001f)
+        assertEquals(0.5f, zoomed.top + zoomed.height / 2f, 0.0001f)
+        assertEquals(0.5f, zoomed.width, 0.0001f)
+        assertEquals(0.375f, zoomed.height, 0.0001f)
+    }
+
+    @Test
+    fun freeDistortionKeepsFourBoundedCornersAndIsFullyUndoable() {
+        val hostile = ImageFreeTransform(
+            topLeft = ImageFreeTransformCorner(Float.NaN, -4f),
+            topRight = ImageFreeTransformCorner(4f, Float.POSITIVE_INFINITY),
+            bottomRight = ImageFreeTransformCorner(2f, 2f),
+            bottomLeft = ImageFreeTransformCorner(-2f, -2f),
+        ).normalized()
+        listOf(hostile.topLeft, hostile.topRight, hostile.bottomRight, hostile.bottomLeft).forEach { corner ->
+            assertTrue(corner.x in -0.5f..1.5f)
+            assertTrue(corner.y in -0.5f..1.5f)
+        }
+        val runtime = ImageFocusRuntime(ImageBlock(source = "source"), ImageFocusCommitHost { _, _ -> true })
+        assertTrue(runtime.edit { state -> state.copy(crop = state.crop.copy(freeTransform = hostile)) })
+        assertEquals(hostile, runtime.document().crop.freeTransform)
+        assertTrue(runtime.undo())
+        assertTrue(runtime.document().crop.freeTransform.isIdentity())
+        assertTrue(runtime.redo())
+        assertEquals(hostile, runtime.document().crop.freeTransform)
+    }
+
+    @Test
     fun everyAdjustmentAndEffectNormalizesAndResetsWithoutTouchingGeometry() {
         val original = richDocument()
         val runtime = ImageFocusRuntime(ImageBlockAdapter.save(ImageBlock(source = "s"), original), ImageFocusCommitHost { _, _ -> true })
@@ -351,6 +415,38 @@ class ImageFocusPhase6Test {
         assertEquals(original.mask, runtime.document().mask)
         assertTrue(runtime.undo())
         assertEquals(original.normalized(), runtime.document())
+    }
+
+    @Test
+    fun fourModeLayersStayIndependentAndEveryNewObjectIsUndoable() {
+        val runtime = ImageFocusRuntime(ImageBlock(source = "s"), ImageFocusCommitHost { _, _ -> true })
+        assertTrue(runtime.edit { state ->
+            state.copy(adjustments = state.adjustments.copy(brightness = .3f, vignette = .4f))
+        })
+        assertTrue(runtime.edit { state ->
+            state.copy(effects = state.effects.copy(filter = ImageFilterKind.DUOTONE, filterIntensity = .65f))
+        })
+        assertEquals(.3f, runtime.document().adjustments.brightness, .0001f)
+        assertEquals(.4f, runtime.document().adjustments.vignette, .0001f)
+        assertEquals(ImageFilterKind.DUOTONE, runtime.document().effects.filter)
+        assertTrue(runtime.undo())
+        assertEquals(ImageFilterKind.NONE, runtime.document().effects.filter)
+        assertEquals(.3f, runtime.document().adjustments.brightness, .0001f)
+        assertTrue(runtime.redo())
+
+        val signature = ImageMarkupLabel(
+            id = "signature-1",
+            kind = ImageMarkupLabelKind.SIGNATURE,
+            points = listOf(ImageMarkupPoint(-1f, 2f), ImageMarkupPoint(.8f, .6f)),
+            rotationDegrees = 600f,
+        ).normalized()
+        assertEquals(0f, signature.points.first().x, .0001f)
+        assertEquals(1f, signature.points.first().y, .0001f)
+        assertEquals(180f, signature.rotationDegrees, .0001f)
+        assertTrue(runtime.edit { state -> state.copy(markup = ImageMarkup(labels = listOf(signature))) })
+        assertEquals(ImageMarkupLabelKind.SIGNATURE, runtime.document().markup.labels.single().kind)
+        assertTrue(runtime.undo())
+        assertTrue(runtime.document().markup.labels.isEmpty())
     }
 
     @Test

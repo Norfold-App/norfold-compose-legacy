@@ -8,6 +8,11 @@ import kotlin.math.abs
 @Serializable enum class ImageCompositionGuide { NONE, THIRDS, GOLDEN_RATIO, DIAGONALS }
 @Serializable enum class ImageFrameMode { FIT, FILL }
 @Serializable enum class ImageMaskKind { NONE, RECTANGLE, ROUNDED_RECTANGLE, ELLIPSE }
+/** A single non-destructive creative effect, deliberately separate from numeric adjustments. */
+@Serializable enum class ImageFilterKind {
+    NONE, MONOCHROME, SEPIA, INVERT, DUOTONE, BLUR, GRAIN, PIXELATE, POSTERIZE, EMBOSS,
+}
+@Serializable enum class ImageMarkupLabelKind { TEXT, SIGNATURE, STICKER, SHAPE }
 
 /** A source-independent crop in normalized image coordinates. */
 @Serializable
@@ -31,6 +36,30 @@ data class NormalizedRect(
     }
 }
 
+/** A movable destination corner for non-destructive four-corner perspective editing. */
+@Serializable
+data class ImageFreeTransformCorner(val x: Float, val y: Float) {
+    fun normalized() = copy(
+        x = x.finiteOr(0f).coerceIn(-0.5f, 1.5f),
+        y = y.finiteOr(0f).coerceIn(-0.5f, 1.5f),
+    )
+}
+
+@Serializable
+data class ImageFreeTransform(
+    val topLeft: ImageFreeTransformCorner = ImageFreeTransformCorner(0f, 0f),
+    val topRight: ImageFreeTransformCorner = ImageFreeTransformCorner(1f, 0f),
+    val bottomRight: ImageFreeTransformCorner = ImageFreeTransformCorner(1f, 1f),
+    val bottomLeft: ImageFreeTransformCorner = ImageFreeTransformCorner(0f, 1f),
+) {
+    fun normalized() = copy(
+        topLeft = topLeft.normalized(), topRight = topRight.normalized(),
+        bottomRight = bottomRight.normalized(), bottomLeft = bottomLeft.normalized(),
+    )
+
+    fun isIdentity(): Boolean = normalized() == ImageFreeTransform()
+}
+
 @Serializable
 data class ImageCrop(
     val bounds: NormalizedRect = NormalizedRect.FULL,
@@ -42,6 +71,7 @@ data class ImageCrop(
     val flipVertical: Boolean = false,
     val perspectiveHorizontal: Float = 0f,
     val perspectiveVertical: Float = 0f,
+    val freeTransform: ImageFreeTransform = ImageFreeTransform(),
 ) {
     fun normalized() = copy(
         bounds = bounds.normalized(),
@@ -49,12 +79,14 @@ data class ImageCrop(
         quarterTurns = ((quarterTurns % 4) + 4) % 4,
         perspectiveHorizontal = perspectiveHorizontal.finiteOr(0f).coerceIn(-1f, 1f),
         perspectiveVertical = perspectiveVertical.finiteOr(0f).coerceIn(-1f, 1f),
+        freeTransform = freeTransform.normalized(),
     )
 }
 
 @Serializable
 data class ImageFrame(
-    val mode: ImageFrameMode = ImageFrameMode.FIT,
+    /** New images cover their rounded Flow frame by default; explicit FIT remains available in Image Focus. */
+    val mode: ImageFrameMode = ImageFrameMode.FILL,
     val focalX: Float = 0.5f,
     val focalY: Float = 0.5f,
     val scale: Float = 1f,
@@ -64,7 +96,9 @@ data class ImageFrame(
     fun normalized() = copy(
         focalX = focalX.finiteOr(0.5f).coerceIn(0f, 1f),
         focalY = focalY.finiteOr(0.5f).coerceIn(0f, 1f),
-        scale = scale.finiteOr(1f).coerceIn(0.1f, 20f),
+        // Presentation must never shrink below the editor frame. Crop owns zoom; Frame may only add
+        // magnification and pan after the crop has established the visible area.
+        scale = scale.finiteOr(1f).coerceIn(1f, 20f),
         offsetX = offsetX.finiteOr(0f).coerceIn(-1f, 1f),
         offsetY = offsetY.finiteOr(0f).coerceIn(-1f, 1f),
     )
@@ -89,12 +123,17 @@ data class ImageAdjustments(
     val saturation: Float = 0f,
     val sharpness: Float = 0f,
     val blur: Float = 0f,
+    /** Brightness is independent from exposure so both controls have stable round-trip semantics. */
+    val brightness: Float = 0f,
+    val vignette: Float = 0f,
 ) {
     fun normalized() = copy(
         exposure = exposure.unit(), contrast = contrast.unit(), highlights = highlights.unit(),
         shadows = shadows.unit(), temperature = temperature.unit(), tint = tint.unit(),
         saturation = saturation.unit(), sharpness = sharpness.unit(),
         blur = blur.finiteOr(0f).coerceIn(0f, 1f),
+        brightness = brightness.unit(),
+        vignette = vignette.positiveUnit(),
     )
 }
 
@@ -104,12 +143,15 @@ data class ImageEffects(
     val monochrome: Float = 0f,
     val sepia: Float = 0f,
     val vignette: Float = 0f,
+    val filter: ImageFilterKind = ImageFilterKind.NONE,
+    val filterIntensity: Float = 1f,
 ) {
     fun normalized() = copy(
         opacity = opacity.finiteOr(1f).coerceIn(0f, 1f),
         monochrome = monochrome.positiveUnit(),
         sepia = sepia.positiveUnit(),
         vignette = vignette.positiveUnit(),
+        filterIntensity = filterIntensity.finiteOr(1f).coerceIn(0f, 1f),
     )
 }
 
@@ -147,6 +189,69 @@ data class ImageAccessibility(
     companion object { const val MAX_ALT_TEXT = 2_048 }
 }
 
+/** Reversible annotations in source-normalized coordinates, independent of display size or crop frame. */
+@Serializable
+data class ImageMarkup(
+    val strokes: List<ImageMarkupStroke> = emptyList(),
+    val labels: List<ImageMarkupLabel> = emptyList(),
+) {
+    fun normalized() = copy(
+        strokes = strokes.take(MAX_STROKES).map(ImageMarkupStroke::normalized),
+        labels = labels.take(MAX_LABELS).map(ImageMarkupLabel::normalized),
+    )
+
+    companion object {
+        const val MAX_STROKES = 128
+        const val MAX_LABELS = 64
+    }
+}
+
+@Serializable
+data class ImageMarkupPoint(val x: Float, val y: Float) {
+    fun normalized() = copy(x = x.finiteOr(0.5f).coerceIn(0f, 1f), y = y.finiteOr(0.5f).coerceIn(0f, 1f))
+}
+
+@Serializable
+data class ImageMarkupStroke(
+    val points: List<ImageMarkupPoint> = emptyList(),
+    val color: ColorValue = ColorValue(244, 67, 54),
+    /** Fraction of the source's shorter edge rather than device-dependent pixels. */
+    val width: Float = 0.014f,
+) {
+    fun normalized() = copy(
+        points = points.take(MAX_POINTS).map(ImageMarkupPoint::normalized),
+        width = width.finiteOr(0.014f).coerceIn(0.002f, 0.12f),
+    )
+
+    companion object { const val MAX_POINTS = 4_096 }
+}
+
+@Serializable
+data class ImageMarkupLabel(
+    val id: String = "",
+    val kind: ImageMarkupLabelKind = ImageMarkupLabelKind.TEXT,
+    val text: String = "Text",
+    val x: Float = 0.5f,
+    val y: Float = 0.5f,
+    val color: ColorValue = ColorValue(255, 255, 255),
+    val size: Float = 0.055f,
+    val rotationDegrees: Float = 0f,
+    /** Signature paths are stored with the object so they survive reopening and rendering. */
+    val points: List<ImageMarkupPoint> = emptyList(),
+) {
+    fun normalized() = copy(
+        id = id.trim().take(MAX_ID),
+        text = text.take(MAX_TEXT),
+        x = x.finiteOr(0.5f).coerceIn(0f, 1f),
+        y = y.finiteOr(0.5f).coerceIn(0f, 1f),
+        size = size.finiteOr(0.055f).coerceIn(0.018f, 0.18f),
+        rotationDegrees = rotationDegrees.finiteOr(0f).coerceIn(-180f, 180f),
+        points = points.take(MAX_POINTS).map(ImageMarkupPoint::normalized),
+    )
+
+    companion object { const val MAX_TEXT = 256; const val MAX_ID = 96; const val MAX_POINTS = 4_096 }
+}
+
 @Serializable
 data class ImageSourceMetadata(
     val pixelWidth: Int? = null,
@@ -175,6 +280,7 @@ data class ImageEditDocument(
     val effects: ImageEffects = ImageEffects(),
     val border: ImageBorder = ImageBorder(),
     val shadow: ImageShadow = ImageShadow(),
+    val markup: ImageMarkup = ImageMarkup(),
     val accessibility: ImageAccessibility = ImageAccessibility(),
     val sourceMetadata: ImageSourceMetadata = ImageSourceMetadata(),
 ) {
@@ -182,18 +288,18 @@ data class ImageEditDocument(
         schemaVersion = CURRENT_SCHEMA_VERSION,
         crop = crop.normalized(), frame = frame.normalized(), mask = mask.normalized(),
         adjustments = adjustments.normalized(), effects = effects.normalized(), border = border.normalized(),
-        shadow = shadow.normalized(), accessibility = accessibility.normalized(),
+        shadow = shadow.normalized(), markup = markup.normalized(), accessibility = accessibility.normalized(),
         sourceMetadata = sourceMetadata.normalized(),
     )
 
-    fun parameters() = ImageEditParameters(crop, frame, mask, adjustments, effects, border, shadow).normalized()
+    fun parameters() = ImageEditParameters(crop, frame, mask, adjustments, effects, border, shadow, markup).normalized()
 
     fun withParameters(parameters: ImageEditParameters): ImageEditDocument {
         val clean = parameters.normalized()
         return copy(
             crop = clean.crop, frame = clean.frame, mask = clean.mask,
             adjustments = clean.adjustments, effects = clean.effects,
-            border = clean.border, shadow = clean.shadow,
+            border = clean.border, shadow = clean.shadow, markup = clean.markup,
         ).normalized()
     }
 
@@ -210,11 +316,12 @@ data class ImageEditParameters(
     val effects: ImageEffects = ImageEffects(),
     val border: ImageBorder = ImageBorder(),
     val shadow: ImageShadow = ImageShadow(),
+    val markup: ImageMarkup = ImageMarkup(),
 ) {
     fun normalized() = copy(
         crop = crop.normalized(), frame = frame.normalized(), mask = mask.normalized(),
         adjustments = adjustments.normalized(), effects = effects.normalized(),
-        border = border.normalized(), shadow = shadow.normalized(),
+        border = border.normalized(), shadow = shadow.normalized(), markup = markup.normalized(),
     )
 }
 
