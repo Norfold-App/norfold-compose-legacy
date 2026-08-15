@@ -36,6 +36,7 @@ import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.ui.components.LocalPopupStyle
+import com.norfold.app.ui.components.LocalReduceMotion
 import com.norfold.app.ui.components.PopupStyle
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 
@@ -166,6 +167,9 @@ fun NorfoldTheme(
                 LocalAppIconFamily provides settings.appIconFamily,
                 LocalEditorIconFamily provides settings.editorIconFamily,
                 LocalEditorToolbarScale provides settings.editorToolbarScale,
+                // Provided here rather than threaded through each screen so a new editor surface
+                // inherits the accessibility preference by existing, not by remembering to ask.
+                LocalReduceMotion provides settings.reduceMotion,
                 content = content,
             )
             unscaledOverlay()
