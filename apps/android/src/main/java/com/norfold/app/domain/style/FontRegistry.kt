@@ -259,8 +259,12 @@ class FontRegistry(
         if (record.source == FontSource.SYSTEM) return emptyList()
         // A variable family loads its whole face; Compose applies the weight through the axis.
         if (record.isVariable) {
+            // When no face carries the requested slant, load the faces the family *does* have and let
+            // Compose synthesize — the same rule [FontFamilyRecord.bestFace] applies to static families.
+            // Falling back to the upright faces specifically would return nothing for a family imported
+            // from a single italic variable file, which reports OFFLINE_READY with no asset to render.
             return record.faces.filter { it.italic == request.italic }
-                .ifEmpty { record.faces.filter { !it.italic } }
+                .ifEmpty { record.faces }
                 .map { it.asset }
         }
         return listOfNotNull(record.bestFace(request.weight, request.italic)?.asset)

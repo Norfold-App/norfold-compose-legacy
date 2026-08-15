@@ -55,6 +55,18 @@ class SharedStyleHostIntegrationTest {
     )
     private val registry = FontRegistry(listOf(font))
 
+    /**
+     * A bundled face by name.
+     *
+     * Fixtures name the file they need. Enumerating the directory and taking the first entry makes the
+     * test depend on filesystem enumeration order, which differs between machines and turns a real
+     * behavioural gap into an intermittent failure on whichever machine happens to enumerate differently.
+     */
+    private fun bundledFace(fileName: String): File =
+        File("src/main/assets/fonts/faces/$fileName").also {
+            assertTrue("bundled fixture $fileName is missing", it.isFile)
+        }
+
     @Test
     fun `Flow applies shared color style and font through canonical history`() {
         val paragraph = ParagraphBlock(id = "flow-p", content = listOf(InlineText("Flow text")))
@@ -171,9 +183,15 @@ class SharedStyleHostIntegrationTest {
 
     @Test
     fun `imported font reinstalls renders and resolves in both hosts after reconstruction`() {
-        val source = File("src/main/assets/fonts/faces").listFiles().orEmpty().first { it.extension == "ttf" }
+        // An explicitly named face, never "the first .ttf in the directory": File.listFiles() returns
+        // readdir order, so enumerating 65 bundled faces picked a different font on CI than locally and
+        // the test only held for some of them. This one is the strictest shape an import can have — a
+        // single variable face that is italic-only — which is what CI happened to pick when it failed.
+        val source = bundledFace("montserrat-variableitalic.ttf")
         val bytes = source.readBytes()
         val accepted = FontFileValidator.validate(bytes, source.name) as FontValidation.Accepted
+        assertTrue("the pinned fixture must be a variable face", accepted.variable)
+        assertTrue("the pinned fixture must be an italic face", accepted.italic)
         val root = Files.createTempDirectory("norfold-imported-font-reconstruction").toFile()
         var identity: FontIdentity? = null
         try {
@@ -189,7 +207,11 @@ class SharedStyleHostIntegrationTest {
             OfflineFontLibrary.install(record)
             val loadedResolution = OfflineFontLibrary.registry.resolve(FontRequest(importedIdentity))
             assertEquals(importedIdentity, loadedResolution.resolved)
-            assertEquals(record.faces.map { it.asset }, loadedResolution.assets)
+            assertEquals(
+                "an italic-only variable import must still resolve to its one packaged file",
+                record.faces.map { it.asset },
+                loadedResolution.assets,
+            )
 
             val browser = FontBrowserEngine(OfflineFontLibrary.registry)
             browser.open(importedIdentity, "Imported preview")

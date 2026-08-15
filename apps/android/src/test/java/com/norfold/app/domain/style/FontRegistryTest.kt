@@ -147,6 +147,40 @@ class FontRegistryTest {
     // ── §37.31 offline by construction ───────────────────────────────────────────────────────────
 
     /**
+     * A variable family whose only face is italic still resolves to that file for an upright request.
+     *
+     * This is exactly what a user gets by importing one `*-Italic[wght].ttf`: a single-face family with no
+     * upright face at all. Slant-filtering the faces and then falling back to "the upright ones" returns
+     * nothing for it, and a resolution that reports OFFLINE_READY with an empty asset list renders no text
+     * while claiming to be ready. The rule is the one [FontFamilyRecord.bestFace] already uses for static
+     * families: with no face of the requested slant, load what the family has.
+     */
+    @Test
+    fun `a variable family with only an italic face resolves upright requests to that face`() {
+        val italicOnly = FontFamilyRecord(
+            id = "user-italic-only",
+            name = "Italic Only",
+            source = FontSource.IMPORTED,
+            category = FontCategory.SANS,
+            faces = listOf(
+                FontFaceRecord(asset = "/data/fonts/italic-only.ttf", italic = true, variable = true),
+            ),
+            portability = FontPortability.PRIVATE_LOCAL,
+        )
+        val registry = FontRegistry(listOf(italicOnly))
+        for (italic in listOf(false, true)) {
+            val resolution = registry.resolve(FontRequest(italicOnly.identity, italic = italic))
+            assertEquals(italicOnly.identity, resolution.resolved)
+            assertEquals(FontAvailability.OFFLINE_READY, resolution.availability)
+            assertEquals(
+                "italic=$italic must load the one packaged face",
+                listOf("/data/fonts/italic-only.ttf"),
+                resolution.assets,
+            )
+        }
+    }
+
+    /**
      * Resolving the whole guaranteed set yields asset paths and never a download state.
      *
      * The structural half of this guarantee is that [FontRegistry] has no I/O at all — it is handed records

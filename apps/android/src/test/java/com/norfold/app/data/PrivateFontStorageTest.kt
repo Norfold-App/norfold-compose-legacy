@@ -12,9 +12,11 @@ import org.junit.Test
 
 class PrivateFontStorageTest {
     @Test fun `accepted font is atomically copied indexed deduplicated and removable`() {
-        val source = File("src/main/assets/fonts/faces").listFiles().orEmpty().firstOrNull { it.extension == "ttf" }
-        assumeTrue(source?.isFile == true)
-        val bytes = source!!.readBytes()
+        // Named rather than enumerated: File.listFiles() returns readdir order, so "the first .ttf" is a
+        // different font on different machines and the fixture is not a stable contract.
+        val source = File("src/main/assets/fonts/faces/carlito-regular.ttf")
+        assumeTrue(source.isFile)
+        val bytes = source.readBytes()
         val accepted = FontFileValidator.validate(bytes, source.name) as FontValidation.Accepted
         val root = Files.createTempDirectory("norfold-font-store").toFile()
         try {
