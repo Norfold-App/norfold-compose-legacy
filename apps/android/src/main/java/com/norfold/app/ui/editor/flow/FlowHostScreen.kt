@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -250,13 +251,23 @@ fun FlowHostScreen(
     val imeBottom = WindowInsets.ime.getBottom(density)
     val compact = configuration.screenWidthDp < FLOW_COMPACT_WIDTH_DP
     var imeWasOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(configuration.screenWidthDp, configuration.screenHeightDp, imeBottom > 0) {
+    // A physical keyboard is a presentation input, not just an input method: `KEYBOARD_QWERTY` is reported
+    // for an attached hardware keyboard and `KEYBOARD_NOKEYS` for a touch-only device, so the slash session
+    // can open as a searchable list where arrow keys exist and as the thumb rail where they do not.
+    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY
+    LaunchedEffect(
+        configuration.screenWidthDp,
+        configuration.screenHeightDp,
+        imeBottom > 0,
+        hardwareKeyboard,
+    ) {
         presenter.act {
             onFormFactorChanged(
                 FormFactor(
                     widthDp = configuration.screenWidthDp,
                     heightDp = configuration.screenHeightDp,
                     keyboardOpen = imeBottom > 0,
+                    hardwareKeyboard = hardwareKeyboard,
                 ),
             )
         }
@@ -312,6 +323,20 @@ fun FlowHostScreen(
         },
     )
 
+    // Running a slash command is one behaviour with three entry points — a rail tap, a list tap, and Enter —
+    // and one of them cannot live in the runtime: picker-backed insertion needs an Android URI, so the host
+    // has to consume the session and launch the picker itself. Hoisting it here is what keeps the rail and
+    // the list from acquiring separately-drifting copies of that exception.
+    val pickSlashCommand: (String) -> Unit = { id ->
+        if (id == FlowIds.INSERT_IMAGE) {
+            if (presenter.act { consumeSlashForImagePicker() }) imagePicker.launch(arrayOf("image/*"))
+            else notice = "Couldn't prepare image insertion. Try again."
+        } else {
+            val result = presenter.act { acceptSlash(id) }
+            (result as? com.norfold.app.editor.command.CommandResult.Failure)?.let { notice = it.reason }
+        }
+    }
+
     FlowVisualTheme {
     val selectedObject = state.primaryId?.let(state.document::findById)
     Box(
@@ -320,25 +345,60 @@ fun FlowHostScreen(
             .background(MaterialTheme.colorScheme.background)
             .onPreviewKeyEvent { event ->
                 if (state.slash != null && event.type == KeyEventType.KeyDown) {
+                    val rail = state.slashRail
+                    // Two things can hold the highlight: the rail's slots, or the resolver's ranked results.
+                    // A list promoted from inside a group still shows the group's slots, so it walks with the
+                    // rail rather than with the query — otherwise the arrow keys would move a highlight the
+                    // user cannot see.
+                    val onSlots = rail != null && (rail.isRail || rail.scoped)
                     when (event.key) {
+                        Key.DirectionLeft, Key.DirectionRight -> {
+                            // Horizontal arrows belong to the strip. In the list the rows are vertical, so
+                            // leaving these unhandled lets the IME and text field have them back.
+                            if (rail?.isRail == true) {
+                                presenter.act { moveRailFocus(if (event.key == Key.DirectionRight) 1 else -1) }
+                                return@onPreviewKeyEvent true
+                            }
+                        }
                         Key.DirectionDown -> {
-                            presenter.act { moveSlashSelection(1) }
+                            // On the rail, down is the gesture that raises the names — the keyboard twin of
+                            // the trailing chevron.
+                            if (rail?.isRail == true) presenter.act { openSlashList() }
+                            else if (onSlots) presenter.act { moveRailFocus(1) }
+                            else presenter.act { moveSlashSelection(1) }
                             return@onPreviewKeyEvent true
                         }
                         Key.DirectionUp -> {
-                            presenter.act { moveSlashSelection(-1) }
+                            if (rail?.isRail == true) {
+                                // Up is down's inverse: it puts the names away again, and does nothing at all
+                                // when there is nothing to put away.
+                                presenter.act { popRailLevel() }
+                            } else if (onSlots) {
+                                presenter.act { moveRailFocus(-1) }
+                            } else {
+                                presenter.act { moveSlashSelection(-1) }
+                            }
                             return@onPreviewKeyEvent true
                         }
                         Key.Enter -> {
-                            val selected = state.slash.selected
-                            if (selected?.command?.id == FlowIds.INSERT_IMAGE) {
-                                if (presenter.act { consumeSlashForImagePicker() }) imagePicker.launch(arrayOf("image/*"))
-                                else notice = "Couldn't prepare image insertion. Try again."
+                            val focused = rail?.focused
+                            if (onSlots && focused != null) {
+                                when (focused) {
+                                    is com.norfold.app.editor.flow.FlowRailSlot.Command ->
+                                        pickSlashCommand(focused.id)
+                                    else -> presenter.act { activateRailFocus() }
+                                }
                             } else {
-                                val result = presenter.act { acceptSelectedSlash() }
-                                (result as? com.norfold.app.editor.command.CommandResult.Failure)?.let { notice = it.reason }
+                                val selected = state.slash.selected
+                                if (selected != null) pickSlashCommand(selected.command.id)
                             }
                             return@onPreviewKeyEvent true
+                        }
+                        Key.Backspace -> {
+                            // Intercepted only when there is a level to pop. When there is not, the `/` is
+                            // ordinary text and deleting it is what dismisses the session — so the key must
+                            // reach the field rather than be swallowed into a dead press.
+                            if (presenter.act { popRailLevel() }) return@onPreviewKeyEvent true
                         }
                         Key.Escape -> {
                             presenter.act { closeSlash(DismissTrigger.CANCEL) }
@@ -502,19 +562,26 @@ fun FlowHostScreen(
             }
             notice?.let { FlowNotice(it) { notice = null } }
             state.slash?.let { session ->
-                FlowSlashMenu(
-                    session = session,
-                    onPick = { id ->
-                        if (id == FlowIds.INSERT_IMAGE) {
-                            if (presenter.act { consumeSlashForImagePicker() }) imagePicker.launch(arrayOf("image/*"))
-                            else notice = "Couldn't prepare image insertion. Try again."
-                        } else {
-                            val result = presenter.act { acceptSlash(id) }
-                            (result as? com.norfold.app.editor.command.CommandResult.Failure)?.let { notice = it.reason }
-                        }
-                    },
-                    onDismiss = { presenter.act { closeSlash(DismissTrigger.CANCEL) } },
-                )
+                val rail = state.slashRail
+                // The rail and the list are one session wearing two presentations, so this is a branch on
+                // how to draw it — never on which command system is in charge.
+                if (rail != null && rail.isRail) {
+                    FlowCommandRailBar(
+                        rail = rail,
+                        onCommand = pickSlashCommand,
+                        onGroup = { group -> presenter.act { openRailGroup(group) } },
+                        onBack = { presenter.act { popRailLevel() } },
+                        onOpenList = { presenter.act { openSlashList() } },
+                    )
+                } else {
+                    FlowSlashMenu(
+                        session = session,
+                        rail = rail,
+                        onPick = pickSlashCommand,
+                        onBack = { presenter.act { popRailLevel() } },
+                        onDismiss = { presenter.act { closeSlash(DismissTrigger.CANCEL) } },
+                    )
+                }
             }
             if (state.interactionMode != com.norfold.app.editor.flow.FlowInteractionMode.READING || state.formFactor.keyboardOpen) {
                 FlowContextDock(
@@ -1349,9 +1416,24 @@ private fun FlowDockButton(
 @Composable
 private fun FlowSlashMenu(
     session: com.norfold.app.editor.flow.FlowSlashSession,
+    rail: com.norfold.app.editor.flow.FlowRailState?,
     onPick: (String) -> Unit,
+    onBack: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // Promoted from inside a group, the list keeps the group's scope. Widening back to everything would
+    // silently undo the narrowing the user just performed, and the query path is the one that should widen.
+    val scoped = rail?.scoped == true
+    val rows: List<SlashRow> = if (scoped) {
+        rail.listItems.map { SlashRow(it.id, it.label, it.enabled, it.disabledReason) }
+    } else {
+        session.results.map {
+            SlashRow(it.command.id, it.command.label, it.status.isInvokable, it.status.reason)
+        }
+    }
+    // Scoped rows are the rail's slots minus the leading Back, so the rail's focus is the row index plus one.
+    val highlighted = if (scoped) rail.focusedIndex - 1 else session.selectedIndex
+
     ElevatedCard(
         Modifier
             .fillMaxWidth()
@@ -1364,33 +1446,35 @@ private fun FlowSlashMenu(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "/${session.query.query}",
+                if (scoped) rail.group?.label.orEmpty() else "/${session.query.query}",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = onDismiss) { Text("Close") }
+            // Inside a group the only useful exit is one level up; at the top level there is no level to go
+            // up to, so the button says what it does instead of pretending to be a hierarchy.
+            if (scoped) TextButton(onClick = onBack) { Text("Back") }
+            else TextButton(onClick = onDismiss) { Text("Close") }
         }
         HorizontalDivider()
         LazyColumn(Modifier.heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT)) {
-            itemsIndexed(session.results, key = { _, item -> item.command.id }) { index, result ->
-                val enabled = result.status.isInvokable
+            itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .semantics { selected = index == session.selectedIndex }
-                        .background(if (index == session.selectedIndex) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, RoundedCornerShape(10.dp))
-                        .clickable(enabled = enabled, onClick = { onPick(result.command.id) })
+                        .semantics { selected = index == highlighted }
+                        .background(if (index == highlighted) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, RoundedCornerShape(10.dp))
+                        .clickable(enabled = row.enabled, onClick = { onPick(row.id) })
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        result.command.label,
+                        row.label,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (enabled) MaterialTheme.colorScheme.onSurface
+                        color = if (row.enabled) MaterialTheme.colorScheme.onSurface
                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                     )
-                    if (!enabled) {
+                    if (!row.enabled) {
                         Text(
-                            result.status.reason ?: "Not available here",
+                            row.reason ?: "Not available here",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1400,6 +1484,18 @@ private fun FlowSlashMenu(
         }
     }
 }
+
+/**
+ * One row of the slash list, whichever source it came from. The ranked results and a group's commands carry
+ * the same four facts in different shapes; flattening them here keeps one row renderer instead of two that
+ * drift.
+ */
+private data class SlashRow(
+    val id: String,
+    val label: String,
+    val enabled: Boolean,
+    val reason: String?,
+)
 
 /**
  * The `+` palette and the "Turn into" list, presented the way the Adaptive Presentation runtime chose.

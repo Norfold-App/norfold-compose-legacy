@@ -222,6 +222,8 @@ data class FlowHostUiState(
     val activeSurfaceId: String?,
     val slash: FlowSlashSession?,
     val slashBlockId: String?,
+    /** How the open slash session should be drawn, and what the rail holds. Null when no session is open. */
+    val slashRail: FlowRailState?,
     val dock: List<FlowCommandItem>,
     val insertPalette: List<FlowCommandItem>,
     val convertPalette: List<FlowCommandItem>,
@@ -619,6 +621,21 @@ class FlowHostRuntime(
     private var slashBlockId: String? = null
     private var slashInput: FlowSlashInput? = null
     private var slashSession: FlowSlashSession? = null
+
+    /**
+     * The group the rail has drilled into, and whether the user asked for the list by name.
+     *
+     * Presentation state lives here rather than in [FlowSlashSession] because the session is produced by
+     * [FlowSlashResolver], which is a pure function of block text and caret — the only thing that keeps the
+     * menu from ever disagreeing with what was typed. Adding "which panel is showing" to it would give the
+     * resolver state to remember, and a pure function with memory is no longer one.
+     *
+     * [slashListPinned] is the difference between a list the query opened and a list the user opened. Without
+     * it, backspacing to a bare `/` would yank a user who deliberately tapped the chevron back to the rail.
+     */
+    private var slashGroup: FlowCommandGroup? = null
+    private var slashListPinned = false
+    private var slashRailFocus = 0
 
     private var lastFailure: String? = null
 
@@ -1425,6 +1442,13 @@ class FlowHostRuntime(
                 0
             },
         )
+        // A trigger at a different offset is a different invocation, not the same one edited. Carrying the
+        // drilldown across would open the next `/` inside whatever group the last one was left in.
+        if (session == null || previous?.query?.triggerOffset != session.query.triggerOffset) {
+            slashGroup = null
+            slashListPinned = false
+            slashRailFocus = 0
+        }
         slashBlockId = blockId
         slashInput = input
         val wasOpen = slashSession != null
@@ -1450,11 +1474,6 @@ class FlowHostRuntime(
         revision++
         return true
     }
-
-    /** Runs the currently highlighted slash result, exactly as if its row had been tapped. */
-    fun acceptSelectedSlash(): CommandResult =
-        slashSession?.selected?.command?.id?.let(::acceptSlash)
-            ?: CommandResult.Failure("No slash result is selected")
 
     /**
      * Removes the slash trigger before launching a system picker. The picked URI arrives asynchronously, so
@@ -1509,14 +1528,133 @@ class FlowHostRuntime(
 
     fun closeSlash(trigger: DismissTrigger = DismissTrigger.CANCEL) {
         if (slashSession != null) closeSurface(FlowSurfaces.SLASH_MENU, trigger)
-        slashSession = null
-        slashInput = null
-        slashBlockId = null
+        forgetSlashSession()
         instrumentation.onSlashSessionChanged(null, -1)
         revision++
     }
 
+    /**
+     * Drops the session and its presentation together. Every route out of slash goes through here, because
+     * the surface coordinator can close the menu without [closeSlash] being the thing that closed it — and a
+     * leftover drilldown would then be what the next `/` opens into.
+     */
+    private fun forgetSlashSession() {
+        slashSession = null
+        slashInput = null
+        slashBlockId = null
+        slashGroup = null
+        slashListPinned = false
+        slashRailFocus = 0
+    }
+
     fun slashSession(): FlowSlashSession? = slashSession
+
+    // ── The command rail: the slash session's other presentation (stage V1) ───────────────────────────
+
+    /**
+     * Which presentation the open session should wear. Derived rather than stored, so there is no second
+     * copy of the answer to fall out of step with the query:
+     *
+     *  - a physical keyboard or an expanded window goes straight to the searchable list. The rail exists to
+     *    put commands where a thumb already is, above the IME; with arrow keys and no IME it is a worse
+     *    control than a search field;
+     *  - a list the user explicitly opened stays open;
+     *  - any typed query promotes to the list, because a query needs names to read, not icons to decode;
+     *  - a bare `/` is the rail.
+     */
+    fun slashPresentation(): FlowSlashPresentation {
+        val session = slashSession ?: return FlowSlashPresentation.RAIL
+        val form = presentation.formFactor
+        return when {
+            form.hardwareKeyboard || form.isExpanded -> FlowSlashPresentation.LIST
+            slashListPinned -> FlowSlashPresentation.LIST
+            session.query.query.isNotEmpty() -> FlowSlashPresentation.LIST
+            else -> FlowSlashPresentation.RAIL
+        }
+    }
+
+    /**
+     * The rail for the open session, or null when none is open.
+     *
+     * Built from the same [CommandSurface.SLASH] context the resolver uses, so a command the rail offers is
+     * a command the list would offer and the trigger erasure in [FlowSlashResolver.accept] still applies.
+     */
+    fun slashRail(): FlowRailState? {
+        if (slashSession == null) return null
+        val visible = itemsOf(registry.all(), CommandSurface.SLASH).filter { it.status.isVisible }
+        return FlowCommandRail.build(
+            visible = visible,
+            presentation = slashPresentation(),
+            group = slashGroup,
+            focusedIndex = slashRailFocus,
+        )
+    }
+
+    /** Walks the rail by [delta] slots. Returns false when there is no rail to walk. */
+    fun moveRailFocus(delta: Int): Boolean {
+        val rail = slashRail() ?: return false
+        val next = FlowCommandRail.moveFocus(rail, delta)
+        if (next == slashRailFocus) return false
+        slashRailFocus = next
+        revision++
+        return true
+    }
+
+    /** Drills the rail into [group], swapping its contents in place. Focus lands past the Back slot. */
+    fun openRailGroup(group: FlowCommandGroup): Boolean {
+        if (slashSession == null) return false
+        slashGroup = group
+        slashListPinned = false
+        slashRailFocus = 1
+        revision++
+        return true
+    }
+
+    /**
+     * Pops one level of rail presentation. Returns false when there is nothing left to pop — which is the
+     * signal the surface needs to *not* intercept the key and let the `/` be deleted as ordinary text.
+     */
+    fun popRailLevel(): Boolean {
+        if (slashSession == null) return false
+        if (slashListPinned) {
+            // Focus survives the drop back to the rail. The list and the rail show the same slots in the
+            // same order, so moving the highlight here would relocate the user's place for no reason.
+            slashListPinned = false
+            revision++
+            return true
+        }
+        if (slashGroup != null) {
+            slashGroup = null
+            slashRailFocus = 0
+            revision++
+            return true
+        }
+        return false
+    }
+
+    /** Raises the searchable list over the rail, which stays live underneath. */
+    fun openSlashList(): Boolean {
+        if (slashSession == null) return false
+        if (slashListPinned) return false
+        slashListPinned = true
+        revision++
+        return true
+    }
+
+    /**
+     * Activates the focused rail slot: runs a command, drills into a group, or pops back out. Returns null
+     * when the slot was a move rather than a command, so the surface knows there is no [CommandResult] to
+     * report and no notice to raise.
+     */
+    fun activateRailFocus(): CommandResult? {
+        val rail = slashRail() ?: return null
+        return when (val slot = rail.focused) {
+            null -> null
+            FlowRailSlot.Back -> { popRailLevel(); null }
+            is FlowRailSlot.Group -> { openRailGroup(slot.group); null }
+            is FlowRailSlot.Command -> acceptSlash(slot.id)
+        }
+    }
 
     // ── Multi-select (deliverable 5) ──────────────────────────────────────────────────────────────────
 
@@ -1644,9 +1782,7 @@ class FlowHostRuntime(
             forgetSurfaceState(result.closed.id)
             instrumentation.onSurfaceDismissed(result.closed.id, trigger)
             if (result.closed.id == FlowSurfaces.SLASH_MENU) {
-                slashSession = null
-                slashInput = null
-                slashBlockId = null
+                forgetSlashSession()
             }
             revision++
         }
@@ -1667,9 +1803,7 @@ class FlowHostRuntime(
                 forgetSurfaceState(outcome.closed.id)
                 instrumentation.onSurfaceDismissed(outcome.closed.id, DismissTrigger.BACK)
                 if (outcome.closed.id == FlowSurfaces.SLASH_MENU) {
-                    slashSession = null
-                    slashInput = null
-                    slashBlockId = null
+                    forgetSlashSession()
                 }
                 FlowBackResult.ClosedSurface(outcome.closed.id, outcome.nowActive?.id)
             }
@@ -1823,6 +1957,7 @@ class FlowHostRuntime(
             activeSurfaceId = surfaces.active()?.id,
             slash = slashSession,
             slashBlockId = slashBlockId,
+            slashRail = slashRail(),
             dock = dockCommands(),
             insertPalette = insertPalette(),
             convertPalette = convertPalette(),

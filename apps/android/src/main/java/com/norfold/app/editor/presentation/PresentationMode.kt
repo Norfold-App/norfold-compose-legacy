@@ -28,6 +28,13 @@ data class FormFactor(
     val widthDp: Int,
     val heightDp: Int,
     val keyboardOpen: Boolean = false,
+    /**
+     * A physical keyboard is attached. Distinct from [keyboardOpen], which is the on-screen IME: a surface
+     * that exists to sit above the IME has nothing to sit above here, and a user with arrow keys and Enter
+     * is searching by name rather than aiming at an icon. Defaulted so every existing construction site —
+     * and every test — keeps describing a touch device without being edited.
+     */
+    val hardwareKeyboard: Boolean = false,
 ) {
     val isExpanded: Boolean get() = widthDp >= EXPANDED_MIN_WIDTH_DP
     val isTablet: Boolean get() = widthDp in TABLET_MIN_WIDTH_DP until EXPANDED_MIN_WIDTH_DP
