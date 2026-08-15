@@ -21,6 +21,16 @@ sealed interface UiFeedbackAction {
     data class Resolve(val token: Long) : UiFeedbackAction
     data object RetrySync : UiFeedbackAction
     data object RetryInitialization : UiFeedbackAction
+
+    /**
+     * Restore the backup that was just refused, without the notes and documents in it.
+     *
+     * Offered only when a restore was refused because the backup predates an editor content epoch
+     * boundary. The refusal wrote nothing, so this is the owner's explicit second choice: take the
+     * accounts, workspaces, settings and task data out of the backup and leave the erased editor
+     * generation erased.
+     */
+    data object RestoreWithoutEditorContent : UiFeedbackAction
 }
 
 data class UiFeedback(

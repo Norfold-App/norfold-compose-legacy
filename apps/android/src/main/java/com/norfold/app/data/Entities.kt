@@ -730,6 +730,12 @@ data class AppSettingsEntity(
     val notificationEmail: Boolean = false,
     val notificationPush: Boolean = true,
     val subscriptionTier: String = SubscriptionTier.Free.name,
+    // Storage bookkeeping, not a preference: which editor content epoch this install's notes,
+    // documents, and editor history belong to. It deliberately does not travel through the
+    // AppSettings domain model, because nothing in the UI may offer to change it and a settings
+    // import must not be able to move an install backwards into an erased epoch.
+    val editorContentEpoch: Int = 0,
+    val editorContentEpochAt: Long? = null,
 )
 
 fun WorkspaceEntity.toDomain() = com.norfold.app.domain.Workspace(

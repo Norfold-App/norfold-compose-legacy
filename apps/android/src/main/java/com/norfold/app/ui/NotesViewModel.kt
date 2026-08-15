@@ -35,6 +35,7 @@ import com.norfold.app.data.InstallationIdentityStore
 import com.norfold.app.data.NorfoldWorkScheduler
 import com.norfold.app.data.NorfoldDatabase
 import com.norfold.app.data.NetworkMonitor
+import com.norfold.app.data.RecoveryStorageProvider
 import com.norfold.app.data.DocsRepository
 import com.norfold.app.data.SyncSecretStore
 import com.norfold.app.data.SecureChatOutboxEntity
@@ -44,6 +45,8 @@ import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.AppIconFamily
 import com.norfold.app.domain.BackupCodec
 import com.norfold.app.domain.BackupCategory
+import com.norfold.app.domain.BackupSnapshot
+import com.norfold.app.domain.RestoreOutcome
 import com.norfold.app.domain.mergeSelectedInto
 import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
@@ -930,6 +933,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 Log.i(InitLogTag, "seed")
                 repository.ensureSeedData()
+                // After the seed so a fresh install is already stamped at the current epoch and
+                // this no-ops for it; before the sweep and the index rebuild so both run against
+                // what survives the boundary rather than against rows about to be deleted.
+                Log.i(InitLogTag, "epoch")
+                repository.applyEditorContentEpoch { RecoveryStorageProvider(app).deleteAll() }
                 repairLegacyCallingName()
                 // A process restart is a new authentication session. Resolve the persisted vault
                 // state before exposing workspace content so a protected vault never flashes or
@@ -1027,8 +1035,55 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 syncConfiguredNow()
             }
             UiFeedbackAction.RetryInitialization -> if (actionPerformed) retryInitialization()
+            UiFeedbackAction.RestoreWithoutEditorContent -> {
+                val snapshot = pendingEditorEpochRestore
+                pendingEditorEpochRestore = null
+                if (actionPerformed && snapshot != null) {
+                    viewModelScope.launch {
+                        runCatching { repository.restoreDroppingEditorArtifacts(snapshot) }
+                            .onSuccess {
+                                emitSuccess("Backup restored without its old notes and documents")
+                            }
+                            .onFailure {
+                                emitError("Couldn't restore that backup. Nothing was changed.")
+                            }
+                    }
+                }
+            }
             null -> Unit
         }
+    }
+
+    /**
+     * The backup a refused restore was holding, kept only until the owner answers the refusal.
+     *
+     * Dropped as soon as the offer is taken or dismissed: a decrypted backup in memory is the whole
+     * workspace, and there is no reason to keep one alive past the question it answers.
+     */
+    private var pendingEditorEpochRestore: BackupSnapshot? = null
+
+    /**
+     * Restores [snapshot], returning false when it was refused and nothing was written.
+     *
+     * A refusal means the backup predates an editor content epoch boundary this install has already
+     * crossed, so applying it would put back exactly the generation of notes and documents the
+     * boundary erased. Callers must not report success on a false return; they get a message and an
+     * explicit offer to restore everything except the editor content instead.
+     */
+    private suspend fun applyRestoredSnapshot(snapshot: BackupSnapshot): Boolean {
+        val outcome = repository.restore(snapshot)
+        if (outcome is RestoreOutcome.EditorEpochRefused) {
+            pendingEditorEpochRestore = snapshot
+            val preview = outcome.preview
+            emitError(
+                "This backup holds notes and documents from an older version of Norfold that this " +
+                    "device has already cleared (${preview.refusedNoteCount} notes). Nothing was changed.",
+                actionLabel = "Restore the rest",
+                action = UiFeedbackAction.RestoreWithoutEditorContent,
+            )
+            return false
+        }
+        return true
     }
 
     private fun registerFeedbackResolution(
@@ -6256,7 +6311,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             val result = googleDriveApiSyncStore.restoreDeviceBackup(resolvedSecret.toCharArray(), manifest)
             val local = repository.snapshot()
-            repository.restore(result.snapshot.mergeSelectedInto(local, categories))
+            // A refusal writes nothing, so the settings below — chain id, sync status, autoBackup —
+            // must not be written either: they would describe a restore that did not happen.
+            if (!applyRestoredSnapshot(result.snapshot.mergeSelectedInto(local, categories))) {
+                return@runCatching false
+            }
             val accountId = NorfoldSupabase.currentAccountId()
             if (accountId != null) syncSecretStore.save(accountId, secret.toCharArray())
             val next = repository.settingsValue().copy(
@@ -6270,10 +6329,13 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             )
             repository.updateSettings(next)
             NorfoldWorkScheduler.reconcile(app, next)
-        }.onSuccess {
-            restoredBackupCategories = categories
+            true
+        }.onSuccess { restored ->
+            if (restored) {
+                restoredBackupCategories = categories
+                emitSuccess("Selected backup data restored")
+            }
             _accountCoordinatorState.value = AccountCoordinatorState.Ready
-            emitSuccess("Selected backup data restored")
         }.onFailure {
             val message = googleDriveFailureMessage(it, "Couldn't restore that backup")
             _accountCoordinatorState.value = AccountCoordinatorState.RecoverableError(message)
@@ -6442,27 +6504,33 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     SyncFolderAction.RestoreChain -> {
                         val result = syncStore.restoreChain(uri, request.provider, request.secret.toCharArray())
-                        repository.restore(result.snapshot)
-                        repository.updateSettings(
-                            state.value.settings.copy(
-                                syncProvider = request.provider,
-                                syncFolderUri = uri.toString(),
-                                syncChainId = result.writeResult.chainId,
-                                syncDeviceName = request.deviceName,
-                                syncUserName = request.username,
-                                syncPublicName = request.publicName,
-                                lastSyncAt = System.currentTimeMillis(),
-                                lastSyncHash = result.writeResult.snapshotHash,
-                                lastSyncStatus = result.writeResult.status,
-                                syncConflictCount = result.writeResult.conflictCount,
-                            ),
-                        )
-                        conflictReport.value = null
-                        result.writeResult.status
+                        if (!applyRestoredSnapshot(result.snapshot)) {
+                            // Refused: nothing was written, and the refusal has already been
+                            // reported with its own offer. An empty status is what tells the
+                            // success handler below it has nothing to announce.
+                            ""
+                        } else {
+                            repository.updateSettings(
+                                state.value.settings.copy(
+                                    syncProvider = request.provider,
+                                    syncFolderUri = uri.toString(),
+                                    syncChainId = result.writeResult.chainId,
+                                    syncDeviceName = request.deviceName,
+                                    syncUserName = request.username,
+                                    syncPublicName = request.publicName,
+                                    lastSyncAt = System.currentTimeMillis(),
+                                    lastSyncHash = result.writeResult.snapshotHash,
+                                    lastSyncStatus = result.writeResult.status,
+                                    syncConflictCount = result.writeResult.conflictCount,
+                                ),
+                            )
+                            conflictReport.value = null
+                            result.writeResult.status
+                        }
                     }
                 }
             }.onSuccess {
-                emitSuccess(it)
+                if (it.isNotBlank()) emitSuccess(it)
             }.onFailure { error ->
                 val failure = syncFailureMessage(error, request.provider)
                 repository.updateSettings(state.value.settings.copy(lastSyncStatus = failure))
@@ -6527,8 +6595,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         NorfoldSupabase.currentAccountId()?.let { syncSecretStore.save(it, resolvedSecret.toCharArray()) }
         runCatching {
             val result = googleDriveApiSyncStore.restoreChain(resolvedSecret.toCharArray())
-            repository.restore(result.snapshot)
-            val next = state.value.settings.copy(
+            if (!applyRestoredSnapshot(result.snapshot)) {
+                // Refused, so nothing was written and there is no chain to record. The refusal
+                // carries its own message; a blank status is how the handler below stays quiet.
+                ""
+            } else {
+                val next = state.value.settings.copy(
                     syncProvider = SyncProvider.GoogleDrive,
                     syncFolderUri = GoogleDriveApiSyncStore.AppDataFolderUri,
                     syncChainId = result.writeResult.chainId,
@@ -6541,12 +6613,13 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     syncConflictCount = result.writeResult.conflictCount,
                     autoBackup = true,
                 )
-            repository.updateSettings(next)
-            NorfoldWorkScheduler.reconcile(app, next)
-            conflictReport.value = null
-            result.writeResult.status
+                repository.updateSettings(next)
+                NorfoldWorkScheduler.reconcile(app, next)
+                conflictReport.value = null
+                result.writeResult.status
+            }
         }.onSuccess {
-            emitSuccess(it)
+            if (it.isNotBlank()) emitSuccess(it)
         }.onFailure { error ->
             val failure = googleDriveFailureMessage(error, "Google Drive restore failed")
             repository.updateSettings(state.value.settings.copy(lastSyncStatus = failure))
@@ -6610,7 +6683,16 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         localSnapshot = repository.snapshot(),
                     )
                 }
-            if (remoteSnapshot != null) repository.restore(remoteSnapshot)
+            // Sync is a merge, not a replace, so a refusal is reported in the sync status and
+            // nowhere else: this device's own notes are untouched and there is nothing for the
+            // owner to decide. Only an explicit restore offers to drop the editor content.
+            val editorDataSkipped = remoteSnapshot != null &&
+                repository.restore(remoteSnapshot) is RestoreOutcome.EditorEpochRefused
+            val status = if (editorDataSkipped) {
+                "Sync skipped older notes and documents from another device. Nothing here changed."
+            } else {
+                result.status
+            }
             // Re-read at write time: `current` predates the network sync, and restore() may have
             // just persisted the remote snapshot's settings (or the user changed one mid-sync).
             // Only the sync-outcome fields belong to this write.
@@ -6618,12 +6700,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 repository.settings.first().copy(
                     lastSyncAt = System.currentTimeMillis(),
                     lastSyncHash = result.snapshotHash,
-                    lastSyncStatus = result.status,
+                    lastSyncStatus = status,
                     syncConflictCount = result.conflictCount,
                 ),
             )
             conflictReport.value = if (result.conflictCount > 0) readConflictReportFrom(current) else null
-            result.status
+            status
         }.onSuccess {
             emitSuccess(it)
         }.onFailure { error ->
@@ -7016,9 +7098,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             require(secret.isNotBlank()) { "Backup password is required" }
             require(payload.isNotBlank()) { "Backup payload is empty" }
-            repository.restore(withContext(Dispatchers.IO) { BackupCodec.decrypt(payload, secret.toCharArray()) })
-        }.onSuccess {
-            emitSuccess("Backup restored")
+            applyRestoredSnapshot(withContext(Dispatchers.IO) { BackupCodec.decrypt(payload, secret.toCharArray()) })
+        }.onSuccess { restored ->
+            if (restored) emitSuccess("Backup restored")
         }.onFailure {
             emitError("Couldn't restore that backup. Check the backup password and file, then retry.")
         }
@@ -7034,9 +7116,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 require(payload.isNotBlank()) { "Backup file is empty" }
                 val snapshot = withContext(Dispatchers.IO) { BackupCodec.decrypt(payload, secret.toCharArray()) }
-                repository.restore(snapshot)
-                snapshot
+                // A refused import leaves onboarding where it was: the wizard must not be finished
+                // on the strength of workspaces that were never written.
+                if (applyRestoredSnapshot(snapshot)) snapshot else null
             }.onSuccess { snapshot ->
+                if (snapshot == null) return@onSuccess
                 // Restoring during onboarding replaces the starter content with the user's real
                 // workspaces; walking the remaining wizard steps would rename the restored active
                 // workspace and rewrite its settings. Finish onboarding here instead.

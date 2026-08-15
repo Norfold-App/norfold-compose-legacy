@@ -14,6 +14,7 @@ import androidx.work.WorkerParameters
 import com.norfold.app.cloud.NorfoldSupabase
 import com.norfold.app.cloud.PushRegistrationClient
 import com.norfold.app.domain.AppSettings
+import com.norfold.app.domain.RestoreOutcome
 import com.norfold.app.domain.SyncProvider
 import java.util.concurrent.TimeUnit
 
@@ -136,11 +137,19 @@ class NorfoldSyncWorker(context: Context, params: WorkerParameters) : CoroutineW
                 lastSyncHash = settings.lastSyncHash,
                 localSnapshot = repository.snapshot(),
             )
-            if (remote != null) repository.restore(remote)
+            // A remote snapshot from an earlier editor content epoch is refused rather than
+            // applied, and a refusal writes nothing at all. Background sync says so in the status
+            // instead of reporting a clean sync, because the two devices genuinely disagree about
+            // which generation of editor content exists and only the owner can settle that.
+            val outcome = if (remote != null) repository.restore(remote) else null
             repository.updateSettings(repository.settingsValue().copy(
                 lastSyncAt = System.currentTimeMillis(),
                 lastSyncHash = result.snapshotHash,
-                lastSyncStatus = result.status,
+                lastSyncStatus = when (outcome) {
+                    is RestoreOutcome.EditorEpochRefused ->
+                        "Sync skipped older editor data from another device. Nothing on this device changed."
+                    else -> result.status
+                },
                 syncConflictCount = result.conflictCount,
             ))
             Result.success()

@@ -68,5 +68,10 @@ fun BackupSnapshot.mergeSelectedInto(
         workspaceObjectHistory = if (workspace) workspaceObjectHistory else local.workspaceObjectHistory,
         workspaceComments = if (workspace) workspaceComments else local.workspaceComments,
         workspaceFiles = if (conversations) workspaceFiles else local.workspaceFiles,
+        // The epoch follows whichever side supplied the editor artifacts. A restore that keeps the
+        // local notes must keep the local epoch too: stamping the merge with the backup's epoch
+        // would make the install refuse its own content, and defaulting it here would refuse every
+        // selective restore, including one that only takes device settings.
+        editorContentEpoch = if (workspace) editorContentEpoch else local.editorContentEpoch,
     )
 }

@@ -28,7 +28,48 @@ data class BackupSnapshot(
     val workspaceObjectHistory: List<WorkspaceObjectHistory> = emptyList(),
     val workspaceComments: List<WorkspaceComment> = emptyList(),
     val workspaceFiles: List<WorkspaceFileItem> = emptyList(),
+    // Which editor content epoch the notes, documents, and editor history in this snapshot were
+    // authored in. A snapshot with no stamp was written before epochs existed, so it defaults to
+    // the unstamped epoch and its editor artifacts are refused by an install that has already
+    // crossed the boundary. See EditorContentEpoch.kt.
+    val editorContentEpoch: Int = UnstampedEditorContentEpoch,
 )
+
+/**
+ * The same snapshot with its editor artifacts removed, for restoring a backup that predates an
+ * editor content epoch boundary this install has already crossed.
+ *
+ * Everything the boundary preserves still restores: workspaces, settings and device profiles, task
+ * boards and cards with their properties and checklists, goals, calendar events, chat, standalone
+ * files, and the parts of the workspace graph that describe them. What is dropped is the erased
+ * generation — notes, notebooks, note-scoped tags, note attachments and embeds, the rich bodies
+ * owned by tasks and calendar events, and the Note half of the workspace graph with the comments,
+ * history, relationships, and activity that hang off it.
+ *
+ * A partial restore is the honest outcome here. Refusing the whole backup would take away the
+ * owner's tasks and chat to protect them from documents they were told are gone.
+ */
+fun BackupSnapshot.withoutEditorArtifacts(): BackupSnapshot {
+    val noteObjectIds = workspaceObjects
+        .filter { it.objectType == WorkspaceObjectType.Note }
+        .mapTo(hashSetOf()) { it.id }
+    fun isNoteObject(objectId: Long?) = objectId != null && objectId in noteObjectIds
+    return copy(
+        notes = emptyList(),
+        notebooks = emptyList(),
+        tags = tags.filterNot { it.scope == NoteTagScope },
+        attachments = emptyList(),
+        embeds = emptyList(),
+        ownedDocuments = emptyList(),
+        workspaceObjects = workspaceObjects.filterNot { it.id in noteObjectIds },
+        workspaceObjectLinks = workspaceObjectLinks.filterNot {
+            isNoteObject(it.fromObjectId) || isNoteObject(it.toObjectId)
+        },
+        workspaceActivities = workspaceActivities.filterNot { isNoteObject(it.objectId) },
+        workspaceObjectHistory = workspaceObjectHistory.filterNot { isNoteObject(it.objectId) },
+        workspaceComments = workspaceComments.filterNot { isNoteObject(it.objectId) },
+    )
+}
 
 object BackupCodec {
     // V3 adds structured documents owned by Tasks and Calendar events. NOTE rows keep carrying
@@ -37,6 +78,9 @@ object BackupCodec {
 
     fun encode(snapshot: BackupSnapshot): String = buildString {
         appendLine(Header)
+        // Unknown line prefixes are ignored on decode, so stamping the epoch does not need a new
+        // header version: an older build reads this backup exactly as it did before.
+        appendLine(listOf("EDITOR_EPOCH", snapshot.editorContentEpoch).joinToString("|"))
         appendLine(
             listOf(
                 "TASK_PREFS",
@@ -301,9 +345,12 @@ object BackupCodec {
         val workspaceFiles = mutableListOf<WorkspaceFileItem>()
         val deviceSettingsProfiles = mutableListOf<DeviceSettingsProfile>()
         var taskWorkspacePrefs = TaskWorkspacePrefs()
+        var editorContentEpoch = UnstampedEditorContentEpoch
         lines.drop(1).forEach { line ->
             val cells = line.split("|")
             when (cells.firstOrNull()) {
+                "EDITOR_EPOCH" -> editorContentEpoch =
+                    cells.getOrElse(1) { "" }.toIntOrNull()?.coerceAtLeast(UnstampedEditorContentEpoch) ?: UnstampedEditorContentEpoch
                 "TASK_PREFS" -> taskWorkspacePrefs = TaskWorkspacePrefs(
                     viewMode = unb64(cells.getOrElse(1) { b64("Board") }),
                     selectedBoardId = cells.getOrElse(2) { "1" }.toLong(),
@@ -669,6 +716,7 @@ object BackupCodec {
             workspaceObjectHistory = workspaceObjectHistory,
             workspaceComments = workspaceComments,
             workspaceFiles = workspaceFiles,
+            editorContentEpoch = editorContentEpoch,
         )
     }
 

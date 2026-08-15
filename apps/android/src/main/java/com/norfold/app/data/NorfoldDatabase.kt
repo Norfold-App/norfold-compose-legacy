@@ -47,7 +47,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SecureChatUserHiddenEntity::class,
         PrivateChatArchiveManifestEntity::class,
     ],
-    version = 51,
+    version = 52,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -110,6 +110,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_48_49,
                     MIGRATION_49_50,
                     MIGRATION_50_51,
+                    MIGRATION_51_52,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -299,6 +300,17 @@ abstract class NorfoldDatabase : RoomDatabase() {
                         "AND MAX(payload_json) LIKE '%\"calculationPayload\"%'" +
                         ")",
                 )
+            }
+        }
+        // The editor content epoch. Two columns on the single settings row: which epoch this
+        // install's editor content belongs to, and when it was established. Existing installs
+        // land on epoch 0, which is what makes the one-time editor reset run exactly once; a
+        // fresh install is stamped at the current epoch when its workspace is created, so it
+        // never has anything to reset.
+        internal val MIGRATION_51_52 = object : Migration(51, 52) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN editorContentEpoch INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE settings ADD COLUMN editorContentEpochAt INTEGER")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds

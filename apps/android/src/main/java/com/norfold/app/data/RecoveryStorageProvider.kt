@@ -52,6 +52,19 @@ class RecoveryStorageProvider(
         .filter(File::isDirectory)
         .sumOf { FileRecoverySnapshotStore(it, retention).storageBytes() }
 
+    /**
+     * Deletes every restore point for every artifact.
+     *
+     * Only the editor content epoch boundary calls this. A restore point is a copy of a document,
+     * so leaving these behind would let an erased epoch be typed back into existence one undo at a
+     * time. Returns false when something survived, which the caller treats as a reason not to
+     * declare the boundary crossed.
+     */
+    fun deleteAll(): Boolean {
+        if (!root.exists()) return true
+        return root.deleteRecursively() && !root.exists()
+    }
+
     private fun sanitize(key: String): String {
         val cleaned = key.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '_' }.joinToString("")
         return cleaned.take(MAX_SEGMENT_LENGTH).ifBlank { FALLBACK_SEGMENT }

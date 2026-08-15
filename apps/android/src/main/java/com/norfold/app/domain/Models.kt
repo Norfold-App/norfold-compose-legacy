@@ -80,8 +80,14 @@ data class Tag(
     val id: Long,
     val name: String,
     val color: Long,
-    val scope: String = "notes",
+    val scope: String = NoteTagScope,
 )
+
+/**
+ * The scope every tag applied to a note carries. Task boards scope their tags per board instead
+ * ("board:<id>"), which is what keeps a note tag and a card label with the same text independent.
+ */
+const val NoteTagScope: String = "notes"
 
 data class Attachment(
     val id: Long,

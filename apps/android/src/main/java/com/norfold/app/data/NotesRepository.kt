@@ -28,6 +28,13 @@ import com.norfold.app.domain.DeviceSettingsProfile
 import com.norfold.app.domain.SettingsProfileCategory
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EmbedBlock
+import com.norfold.app.domain.CurrentEditorContentEpoch
+import com.norfold.app.domain.NoteTagScope
+import com.norfold.app.domain.RestoreEpochPreview
+import com.norfold.app.domain.RestoreOutcome
+import com.norfold.app.domain.UnstampedEditorContentEpoch
+import com.norfold.app.domain.acceptsEditorArtifacts
+import com.norfold.app.domain.withoutEditorArtifacts
 import com.norfold.app.domain.EmbedMetadata
 import com.norfold.app.domain.FileBlock
 import com.norfold.app.domain.MathBlock
@@ -248,11 +255,69 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val existing = ensureSettingsDeviceIdentity()
         dao.upsertSettings(existing.copy(activeWorkspaceId = wsId, workspaceName = "Personal"))
         ensureDefaultTaskBoard(wsId)
+        // A fresh install is born in the current editor content epoch: it has no earlier
+        // generation of documents, so the one-time reset must never run against it.
+        dao.markEditorContentEpoch(CurrentEditorContentEpoch, System.currentTimeMillis())
         // A new workspace is empty. There is no guide, demo, template, or stress-test content
         // to create here, and no repair pass that could recreate any of it on a later launch:
         // every document in the app is authored by whoever uses it.
         rebuildWorkspaceIndex()
     }
+
+    /**
+     * Crosses the editor content epoch boundary, once, on an install that predates it.
+     *
+     * Erases the previous generation of editor content: notes, notebooks, every owned document and
+     * its blocks (which is where stylesheets live), the rich bodies attached to tasks and calendar
+     * events, note attachments and embeds, note-scoped tags, and the editor half of the workspace
+     * graph — each Note object's comments, history, relationships, and activity — plus queued sync
+     * operations and remote bindings for editor artifacts, and every local restore point.
+     *
+     * Preserved, deliberately: accounts, authentication, workspaces, settings, tasks and their
+     * cards' metadata, calendar events and their metadata, chat, goals, and standalone workspace
+     * files. Room's clearAllTables is unusable here for exactly that reason.
+     *
+     * Returns true when the boundary was crossed by this call, false when this install was already
+     * in the current epoch.
+     *
+     * @param deleteLocalSnapshots deletes the on-disk restore points; returns false if any survive.
+     *   It runs before the database transaction, not after, because the failure that matters is a
+     *   process death between the two: snapshots deleted but content still present is a wasted undo
+     *   history, while content deleted but snapshots still present is an erased epoch that can be
+     *   restored a block at a time.
+     */
+    suspend fun applyEditorContentEpoch(deleteLocalSnapshots: () -> Boolean = { true }): Boolean {
+        val stored = dao.settings() ?: return false
+        if (stored.editorContentEpoch >= CurrentEditorContentEpoch) return false
+        if (!deleteLocalSnapshots()) return false
+        database.withTransaction {
+            // Object graphs first: pruning a Note object also removes the comments, history,
+            // relationships, and activity hanging off it, and it needs the object row to still
+            // be there to find them.
+            dao.workspaceObjectIdsOfTypes(listOf(WorkspaceObjectType.Note.name))
+                .forEach { deleteWorkspaceObjectGraph(it) }
+            // Documents before notes: the note-owned document rows are found by joining notes.
+            dao.clearDocuments()
+            dao.clearAttachments()
+            dao.clearNoteEmbeds()
+            dao.clearNotes()
+            dao.clearNotebooks()
+            dao.deleteNoteScopedTags()
+            val editorSyncTypes = listOf(WorkspaceObjectType.Note.name, RemoteDocumentObjectType)
+            dao.deleteSyncOutboxForTypes(editorSyncTypes)
+            dao.deleteSyncTombstonesForTypes(editorSyncTypes)
+            dao.deleteRemoteBindingsForTypes(editorSyncTypes)
+            // The stamp is written inside the same transaction as the deletes. The requirement is
+            // that the epoch is never marked without the reset having succeeded, and atomicity is
+            // a stronger guarantee than ordering: a half-finished reset rolls the stamp back with
+            // it, so the next launch retries the whole boundary.
+            dao.markEditorContentEpoch(CurrentEditorContentEpoch, System.currentTimeMillis())
+        }
+        return true
+    }
+
+    /** The epoch this install's editor content belongs to. Storage bookkeeping, never a preference. */
+    suspend fun editorContentEpoch(): Int = dao.settings()?.editorContentEpoch ?: UnstampedEditorContentEpoch
 
     suspend fun registerSettingsDevice(screenClass: String) {
         val normalizedScreenClass = screenClass.takeIf { it in setOf("Compact", "Medium", "Expanded") } ?: "Compact"
@@ -2661,6 +2726,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
     }
 
     suspend fun updateSettings(settings: AppSettings) {
+        val stored = dao.settings()
         val entity = AppSettingsEntity(
             themeMode = settings.themeMode.name,
             themeProfile = settings.themeProfile.name,
@@ -2753,7 +2819,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
             notificationPush = settings.notificationPush,
             subscriptionTier = settings.subscriptionTier.name,
         )
-        dao.upsertSettings(entity)
+        dao.upsertSettings(
+            // The epoch columns are not part of the settings model, so this rebuilt entity carries
+            // their defaults. Writing that would move the install back to the unstamped epoch and
+            // make the one-time reset run again on the next launch — after a theme change.
+            entity.copy(
+                editorContentEpoch = stored?.editorContentEpoch ?: entity.editorContentEpoch,
+                editorContentEpochAt = stored?.editorContentEpochAt ?: entity.editorContentEpochAt,
+            ),
+        )
         if (settings.settingsDeviceId.isNotBlank()) {
             dao.upsertDeviceSettingsProfile(settings.toDeviceSettingsProfile().toEntity())
         }
@@ -2832,9 +2906,53 @@ class DocsRepository(private val database: NorfoldDatabase) {
         workspaceObjectHistory = dao.allWorkspaceObjectHistory().map { it.toDomain() },
         workspaceComments = dao.allWorkspaceComments().map { it.toDomain() },
         workspaceFiles = dao.allWorkspaceFiles().map { it.toDomain() },
+        // Stamped with this install's epoch so a restore onto a device that has already crossed a
+        // later boundary can tell that these editor artifacts belong to an erased generation.
+        editorContentEpoch = dao.settings()?.editorContentEpoch ?: UnstampedEditorContentEpoch,
     )
 
-    suspend fun restore(snapshot: BackupSnapshot) {
+    /**
+     * Replaces this install's content with a backup.
+     *
+     * A backup written before an editor content epoch boundary this install has already crossed is
+     * refused rather than partly applied, and nothing is written. Restore is a whole-database
+     * replace: applying such a backup with its documents stripped out would clear the notes written
+     * since the boundary and have nothing to put back. The refusal carries what was found, so the
+     * caller can offer [restoreDroppingEditorArtifacts] as an explicit choice.
+     */
+    suspend fun restore(snapshot: BackupSnapshot): RestoreOutcome {
+        val preview = restorePreview(snapshot)
+        if (!preview.editorArtifactsAccepted) return RestoreOutcome.EditorEpochRefused(preview)
+        restoreAccepted(snapshot)
+        return RestoreOutcome.Restored
+    }
+
+    /**
+     * Restores only what an editor content epoch boundary preserves — workspaces, settings, tasks
+     * and their cards, calendar, chat, standalone files — and drops the erased editor generation.
+     *
+     * Only an explicit choice reaches here, because it deletes any editor content authored since
+     * the boundary without replacing it.
+     */
+    suspend fun restoreDroppingEditorArtifacts(snapshot: BackupSnapshot): RestoreOutcome {
+        restoreAccepted(snapshot.withoutEditorArtifacts())
+        return RestoreOutcome.Restored
+    }
+
+    /** How much of a backup an install at the current epoch would actually accept. */
+    suspend fun restorePreview(snapshot: BackupSnapshot): RestoreEpochPreview {
+        val installEpoch = dao.settings()?.editorContentEpoch ?: UnstampedEditorContentEpoch
+        val accepts = acceptsEditorArtifacts(installEpoch, snapshot.editorContentEpoch)
+        return RestoreEpochPreview(
+            installEpoch = installEpoch,
+            snapshotEpoch = snapshot.editorContentEpoch,
+            editorArtifactsAccepted = accepts,
+            refusedNoteCount = if (accepts) 0 else snapshot.notes.size,
+            refusedOwnedDocumentCount = if (accepts) 0 else snapshot.ownedDocuments.size,
+        )
+    }
+
+    private suspend fun restoreAccepted(snapshot: BackupSnapshot) {
         database.withTransaction {
             dao.clearSyncOutbox()
             dao.clearSyncTombstones()
@@ -3125,6 +3243,14 @@ class DocsRepository(private val database: NorfoldDatabase) {
                     taskKanbanEngine = snapshot.taskWorkspacePrefs.kanbanEngine,
                 ),
             )
+            // A backup from a later epoch carries a generation of editor content this install has
+            // no boundary for. Adopting its epoch is what stops the one-time reset from erasing
+            // what was just restored on the next launch. A backup from an earlier epoch cannot
+            // lower the stamp: crossing a boundary is not reversible by restoring.
+            dao.markEditorContentEpoch(
+                maxOf(dao.settings()?.editorContentEpoch ?: UnstampedEditorContentEpoch, snapshot.editorContentEpoch),
+                System.currentTimeMillis(),
+            )
             rebuildWorkspaceIndex()
         }
     }
@@ -3377,7 +3503,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
     private suspend fun setTags(noteId: Long, names: List<String>) {
         dao.clearTagsForNote(noteId)
         names.map { it.trim().removePrefix("#") }.filter { it.isNotBlank() }.distinct().forEach { name ->
-            dao.insertNoteTag(NoteTagCrossRef(noteId, getOrCreateTag(name, scope = "notes").id))
+            dao.insertNoteTag(NoteTagCrossRef(noteId, getOrCreateTag(name, scope = NoteTagScope).id))
         }
     }
 

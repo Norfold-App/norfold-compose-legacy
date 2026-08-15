@@ -110,6 +110,29 @@ interface NotesDao {
     @Query("DELETE FROM remote_object_bindings WHERE workspaceId = :ws")
     suspend fun deleteRemoteBindingsForWorkspace(ws: Long)
 
+    // The editor content epoch reset. These are deliberately not scoped to a workspace: the epoch
+    // boundary is an install-wide fact, and scoping by workspaceId would leave editor rows behind
+    // that belong to a workspace row an earlier delete already removed.
+    @Query("SELECT id FROM workspace_objects WHERE objectType IN (:objectTypes)")
+    suspend fun workspaceObjectIdsOfTypes(objectTypes: List<String>): List<Long>
+
+    // Note-scoped tags only; board tags ("board:<id>") are card metadata the boundary preserves.
+    // The literal must stay in step with NoteTagScope — Room needs a constant expression here.
+    @Query("DELETE FROM tags WHERE scope = 'notes'")
+    suspend fun deleteNoteScopedTags()
+
+    @Query("DELETE FROM sync_outbox WHERE objectType IN (:objectTypes)")
+    suspend fun deleteSyncOutboxForTypes(objectTypes: List<String>)
+
+    @Query("DELETE FROM sync_tombstones WHERE objectType IN (:objectTypes)")
+    suspend fun deleteSyncTombstonesForTypes(objectTypes: List<String>)
+
+    @Query("DELETE FROM remote_object_bindings WHERE objectType IN (:objectTypes)")
+    suspend fun deleteRemoteBindingsForTypes(objectTypes: List<String>)
+
+    @Query("UPDATE settings SET editorContentEpoch = :epoch, editorContentEpochAt = :establishedAt WHERE id = 1")
+    suspend fun markEditorContentEpoch(epoch: Int, establishedAt: Long)
+
     @Transaction
     @Query("SELECT * FROM notes WHERE archived = 0 AND workspaceId = :ws ORDER BY pinned DESC, updatedAt DESC")
     fun observeActiveNotes(ws: Long): Flow<List<NoteWithRelations>>
