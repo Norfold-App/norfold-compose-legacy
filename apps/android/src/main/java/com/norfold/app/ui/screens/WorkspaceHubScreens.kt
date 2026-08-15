@@ -775,8 +775,10 @@ fun TemplatesScreen(state: DocsUiState, viewModel: DocsViewModel) {
     LazyColumn(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Templates", fontWeight = FontWeight.Black, fontSize = 28.sp) }
         items(templates) { name ->
-            CompactHubRow(name, "Workspace structure with docs, tasks, files, and boards", Icons.Outlined.Tag) {
-                viewModel.createWorkspace(name, template = name)
+            // A template names a workspace. It never writes documents, tasks, or chat messages
+            // into it: everything in a Norfold workspace is authored by whoever uses it.
+            CompactHubRow(name, "Creates an empty workspace with this name", Icons.Outlined.Tag) {
+                viewModel.createWorkspace(name)
             }
         }
     }

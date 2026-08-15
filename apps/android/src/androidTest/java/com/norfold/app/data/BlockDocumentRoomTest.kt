@@ -271,43 +271,43 @@ class BlockDocumentRoomTest {
     }
 
     @Test
-    fun emptyDatabaseStaysEmptyUntilGuideIsChosenAndGuideAppliesExactlyOnce() = runBlocking {
+    fun emptyDatabaseStaysEmptyAcrossEveryLaunch() = runBlocking {
         val repository = DocsRepository(database)
 
         repository.ensureSeedData()
         assertTrue(dao.allNotesSnapshot().isEmpty())
         assertTrue(dao.allTasks().isEmpty())
+        assertTrue(dao.allNotebooks().isEmpty())
 
-        repository.applyWorkspaceTemplate("Norfold Guide")
-        val notesAfterFirstSeed = dao.allNotesSnapshot().map { it.toDomain() }
-        val tasksAfterFirstSeed = dao.allTasks()
-        val playground = notesAfterFirstSeed.single { it.title == "Rich blocks playground" }
-        val stress = notesAfterFirstSeed.single { it.title == "Long document performance demo" }
-        val blockTypes = playground.document.blocks.map { it::class }
+        // A second launch is where the old guide-repair pass used to run. Nothing may appear.
+        repository.ensureSeedData()
+        repository.ensureSeedData()
 
-        assertTrue(dao.allNotebooks().any { it.name == "Norfold Guide" })
-        assertTrue(blockTypes.containsAll(listOf(TableBlock::class, MathBlock::class, MermaidBlock::class, ChartBlock::class, EmbedBlock::class, FileBlock::class)))
-        assertTrue(stress.document.blocks.size > 200)
-        assertTrue(stress.document.blocks.count { it is MathBlock || it is MermaidBlock || it is ChartBlock } >= 8)
-        assertTrue(tasksAfterFirstSeed.size >= 4)
-        assertTrue(dao.allTaskPropertyValues().isNotEmpty())
-        assertTrue(dao.allTags().any { it.scope.startsWith("board:") })
-
-        repository.applyWorkspaceTemplate("Norfold Guide")
-
-        assertEquals(notesAfterFirstSeed.size, dao.allNotesSnapshot().size)
-        assertEquals(tasksAfterFirstSeed.size, dao.allTasks().size)
+        assertTrue(dao.allNotesSnapshot().isEmpty())
+        assertTrue(dao.allTasks().isEmpty())
+        assertTrue(dao.allNotebooks().isEmpty())
+        // The workspace record, the settings identity, and the default board are workspace
+        // structure rather than content, and they are the only things a first launch creates.
+        assertEquals(1, dao.allWorkspaces().size)
+        assertTrue(dao.settings() != null)
     }
 
     @Test
-    fun guideFillsMissingNotesWithoutReplacingExistingTasks() = runBlocking {
+    fun repeatedLaunchesLeaveAuthoredContentExactlyAsItWas() = runBlocking {
         dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
         dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
         dao.insertTask(TaskEntity(title = "Keep this task", workspaceId = 1, createdAt = 1, updatedAt = 1))
+        val repository = DocsRepository(database)
+        // The literal name that used to trigger the every-launch repair pass.
+        val notebook = dao.insertNotebook(NotebookEntity(name = "Norfold Guide", color = 0, sortOrder = 0, workspaceId = 1))
+        repository.createNote("Mine", "# Mine", notebook)
+        val notesBefore = dao.allNotesSnapshot().map { it.toDomain() }
 
-        DocsRepository(database).applyWorkspaceTemplate("Norfold Guide")
+        repository.ensureSeedData()
+        repository.ensureSeedData()
 
-        assertTrue(dao.allNotesSnapshot().any { it.note.title == "Rich blocks playground" })
+        assertEquals(notesBefore.map { it.title }, dao.allNotesSnapshot().map { it.note.title })
+        assertEquals(notesBefore.map { it.document }, dao.allNotesSnapshot().map { it.toDomain().document })
         assertEquals(listOf("Keep this task"), dao.allTasks().map { it.title })
     }
 

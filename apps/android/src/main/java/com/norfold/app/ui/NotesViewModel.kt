@@ -3022,7 +3022,6 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         setup: OnboardingSetupPreferences = OnboardingSetupPreferences(),
         fullName: String = "",
         displayName: String = "",
-        template: String = "Start empty",
         emailUpdates: Boolean = false,
         reminders: Boolean = true,
         productTips: Boolean = true,
@@ -3086,7 +3085,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             )
         repository.updateSettings(completedSettings)
         NorfoldWorkScheduler.reconcile(app, completedSettings)
-        if (!preserveRestoredWorkspace) repository.applyWorkspaceTemplate(template)
+        // Onboarding creates no content. The workspace it finishes with is empty unless a
+        // restore put something there.
         // Only now is onboarding durably complete — safe for the caller to drop its wizard state.
         onFinished()
         resetNavigation(Destination.WorkspaceHub)
@@ -5921,13 +5921,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         iconKind: WorkspaceIconKind = WorkspaceIconKind.Text,
         iconUri: String? = null,
         backgroundUri: String? = null,
-        template: String? = null,
     ) = viewModelScope.launch {
         if (name.isBlank()) return@launch
         val id = repository.createWorkspace(name.trim(), icon, palette, iconKind, iconUri, backgroundUri)
         repository.setActiveWorkspace(id)
         refreshTeamBinding()
-        template?.let { repository.applyWorkspaceTemplate(it) }
         resetNavigation(Destination.WorkspaceHub)
         emitSuccess("Workspace \"${name.trim()}\" created")
     }

@@ -129,7 +129,6 @@ fun NorfoldOnboardingScreen(
     var fullName by rememberSaveable { mutableStateOf(preferences.getString("full_name", "") ?: "") }
     var displayName by rememberSaveable { mutableStateOf(preferences.getString("display_name", "") ?: "") }
     var workspaceName by rememberSaveable { mutableStateOf(preferences.getString("workspace", "My Workspace") ?: "My Workspace") }
-    var workspaceTemplate by rememberSaveable { mutableStateOf(preferences.getString("template", "Start empty") ?: "Start empty") }
     var collaborationMode by rememberSaveable { mutableStateOf(preferences.getString("collaboration", "Just me for now") ?: "Just me for now") }
     var inviteCode by rememberSaveable { mutableStateOf("") }
     var avatarUri by rememberSaveable { mutableStateOf(preferences.getString("avatar_uri", "") ?: "") }
@@ -206,7 +205,7 @@ fun NorfoldOnboardingScreen(
     }
 
     LaunchedEffect(
-        step, fullName, displayName, workspaceName, workspaceTemplate, collaborationMode, avatarUri,
+        step, fullName, displayName, workspaceName, collaborationMode, avatarUri,
         useRecommendedDefaults, setupTheme, setupLabels, setupAppIcons, setupEditorIcons,
         setupFontScale, setupUiScale, setupToolbarScale, setupReduceMotion,
         backupFrequency,
@@ -216,7 +215,6 @@ fun NorfoldOnboardingScreen(
             .putString("full_name", fullName)
             .putString("display_name", displayName)
             .putString("workspace", workspaceName)
-            .putString("template", workspaceTemplate)
             .putString("collaboration", collaborationMode)
             .putString("avatar_uri", avatarUri)
             .putBoolean("recommended_defaults", useRecommendedDefaults)
@@ -290,7 +288,7 @@ fun NorfoldOnboardingScreen(
                     3 -> ProfileStep(fullName, { fullName = it }, displayName, { displayName = it }, avatarUri) {
                         avatarPicker.launch(arrayOf("image/*"))
                     }
-                    4 -> WorkspaceStep(workspaceName, { workspaceName = it }, workspaceTemplate) { workspaceTemplate = it }
+                    4 -> WorkspaceStep(workspaceName) { workspaceName = it }
                     5 -> CollaborationStep(
                         collaborationMode,
                         inviteCode,
@@ -382,7 +380,6 @@ fun NorfoldOnboardingScreen(
                         ),
                         fullName = fullName,
                         displayName = displayName,
-                        template = workspaceTemplate,
                         emailUpdates = emailUpdates,
                         reminders = reminders,
                         productTips = productTips,
@@ -573,33 +570,21 @@ private fun ProfileStep(fullName: String, onFullName: (String) -> Unit, displayN
 }
 
 @Composable
-private fun WorkspaceStep(name: String, onName: (String) -> Unit, template: String, onTemplate: (String) -> Unit) {
+private fun WorkspaceStep(name: String, onName: (String) -> Unit) {
     StepIcon(Icons.Outlined.Workspaces)
     Text("Create your workspace", fontSize = 28.sp, fontWeight = FontWeight.Black)
     Text("Give your workspace a name.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     OutlinedTextField(name, { onName(it.take(50)) }, Modifier.fillMaxWidth(), label = { Text("Workspace name") }, supportingText = { Text("${name.length}/50") }, singleLine = true)
     OutlinedTextField("Personal", {}, Modifier.fillMaxWidth(), label = { Text("Workspace type") }, readOnly = true)
-    Text("Starting point", Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold)
-    listOf(
-        "Start empty" to "A clean workspace with no demo content",
-        "Norfold Guide" to "A complete interactive tour of docs, tasks, tables, charts, and rich blocks",
-        "Personal organizer" to "A daily doc and a weekly planning task",
-        "Study planner" to "Study docs and revision tasks",
-        "Team workspace" to "A shared brief, task, and collaboration chat",
-    ).forEach { (label, detail) ->
-        Surface(
-            Modifier.fillMaxWidth().clickable { onTemplate(label) },
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, if (template == label) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
-            color = if (template == label) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .35f) else MaterialTheme.colorScheme.surface,
-        ) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) { Text(label, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-                if (template == label) Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-            }
-        }
-    }
-    Text("You can always change this later.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.fillMaxWidth())
+    // There is no starting-point choice: a new workspace is empty. Nothing here creates a
+    // guide, a demo document, a sample task, or a chat message on the owner's behalf.
+    Text(
+        "Your workspace starts empty. Everything in it will be something you wrote.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text("You can rename it later.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.fillMaxWidth())
 }
 
 @Composable
