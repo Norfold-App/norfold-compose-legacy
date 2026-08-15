@@ -736,6 +736,11 @@ data class AppSettingsEntity(
     // import must not be able to move an install backwards into an erased epoch.
     val editorContentEpoch: Int = 0,
     val editorContentEpochAt: Long? = null,
+    // The server half of the same boundary, tracked separately because it cannot be part of the
+    // local transaction. remoteEditorResetOutcome is null while the reset is still owed, which is
+    // what a retry looks for; remoteEditorContentEpoch records the epoch the server acknowledged.
+    val remoteEditorContentEpoch: Int = 0,
+    val remoteEditorResetOutcome: String? = null,
 )
 
 fun WorkspaceEntity.toDomain() = com.norfold.app.domain.Workspace(

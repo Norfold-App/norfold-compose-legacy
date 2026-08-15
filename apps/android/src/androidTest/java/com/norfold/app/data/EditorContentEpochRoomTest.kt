@@ -11,6 +11,7 @@ import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.NoteEmbedType
 import com.norfold.app.domain.NoteTagScope
 import com.norfold.app.domain.ParagraphBlock
+import com.norfold.app.domain.RemoteEditorResetOutcome
 import com.norfold.app.domain.UnstampedEditorContentEpoch
 import com.norfold.app.domain.WorkspaceActivityType
 import com.norfold.app.domain.WorkspaceHistoryType
@@ -184,6 +185,70 @@ class EditorContentEpochRoomTest {
         assertEquals(CurrentEditorContentEpoch, repository.editorContentEpoch())
         assertFalse(repository.applyEditorContentEpoch())
         assertEquals(listOf("Survives a settings write"), dao.allNotesSnapshot().map { it.note.title })
+    }
+
+    @Test
+    fun anUpgradedInstallOwesTheRemoteResetUntilTheServerAnswers() = runBlocking {
+        seedInstallFromBeforeTheBoundary()
+        // Before the boundary there is nothing owed, because the local erase is what creates
+        // the debt in the first place.
+        assertFalse(repository.remoteEditorResetPending())
+
+        assertTrue(repository.applyEditorContentEpoch())
+        assertTrue(repository.remoteEditorResetPending())
+
+        // Offline, signed out, expired: the answer is "not yet", and the debt must survive it.
+        assertFalse(repository.recordRemoteEditorReset(RemoteEditorResetOutcome.Retryable("offline")))
+        assertTrue(repository.remoteEditorResetPending())
+
+        assertTrue(repository.recordRemoteEditorReset(RemoteEditorResetOutcome.Applied(3)))
+        assertFalse(repository.remoteEditorResetPending())
+    }
+
+    @Test
+    fun aServerThatHadAlreadyCrossedTheBoundarySettlesTheDebtToo() = runBlocking {
+        seedInstallFromBeforeTheBoundary()
+        assertTrue(repository.applyEditorContentEpoch())
+
+        // A second device reaching a server another device already reset gets AlreadyApplied, which
+        // has to settle the debt: the work is done, and it does not matter who did it.
+        assertTrue(repository.recordRemoteEditorReset(RemoteEditorResetOutcome.AlreadyApplied))
+        assertFalse(repository.remoteEditorResetPending())
+    }
+
+    @Test
+    fun aDeviceThatMayNotResetTheWorkspaceStopsAsking() = runBlocking {
+        seedInstallFromBeforeTheBoundary()
+        assertTrue(repository.applyEditorContentEpoch())
+
+        // A member or viewer will never be allowed to erase the workspace's documents, so retrying
+        // forever would be a permanent background failure with no possible outcome.
+        assertTrue(repository.recordRemoteEditorReset(RemoteEditorResetOutcome.Refused("authorization_denied")))
+        assertFalse(repository.remoteEditorResetPending())
+    }
+
+    @Test
+    fun aSettingsWriteDoesNotBringTheRemoteDebtBack() = runBlocking {
+        seedInstallFromBeforeTheBoundary()
+        assertTrue(repository.applyEditorContentEpoch())
+        assertTrue(repository.recordRemoteEditorReset(RemoteEditorResetOutcome.Applied(1)))
+
+        // The remote columns are not part of the settings model either, so the same trap applies:
+        // a theme change must not make the device start asking the server to erase again.
+        repository.updateSettings(repository.settingsValue().copy(lastSyncStatus = "changed"))
+
+        assertFalse(repository.remoteEditorResetPending())
+    }
+
+    @Test
+    fun aFreshInstallOwesTheServerNothing() = runBlocking {
+        repository.ensureSeedData()
+
+        // A workspace created by this build never held a remote editor generation, so the retry
+        // must never start — not even once, and not on any later launch.
+        assertFalse(repository.remoteEditorResetPending())
+        repository.updateSettings(repository.settingsValue().copy(lastSyncStatus = "changed"))
+        assertFalse(repository.remoteEditorResetPending())
     }
 
     /** An install carrying a generation of editor content authored before the boundary existed. */

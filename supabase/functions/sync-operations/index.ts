@@ -60,6 +60,12 @@ Deno.serve(async (request) => {
     // response. The old blanket 401 also mislabeled every failure as an auth problem.
     if (message.startsWith("VERSION_CONFLICT")) return json({ error: message }, 409);
     if (message.includes("CHANNEL_ACCESS_DENIED")) return json({ error: "CHANNEL_ACCESS_DENIED" }, 403);
+    // A workspace whose editor content epoch has been reset refuses writes from a device still
+    // holding the erased generation. That is a disagreement about which generation exists, not an
+    // authorization failure — the caller may well be the owner who ran the reset on another device
+    // — so it is a conflict, and the marker stays verbatim so the client can say something true
+    // instead of reporting a generic sync failure.
+    if (message.includes("EDITOR_EPOCH_STALE")) return json({ error: "EDITOR_EPOCH_STALE" }, 409);
     if (message === "Authentication required" || message === "Invalid authentication token") {
       return json({ error: message }, 401);
     }

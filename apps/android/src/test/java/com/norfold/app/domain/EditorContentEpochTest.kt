@@ -139,6 +139,59 @@ class EditorContentEpochTest {
         assertEquals(CurrentEditorContentEpoch, takingSettingsOnly.editorContentEpoch)
     }
 
+    @Test
+    fun aDeviceThatIsMerelyOfflineOrSignedOutKeepsOwingTheRemoteReset() {
+        // Every one of these is a device that will be able to do the reset later, so the debt has
+        // to survive. The last case is the important one: an unrecognised message is retryable,
+        // because giving up on a message this build cannot read would leave the erased generation
+        // on the server permanently.
+        listOf(
+            "Failed to connect to supabase.co",
+            "JWT expired",
+            "HTTP 401 Unauthorized",
+            "Bad Gateway",
+            null,
+        ).forEach { message ->
+            assertTrue(
+                "expected retryable for: $message",
+                classifyRemoteEditorResetFailure(message) is RemoteEditorResetOutcome.Retryable,
+            )
+        }
+    }
+
+    @Test
+    fun aDeviceThatWillNeverBeAllowedToResetStopsAsking() {
+        // A viewer or ordinary member is refused by the server's role gate, and no amount of
+        // retrying changes that. Same for a workspace that no longer exists.
+        assertEquals(
+            RemoteEditorResetOutcome.Refused("authorization_denied"),
+            classifyRemoteEditorResetFailure("editor_reset_denied"),
+        )
+        assertEquals(
+            RemoteEditorResetOutcome.Refused("authorization_denied"),
+            classifyRemoteEditorResetFailure("HTTP 403 Forbidden"),
+        )
+        assertEquals(
+            RemoteEditorResetOutcome.Refused("unknown_workspace"),
+            classifyRemoteEditorResetFailure("editor_reset_unknown_workspace"),
+        )
+        assertEquals(
+            RemoteEditorResetOutcome.Refused("invalid_epoch"),
+            classifyRemoteEditorResetFailure("editor_reset_invalid_epoch"),
+        )
+    }
+
+    @Test
+    fun anExpiredTokenIsRetriedEvenThoughTheServerCallsItAnAuthorizationProblem() {
+        // The two categories overlap in the wire message, and the ordering has to favour the
+        // retryable reading: a signed-out device still owes the reset, while treating it as a
+        // permanent refusal would silently abandon the boundary at the next token expiry.
+        assertEquals(
+            RemoteEditorResetOutcome.Retryable("authentication_expired"),
+            classifyRemoteEditorResetFailure("permission denied: JWT expired"),
+        )
+    }
+
     private fun fullSnapshot(): BackupSnapshot {
         val noteObject = WorkspaceObject(
             id = 11,

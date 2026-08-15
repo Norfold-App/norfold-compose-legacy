@@ -47,7 +47,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SecureChatUserHiddenEntity::class,
         PrivateChatArchiveManifestEntity::class,
     ],
-    version = 52,
+    version = 53,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -111,6 +111,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_49_50,
                     MIGRATION_50_51,
                     MIGRATION_51_52,
+                    MIGRATION_52_53,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -311,6 +312,16 @@ abstract class NorfoldDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE settings ADD COLUMN editorContentEpoch INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE settings ADD COLUMN editorContentEpochAt INTEGER")
+            }
+        }
+        // The server half of the same boundary. An existing install lands with a null outcome,
+        // which is what "the remote reset is still owed" looks like on disk; the retry keeps
+        // asking until the server acknowledges or refuses permanently. A fresh install never had
+        // remote editor content, so its first launch records that it owes nothing.
+        internal val MIGRATION_52_53 = object : Migration(52, 53) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE settings ADD COLUMN remoteEditorContentEpoch INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE settings ADD COLUMN remoteEditorResetOutcome TEXT")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds

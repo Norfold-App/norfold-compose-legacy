@@ -14,6 +14,8 @@ import androidx.work.WorkerParameters
 import com.norfold.app.cloud.NorfoldSupabase
 import com.norfold.app.cloud.PushRegistrationClient
 import com.norfold.app.domain.AppSettings
+import com.norfold.app.domain.CurrentEditorContentEpoch
+import com.norfold.app.domain.RemoteEditorResetOutcome
 import com.norfold.app.domain.RestoreOutcome
 import com.norfold.app.domain.SyncProvider
 import java.util.concurrent.TimeUnit
@@ -23,6 +25,7 @@ object NorfoldWorkScheduler {
     private const val SyncWork = "norfold.account.sync"
     private const val PushHealthWork = "norfold.account.push-health"
     private const val ReconcileWork = "norfold.account.reconcile"
+    private const val EditorEpochResetWork = "norfold.editor.epoch-reset"
 
     fun reconcile(context: Context, settings: AppSettings) {
         val manager = WorkManager.getInstance(context.applicationContext)
@@ -67,6 +70,23 @@ object NorfoldWorkScheduler {
             if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
             request,
         )
+    }
+
+    /**
+     * Keeps asking the server to erase the editor generation it still holds.
+     *
+     * WorkManager gives up after four attempts, and a device can be offline for longer than that,
+     * so this is enqueued again on every launch while the reset is still owed rather than trusted to
+     * survive on its own. `KEEP` makes the repeat enqueue harmless: a request already waiting for a
+     * network is left alone instead of being restarted with a fresh backoff.
+     */
+    fun enqueueEditorEpochReset(context: Context) {
+        val request = OneTimeWorkRequestBuilder<NorfoldEditorEpochResetWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context.applicationContext)
+            .enqueueUniqueWork(EditorEpochResetWork, ExistingWorkPolicy.KEEP, request)
     }
 
     fun cancelAccountWork(context: Context) {
@@ -175,6 +195,44 @@ class NorfoldReconciliationWorker(context: Context, params: WorkerParameters) : 
         // worker guarantees token health after process death; missed object operations are pulled
         // on the next foreground initialization instead of trusting FCM as a data transport.
     }.fold(onSuccess = { Result.success() }, onFailure = { if (runAttemptCount < 4) Result.retry() else Result.failure() })
+}
+
+/**
+ * The remote half of the editor content epoch boundary, retried until it is settled.
+ *
+ * The device has already erased its own editor generation; this asks the server to erase the copy it
+ * holds. Nothing the owner sees depends on the answer — the local boundary stands either way, and a
+ * document from the erased generation is refused on the way in — so this worker never writes a
+ * user-visible status. It only stops when the server acknowledges the reset or refuses it
+ * permanently, which is the point: the boundary is owed, not optional.
+ */
+class NorfoldEditorEpochResetWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        val repository = DocsRepository(NorfoldDatabase.get(applicationContext))
+        if (!repository.remoteEditorResetPending()) return Result.success()
+        // No remote workspace means this install never synced its editor content anywhere, so there
+        // is nothing on a server to erase and nothing to keep asking about. Signed out is different:
+        // the binding may simply not have been read back yet, so that case keeps owing the reset.
+        val remoteWorkspaceId = repository.remoteWorkspaceId()
+            ?: return if (NorfoldSupabase.isSignedIn()) {
+                repository.markRemoteEditorResetNotNeeded()
+                Result.success()
+            } else {
+                if (runAttemptCount < 4) Result.retry() else Result.failure()
+            }
+        val outcome = runCatching {
+            NorfoldSupabase.resetWorkspaceEditorContent(remoteWorkspaceId, CurrentEditorContentEpoch)
+        }.getOrElse { RemoteEditorResetOutcome.Retryable("reset_service_unavailable") }
+        return if (repository.recordRemoteEditorReset(outcome)) {
+            Result.success()
+        } else if (runAttemptCount < 4) {
+            Result.retry()
+        } else {
+            // Failure here is not abandonment: the debt is still recorded in settings, and the next
+            // launch enqueues this worker again.
+            Result.failure()
+        }
+    }
 }
 
 private suspend fun updateStatus(repository: DocsRepository, status: String): androidx.work.ListenableWorker.Result {

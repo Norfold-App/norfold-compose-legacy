@@ -56,6 +56,8 @@ import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.ChatScope
 import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.CurrentEditorContentEpoch
+import com.norfold.app.domain.EditorContentEpochPayloadKey
 import com.norfold.app.domain.DocOverlapMode
 import com.norfold.app.domain.DocSectionAction
 import com.norfold.app.domain.ControlLabelMode
@@ -938,6 +940,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 // what survives the boundary rather than against rows about to be deleted.
                 Log.i(InitLogTag, "epoch")
                 repository.applyEditorContentEpoch { RecoveryStorageProvider(app).deleteAll() }
+                // The server half is owed, not done: it needs a network and an authorized session,
+                // and neither is guaranteed here. Re-enqueuing on every launch is what carries the
+                // debt past WorkManager's attempt ceiling and past process death.
+                if (repository.remoteEditorResetPending()) NorfoldWorkScheduler.enqueueEditorEpochReset(app)
                 repairLegacyCallingName()
                 // A process restart is a new authentication session. Resolve the persisted vault
                 // state before exposing workspace content so a protected vault never flashes or
@@ -3649,6 +3655,21 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Why a document could not be published, in the owner's words.
+     *
+     * A stale-epoch refusal is the one failure here that is neither the network's fault nor worth
+     * retrying: the workspace has crossed an editor content epoch this build does not know about,
+     * which happens when another device is running a newer version of Norfold. Reporting it as a
+     * sync error would send the owner looking at their connection instead of at the real fix.
+     */
+    private fun documentPublishFailureStatus(error: Throwable, onlineStatus: String): String = when {
+        "EDITOR_EPOCH_STALE" in error.message.orEmpty() ->
+            "Another device reset this workspace's editor content · update Norfold here to sync documents"
+        networkOnline.value -> onlineStatus
+        else -> "Offline · document saved locally"
+    }
+
     private suspend fun publishSharedDocument(noteId: Long, locallyDirtyBlockIds: Set<String>) {
         if (!NorfoldSupabase.isSignedIn()) return
         sharedDocumentSyncMutex.withLock {
@@ -3685,6 +3706,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     put("layoutJson", DocLayoutJson.encode(note.freeformLayout, note.canvasSpec))
                     put("artifactKind", note.artifactKind.storageValue)
                     put("updatedAt", note.updatedAt)
+                    // The generation this document belongs to. A reset workspace refuses a write
+                    // that does not name its epoch, which is how a device still holding the erased
+                    // generation is stopped from uploading it back.
+                    put(EditorContentEpochPayloadKey, CurrentEditorContentEpoch)
                 }
                 val result = runCatching {
                     NorfoldSupabase.upsertSharedDocument(
@@ -4046,7 +4071,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching { publishSharedDocument(owner.id, emptySet()) }
                     .onFailure {
                         if (it is CancellationException) throw it
-                        _documentPresenceStatus.value = if (networkOnline.value) "Document sync error · retrying when reopened" else "Offline · document saved locally"
+                        _documentPresenceStatus.value =
+                            documentPublishFailureStatus(it, "Document sync error · retrying when reopened")
                     }
                 runCatching {
                     NorfoldSupabase.sharedDocumentChanges(remoteWorkspaceId, syncId).collect { remote ->
@@ -4187,7 +4213,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                                 runCatching { publishSharedDocument(owner.id, dirtyBlockIds) }
                                     .onFailure {
                                         if (it is CancellationException) throw it
-                                        _documentPresenceStatus.value = if (networkOnline.value) "Saved locally · document sync failed" else "Offline · document saved locally"
+                                        _documentPresenceStatus.value =
+                                            documentPublishFailureStatus(it, "Saved locally · document sync failed")
                                     }
                             }
                         }

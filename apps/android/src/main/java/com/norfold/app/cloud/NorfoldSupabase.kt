@@ -1,6 +1,8 @@
 package com.norfold.app.cloud
 
 import io.github.jan.supabase.SupabaseClient
+import com.norfold.app.domain.RemoteEditorResetOutcome
+import com.norfold.app.domain.classifyRemoteEditorResetFailure
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.OtpType
 import io.github.jan.supabase.auth.auth
@@ -39,10 +41,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -582,6 +586,38 @@ object NorfoldSupabase {
         val result = payload["results"]?.jsonArray?.firstOrNull()
             ?: error(payload["error"]?.jsonPrimitive?.contentOrNull ?: "Document sync failed")
         return responseJson.decodeFromJsonElement(RemoteWorkspaceObject.serializer(), result)
+    }
+
+    /**
+     * Asks the server to erase the editor generation it still holds for this workspace.
+     *
+     * Authorized by the signed-in user's own token: the RPC is `security definer` so it can perform
+     * the deletes, but its gate is `has_workspace_role` under `auth.uid()`, so no privileged
+     * credential is needed here and none exists on the device. Errors are classified rather than
+     * thrown, because the caller's only question is whether to ask again.
+     */
+    suspend fun resetWorkspaceEditorContent(remoteWorkspaceId: String, epoch: Int): RemoteEditorResetOutcome {
+        if (!ExternalServiceConfig.capabilities.supabase) return RemoteEditorResetOutcome.Retryable("cloud_not_configured")
+        if (!isSignedIn()) return RemoteEditorResetOutcome.Retryable("signed_out")
+        if (runCatching { UUID.fromString(remoteWorkspaceId) }.isFailure) {
+            return RemoteEditorResetOutcome.Refused("invalid_workspace")
+        }
+        return try {
+            val row = client.postgrest.rpc(
+                function = "reset_workspace_editor_content",
+                parameters = buildJsonObject {
+                    put("p_workspace", remoteWorkspaceId)
+                    put("p_epoch", epoch)
+                },
+            ).decodeAs<JsonObject>()
+            if (row["already_applied"]?.jsonPrimitive?.booleanOrNull == true) {
+                RemoteEditorResetOutcome.AlreadyApplied
+            } else {
+                RemoteEditorResetOutcome.Applied(row["deleted"]?.jsonPrimitive?.intOrNull ?: 0)
+            }
+        } catch (error: Throwable) {
+            classifyRemoteEditorResetFailure(error.message)
+        }
     }
 
     suspend fun sharedDocuments(remoteWorkspaceId: String, documentSyncId: String? = null): List<RemoteWorkspaceObject> {

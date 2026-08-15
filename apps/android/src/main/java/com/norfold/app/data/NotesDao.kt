@@ -133,6 +133,11 @@ interface NotesDao {
     @Query("UPDATE settings SET editorContentEpoch = :epoch, editorContentEpochAt = :establishedAt WHERE id = 1")
     suspend fun markEditorContentEpoch(epoch: Int, establishedAt: Long)
 
+    // The remote half of the boundary. A null outcome means the reset is still owed, so this is
+    // the only write that clears the debt and the only one that can record why it was abandoned.
+    @Query("UPDATE settings SET remoteEditorContentEpoch = :epoch, remoteEditorResetOutcome = :outcome WHERE id = 1")
+    suspend fun markRemoteEditorReset(epoch: Int, outcome: String)
+
     @Transaction
     @Query("SELECT * FROM notes WHERE archived = 0 AND workspaceId = :ws ORDER BY pinned DESC, updatedAt DESC")
     fun observeActiveNotes(ws: Long): Flow<List<NoteWithRelations>>

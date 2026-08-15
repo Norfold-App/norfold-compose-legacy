@@ -29,7 +29,10 @@ import com.norfold.app.domain.SettingsProfileCategory
 import com.norfold.app.domain.FreeformPlacement
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.CurrentEditorContentEpoch
+import com.norfold.app.domain.EditorContentEpochPayloadKey
 import com.norfold.app.domain.NoteTagScope
+import com.norfold.app.domain.RemoteEditorResetOutcome
+import com.norfold.app.domain.RemoteEditorResetStatus
 import com.norfold.app.domain.RestoreEpochPreview
 import com.norfold.app.domain.RestoreOutcome
 import com.norfold.app.domain.UnstampedEditorContentEpoch
@@ -97,6 +100,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -130,6 +134,8 @@ private data class SharedDocumentPayload(
     val freeformLayout: Map<String, FreeformPlacement>,
     val canvasSpec: DocCanvasSpec,
     val artifactKind: DocumentArtifactKind,
+    /** The editor content epoch the sending device wrote this in. Absent means before epochs. */
+    val editorContentEpoch: Int,
 )
 
 private fun chatSecurityModeName(raw: String): String = when (raw.lowercase()) {
@@ -154,6 +160,8 @@ private fun RemoteWorkspaceObject.decodeSharedDocument(): SharedDocumentPayload?
         canvasSpec = DocLayoutJson.decodeCanvas(layoutJson),
         artifactKind = DocumentArtifactKind.fromStorage(body["artifactKind"]?.jsonPrimitive?.contentOrNull)
             ?: DocumentArtifactKind.inferredFrom(layoutMode, document),
+        editorContentEpoch = body[EditorContentEpochPayloadKey]?.jsonPrimitive?.intOrNull
+            ?: UnstampedEditorContentEpoch,
     )
 }.getOrNull()
 
@@ -256,8 +264,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
         dao.upsertSettings(existing.copy(activeWorkspaceId = wsId, workspaceName = "Personal"))
         ensureDefaultTaskBoard(wsId)
         // A fresh install is born in the current editor content epoch: it has no earlier
-        // generation of documents, so the one-time reset must never run against it.
+        // generation of documents, so the one-time reset must never run against it. That covers
+        // the server too — a workspace created by this build never held a remote editor
+        // generation, so nothing is owed and the retry never starts.
         dao.markEditorContentEpoch(CurrentEditorContentEpoch, System.currentTimeMillis())
+        dao.markRemoteEditorReset(CurrentEditorContentEpoch, RemoteEditorResetStatus.NotNeeded)
         // A new workspace is empty. There is no guide, demo, template, or stress-test content
         // to create here, and no repair pass that could recreate any of it on a later launch:
         // every document in the app is authored by whoever uses it.
@@ -318,6 +329,53 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
     /** The epoch this install's editor content belongs to. Storage bookkeeping, never a preference. */
     suspend fun editorContentEpoch(): Int = dao.settings()?.editorContentEpoch ?: UnstampedEditorContentEpoch
+
+    /**
+     * Whether this install still owes the server an editor content reset.
+     *
+     * Owed means: the local boundary has been crossed, and no outcome has been recorded for the
+     * remote half. A settings row that does not exist yet owes nothing — there is no install to
+     * speak of. An install that never crossed the boundary owes nothing either, because the local
+     * reset is what creates the debt.
+     */
+    suspend fun remoteEditorResetPending(): Boolean {
+        val stored = dao.settings() ?: return false
+        if (stored.editorContentEpoch < CurrentEditorContentEpoch) return false
+        return stored.remoteEditorResetOutcome == null
+    }
+
+    /**
+     * Records the answer the server gave, clearing the debt when the answer is final.
+     *
+     * A retryable failure writes nothing at all: leaving the outcome null is exactly what keeps the
+     * next launch and the next retry asking. Returns whether the debt is now settled.
+     */
+    suspend fun recordRemoteEditorReset(outcome: RemoteEditorResetOutcome): Boolean = when (outcome) {
+        is RemoteEditorResetOutcome.Applied, RemoteEditorResetOutcome.AlreadyApplied -> {
+            dao.markRemoteEditorReset(CurrentEditorContentEpoch, RemoteEditorResetStatus.Applied)
+            true
+        }
+        is RemoteEditorResetOutcome.Refused -> {
+            dao.markRemoteEditorReset(
+                dao.settings()?.remoteEditorContentEpoch ?: UnstampedEditorContentEpoch,
+                RemoteEditorResetStatus.Refused,
+            )
+            true
+        }
+        is RemoteEditorResetOutcome.Retryable -> false
+    }
+
+    /**
+     * Settles the debt for an install that has no remote editor generation to erase.
+     *
+     * Recorded as "not needed" rather than as a refusal, because nothing refused anything: there is
+     * no workspace bound to a server, so there is no server-side generation to reset. A workspace
+     * joined later cannot smuggle the erased generation back in either — a document stamped with an
+     * older epoch is refused on the way in.
+     */
+    suspend fun markRemoteEditorResetNotNeeded() {
+        dao.markRemoteEditorReset(CurrentEditorContentEpoch, RemoteEditorResetStatus.NotNeeded)
+    }
 
     suspend fun registerSettingsDevice(screenClass: String) {
         val normalizedScreenClass = screenClass.takeIf { it in setOf("Compact", "Medium", "Expanded") } ?: "Compact"
@@ -494,6 +552,12 @@ class DocsRepository(private val database: NorfoldDatabase) {
         remote: RemoteWorkspaceObject,
     ): ImportedSharedDocument? {
         val payload = remote.decodeSharedDocument() ?: return null
+        // The read-side half of the epoch boundary. While the remote reset is still owed — offline,
+        // signed out, or simply not acknowledged yet — the server still holds documents from the
+        // erased generation, and a pull would type them straight back into this install. Refusing
+        // here is what makes the offline case honest: the local erase stands on its own, and the
+        // server's copy cannot undo it whether or not the remote reset has landed.
+        if (!acceptsEditorArtifacts(editorContentEpoch(), payload.editorContentEpoch)) return null
         val existingBinding = dao.remoteBindingByRemoteId(localWorkspaceId, RemoteDocumentObjectType, remote.id)
             ?: dao.remoteBindingBySyncId(localWorkspaceId, RemoteDocumentObjectType, remote.clientSyncId)
         if (existingBinding != null && remote.serverVersion <= existingBinding.remoteVersion) {
@@ -2822,10 +2886,14 @@ class DocsRepository(private val database: NorfoldDatabase) {
         dao.upsertSettings(
             // The epoch columns are not part of the settings model, so this rebuilt entity carries
             // their defaults. Writing that would move the install back to the unstamped epoch and
-            // make the one-time reset run again on the next launch — after a theme change.
+            // make the one-time reset run again on the next launch — after a theme change. The
+            // remote columns are read explicitly rather than through an elvis, because a null
+            // outcome is meaningful there: it is what "the remote reset is still owed" looks like.
             entity.copy(
                 editorContentEpoch = stored?.editorContentEpoch ?: entity.editorContentEpoch,
                 editorContentEpochAt = stored?.editorContentEpochAt ?: entity.editorContentEpochAt,
+                remoteEditorContentEpoch = stored?.remoteEditorContentEpoch ?: entity.remoteEditorContentEpoch,
+                remoteEditorResetOutcome = if (stored != null) stored.remoteEditorResetOutcome else entity.remoteEditorResetOutcome,
             ),
         )
         if (settings.settingsDeviceId.isNotBlank()) {
