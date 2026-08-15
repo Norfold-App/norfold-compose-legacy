@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.norfold.app.data.DocsRepository
 import com.norfold.app.data.NorfoldDatabase
 import com.norfold.app.data.NotesDao
+import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.CurrentEditorContentEpoch
 import com.norfold.app.domain.DocOverlapMode
@@ -25,6 +26,7 @@ import com.norfold.app.editor.flow.FlowBlockKind
 import com.norfold.app.editor.relationship.CommentAnchor
 import com.norfold.app.editor.relationship.CommentStatus
 import com.norfold.app.editor.relationship.Phase7ArtifactCodec
+import com.norfold.app.editor.style.CalloutTone
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -100,6 +102,7 @@ class QaScenarioBuildersRoomTest {
 
         assertEquals(
             listOf(
+                QaTitles.FlowCallouts,
                 QaTitles.Document,
                 QaTitles.FlowArchitecture,
                 QaTitles.FlowDailyLog,
@@ -108,12 +111,12 @@ class QaScenarioBuildersRoomTest {
                 QaTitles.Legacy,
                 QaTitles.QuickNote,
                 QaTitles.Spreadsheet,
-            ),
+            ).sorted(),
             dao.allNotesSnapshot().map { it.note.title }.sorted(),
         )
         assertEquals(
             mapOf(
-                DocumentArtifactKind.Flow.storageValue to 5,
+                DocumentArtifactKind.Flow.storageValue to 6,
                 DocumentArtifactKind.Document.storageValue to 2,
                 DocumentArtifactKind.Spreadsheet.storageValue to 1,
             ),
@@ -122,7 +125,7 @@ class QaScenarioBuildersRoomTest {
 
         // The workspace graph is a by-product of the production writers, never written by the harness.
         val notes = dao.allWorkspaceObjects().filter { it.objectType == WorkspaceObjectType.Note.name }
-        assertEquals(8, notes.size)
+        assertEquals(9, notes.size)
         assertEquals(2, dao.allWorkspaceComments().size)
         assertTrue(dao.allWorkspaceActivities().isNotEmpty())
         assertTrue(dao.allWorkspaceObjectHistory().isNotEmpty())
@@ -137,6 +140,22 @@ class QaScenarioBuildersRoomTest {
         document.walk { present += it }
         val missing = FlowBlockKind.entries.filter { kind -> present.none(kind::matches) }
         assertEquals(emptyList<FlowBlockKind>(), missing)
+    }
+
+    /**
+     * The tone gallery has to hold all five tones, each stored under its canonical name.
+     *
+     * The tones are reached by cycling the control, so this also asserts that the control can reach every tone
+     * from the default — a rendering shot proves colours, and only the stored value proves the route.
+     */
+    @Test
+    fun theCalloutGalleryHoldsEveryToneUnderItsCanonicalName() = runBlocking {
+        QaScenarioBuilders.prepare(database, QaScenario.Demo)
+        val document = documentTitled(QaTitles.FlowCallouts).document
+
+        val callouts = mutableListOf<CalloutBlock>()
+        document.walk { block -> (block as? CalloutBlock)?.let(callouts::add) }
+        assertEquals(CalloutTone.entries.map { it.stored }, callouts.map { it.tone })
     }
 
     @Test

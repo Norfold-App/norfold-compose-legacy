@@ -46,6 +46,7 @@ import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.relationship.CommentAuthorRef
 import com.norfold.app.editor.relationship.RelationshipCommandIds
 import com.norfold.app.editor.relationship.ThreadId
+import com.norfold.app.editor.style.CalloutTone
 
 /** The deterministic starting point a harness entry asks for. */
 internal enum class QaScenario { Demo, Empty, Onboarding, Offline }
@@ -61,6 +62,7 @@ internal object QaTitles {
     const val FlowDailyLog = "Daily Log"
     const val FlowArchitecture = "Architecture Notes"
     const val FlowReading = "Project Aurora"
+    const val FlowCallouts = "Callout Tones"
     const val QuickNote = "QA Quick Note"
     const val Document = "QA Editorial Brief"
     const val Spreadsheet = "QA Launch Workbook"
@@ -143,6 +145,7 @@ internal object QaScenarioBuilders {
         buildDailyLog(repository)
         buildArchitectureNotes(repository)
         buildReadingSample(repository)
+        buildCalloutTones(repository)
         buildQuickNote(repository)
         val briefNoteId = buildEditorialBrief(repository)
         buildLaunchWorkbook(repository)
@@ -239,6 +242,23 @@ internal object QaScenarioBuilders {
             type(child.id, body)
             if (collapsed) check(runtime.toggleCollapsed(id)) { "QA scenario: callout $id refused to collapse" }
             return id
+        }
+
+        /**
+         * Steps a callout to [target] the only way a finger can: by tapping the tone control until it arrives.
+         *
+         * Cycling rather than writing the field keeps the tone on the command route, so a scenario that renders
+         * five tones is also evidence that the control reaches all five. Bounded by the number of tones, so a
+         * cycle that ever stops advancing fails here instead of spinning.
+         */
+        fun tone(blockId: String, target: CalloutTone) {
+            repeat(CalloutTone.entries.size) {
+                if ((document().findById(blockId) as? CalloutBlock)?.tone == target.stored) return
+                check(runtime.cycleCalloutTone(blockId)) { "QA scenario: callout $blockId refused a tone step" }
+            }
+            check((document().findById(blockId) as? CalloutBlock)?.tone == target.stored) {
+                "QA scenario: callout $blockId never reached ${target.stored}"
+            }
         }
 
         /** Bolds the first occurrence of [phrase] in [blockId], selection first, exactly like the text dock. */
@@ -479,6 +499,30 @@ internal object QaScenarioBuilders {
                 FlowBlockKind.BULLET_LIST,
                 listOf("One record per item", "Written at intake", "Read anywhere"),
             )
+        }
+
+    /**
+     * One callout per tone, each stepped to its tone through the tone control.
+     *
+     * Five tones exist and until this artifact only two callouts existed, both of them the default — which
+     * meant every previous capture of a callout showed the same panel and proved nothing about the other four.
+     * The bodies say what each tone is for, so a shot of this document is also readable as documentation.
+     */
+    private suspend fun buildCalloutTones(repository: DocsRepository) =
+        flowArtifact(repository, QaTitles.FlowCallouts) {
+            text(FlowBlockKind.HEADING_1, "Callout tones")
+            text(
+                FlowBlockKind.PARAGRAPH,
+                "One callout per tone. Tone tints the panel, its rule and its icon, never the words inside it.",
+            )
+            tone(
+                callout("Plain note", "The neutral tone, and where an unrecognised tone renders without being rewritten."),
+                CalloutTone.NOTE,
+            )
+            tone(callout("Tip", "Something optional that makes the task easier."), CalloutTone.TIP)
+            tone(callout("Important", "Something the reader has to carry into the next step."), CalloutTone.IMPORTANT)
+            tone(callout("Warning", "Something that will go wrong if it is ignored."), CalloutTone.WARNING)
+            tone(callout("Caution", "Something that cannot be undone once it has happened."), CalloutTone.CAUTION)
         }
 
     /** The short note every workspace accumulates, and the smallest artifact the list has to render. */

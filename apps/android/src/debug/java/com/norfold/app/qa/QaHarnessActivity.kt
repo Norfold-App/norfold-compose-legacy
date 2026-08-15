@@ -34,6 +34,8 @@ import androidx.lifecycle.lifecycleScope
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.DocumentArtifactKind
+import com.norfold.app.domain.EditorFontFamily
+import com.norfold.app.domain.EditorLineWidth
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.domain.WorkspaceObject
@@ -45,6 +47,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlin.math.abs
 
 /** Debug-variant-only launcher for deterministic, account-free integrated QA. */
 class QaHarnessActivity : FragmentActivity() {
@@ -88,6 +91,9 @@ class QaHarnessActivity : FragmentActivity() {
         status = "Preparing ${entry.title}"
         lifecycleScope.launch {
             runCatching {
+                // Parsed inside the catch, so a malformed extra from a capture runner shows up as a failed
+                // launch with the offending key named, rather than as a shot taken at the wrong scale.
+                val preferences = QaVisualPreferences.from(intent.extras)
                 // The scenario is authored on a background thread through the production runtimes and the
                 // command registry, and it reports back the workspace id the app itself chose. The harness
                 // no longer asserts a hardcoded id, because it no longer mints one.
@@ -102,6 +108,9 @@ class QaHarnessActivity : FragmentActivity() {
                 }
                 val viewModel = ViewModelProvider(this@QaHarnessActivity)[DocsViewModel::class.java]
                 withTimeout(15_000) { viewModel.state.first { it.settings.activeWorkspaceId == workspaceId } }
+                // Before the surface opens, not after: a preference that lands on a visible editor reflows it,
+                // and a capture cannot tell a reflow that settled from one still in flight.
+                preferences.applyTo(viewModel)
                 when (entry.surface) {
                     QaSurface.Workspace -> viewModel.go(Destination.WorkspaceHub)
                     QaSurface.Onboarding -> Unit
@@ -203,12 +212,23 @@ private enum class QaEntry(
         QaTitles.FlowReading,
         "flow-phone-reading-mode",
     ),
+    FlowCalloutTones(
+        "Flow · Callout Tones",
+        "Phone golden: five callout tones, each stepped there through the tone control",
+        QaScenario.Demo,
+        QaSurface.Flow,
+        QaTitles.FlowCallouts,
+        "flow-phone-callout-tones",
+    ),
     Document(
         "Open Document",
         "Two pages of text, chart, shape, and layered overlap. Tables and images have no insert command here",
         QaScenario.Demo,
         QaSurface.Document,
         QaTitles.Document,
+        // Routed so a capture can show the page host beside Flow: paper keeps its own measure and type scale,
+        // and the pair is the only evidence that the reading preference is opt-in per renderer rather than global.
+        "document-phone-page-host",
     ),
     Spreadsheet(
         "Open Spreadsheet",
@@ -290,6 +310,94 @@ private data class QaIntegrationCredentials(val email: String, val password: Str
             val email = extras?.getString("com.norfold.qa.EMAIL")?.trim().orEmpty()
             val password = extras?.getString("com.norfold.qa.PASSWORD").orEmpty()
             return if (email.contains('@') && password.isNotBlank()) QaIntegrationCredentials(email, password) else null
+        }
+    }
+}
+
+/**
+ * The visual configuration a shot is meant to be taken in, supplied by the capture runner.
+ *
+ * Presentation only. Content still comes from [QaScenarioBuilders]: nothing here seeds, edits, or reaches a
+ * document, so the rule that scenario content is authored by real commands is untouched.
+ *
+ * Every field is applied through the same [DocsViewModel] call Settings uses. A shot therefore cannot show a
+ * configuration the app itself cannot reach, and a broken preference path fails the launch instead of being
+ * bypassed by the harness writing the settings row directly. Absent extras change nothing, so an existing
+ * route without them behaves exactly as before.
+ *
+ * All five arrive as strings, because `am start` types are easy to get wrong from a shell and one parser that
+ * rejects what it does not understand is worth more than five that quietly accept a default.
+ */
+private data class QaVisualPreferences(
+    val theme: ThemeMode?,
+    val reading: Float?,
+    val measure: EditorLineWidth?,
+    val face: EditorFontFamily?,
+    val reduceMotion: Boolean?,
+) {
+    /**
+     * Applies each preference in turn, waiting for it to land before starting the next.
+     *
+     * Sequential on purpose. Every setter is a read-modify-write of the whole settings row against
+     * `state.value`, so two of them launched together race: the second reads the row as it was before the
+     * first landed and writes that stale copy back, silently discarding it. Awaiting each one is the
+     * difference between four applied preferences and one.
+     */
+    suspend fun applyTo(viewModel: DocsViewModel) {
+        suspend fun step(apply: () -> Unit, reached: (AppSettings) -> Boolean) {
+            apply()
+            withTimeout(15_000) { viewModel.state.first { reached(it.settings) } }
+        }
+        theme?.let { value -> step({ viewModel.setTheme(value) }) { it.themeMode == value } }
+        measure?.let { value -> step({ viewModel.setEditorLineWidth(value) }) { it.editorLineWidth == value } }
+        face?.let { value -> step({ viewModel.setEditorFontFamily(value) }) { it.editorFontFamily == value } }
+        reduceMotion?.let { value -> step({ viewModel.setPrivacyOption(reduceMotion = value) }) { it.reduceMotion == value } }
+        // The reading fraction has no named setter of its own — Settings patches the field, so the harness
+        // patches the same field rather than inventing a second route to it.
+        reading?.let { value ->
+            step({ viewModel.patchSettings { current -> current.copy(editorFontSize = value) } }) {
+                abs(it.editorFontSize - value) < 0.0005f
+            }
+        }
+    }
+
+    companion object {
+        private const val ThemeExtra = "com.norfold.qa.THEME"
+        private const val ReadingExtra = "com.norfold.qa.READING"
+        private const val MeasureExtra = "com.norfold.qa.MEASURE"
+        private const val FaceExtra = "com.norfold.qa.FACE"
+        private const val ReduceMotionExtra = "com.norfold.qa.REDUCE_MOTION"
+
+        fun from(extras: Bundle?): QaVisualPreferences = QaVisualPreferences(
+            theme = extras.named<ThemeMode>(ThemeExtra),
+            reading = extras?.getString(ReadingExtra)?.trim()?.takeIf { it.isNotEmpty() }?.let { raw ->
+                val value = requireNotNull(raw.toFloatOrNull()) { "$ReadingExtra is not a number: $raw" }
+                require(value in 0f..1f) { "$ReadingExtra must be between 0 and 1, was $value" }
+                value
+            },
+            measure = extras.named<EditorLineWidth>(MeasureExtra),
+            face = extras.named<EditorFontFamily>(FaceExtra),
+            reduceMotion = extras?.getString(ReduceMotionExtra)?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let {
+                when (it) {
+                    "true", "1", "on", "yes" -> true
+                    "false", "0", "off", "no" -> false
+                    else -> throw IllegalArgumentException("$ReduceMotionExtra is not a boolean: $it")
+                }
+            },
+        )
+
+        /**
+         * Reads an enum by name, case-insensitively, and refuses a name that is not one of its constants.
+         *
+         * Refusing matters more than parsing here: `--es …FACE srif` silently falling back to the shipped face
+         * would produce a screenshot labelled "serif" showing sans, which is worse than no screenshot.
+         */
+        private inline fun <reified T : Enum<T>> Bundle?.named(key: String): T? {
+            val raw = this?.getString(key)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return enumValues<T>().firstOrNull { it.name.equals(raw, ignoreCase = true) }
+                ?: throw IllegalArgumentException(
+                    "$key must be one of ${enumValues<T>().joinToString { it.name }}, was $raw",
+                )
         }
     }
 }
