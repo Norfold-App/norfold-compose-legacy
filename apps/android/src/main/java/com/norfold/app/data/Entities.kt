@@ -741,6 +741,13 @@ data class AppSettingsEntity(
     // what a retry looks for; remoteEditorContentEpoch records the epoch the server acknowledged.
     val remoteEditorContentEpoch: Int = 0,
     val remoteEditorResetOutcome: String? = null,
+    // Whether this install carries a generation of editor content authored before the boundary
+    // existed, and so may be reset once. Only the migration that upgrades a pre-epoch database sets
+    // it, because that is the one moment a database can prove which side of the boundary it came
+    // from; an unstamped epoch on its own cannot, and must not be read as permission to erase. The
+    // default is false so every database created from here on is ineligible unless a migration says
+    // otherwise.
+    val legacyEditorResetPending: Boolean = false,
 )
 
 fun WorkspaceEntity.toDomain() = com.norfold.app.domain.Workspace(

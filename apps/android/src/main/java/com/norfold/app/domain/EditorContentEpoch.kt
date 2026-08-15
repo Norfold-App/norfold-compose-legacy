@@ -48,6 +48,31 @@ const val EditorContentEpochPayloadKey: String = "editorContentEpoch"
  */
 fun acceptsEditorArtifacts(installEpoch: Int, payloadEpoch: Int): Boolean = payloadEpoch >= installEpoch
 
+/**
+ * Whether this install may run the one-time destructive reset of the previous editor generation.
+ *
+ * [legacyGenerationPending] is the whole point of this function. An epoch number is a value, not
+ * evidence: [UnstampedEditorContentEpoch] says only "no boundary has been recorded here", which is
+ * equally true of a database upgraded from before the epoch columns existed and of a
+ * current-generation database whose settings row has not been stamped yet — content arriving from a
+ * restore or a sign-in before the first launch finishes stamping, or a process death between
+ * creating the row and stamping it. Deciding from the number alone erases the second case under a
+ * rule written for the first, and the erasure is permanent.
+ *
+ * So destruction requires positive provenance, written only where a database can actually prove it
+ * predates the boundary: the schema migration that adds the marker. No marker means preserve, which
+ * is the safe direction to be wrong in — a preserved install that should have been reset shows the
+ * owner content they can delete themselves, while the reverse shows them nothing at all.
+ *
+ * The epoch comparison stays as the second condition so that an install which has already crossed
+ * the boundary cannot cross it twice, however the marker got there.
+ */
+fun eligibleForLegacyEditorReset(
+    legacyGenerationPending: Boolean,
+    installEpoch: Int,
+    currentEpoch: Int = CurrentEditorContentEpoch,
+): Boolean = legacyGenerationPending && installEpoch < currentEpoch
+
 /** What an install would accept from one backup, reported before anything is written. */
 data class RestoreEpochPreview(
     val installEpoch: Int,

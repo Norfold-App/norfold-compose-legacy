@@ -9,11 +9,63 @@ import org.junit.Test
  * The editor content epoch as it behaves in backups and restores.
  *
  * The reset itself needs a database and lives in the instrumented tests. What is checked here is
- * everything that can be decided without one: which payloads an install accepts, what a refused
- * backup still gives back, and that a stamped backup stays readable by a build that predates the
- * stamp.
+ * everything that can be decided without one: who is eligible to be erased, which payloads an
+ * install accepts, what a refused backup still gives back, and that a stamped backup stays readable
+ * by a build that predates the stamp.
+ *
+ * The eligibility rule is deliberately a pure function so that it is provable here, on the desktop
+ * JVM, in the build gate. The alternative — proving the fence only through a Room test — means the
+ * one rule that decides whether a user's writing is deleted is checked only when a device is
+ * attached, and the rule would be defended by whatever the last device run happened to cover.
  */
 class EditorContentEpochTest {
+    @Test
+    fun onlyPositiveProofOfAnOldGenerationAllowsTheReset() {
+        // The one eligible install: the marker written while migrating a database that predates the
+        // epoch columns, on a row that has not crossed the boundary yet.
+        assertTrue(
+            eligibleForLegacyEditorReset(
+                legacyGenerationPending = true,
+                installEpoch = UnstampedEditorContentEpoch,
+            ),
+        )
+        // No marker, same epoch number. This is the case that used to be erased: content that
+        // arrived from a restore or a sign-in before anything stamped the settings row reads exactly
+        // like a pre-boundary install if the number is all you look at.
+        assertFalse(
+            eligibleForLegacyEditorReset(
+                legacyGenerationPending = false,
+                installEpoch = UnstampedEditorContentEpoch,
+            ),
+        )
+    }
+
+    @Test
+    fun anInstallThatHasCrossedTheBoundaryCannotCrossItAgain() {
+        // Belt and braces against the marker outliving the reset: a stamped install is ineligible on
+        // the epoch alone, so a stale marker cannot spend a second erasure.
+        assertFalse(
+            eligibleForLegacyEditorReset(legacyGenerationPending = true, installEpoch = CurrentEditorContentEpoch),
+        )
+        assertFalse(eligibleForLegacyEditorReset(legacyGenerationPending = true, installEpoch = 7))
+        // Raising the epoch is what re-opens the question, and only for an install still carrying
+        // proof that it holds the older generation.
+        assertTrue(
+            eligibleForLegacyEditorReset(
+                legacyGenerationPending = true,
+                installEpoch = CurrentEditorContentEpoch,
+                currentEpoch = CurrentEditorContentEpoch + 1,
+            ),
+        )
+        assertFalse(
+            eligibleForLegacyEditorReset(
+                legacyGenerationPending = false,
+                installEpoch = CurrentEditorContentEpoch,
+                currentEpoch = CurrentEditorContentEpoch + 1,
+            ),
+        )
+    }
+
     @Test
     fun installAcceptsItsOwnEpochAndNewerButNeverOlder() {
         assertTrue(acceptsEditorArtifacts(installEpoch = 1, payloadEpoch = 1))

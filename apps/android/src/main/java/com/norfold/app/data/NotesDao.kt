@@ -130,8 +130,22 @@ interface NotesDao {
     @Query("DELETE FROM remote_object_bindings WHERE objectType IN (:objectTypes)")
     suspend fun deleteRemoteBindingsForTypes(objectTypes: List<String>)
 
-    @Query("UPDATE settings SET editorContentEpoch = :epoch, editorContentEpochAt = :establishedAt WHERE id = 1")
+    // Crossing the boundary stamps the epoch and gives up the right to erase again in the same
+    // statement, so no ordering, crash, or partially applied transaction can leave an install
+    // stamped but still eligible — or reset but still unstamped and eligible a second time.
+    @Query(
+        "UPDATE settings SET editorContentEpoch = :epoch, editorContentEpochAt = :establishedAt, " +
+            "legacyEditorResetPending = 0 WHERE id = 1",
+    )
     suspend fun markEditorContentEpoch(epoch: Int, establishedAt: Long)
+
+    // Adopting a restored backup's epoch, which is not the same act as crossing the boundary and so
+    // deliberately leaves legacyEditorResetPending alone. Restoring a pre-boundary backup onto an
+    // install that still owes the reset must not cancel the reset, and a backup that carries the
+    // install forward needs no clear: the epoch comparison in eligibleForLegacyEditorReset already
+    // makes it ineligible.
+    @Query("UPDATE settings SET editorContentEpoch = :epoch, editorContentEpochAt = :establishedAt WHERE id = 1")
+    suspend fun adoptEditorContentEpoch(epoch: Int, establishedAt: Long)
 
     // The remote half of the boundary. A null outcome means the reset is still owed, so this is
     // the only write that clears the debt and the only one that can record why it was abandoned.

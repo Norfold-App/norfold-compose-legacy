@@ -47,7 +47,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SecureChatUserHiddenEntity::class,
         PrivateChatArchiveManifestEntity::class,
     ],
-    version = 53,
+    version = 54,
     exportSchema = true,
 )
 abstract class NorfoldDatabase : RoomDatabase() {
@@ -112,6 +112,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
                     MIGRATION_50_51,
                     MIGRATION_51_52,
                     MIGRATION_52_53,
+                    MIGRATION_53_54,
                     )
                 if (BuildConfig.ALLOW_DESTRUCTIVE_SCHEMA_RESET) {
                     builder.fallbackToDestructiveMigration(dropAllTables = true)
@@ -305,9 +306,9 @@ abstract class NorfoldDatabase : RoomDatabase() {
         }
         // The editor content epoch. Two columns on the single settings row: which epoch this
         // install's editor content belongs to, and when it was established. Existing installs
-        // land on epoch 0, which is what makes the one-time editor reset run exactly once; a
-        // fresh install is stamped at the current epoch when its workspace is created, so it
-        // never has anything to reset.
+        // land on epoch 0; a fresh install is stamped at the current epoch when its workspace is
+        // created, so it never has anything to reset. Epoch 0 alone is not what authorises the
+        // one-time reset — see MIGRATION_53_54, which records that separately.
         internal val MIGRATION_51_52 = object : Migration(51, 52) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE settings ADD COLUMN editorContentEpoch INTEGER NOT NULL DEFAULT 0")
@@ -322,6 +323,25 @@ abstract class NorfoldDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE settings ADD COLUMN remoteEditorContentEpoch INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE settings ADD COLUMN remoteEditorResetOutcome TEXT")
+            }
+        }
+        // Records which installs the one-time editor reset is allowed to erase, because an
+        // unstamped epoch cannot answer that on its own: it means both "this database predates the
+        // epoch columns" and "this database has not been stamped yet", and content can arrive in
+        // the second case from a restore or a sign-in before the first launch finishes. Migrating
+        // is the one moment a database proves which side of the boundary it came from, so the proof
+        // is written here and eligibleForLegacyEditorReset requires it. A fresh database gets the
+        // column's default of 0 and is therefore never eligible.
+        //
+        // The 0 in the WHERE clause is a literal on purpose. A migration is a historical record of
+        // what one upgrade did; binding it to CurrentEditorContentEpoch would silently re-target
+        // this statement at a different set of rows the next time the epoch is raised.
+        internal val MIGRATION_53_54 = object : Migration(53, 54) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE settings ADD COLUMN legacyEditorResetPending INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL("UPDATE settings SET legacyEditorResetPending = 1 WHERE editorContentEpoch = 0")
             }
         }
         // Removes the Projects feature: drops the projects table and rebuilds

@@ -114,6 +114,13 @@ jobs:
       - name: Run Android unit tests
         run: ./gradlew :apps:android:testDebugUnitTest
 
+      # The instrumented sources are the only tests that exercise Room migrations and the editor
+      # content epoch reset, and nothing else in this job compiles them. Without this step a broken
+      # androidTest source set is invisible until someone attaches a device, which is exactly when it
+      # is most expensive to discover. Compiling is not running them — that still needs a device.
+      - name: Compile Android instrumented tests
+        run: ./gradlew :apps:android:compileDebugAndroidTestKotlin
+
       - name: Run Android lint
         run: ./gradlew :apps:android:lintDebug
 

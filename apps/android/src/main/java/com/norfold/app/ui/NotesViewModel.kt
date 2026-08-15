@@ -935,9 +935,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 Log.i(InitLogTag, "seed")
                 repository.ensureSeedData()
-                // After the seed so a fresh install is already stamped at the current epoch and
-                // this no-ops for it; before the sweep and the index rebuild so both run against
-                // what survives the boundary rather than against rows about to be deleted.
+                // Before the sweep and the index rebuild, so both run against what survives the
+                // boundary rather than against rows about to be deleted. It is deliberately not the
+                // ordering that keeps a fresh or restored install safe — the reset requires the
+                // legacy marker from MIGRATION_53_54, so nothing here depends on the seed having
+                // stamped the row first.
                 Log.i(InitLogTag, "epoch")
                 repository.applyEditorContentEpoch { RecoveryStorageProvider(app).deleteAll() }
                 // The server half is owed, not done: it needs a network and an authorized session,

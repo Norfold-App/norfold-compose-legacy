@@ -37,6 +37,7 @@ import com.norfold.app.domain.RestoreEpochPreview
 import com.norfold.app.domain.RestoreOutcome
 import com.norfold.app.domain.UnstampedEditorContentEpoch
 import com.norfold.app.domain.acceptsEditorArtifacts
+import com.norfold.app.domain.eligibleForLegacyEditorReset
 import com.norfold.app.domain.withoutEditorArtifacts
 import com.norfold.app.domain.EmbedMetadata
 import com.norfold.app.domain.FileBlock
@@ -289,7 +290,13 @@ class DocsRepository(private val database: NorfoldDatabase) {
      * files. Room's clearAllTables is unusable here for exactly that reason.
      *
      * Returns true when the boundary was crossed by this call, false when this install was already
-     * in the current epoch.
+     * in the current epoch or was never eligible to cross it at all.
+     *
+     * Eligibility is [eligibleForLegacyEditorReset], which needs the marker written by
+     * `MIGRATION_53_54` and not merely an unstamped epoch. That distinction is the whole fence: an
+     * unstamped epoch also describes a current-generation install whose settings row has not been
+     * written yet, and this method's job is to erase content, so it may only run on the install it
+     * can prove is the old one.
      *
      * @param deleteLocalSnapshots deletes the on-disk restore points; returns false if any survive.
      *   It runs before the database transaction, not after, because the failure that matters is a
@@ -299,7 +306,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
      */
     suspend fun applyEditorContentEpoch(deleteLocalSnapshots: () -> Boolean = { true }): Boolean {
         val stored = dao.settings() ?: return false
-        if (stored.editorContentEpoch >= CurrentEditorContentEpoch) return false
+        if (!eligibleForLegacyEditorReset(stored.legacyEditorResetPending, stored.editorContentEpoch)) {
+            return false
+        }
         if (!deleteLocalSnapshots()) return false
         database.withTransaction {
             // Object graphs first: pruning a Note object also removes the comments, history,
@@ -2889,11 +2898,15 @@ class DocsRepository(private val database: NorfoldDatabase) {
             // make the one-time reset run again on the next launch — after a theme change. The
             // remote columns are read explicitly rather than through an elvis, because a null
             // outcome is meaningful there: it is what "the remote reset is still owed" looks like.
+            // The legacy marker is read explicitly for the mirror-image reason: false is meaningful,
+            // and an elvis would let the entity's own false override a stored true, handing the
+            // eligibility back to an install that had already spent it.
             entity.copy(
                 editorContentEpoch = stored?.editorContentEpoch ?: entity.editorContentEpoch,
                 editorContentEpochAt = stored?.editorContentEpochAt ?: entity.editorContentEpochAt,
                 remoteEditorContentEpoch = stored?.remoteEditorContentEpoch ?: entity.remoteEditorContentEpoch,
                 remoteEditorResetOutcome = if (stored != null) stored.remoteEditorResetOutcome else entity.remoteEditorResetOutcome,
+                legacyEditorResetPending = if (stored != null) stored.legacyEditorResetPending else entity.legacyEditorResetPending,
             ),
         )
         if (settings.settingsDeviceId.isNotBlank()) {
@@ -3314,8 +3327,9 @@ class DocsRepository(private val database: NorfoldDatabase) {
             // A backup from a later epoch carries a generation of editor content this install has
             // no boundary for. Adopting its epoch is what stops the one-time reset from erasing
             // what was just restored on the next launch. A backup from an earlier epoch cannot
-            // lower the stamp: crossing a boundary is not reversible by restoring.
-            dao.markEditorContentEpoch(
+            // lower the stamp: crossing a boundary is not reversible by restoring. This adopts
+            // rather than marks, so an install that still owes the reset keeps owing it.
+            dao.adoptEditorContentEpoch(
                 maxOf(dao.settings()?.editorContentEpoch ?: UnstampedEditorContentEpoch, snapshot.editorContentEpoch),
                 System.currentTimeMillis(),
             )

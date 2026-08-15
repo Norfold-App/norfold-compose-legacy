@@ -1,6 +1,7 @@
 package com.norfold.app.data
 
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.norfold.app.domain.BlockDocument
@@ -159,6 +160,104 @@ class EditorContentEpochRoomTest {
 
         assertEquals(listOf("Before the boundary"), dao.allNotesSnapshot().map { it.note.title })
         assertEquals(UnstampedEditorContentEpoch, repository.editorContentEpoch())
+        // Still eligible, because the boundary was abandoned rather than crossed.
+        assertTrue(dao.settings()!!.legacyEditorResetPending)
+    }
+
+    @Test
+    fun contentThatIsMerelyUnstampedIsNeverTreatedAsAnOldGeneration() = runBlocking {
+        seedCurrentGenerationInstallWithNoMarker()
+
+        // An unstamped epoch is not evidence of an old generation. It is equally what a restore or a
+        // sign-in looks like when it lands content before the first launch finishes stamping the
+        // settings row, and the difference is not recoverable after the fact — so with no marker the
+        // reset must decline, whatever the epoch number says.
+        assertEquals(UnstampedEditorContentEpoch, repository.editorContentEpoch())
+        assertFalse(repository.applyEditorContentEpoch())
+
+        assertEquals(listOf("Arrived before the first stamp"), dao.allNotesSnapshot().map { it.note.title })
+        assertTrue(dao.allDocumentBlocks().isNotEmpty())
+        assertEquals(UnstampedEditorContentEpoch, repository.editorContentEpoch())
+    }
+
+    @Test
+    fun initializationThatFindsAWorkspaceAlreadyThereCannotDelete() = runBlocking {
+        // Restore-first onboarding and sign-in-then-pull both reach ensureSeedData() with a workspace
+        // and real content already present, and its early return does not stamp. Call ordering used
+        // to be the only thing standing between that content and the reset; the marker is what makes
+        // the order stop mattering.
+        seedCurrentGenerationInstallWithNoMarker()
+
+        repository.ensureSeedData()
+        assertFalse(repository.applyEditorContentEpoch())
+        repository.ensureSeedData()
+        assertFalse(repository.applyEditorContentEpoch())
+
+        assertEquals(listOf("Arrived before the first stamp"), dao.allNotesSnapshot().map { it.note.title })
+        assertTrue(dao.allDocumentBlocks().isNotEmpty())
+    }
+
+    @Test
+    fun crossingTheBoundarySpendsTheEligibilityInTheSameWrite() = runBlocking {
+        seedInstallFromBeforeTheBoundary()
+        assertTrue(dao.settings()!!.legacyEditorResetPending)
+
+        assertTrue(repository.applyEditorContentEpoch())
+
+        // Stamped and no longer eligible, written by one statement inside the erase transaction:
+        // there is no interleaving that leaves an install stamped but still allowed to erase, or
+        // erased but still allowed to erase a second time.
+        val settings = dao.settings()!!
+        assertEquals(CurrentEditorContentEpoch, settings.editorContentEpoch)
+        assertFalse(settings.legacyEditorResetPending)
+        assertTrue(settings.editorContentEpochAt != null)
+    }
+
+    @Test
+    fun crossingTheBoundaryIsIdempotentAcrossRelaunches() = runBlocking {
+        seedInstallFromBeforeTheBoundary()
+        assertTrue(repository.applyEditorContentEpoch())
+        val establishedAt = dao.settings()!!.editorContentEpochAt
+
+        // Every later launch runs the same two calls in the same order. None may erase again, and
+        // none may re-stamp: a moving establishedAt would mean the boundary was crossed more than
+        // once, which is the thing this whole mechanism exists to prevent.
+        repeat(3) {
+            repository.ensureSeedData()
+            assertFalse(repository.applyEditorContentEpoch())
+        }
+
+        val settings = dao.settings()!!
+        assertEquals(CurrentEditorContentEpoch, settings.editorContentEpoch)
+        assertEquals(establishedAt, settings.editorContentEpochAt)
+        assertFalse(settings.legacyEditorResetPending)
+    }
+
+    @Test
+    fun aFailureInsideTheBoundaryTransactionLeavesNothingHalfDone() = runBlocking {
+        seedInstallFromBeforeTheBoundary()
+
+        // The erase, the stamp, and spending the eligibility are one transaction, and the stamp and
+        // the eligibility are one statement within it. A process death anywhere inside has to leave
+        // the install exactly as it was and still owed the reset — never half-erased and stamped,
+        // which would strand whatever the erase had already reached.
+        val died = runCatching {
+            database.withTransaction {
+                dao.clearNotes()
+                dao.markEditorContentEpoch(CurrentEditorContentEpoch, 99L)
+                throw IllegalStateException("process death")
+            }
+        }
+        assertTrue(died.isFailure)
+
+        val settings = dao.settings()!!
+        assertEquals(UnstampedEditorContentEpoch, settings.editorContentEpoch)
+        assertTrue(settings.legacyEditorResetPending)
+        assertEquals(listOf("Before the boundary"), dao.allNotesSnapshot().map { it.note.title })
+
+        // And the next launch still crosses it, exactly once.
+        assertTrue(repository.applyEditorContentEpoch())
+        assertFalse(repository.applyEditorContentEpoch())
     }
 
     @Test
@@ -251,10 +350,61 @@ class EditorContentEpochRoomTest {
         assertFalse(repository.remoteEditorResetPending())
     }
 
-    /** An install carrying a generation of editor content authored before the boundary existed. */
+    /**
+     * An install whose settings row has not been stamped yet, holding content that is not old.
+     *
+     * This is the shape the fence exists for: a workspace and a document that arrived from a restore
+     * or a sign-in before anything stamped the row, so the epoch reads as unstamped while the content
+     * belongs to the current generation. Nothing here carries the legacy marker, because nothing here
+     * came from before the boundary.
+     */
+    private suspend fun seedCurrentGenerationInstallWithNoMarker() {
+        dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Restored", createdAt = 1))
+        dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
+        dao.insertNote(
+            NoteEntity(
+                id = 1,
+                title = "Arrived before the first stamp",
+                searchText = "Arrived before the first stamp",
+                notebookId = null,
+                pinned = false,
+                starred = false,
+                archived = false,
+                locked = false,
+                createdAt = 1,
+                updatedAt = 1,
+                workspaceId = 1,
+            ),
+        )
+        val owner = DocumentOwner.note(1)
+        dao.upsertDocument(
+            DocumentEntity(
+                id = owner.documentId,
+                ownerType = owner.type.storageValue,
+                ownerId = owner.id,
+                createdAt = 1,
+                updatedAt = 1,
+            ),
+        )
+        val block = ParagraphBlock(id = "body", content = listOf(InlineText("Not an old generation")))
+        dao.upsertDocumentBlocks(
+            listOf(DocumentBlockEntity(block.id, owner.documentId, 0, BlockDocumentJson.encodeBlock(block), 1)),
+        )
+    }
+
+    /**
+     * An install carrying a generation of editor content authored before the boundary existed.
+     *
+     * The marker is what makes it that install rather than merely an unstamped one: on a real device
+     * `MIGRATION_53_54` writes it while upgrading a database that predates the epoch columns, and it
+     * is the only thing the reset accepts as proof. An in-memory database is created at the current
+     * version, so the fixture writes what the migration would have.
+     */
     private suspend fun seedInstallFromBeforeTheBoundary() {
         dao.insertWorkspace(WorkspaceEntity(id = 1, name = "Test", createdAt = 1))
-        dao.upsertSettings(AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true))
+        dao.upsertSettings(
+            AppSettingsEntity(activeWorkspaceId = 1, onboardingComplete = true, legacyEditorResetPending = true),
+        )
         assertEquals(UnstampedEditorContentEpoch, repository.editorContentEpoch())
 
         val notebook = dao.insertNotebook(NotebookEntity(name = "Work", color = 0, sortOrder = 0, workspaceId = 1))
