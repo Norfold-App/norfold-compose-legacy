@@ -71,6 +71,25 @@ class FlowInsertAboveCommand(scope: FlowCommandScope) : FlowCommand(scope) {
     }
 }
 
+/**
+ * A discoverable picker-backed insertion entry.
+ *
+ * The command registry owns its label, aliases and availability so slash, the insert palette and accessibility
+ * discover the same action. The Android host intercepts this id to obtain a persistable image URI before it
+ * asks [FlowHostRuntime] to perform the actual document mutation.
+ */
+class FlowImagePickerCommand(scope: FlowCommandScope) : FlowCommand(scope) {
+    override val id = FlowIds.INSERT_IMAGE
+    override val label = "Photo"
+    override val description = "Choose a photo from this device"
+    override val category = "Insert"
+    override val aliases = listOf("image", "photo", "picture", "media")
+    override val requiredCapabilities = emptySet<Capability>()
+    override val applicability = ApplicabilityPolicy.SELECTION_AS_UNIT
+
+    override fun runOn(targetIds: List<String>): CommandResult = CommandResult.NoOp
+}
+
 // ── Conversion (roadmap deliverable 4) ────────────────────────────────────────────────────────────────
 
 /**

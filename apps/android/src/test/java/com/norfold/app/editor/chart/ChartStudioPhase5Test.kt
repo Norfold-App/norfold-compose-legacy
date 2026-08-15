@@ -499,6 +499,27 @@ class ChartStudioPhase5Test {
     }
 
     @Test
+    fun categoricalLineChartUsesCategoryLabelsInsteadOfNumericCoordinates() {
+        val document = ChartDocument(
+            type = ChartType.LINE,
+            source = ChartDataSource.Manual(
+                rows = listOf(
+                    ChartDataRow("mon", listOf("Mon", "4")),
+                    ChartDataRow("tue", listOf("Tue", "7")),
+                    ChartDataRow("wed", listOf("Wed", "5")),
+                ),
+            ),
+            series = listOf(ChartSeries(id = "series-1")),
+        )
+
+        val ready = assertIs<ChartDataResolution.Ready>(ChartDataResolver.resolve(document))
+        val layout = ChartLayoutEngine.layout(document, ready.data, 480f, 280f)
+
+        assertEquals(listOf("Mon", "Tue", "Wed"), layout.xTicks.map { it.label })
+        assertEquals(3, layout.marks.filterIsInstance<ChartMark.Point>().size)
+    }
+
+    @Test
     fun legacyChartPayloadDecodesWithInheritedSeriesDefaults() {
         val encoded = ChartDocumentCodec.encode(manual(listOf("A" to "2")))
         val decoded = assertIs<ChartDecodeResult.Success>(ChartDocumentCodec.decode(encoded)).document

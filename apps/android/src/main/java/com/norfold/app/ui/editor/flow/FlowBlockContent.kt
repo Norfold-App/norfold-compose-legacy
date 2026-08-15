@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -27,12 +28,16 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
@@ -41,6 +46,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -87,6 +93,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.norfold.app.domain.BulletListBlock
@@ -137,6 +145,8 @@ import com.norfold.app.ui.editor.chart.ChartRenderer
 import com.norfold.app.editor.image.ImageBlockAdapter
 import com.norfold.app.ui.editor.image.ImageFocusRenderer
 import com.norfold.app.ui.components.DiagramKind
+import com.norfold.app.ui.components.DiagramNodeInput
+import com.norfold.app.ui.components.DiagramEdgeInput
 import com.norfold.app.ui.components.FlowDirection
 import com.norfold.app.ui.components.MermaidDiagramCodec
 import com.norfold.app.domain.style.resolvedShapeFill
@@ -146,6 +156,7 @@ import com.norfold.app.ui.editor.style.resolvedShapeMetrics
 import com.norfold.app.editor.diagram.DiagramEditDocumentJson
 import com.norfold.app.editor.diagram.DiagramNodePosition
 import java.io.ByteArrayInputStream
+import kotlin.math.roundToInt
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -238,6 +249,10 @@ data class FlowBlockContext(
     val compact: Boolean = false,
     /** False renders a quiet reading surface. Tapping the owning row activates the editor. */
     val editing: Boolean = true,
+    /** True for the active object block so media can expose a deliberate select-then-edit interaction. */
+    val objectSelected: Boolean = false,
+    /** Nested container shells stay visually flat; only the authored outer group owns the card. */
+    val insideContainer: Boolean = false,
 )
 
 /**
@@ -260,7 +275,7 @@ fun FlowBlockContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp)),
+            style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
             placeholder = "Write something…",
             callbacks = callbacks,
             context = context,
@@ -278,7 +293,7 @@ fun FlowBlockContent(
             modifier = modifier,
         )
 
-        is BulletListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        is BulletListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
             block.items.forEach { item ->
                 FlowListRow(marker = "•") {
                     FlowEditableLine(
@@ -294,7 +309,7 @@ fun FlowBlockContent(
             }
         }
 
-        is NumberedListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        is NumberedListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
             block.items.forEachIndexed { index, item ->
                 FlowListRow(marker = "${block.start + index}.") {
                     FlowEditableLine(
@@ -310,7 +325,7 @@ fun FlowBlockContent(
             }
         }
 
-        is TodoListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        is TodoListBlock -> Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
             block.items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
@@ -334,26 +349,33 @@ fun FlowBlockContent(
             }
         }
 
-        is QuoteBlock -> Row(modifier.height(IntrinsicSize.Min)) {
+        is QuoteBlock -> Row(
+            modifier
+                .height(IntrinsicSize.Min)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f))
+                .padding(horizontal = 16.dp, vertical = 15.dp),
+        ) {
             val childContext = context.copy(
                 wrapperStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + context.wrapperStyles,
             )
             Box(
                 Modifier
-                    .width(3.dp)
+                    .width(4.dp)
                     .fillMaxHeight()
                     .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
             )
-            Column(Modifier.padding(start = 12.dp)) {
+            Column(Modifier.padding(start = 14.dp)) {
                 FlowStyledChildren(block.children, callbacks, childContext)
             }
         }
 
         is CalloutBlock -> Column(
             modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(12.dp),
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
         ) {
             val childContext = context.copy(
                 wrapperStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + context.wrapperStyles,
@@ -374,9 +396,18 @@ fun FlowBlockContent(
                         )
                     }
                 }
-                Text(
-                    block.title.ifBlank { "Callout" },
-                    style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.titleSmall),
+                FlowEditableLine(
+                    blockId = block.id,
+                    itemId = null,
+                    nodes = listOf(InlineText(block.title)),
+                    style = resolvedFlowTextStyle(
+                        block,
+                        context,
+                        MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.primary),
+                    ),
+                    placeholder = "Callout title",
+                    callbacks = callbacks,
+                    context = context,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -389,17 +420,44 @@ fun FlowBlockContent(
         // honest description of that: one run, no styling, same editing path as every other line.
         is CodeBlock -> FlowCodeBlock(block, callbacks, context, modifier)
 
-        is DividerBlock -> HorizontalDivider(modifier.padding(vertical = 12.dp))
+        is DividerBlock -> HorizontalDivider(modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
 
-        is ContainerBlock -> if (block.axis == ContainerAxis.Row && !context.compact) {
-            Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        is ContainerBlock -> if (context.insideContainer) {
+            FlowStyledChildren(block.children, callbacks, context)
+        } else if (block.axis == ContainerAxis.Row && !context.compact) {
+            Row(
+                modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
                 block.children.forEach { child ->
-                    Box(Modifier.weight(1f)) { FlowBlockContent(child, callbacks, context = context) }
+                    Box(Modifier.weight(1f)) {
+                        FlowBlockContent(child, callbacks, context = context.copy(insideContainer = true))
+                    }
                 }
             }
         } else {
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(if (block.axis == ContainerAxis.Row) 12.dp else 0.dp)) {
-                FlowStyledChildren(block.children, callbacks, context)
+            Column(
+                modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+            ) {
+                block.children.forEachIndexed { index, child ->
+                    if (index > 0 && block.axis == ContainerAxis.Row) {
+                        HorizontalDivider(
+                            Modifier.padding(vertical = 13.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                        )
+                    }
+                    FlowBlockContent(child, callbacks, context = context.copy(insideContainer = true))
+                }
             }
         }
 
@@ -407,26 +465,50 @@ fun FlowBlockContent(
 
         is ImageBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
             val loaded = remember(block.imageEditDocument) { ImageBlockAdapter.load(block) }
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                ImageFocusRenderer(
-                    block = block,
-                    modifier = Modifier
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Box(
+                    Modifier
                         .fillMaxWidth()
-                        .height(block.displayHeightDp.coerceIn(120f, 560f).dp)
+                        .clip(RoundedCornerShape(14.dp))
                         .then(
-                            if (context.editing && !context.selectionMode && loaded.isEditable) {
-                                Modifier.clickable(
-                                    role = Role.Button,
-                                    onClickLabel = "Open Image Focus",
-                                ) { callbacks.onOpenImage(block.id) }
-                            } else Modifier
-                        )
-                        .semantics {
-                            contentDescription = "Image${block.caption.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}"
-                        },
-                )
-                if (block.caption.isNotBlank()) {
-                    Text(block.caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (context.objectSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
+                            else Modifier
+                        ),
+                ) {
+                    ImageFocusRenderer(
+                        block = block,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(block.displayHeightDp.coerceIn(120f, 560f).dp)
+                            .semantics {
+                                contentDescription = "Image${block.caption.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}"
+                            },
+                    )
+                    if (context.objectSelected && loaded.isEditable) {
+                        Surface(
+                            onClick = { callbacks.onOpenImage(block.id) },
+                            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                            shape = RoundedCornerShape(12.dp),
+                            shadowElevation = 5.dp,
+                        ) {
+                            Icon(Icons.Filled.Image, "Edit image", Modifier.padding(12.dp).size(20.dp))
+                        }
+                        Surface(
+                            modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            shape = CircleShape,
+                        ) { Icon(Icons.Filled.Check, "Image selected", Modifier.padding(6.dp).size(16.dp)) }
+                    }
+                }
+                if (block.caption.isNotBlank() && context.editing) {
+                    Text(
+                        block.caption,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         } else {
@@ -435,7 +517,18 @@ fun FlowBlockContent(
 
         is ChartBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        if (context.objectSelected) 2.dp else 1.dp,
+                        if (context.objectSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(16.dp),
+                    )
+                    .padding(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 ChartRenderer(
                     document = loaded.document,
                     resolution = remember(loaded.document, context.chartDataRevision) {
@@ -443,14 +536,10 @@ fun FlowBlockContent(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(
-                            if (context.editing && !context.selectionMode && loaded.isEditable) {
-                                Modifier.clickable(
-                                    role = Role.Button,
-                                    onClickLabel = "Open Chart Studio",
-                                ) { callbacks.onOpenChart(block.id) }
-                            } else Modifier
-                        ),
+                        .then(if (context.objectSelected && loaded.isEditable) Modifier.clickable(
+                            role = Role.Button,
+                            onClickLabel = "Open Chart Studio",
+                        ) { callbacks.onOpenChart(block.id) } else Modifier),
                     heightDp = block.editorHeightDp.toInt().coerceIn(120, 560),
                 )
             }
@@ -548,7 +637,9 @@ private fun FlowMathBlock(
     context: FlowBlockContext,
     modifier: Modifier = Modifier,
 ) {
-    var mode by rememberSaveable(block.id) { mutableStateOf(FlowRenderableMode.Preview) }
+    // Source is the writing surface.  A formula no longer looks editable while quietly forcing the user to
+    // discover a hidden mode switch; Preview remains one tap away once the expression is written.
+    var mode by rememberSaveable(block.id, context.editing) { mutableStateOf(if (context.editing) FlowRenderableMode.Source else FlowRenderableMode.Preview) }
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp)).padding(12.dp),
@@ -563,7 +654,7 @@ private fun FlowMathBlock(
         if (mode == FlowRenderableMode.Source && context.editing) {
             FlowEditableLine(
                 block.id, null, listOf(InlineText(block.tex)),
-                MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
                 "TeX source", callbacks, context, structuralEnter = false,
             )
         } else {
@@ -571,7 +662,7 @@ private fun FlowMathBlock(
                 block.tex.ifBlank { "Empty equation" },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp)
                     .semantics { contentDescription = "Equation ${block.tex}" },
-                style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Serif),
+                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif),
             )
         }
     }
@@ -603,9 +694,9 @@ private fun FlowCodeBlock(
             style = resolvedFlowTextStyle(
                 block,
                 context,
-                MaterialTheme.typography.bodyMedium.copy(
+                MaterialTheme.typography.bodyLarge.copy(
                     fontFamily = FontFamily.Monospace,
-                    lineHeight = 20.sp,
+                    lineHeight = 30.sp,
                 ),
             ),
             placeholder = "Code",
@@ -626,7 +717,7 @@ private fun FlowHtmlBlock(
     context: FlowBlockContext,
     modifier: Modifier = Modifier,
 ) {
-    var mode by rememberSaveable(block.id) { mutableStateOf(FlowRenderableMode.Preview) }
+    var mode by rememberSaveable(block.id, context.editing) { mutableStateOf(if (context.editing) FlowRenderableMode.Source else FlowRenderableMode.Preview) }
     Column(
         modifier
             .clip(RoundedCornerShape(12.dp))
@@ -651,7 +742,7 @@ private fun FlowHtmlBlock(
                     blockId = block.id,
                     itemId = null,
                     nodes = listOf(InlineText(block.code)),
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, lineHeight = 18.sp),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace, lineHeight = 30.sp),
                     placeholder = "HTML source",
                     callbacks = callbacks,
                     context = context,
@@ -753,7 +844,7 @@ private fun FlowMermaidBlock(
     context: FlowBlockContext,
     modifier: Modifier = Modifier,
 ) {
-    var mode by rememberSaveable(block.id) { mutableStateOf(FlowRenderableMode.Preview) }
+    var mode by rememberSaveable(block.id, context.editing) { mutableStateOf(if (context.editing) FlowRenderableMode.Source else FlowRenderableMode.Preview) }
     var selectedNodeId by rememberSaveable(block.id) { mutableStateOf<String?>(null) }
     val defaultColor = MaterialTheme.colorScheme.primary.toArgb().let { color -> "#%06X".format(color and 0xFFFFFF) }
     val model = remember(block.code, defaultColor) {
@@ -772,18 +863,6 @@ private fun FlowMermaidBlock(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Mermaid diagram",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                if (model == null) "Source only" else "Renderable",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -817,9 +896,9 @@ private fun FlowMermaidBlock(
                     blockId = block.id,
                     itemId = null,
                     nodes = listOf(InlineText(block.code)),
-                    style = MaterialTheme.typography.bodySmall.copy(
+                    style = MaterialTheme.typography.bodyLarge.copy(
                         fontFamily = FontFamily.Monospace,
-                        lineHeight = 18.sp,
+                        lineHeight = 30.sp,
                     ),
                     placeholder = "Mermaid source",
                     callbacks = callbacks,
@@ -982,68 +1061,13 @@ private fun FlowMermaidPreview(
                 val disconnected = model.nodes.map { it.id }.filter { it in visibleIds && it !in visited }
                 disconnected.forEach { add(listOf(it)) }
             }
-            Column(
-                Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                levels.forEachIndexed { levelIndex, level ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                    ) {
-                        level.take(3).forEach { id ->
-                            val node = nodesById.getValue(id)
-                            Box(
-                                Modifier
-                                    .weight(1f, fill = false)
-                                    .widthIn(min = 88.dp, max = 180.dp)
-                                    .clip(RoundedCornerShape(if (node.shape.name == "Rounded") 8.dp else 4.dp))
-                                    .border(
-                                        if (selectedNodeId == id) 3.dp else 1.dp,
-                                        if (selectedNodeId == id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                                        RoundedCornerShape(8.dp),
-                                    )
-                                    .clickable(enabled = onSelectNode != null) { onSelectNode?.invoke(id) }
-                                    .semantics {
-                                        role = Role.Button
-                                        stateDescription = if (selectedNodeId == id) "Selected node" else "Diagram node"
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 7.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(node.label, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                    if (levelIndex != levels.lastIndex) {
-                        val outgoingLabels = level
-                            .flatMap { from -> visibleEdges.filter { it.from == from }.map { it.label.trim() } }
-                            .filter(String::isNotEmpty)
-                            .distinct()
-                        Box(
-                            Modifier.height(28.dp).widthIn(min = 80.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Box(
-                                if (model.direction == FlowDirection.TD) {
-                                    Modifier.width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outline)
-                                } else {
-                                    Modifier.height(2.dp).fillMaxWidth().background(MaterialTheme.colorScheme.outline)
-                                },
-                            )
-                            if (outgoingLabels.isNotEmpty()) {
-                                Text(
-                                    outgoingLabels.joinToString(" / "),
-                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface).padding(horizontal = 5.dp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            FlowBranchedDiagram(
+                levels = levels,
+                nodesById = nodesById,
+                edges = visibleEdges,
+                selectedNodeId = selectedNodeId,
+                onSelectNode = onSelectNode,
+            )
         }
         DiagramKind.Sequence -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
@@ -1072,6 +1096,81 @@ private fun FlowMermaidPreview(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun FlowBranchedDiagram(
+    levels: List<List<String>>,
+    nodesById: Map<String, DiagramNodeInput>,
+    edges: List<DiagramEdgeInput>,
+    selectedNodeId: String?,
+    onSelectNode: ((String) -> Unit)?,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(184.dp)) {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val widthPx = with(density) { maxWidth.toPx() }
+        val heightPx = with(density) { 184.dp.toPx() }
+        val nodeWidth = 112.dp
+        val nodeHeight = 42.dp
+        val nodeWidthPx = with(density) { nodeWidth.toPx() }
+        val nodeHeightPx = with(density) { nodeHeight.toPx() }
+        val positions = remember(levels, widthPx, heightPx) {
+            buildMap<String, Offset> {
+                levels.forEachIndexed { levelIndex, level ->
+                    val y = if (levels.size == 1) .5f else .10f + (.80f * levelIndex / (levels.size - 1).coerceAtLeast(1))
+                    level.take(3).forEachIndexed { itemIndex, id ->
+                        val x = (itemIndex + 1f) / (level.take(3).size + 1f)
+                        put(id, Offset(widthPx * x, heightPx * y))
+                    }
+                }
+            }
+        }
+        val connector = MaterialTheme.colorScheme.primary.copy(alpha = .78f)
+        Canvas(Modifier.fillMaxSize()) {
+            edges.forEach { edge ->
+                val from = positions[edge.from] ?: return@forEach
+                val to = positions[edge.to] ?: return@forEach
+                val start = Offset(from.x, from.y + nodeHeightPx / 2f)
+                val end = Offset(to.x, to.y - nodeHeightPx / 2f)
+                val elbowY = start.y + (end.y - start.y) * .48f
+                drawLine(connector, start, Offset(start.x, elbowY), 2.dp.toPx())
+                drawLine(connector, Offset(start.x, elbowY), Offset(end.x, elbowY), 2.dp.toPx())
+                drawLine(connector, Offset(end.x, elbowY), end, 2.dp.toPx())
+                drawLine(connector, end, Offset(end.x - 5.dp.toPx(), end.y - 6.dp.toPx()), 2.dp.toPx())
+                drawLine(connector, end, Offset(end.x + 5.dp.toPx(), end.y - 6.dp.toPx()), 2.dp.toPx())
+            }
+        }
+        positions.forEach { (id, center) ->
+            val node = nodesById[id] ?: return@forEach
+            Box(
+                Modifier
+                    .offset {
+                        IntOffset(
+                            (center.x - nodeWidthPx / 2f).roundToInt(),
+                            (center.y - nodeHeightPx / 2f).roundToInt(),
+                        )
+                    }
+                    .width(nodeWidth)
+                    .height(nodeHeight)
+                    .clip(RoundedCornerShape(if (node.shape.name == "Rounded") 10.dp else 6.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        if (selectedNodeId == id) 3.dp else 1.dp,
+                        if (selectedNodeId == id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(10.dp),
+                    )
+                    .clickable(enabled = onSelectNode != null) { onSelectNode?.invoke(id) }
+                    .semantics {
+                        role = Role.Button
+                        stateDescription = if (selectedNodeId == id) "Selected node" else "Diagram node"
+                    }
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(node.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            }
+        }
     }
 }
 
@@ -1178,13 +1277,13 @@ private fun FlowTablePreview(
     modifier: Modifier = Modifier,
 ) {
     val cursor = context.tableCursor?.takeIf { it.blockId == block.id }
-    val columnCount = maxOf(block.headers.size, block.rows.maxOfOrNull { it.size } ?: 0, 1)
-    Box(modifier.horizontalScroll(rememberScrollState())) {
+    Box(modifier.fillMaxWidth()) {
         Column(
             Modifier
-                .width((columnCount * 120).coerceAtLeast(336).dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f)),
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp)),
         ) {
         // Gated on the same flag as the route itself: an escape hatch into a host the build has not
         // enabled would make the flag decorative. §25 — this opens the *same* table identity, so it is a
@@ -1216,7 +1315,7 @@ private fun FlowTablePreview(
             }
         }
             block.rows.forEachIndexed { rowIndex, row ->
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(Modifier.fillMaxWidth()) {
                     row.forEachIndexed { column, cell ->
                         FlowTableCell(
@@ -1300,8 +1399,8 @@ private fun FlowListRow(marker: String, content: @Composable () -> Unit) {
             marker,
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier
-                .width(28.dp)
-                .padding(top = 2.dp),
+                .width(32.dp)
+                .padding(top = 1.dp),
         )
         Box(Modifier.weight(1f)) { content() }
     }
@@ -1361,7 +1460,7 @@ private fun FlowEditableLine(
     val styled = flowInlineSpans(nodes)
 
     if (context.selectionMode || !context.editing) {
-        Box(modifier) {
+        Box(modifier.fillMaxWidth()) {
             Text(
                 text = if (text.isEmpty()) AnnotatedString(placeholder) else styled,
                 style = style.copy(
@@ -1371,7 +1470,7 @@ private fun FlowEditableLine(
                         resolvedContentColor(style.color, LocalContentColor.current)
                     },
                 ),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(start = 3.dp),
             )
         }
         return
@@ -1544,7 +1643,8 @@ private fun resolvedFlowTextStyle(
     block: DocumentBlock,
     context: FlowBlockContext,
     base: TextStyle,
-): TextStyle = resolvedTextStyle(
+): TextStyle {
+    val resolved = resolvedTextStyle(
     block = block,
     sheet = context.stylesheet,
     base = base,
@@ -1554,26 +1654,26 @@ private fun resolvedFlowTextStyle(
     previewTargetIds = context.previewTargetIds,
     // Semantic H2/H3 use the Flow accent by default. Stored explicit colour still wins inside
     // resolvedTextStyle; only the implicit theme text token is prevented from flattening that hierarchy.
-    adaptThemeTextTokens = block !is HeadingBlock || block.level !in 2..3,
-)
+        adaptThemeTextTokens = block !is HeadingBlock || block.level !in 2..3,
+    )
+    return when (block) {
+        is HeadingBlock -> when (block.level) {
+            1 -> resolved.copy(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Medium)
+            2, 3 -> resolved.copy(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            else -> resolved
+        }
+        else -> resolved
+    }
+}
 
 @Composable
 private fun headingStyle(level: Int): TextStyle = when (level) {
-    1 -> MaterialTheme.typography.headlineLarge.copy(
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
-    )
+    1 -> MaterialTheme.typography.headlineLarge
     2 -> MaterialTheme.typography.headlineMedium.copy(
         color = MaterialTheme.colorScheme.primary,
-        fontSize = 20.sp,
-        lineHeight = 26.sp,
     )
     3 -> MaterialTheme.typography.headlineSmall.copy(
         color = MaterialTheme.colorScheme.primary,
-        fontSize = 17.sp,
-        lineHeight = 23.sp,
     )
     4 -> MaterialTheme.typography.titleLarge
     5 -> MaterialTheme.typography.titleMedium

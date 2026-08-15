@@ -134,6 +134,8 @@ object FlowIds {
     const val SPLIT = "flow.split"
     const val MERGE_PREVIOUS = "flow.merge.previous"
     const val INSERT_ABOVE = "flow.insert.above"
+    /** Picker-backed insertion is a host action rather than a registry command because it needs an Android URI. */
+    const val INSERT_IMAGE = "flow.insert.image"
 
     /** Prefix of every insertion command — the `+` palette is exactly this family. */
     const val INSERT_PREFIX = "flow.insert."

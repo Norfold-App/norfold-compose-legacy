@@ -55,25 +55,30 @@ class FlowSlashResolverTest {
         assertEquals(FlowSlashQuery(triggerOffset = 0, query = ""), resolver.detect(input("/")))
     }
 
-    @Test fun detects_aSlashAfterWhitespace_andCapturesTheQuery() {
-        val (_, resolver) = setup(para("a", "hello /head"))
-        val query = resolver.detect(input("hello /head"))
-        assertEquals(6, query?.triggerOffset)
+    @Test fun detects_anIndentedSlash_andCapturesTheQuery() {
+        val (_, resolver) = setup(para("a", "  /head"))
+        val query = resolver.detect(input("  /head"))
+        assertEquals(2, query?.triggerOffset)
         assertEquals("head", query?.query)
-        assertEquals("endOffset spans the whole trigger", 11, query?.endOffset)
+        assertEquals("endOffset spans the whole trigger", 7, query?.endOffset)
     }
 
     @Test fun endOffset_erasesExactlyTheTrigger() {
-        val text = "hello /head"
+        val text = "  /head"
         val (_, resolver) = setup(para("a", text))
         val query = resolver.detect(input(text))!!
-        assertEquals("hello ", text.removeRange(query.triggerOffset, query.endOffset))
+        assertEquals("  ", text.removeRange(query.triggerOffset, query.endOffset))
     }
 
     @Test fun tracksTheCaret_notTheEndOfTheText() {
         val (_, resolver) = setup(para("a", "/head and more"))
         val query = resolver.detect(input("/head and more", caret = 5))
         assertEquals("Only text up to the caret is the query", "head", query?.query)
+    }
+
+    @Test fun suppresses_aSlashAfterOrdinaryProse() {
+        val (_, resolver) = setup(para("a", "write /heading"))
+        assertNull(resolver.detect(input("write /heading")))
     }
 
     // ── Suppression: `/` as content ─────────────────────────────────────────────────────────────────
@@ -156,6 +161,13 @@ class FlowSlashResolverTest {
         assertEquals("flow.insert.bulletList", session.results.first().command.id)
     }
 
+    @Test fun imageAlias_resolvesToThePickerBackedPhotoCommand() {
+        val (scope, resolver) = setup(para("a", "/photo"))
+        scope.selectBlocks(listOf("a"))
+        val session = resolver.resolve(input("/photo"))!!
+        assertEquals(FlowIds.INSERT_IMAGE, session.results.first().command.id)
+    }
+
     @Test fun multiWordQuery_reachesConvertCommands() {
         val (scope, resolver) = setup(para("a", "/turn into quote"))
         scope.selectBlocks(listOf("a"))
@@ -200,25 +212,32 @@ class FlowSlashResolverTest {
         assertEquals(3, session.results.size)
     }
 
+    @Test fun session_exposesTheFirstResultAsTheInitialKeyboardSelection() {
+        val (_, resolver) = setup(para("a", "/"))
+        val session = resolver.resolve(input("/"))!!
+        assertEquals(0, session.selectedIndex)
+        assertEquals(session.results.first(), session.selected)
+    }
+
     // ── Accept ──────────────────────────────────────────────────────────────────────────────────────
 
     @Test fun accept_erasesTheQueryAndRunsTheCommand_asOneUndoUnit() {
-        val (scope, resolver) = setup(para("a", "Notes /h1"))
+        val (scope, resolver) = setup(para("a", "/h1"))
         scope.selectBlocks(listOf("a"))
-        val typed = input("Notes /h1")
+        val typed = input("/h1")
         val command = resolver.resolve(typed)!!.results.first().command
         assertEquals("flow.insert.heading1", command.id)
 
         val result = resolver.accept("a", typed, command)
         assertTrue(result is CommandResult.Success)
 
-        assertEquals("The trigger text is gone", "Notes ", scope.document().findById("a")!!.plainText())
+        assertEquals("The trigger text is gone", "", scope.document().findById("a")!!.plainText())
         assertEquals(2, scope.document().blocks.size)
         assertTrue(scope.document().blocks[1] is HeadingBlock)
         assertEquals("Erase + command is one undo step", 1, scope.controller.undoDepth())
 
         scope.controller.undo()
-        assertEquals("Undo restores exactly what the user typed", "Notes /h1", scope.document().findById("a")!!.plainText())
+        assertEquals("Undo restores exactly what the user typed", "/h1", scope.document().findById("a")!!.plainText())
         assertEquals(1, scope.document().blocks.size)
     }
 
@@ -246,17 +265,17 @@ class FlowSlashResolverTest {
             id = "l",
             items = listOf(
                 ListItem(id = "i1", content = listOf(InlineText("first"))),
-                ListItem(id = "i2", content = listOf(InlineText("second /divider"))),
+                ListItem(id = "i2", content = listOf(InlineText("/divider"))),
             ),
         )
         val (scope, resolver) = setup(list)
         scope.selectBlocks(listOf("l"))
-        val typed = FlowSlashInput(text = "second /divider", caret = 15, itemId = "i2")
+        val typed = FlowSlashInput(text = "/divider", caret = 8, itemId = "i2")
         val command = resolver.resolve(typed)!!.results.first().command
 
         resolver.accept("l", typed, command)
         val updated = scope.document().findById("l") as BulletListBlock
-        assertEquals("second ", updated.items[1].content.joinToString("") { it.plainText() })
+        assertEquals("", updated.items[1].content.joinToString("") { it.plainText() })
         assertEquals("first", updated.items[0].content.joinToString("") { it.plainText() })
         assertEquals(1, scope.controller.undoDepth())
     }
@@ -272,19 +291,19 @@ class FlowSlashResolverTest {
             id = "t",
             items = listOf(
                 TodoItem(id = "i1", checked = true, content = listOf(InlineText("done"))),
-                TodoItem(id = "i2", checked = false, content = listOf(InlineText("second /divider"))),
+                TodoItem(id = "i2", checked = false, content = listOf(InlineText("/divider"))),
             ),
         )
         val (scope, resolver) = setup(todo)
         scope.selectBlocks(listOf("t"))
-        val typed = FlowSlashInput(text = "second /divider", caret = 15, itemId = "i2")
+        val typed = FlowSlashInput(text = "/divider", caret = 8, itemId = "i2")
         val command = resolver.resolve(typed)!!.results.first().command
 
         val result = resolver.accept("t", typed, command)
         assertTrue(result is CommandResult.Success)
 
         val updated = scope.document().findById("t") as TodoListBlock
-        assertEquals("the trigger is erased from the to-do's own text", "second ", updated.items[1].plain())
+        assertEquals("the trigger is erased from the to-do's own text", "", updated.items[1].plain())
         assertEquals("the sibling item is untouched", "done", updated.items[0].plain())
         assertEquals("checked state is content, not a casualty of the erase", true, updated.items[0].checked)
         assertEquals(false, updated.items[1].checked)
@@ -296,24 +315,24 @@ class FlowSlashResolverTest {
             id = "t",
             items = listOf(
                 TodoItem(id = "i1", checked = true, content = listOf(InlineText("done"))),
-                TodoItem(id = "i2", checked = true, content = listOf(InlineText("ship it /divider"))),
+                TodoItem(id = "i2", checked = true, content = listOf(InlineText("/divider"))),
             ),
         )
         val (scope, resolver) = setup(todo)
         scope.selectBlocks(listOf("t"))
-        val typed = FlowSlashInput(text = "ship it /divider", caret = 16, itemId = "i2")
+        val typed = FlowSlashInput(text = "/divider", caret = 8, itemId = "i2")
         val command = resolver.resolve(typed)!!.results.first().command
 
         resolver.accept("t", typed, command)
         // Asserted before undoing: without this the test passes vacuously against an erase that never
         // happened, because "undo restores the typed text" is trivially true when nothing removed it.
         val afterAccept = scope.document().findById("t") as TodoListBlock
-        assertEquals("ship it ", afterAccept.items[1].plain())
+        assertEquals("", afterAccept.items[1].plain())
 
         scope.controller.undo()
 
         val restored = scope.document().findById("t") as TodoListBlock
-        assertEquals("ship it /divider", restored.items[1].plain())
+        assertEquals("/divider", restored.items[1].plain())
         assertEquals(true, restored.items[1].checked)
         assertEquals("done", restored.items[0].plain())
         assertEquals(true, restored.items[0].checked)
@@ -323,11 +342,11 @@ class FlowSlashResolverTest {
     @Test fun accept_failsSafely_whenTheAddressedItemIsGone() {
         val todo = TodoListBlock(
             id = "t",
-            items = listOf(TodoItem(id = "i1", content = listOf(InlineText("only /divider")))),
+            items = listOf(TodoItem(id = "i1", content = listOf(InlineText("/divider")))),
         )
         val (scope, resolver) = setup(todo)
         scope.selectBlocks(listOf("t"))
-        val typed = FlowSlashInput(text = "only /divider", caret = 13, itemId = "gone")
+        val typed = FlowSlashInput(text = "/divider", caret = 8, itemId = "gone")
         val command = FlowCommands.registry(scope).get("flow.insert.divider")!!
 
         val result = resolver.accept("t", typed, command)
@@ -337,9 +356,9 @@ class FlowSlashResolverTest {
     }
 
     @Test fun accept_failsSafely_whenTheAddressedBlockIsGone() {
-        val (scope, resolver) = setup(para("a", "text /divider"))
+        val (scope, resolver) = setup(para("a", "/divider"))
         scope.selectBlocks(listOf("a"))
-        val typed = input("text /divider")
+        val typed = input("/divider")
         val command = FlowCommands.registry(scope).get("flow.insert.divider")!!
 
         val result = resolver.accept("missing", typed, command)

@@ -1,6 +1,10 @@
 package com.norfold.app.ui.editor.flow
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,9 +43,22 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Redo
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.AddBox
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FormatBold
+import androidx.compose.material.icons.filled.FormatItalic
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.OpenWith
+import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.outlined.Menu
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -52,10 +69,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -69,19 +90,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -99,6 +127,7 @@ import com.norfold.app.editor.flow.FlowCommandItem
 import com.norfold.app.editor.flow.FlowDragGeometry
 import com.norfold.app.editor.flow.FlowDropPlacement
 import com.norfold.app.editor.flow.FlowHostUiState
+import com.norfold.app.editor.flow.FlowIds
 import com.norfold.app.editor.flow.FlowRowBounds
 import com.norfold.app.editor.flow.FlowSurfaces
 import com.norfold.app.editor.presentation.FormFactor
@@ -117,10 +146,12 @@ import com.norfold.app.domain.stylesheet
 import com.norfold.app.domain.RelationshipDataBlock
 import com.norfold.app.domain.InterchangeDataBlock
 import com.norfold.app.domain.findById
+import com.norfold.app.domain.rootAncestorId
 import com.norfold.app.domain.StylesheetBlock
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
 import com.norfold.app.ui.editor.image.ImageFocusSheet
+import com.norfold.app.editor.image.ImageSourceMetadata
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.relationship.CommentAuthorRef
@@ -174,6 +205,41 @@ fun FlowHostScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
     var imageEditingId by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val readable = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            bounds.outWidth > 0 && bounds.outHeight > 0
+        }.getOrDefault(false)
+        if (!readable) {
+            notice = "That image could not be read. Choose another photo."
+            return@rememberLauncherForActivityResult
+        }
+        val permissionGranted = runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }.isSuccess
+        if (!permissionGranted) {
+            notice = "Norfold could not keep access to that photo. Choose it again."
+            return@rememberLauncherForActivityResult
+        }
+        val imageId = presenter.act {
+            insertImage(
+                uri.toString(),
+                ImageSourceMetadata(
+                    pixelWidth = bounds.outWidth,
+                    pixelHeight = bounds.outHeight,
+                    mimeType = context.contentResolver.getType(uri),
+                ),
+            )
+        }
+        if (imageId == null) {
+            notice = "Couldn't add that photo. Your note was left unchanged."
+        } else {
+            imageEditingId = imageId
+        }
+    }
 
     // ── Adaptive presentation: the window drives the mode, never the other way round (§2.6) ──
     val configuration = LocalConfiguration.current
@@ -242,10 +308,41 @@ fun FlowHostScreen(
         },
     )
 
+    FlowVisualTheme {
+    val selectedObject = state.primaryId?.let(state.document::findById)
     Box(
         modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .onPreviewKeyEvent { event ->
+                if (state.slash != null && event.type == KeyEventType.KeyDown) {
+                    when (event.key) {
+                        Key.DirectionDown -> {
+                            presenter.act { moveSlashSelection(1) }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionUp -> {
+                            presenter.act { moveSlashSelection(-1) }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.Enter -> {
+                            val selected = state.slash.selected
+                            if (selected?.command?.id == FlowIds.INSERT_IMAGE) {
+                                if (presenter.act { consumeSlashForImagePicker() }) imagePicker.launch(arrayOf("image/*"))
+                                else notice = "Couldn't prepare image insertion. Try again."
+                            } else {
+                                val result = presenter.act { acceptSelectedSlash() }
+                                (result as? com.norfold.app.editor.command.CommandResult.Failure)?.let { notice = it.reason }
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.Escape -> {
+                            presenter.act { closeSlash(DismissTrigger.CANCEL) }
+                            return@onPreviewKeyEvent true
+                        }
+                        else -> Unit
+                    }
+                }
                 // Unbound keys fall through untouched, so ordinary typing and the IME are never intercepted.
                 val shortcut = event.toFlowShortcut() ?: return@onPreviewKeyEvent false
                 val handled = presenter.act { handleShortcut(shortcut) }
@@ -267,14 +364,16 @@ fun FlowHostScreen(
                 // multi-step or cross-target reversal before it happens (§13.4).
                 onUndo = { if (history.runtime != null) presenter.act { history.undo() } else presenter.act { undo() } },
                 onRedo = { if (history.runtime != null) presenter.act { history.redo() } else presenter.act { redo() } },
+                onDoneEditing = { presenter.act { leaveTextEditing() } },
                 onEnterSelection = { presenter.act { enterSelectionMode(state.primaryId) } },
                 onOpenGuide = guide.runtime?.let { { guide.open() } },
                 onOpenHistory = history.runtime?.let { { history.open() } },
                 onOpenRecovery = recovery.runtime?.let { { recovery.open() } },
                 compact = compact,
-                editing = state.interactionMode != com.norfold.app.editor.flow.FlowInteractionMode.READING || state.formFactor.keyboardOpen,
+                editing = (state.interactionMode != com.norfold.app.editor.flow.FlowInteractionMode.READING || state.formFactor.keyboardOpen) &&
+                    selectedObject !is ImageBlock && selectedObject !is ChartBlock,
             )
-            HorizontalDivider()
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
             Box(Modifier.weight(1f)) {
                 val flowSheet = state.document.stylesheet()
                 val flowMetrics = remember(visibleBlocks, flowSheet) {
@@ -287,12 +386,12 @@ fun FlowHostScreen(
                         .onGloballyPositioned { drag.viewportTop = it.positionInWindow().y }
                         .onSizeChanged { drag.viewportHeight = it.height.toFloat() },
                     contentPadding = PaddingValues(
-                        start = 20.dp,
-                        end = 20.dp,
-                        top = 16.dp,
+                        start = 22.dp,
+                        end = 22.dp,
+                        top = 22.dp,
                         // Reserve the real height of everything docked below, so the last block and the active
                         // caret can always be scrolled clear of it instead of sitting under it.
-                        bottom = 16.dp + lowerSurfaceDp,
+                        bottom = 24.dp + lowerSurfaceDp,
                     ),
                 ) {
                     itemsIndexed(visibleBlocks, key = { _, block -> block.id }) { index, block ->
@@ -337,7 +436,10 @@ fun FlowHostScreen(
                                 onOpenChart = { chartEditingId = it; guide.signal(GuideSignal.CHART_STUDIO_OPENED) },
                                 onOpenImage = { imageEditingId = it; guide.signal(GuideSignal.IMAGE_FOCUS_OPENED) },
                                 compact = compact,
-                                editing = state.editingBlockId == block.id,
+                                // A focused child remains inside the same top-level row.  Comparing only its
+                                // own id made nested callouts, quote text and container cells flip straight
+                                // back to read-only immediately after focus moved into them.
+                                editing = state.editingBlockId?.let(state.document::rootAncestorId) == block.id,
                                 onActivateEditor = { id -> presenter.act { enterTextEditing(id) } },
                                 onEditorFocusChanged = { blockId, focused ->
                                     if (focused) presenter.act { enterTextEditing(blockId) }
@@ -398,8 +500,13 @@ fun FlowHostScreen(
                 FlowSlashMenu(
                     session = session,
                     onPick = { id ->
-                        val result = presenter.act { acceptSlash(id) }
-                        (result as? com.norfold.app.editor.command.CommandResult.Failure)?.let { notice = it.reason }
+                        if (id == FlowIds.INSERT_IMAGE) {
+                            if (presenter.act { consumeSlashForImagePicker() }) imagePicker.launch(arrayOf("image/*"))
+                            else notice = "Couldn't prepare image insertion. Try again."
+                        } else {
+                            val result = presenter.act { acceptSlash(id) }
+                            (result as? com.norfold.app.editor.command.CommandResult.Failure)?.let { notice = it.reason }
+                        }
                     },
                     onDismiss = { presenter.act { closeSlash(DismissTrigger.CANCEL) } },
                 )
@@ -423,6 +530,8 @@ fun FlowHostScreen(
                     onOpenMore = {
                         presenter.act { openSurface(FlowSurfaces.MORE_ACTIONS, SurfaceClass.COMMAND_MENU) }
                     },
+                    onOpenImage = { imageEditingId = it; guide.signal(GuideSignal.IMAGE_FOCUS_OPENED) },
+                    onOpenChart = { chartEditingId = it; guide.signal(GuideSignal.CHART_STUDIO_OPENED) },
                 )
             }
         }
@@ -431,6 +540,7 @@ fun FlowHostScreen(
             state = state,
             presenter = presenter,
             onNotice = { notice = it },
+            onPickImage = { imagePicker.launch(arrayOf("image/*")) },
         )
         if (state.interchange.requestedAction == null && state.interchange.rawDraft == null) {
             GuideHostLayer(guide, guideContext)
@@ -519,6 +629,7 @@ fun FlowHostScreen(
         if (visible == null || visible.offset + visible.size > limit || visible.offset < 0) {
             listState.animateScrollToItem(index)
         }
+    }
     }
 }
 
@@ -611,19 +722,20 @@ private fun FlowDropMarker(placement: FlowDropPlacement, modifier: Modifier = Mo
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .weight(1f)
-                .height(3.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(color),
-        )
-        Text(
-            if (placement.isNoOp) "Current position" else "Move here",
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            modifier = Modifier.padding(start = 8.dp),
-        )
+        Surface(
+            modifier = Modifier.weight(1f).height(42.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = color.copy(alpha = if (placement.isNoOp) .06f else .10f),
+            border = androidx.compose.foundation.BorderStroke(2.dp, color),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    if (placement.isNoOp) "Current position" else "Drop block here",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = color,
+                )
+            }
+        }
     }
 }
 
@@ -691,6 +803,7 @@ private fun FlowBlockRow(
             onEditorFocusChanged = onEditorFocusChanged,
         )
     }
+    val isObject = block is ImageBlock || block is ChartBlock
 
     // Structural selection means the *row* owns every gesture inside it (correction item 6). The defect this
     // replaces let a child control — the insert handle, a table cell, a callout toggle — take a tap that was
@@ -754,9 +867,12 @@ private fun FlowBlockRow(
                 translationY = if (dragging) drag.lift else 0f
                 alpha = if (dragging) 0.85f else 1f
                 shadowElevation = if (dragging) 12f else 0f
+                rotationZ = if (dragging) -1.25f else 0f
+                scaleX = if (dragging) 1.015f else 1f
+                scaleY = if (dragging) 1.015f else 1f
             }
             .zIndex(if (dragging) 2f else 0f)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(
                 when {
                     // The source keeps a visible placeholder tint so its origin stays legible during the drag.
@@ -772,8 +888,16 @@ private fun FlowBlockRow(
                 onClick = {
                     if (state.selectionMode) presenter.act { toggleSelection(block.id) }
                     else {
-                        onActivateEditor(block.id)
-                        presenter.act { setCaret(block.id, 0) }
+                        if (isObject && editing) {
+                            when (block) {
+                                is ImageBlock -> onOpenImage(block.id)
+                                is ChartBlock -> onOpenChart(block.id)
+                                else -> Unit
+                            }
+                        } else {
+                            onActivateEditor(block.id)
+                            presenter.act { setCaret(block.id, 0) }
+                        }
                     }
                 },
                 // Long-press is the second, gesture-native way into multi-select; the top bar's Select
@@ -827,16 +951,9 @@ private fun FlowBlockRow(
                     chartDataRevision = state.revision,
                     compact = compact,
                     editing = editing,
+                    objectSelected = editing && (block is ImageBlock || block is ChartBlock),
                 ),
             )
-            if (selected && state.relationshipReview.relationships.isNotEmpty()) {
-                Text(
-                    "${state.relationshipReview.relationships.size} relation${if (state.relationshipReview.relationships.size == 1) "" else "s"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
-                )
-            }
         }
     }
 }
@@ -862,6 +979,7 @@ private fun FlowTopBar(
     onExit: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    onDoneEditing: () -> Unit,
     onEnterSelection: () -> Unit,
     onOpenGuide: (() -> Unit)?,
     onOpenHistory: (() -> Unit)?,
@@ -874,30 +992,58 @@ private fun FlowTopBar(
         Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .heightIn(min = 64.dp)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onExit) {
-            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to notes")
-        }
-        IconButton(onClick = onOpenSidebar) {
-            Icon(Icons.Outlined.Menu, contentDescription = "Open note navigation")
-        }
-        FlowTitleField(
-            title = title,
-            onTitleChange = onTitleChange,
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 8.dp),
-        )
         if (compact) {
             if (editing) {
+                TextButton(onClick = onDoneEditing) {
+                    Text("Done", style = MaterialTheme.typography.labelLarge)
+                }
+                Spacer(Modifier.weight(1f))
                 IconButton(onClick = onUndo, enabled = state.canUndo) {
                     Icon(Icons.AutoMirrored.Outlined.Undo, contentDescription = "Undo")
                 }
                 IconButton(onClick = onRedo, enabled = state.canRedo) {
                     Icon(Icons.AutoMirrored.Outlined.Redo, contentDescription = "Redo")
                 }
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Text", style = MaterialTheme.typography.labelLarge)
+                        Icon(Icons.Filled.ArrowDropDown, null, Modifier.width(18.dp))
+                    }
+                }
+            } else {
+                IconButton(onClick = onExit) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to notes")
+                }
+                Surface(
+                    modifier = Modifier.padding(start = 4.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                ) {
+                    Text(
+                        "N",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+                    )
+                }
+                FlowTitleField(
+                    title = title,
+                    onTitleChange = onTitleChange,
+                    editable = false,
+                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                )
             }
             Box {
                 IconButton(onClick = { overflow = true }) {
@@ -932,6 +1078,18 @@ private fun FlowTopBar(
                 }
             }
         } else {
+            IconButton(onClick = onExit) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back to notes")
+            }
+            IconButton(onClick = onOpenSidebar) {
+                Icon(Icons.Outlined.Menu, contentDescription = "Open note navigation")
+            }
+            FlowTitleField(
+                title = title,
+                onTitleChange = onTitleChange,
+                editable = editing,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            )
             if (editing) {
                 TextButton(onClick = onUndo, enabled = state.canUndo) { Text("Undo") }
                 TextButton(onClick = onRedo, enabled = state.canRedo) { Text("Redo") }
@@ -957,7 +1115,12 @@ private fun FlowTopBar(
  * with this keystroke yet"; re-seeding on the latter would delete characters as they are typed.
  */
 @Composable
-private fun FlowTitleField(title: String, onTitleChange: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun FlowTitleField(
+    title: String,
+    onTitleChange: (String) -> Unit,
+    editable: Boolean,
+    modifier: Modifier = Modifier,
+) {
     var value by remember { mutableStateOf(title) }
     var lastOwner by remember { mutableStateOf(title) }
     if (title != lastOwner) {
@@ -972,7 +1135,14 @@ private fun FlowTitleField(title: String, onTitleChange: (String) -> Unit, modif
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             )
         }
-        BasicTextField(
+        if (!editable) {
+            Text(
+                value.ifBlank { "Untitled" },
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else BasicTextField(
             value = value,
             onValueChange = {
                 // A title is one line by definition; newlines pasted in are flattened rather than silently
@@ -1007,67 +1177,140 @@ private fun FlowContextDock(
     onCancelSelection: () -> Unit,
     onFinishSelection: () -> Unit,
     onOpenMore: () -> Unit,
+    onOpenImage: (String) -> Unit,
+    onOpenChart: (String) -> Unit,
 ) {
+    val showLabels = state.formFactor.widthDp >= FLOW_COMPACT_WIDTH_DP
     val inline = state.dock.filter { it.id.startsWith(com.norfold.app.editor.flow.FlowIds.TEXT_PREFIX) }
     val structural = state.dock.filterNot { it.id.startsWith(com.norfold.app.editor.flow.FlowIds.TEXT_PREFIX) }
     val primaryActions = when (state.interactionMode) {
         com.norfold.app.editor.flow.FlowInteractionMode.TEXT_EDITING,
-        com.norfold.app.editor.flow.FlowInteractionMode.TEXT_SELECTION -> inline.take(3)
+        com.norfold.app.editor.flow.FlowInteractionMode.TEXT_SELECTION -> inline.take(4)
         com.norfold.app.editor.flow.FlowInteractionMode.BLOCK_SELECTION,
         com.norfold.app.editor.flow.FlowInteractionMode.MULTI_SELECTION,
         com.norfold.app.editor.flow.FlowInteractionMode.DRAGGING -> (structural + state.tableActions).take(2)
         com.norfold.app.editor.flow.FlowInteractionMode.READING -> emptyList()
     }
+    val selectedObject = state.primaryId?.let(state.document::findById)
+    val allCommands = state.dock + state.moreActions
+    fun command(label: String): FlowCommandItem? = allCommands.firstOrNull { it.label.contains(label, ignoreCase = true) }
     Surface(
         tonalElevation = 2.dp,
-        shape = RoundedCornerShape(16.dp),
+        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(22.dp),
         modifier = Modifier
-            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
             .widthIn(max = FLOW_CONTENT_MAX_WIDTH)
             .fillMaxWidth(),
     ) {
         Row(
             Modifier
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (state.selectionMode) {
-                TextButton(onClick = onCancelSelection) { Text("Cancel") }
+            if (selectedObject is ImageBlock && !state.selectionMode) {
+                FlowDockButton("Edit image", Icons.Filled.Edit, { onOpenImage(selectedObject.id) }, Modifier.weight(1f), showLabel = showLabels)
+                command("Move")?.let { item ->
+                    FlowDockButton("Move", Icons.Filled.OpenWith, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
+                }
+                command("Duplicate")?.let { item ->
+                    FlowDockButton("Duplicate", Icons.Filled.ContentCopy, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
+                }
+                command("Delete")?.let { item ->
+                    FlowDockButton("Delete", Icons.Filled.Delete, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
+                }
+            } else if (selectedObject is ChartBlock && !state.selectionMode) {
+                FlowDockButton("Edit chart", Icons.Filled.BarChart, { onOpenChart(selectedObject.id) }, Modifier.weight(1f), showLabel = showLabels)
+                command("Move")?.let { item ->
+                    FlowDockButton("Move", Icons.Filled.OpenWith, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
+                }
+                command("Duplicate")?.let { item ->
+                    FlowDockButton("Duplicate", Icons.Filled.ContentCopy, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
+                }
+                command("Delete")?.let { item ->
+                    FlowDockButton("Delete", Icons.Filled.Delete, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
+                }
+            } else if (state.selectionMode) {
+                FlowDockButton("Cancel", Icons.Filled.Close, onCancelSelection, Modifier.weight(1f), showLabel = showLabels)
                 Text(
                     if (state.selectedCount == 1) "1 selected" else "${state.selectedCount} selected",
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.weight(1f),
                 )
             } else {
-                AssistChip(onClick = onOpenInsert, label = { Text("Insert") })
-                primaryActions.forEach { item -> FlowCommandChip(item, onCommand) }
+                FlowDockButton("Insert", Icons.Filled.AddBox, onOpenInsert, Modifier.weight(1f), showLabel = showLabels)
+                primaryActions.forEach { item -> FlowCommandChip(item, onCommand, Modifier.weight(1f), showLabel = showLabels) }
                 if (state.interactionMode == com.norfold.app.editor.flow.FlowInteractionMode.TEXT_EDITING &&
                     state.editorStyle.textTargetCount > 0 && primaryActions.size < 3
                 ) {
-                    AssistChip({ onStyleCommand(EditorStyleCommandIds.FONT_BROWSER) }, label = { Text("Font") })
+                    FlowDockButton("Font", Icons.Filled.TextFields, { onStyleCommand(EditorStyleCommandIds.FONT_BROWSER) }, Modifier.weight(1f), showLabel = showLabels)
                 }
-                Spacer(Modifier.weight(1f))
             }
-            AssistChip(onClick = onOpenMore, label = { Text("More") })
+            FlowDockButton("More", Icons.Filled.MoreHoriz, onOpenMore, Modifier.weight(1f), showLabel = showLabels)
             if (state.selectionMode) {
-                TextButton(onClick = onFinishSelection) { Text("Done") }
+                FlowDockButton("Done", Icons.Filled.Check, onFinishSelection, Modifier.weight(1f), showLabel = showLabels)
             }
         }
     }
 }
 
 @Composable
-private fun FlowCommandChip(item: FlowCommandItem, onCommand: (FlowCommandItem) -> Unit) {
-    AssistChip(
-        onClick = { onCommand(item) },
-        label = { Text(item.label) },
-        enabled = true,
-        colors = AssistChipDefaults.assistChipColors(
-            labelColor = if (item.enabled) MaterialTheme.colorScheme.onSurface
-            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-        ),
-    )
+private fun FlowCommandChip(
+    item: FlowCommandItem,
+    onCommand: (FlowCommandItem) -> Unit,
+    modifier: Modifier = Modifier,
+    showLabel: Boolean = true,
+) {
+    val icon = when {
+        item.label.contains("bold", true) -> Icons.Filled.FormatBold
+        item.label.contains("italic", true) -> Icons.Filled.FormatItalic
+        item.label.contains("link", true) -> Icons.Filled.Link
+        item.label.contains("check", true) -> Icons.Filled.Checklist
+        else -> Icons.Filled.TextFields
+    }
+    FlowDockButton(item.label, icon, { onCommand(item) }, modifier, item.enabled, showLabel, selected = item.active || item.mixed)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FlowDockButton(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    showLabel: Boolean = true,
+    selected: Boolean = false,
+) {
+    val color = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        label.equals("Delete", ignoreCase = true) -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState(),
+    ) {
+        Column(
+            modifier
+                .heightIn(min = 54.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(horizontal = 2.dp, vertical = if (showLabel) 4.dp else 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(icon, contentDescription = label, tint = color, modifier = Modifier.height(if (showLabel) 22.dp else 25.dp))
+            val compactLabel = when {
+                label.contains("strike", true) -> "Strike"
+                else -> label
+            }
+            if (showLabel) Text(compactLabel, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
+        }
+    }
 }
 
 /**
@@ -1104,11 +1347,13 @@ private fun FlowSlashMenu(
         }
         HorizontalDivider()
         LazyColumn(Modifier.heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT)) {
-            items(session.results, key = { it.command.id }) { result ->
+            itemsIndexed(session.results, key = { _, item -> item.command.id }) { index, result ->
                 val enabled = result.status.isInvokable
                 Column(
                     Modifier
                         .fillMaxWidth()
+                        .semantics { selected = index == session.selectedIndex }
+                        .background(if (index == session.selectedIndex) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, RoundedCornerShape(10.dp))
                         .clickable(enabled = enabled, onClick = { onPick(result.command.id) })
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
@@ -1141,6 +1386,7 @@ private fun FlowPaletteSurface(
     state: FlowHostUiState,
     presenter: FlowHostPresenter,
     onNotice: (String) -> Unit,
+    onPickImage: () -> Unit,
 ) {
     val surfaceId = state.activeSurfaceId ?: return
     if (surfaceId == FlowSurfaces.COLOR_STUDIO || surfaceId == FlowSurfaces.FONT_BROWSER ||
@@ -1169,7 +1415,14 @@ private fun FlowPaletteSurface(
             items = items,
             recentId = state.recentInsertId.takeIf { surfaceId == FlowSurfaces.INSERT_PALETTE },
             compact = compact,
-            onPick = { item -> presenter.invokeItem(item, CommandSurface.DOCK, onNotice) },
+            onPick = { item ->
+                if (item.id == FlowIds.INSERT_IMAGE) {
+                    presenter.act { closeSurface(FlowSurfaces.INSERT_PALETTE, DismissTrigger.COMMAND_EXECUTED) }
+                    onPickImage()
+                } else {
+                    presenter.invokeItem(item, CommandSurface.DOCK, onNotice)
+                }
+            },
         )
     }
 

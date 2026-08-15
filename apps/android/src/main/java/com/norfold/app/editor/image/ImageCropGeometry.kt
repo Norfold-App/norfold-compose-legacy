@@ -17,6 +17,42 @@ enum class ImageCropHandle {
 
 /** Pure normalized crop geometry shared by pointer and accessibility command routes. */
 object ImageCropGeometry {
+    /**
+     * Scale required to keep a rotated source entirely inside an unchanged crop viewport.
+     *
+     * The viewport is expressed in the source's unrotated aspect ratio. Unlike a square-only
+     * approximation, this preserves the whole image for portrait and landscape sources alike.
+     */
+    fun rotationScaleToFitViewport(degrees: Float, sourceAspectRatio: Float): Float {
+        val aspect = sourceAspectRatio.finiteOr(1f).coerceIn(0.05f, 20f)
+        val radians = Math.toRadians(degrees.finiteOr(0f).toDouble())
+        val cosine = kotlin.math.abs(kotlin.math.cos(radians)).toFloat()
+        val sine = kotlin.math.abs(kotlin.math.sin(radians)).toFloat()
+        val rotatedWidth = aspect * cosine + sine
+        val rotatedHeight = aspect * sine + cosine
+        return min(aspect / rotatedWidth.coerceAtLeast(0.0001f), 1f / rotatedHeight.coerceAtLeast(0.0001f))
+            .coerceIn(0.05f, 1f)
+    }
+
+    /** Resizes the crop frame around its centre. The source stays put; only the visible frame changes. */
+    fun zoom(bounds: NormalizedRect, zoom: Float): NormalizedRect {
+        val current = bounds.normalized()
+        val targetZoom = zoom.finiteOr(1f).coerceIn(1f, 12f)
+        val currentExtent = max(current.width, current.height).coerceAtLeast(NormalizedRect.MIN_EXTENT)
+        val targetExtent = (1f / targetZoom).coerceIn(NormalizedRect.MIN_EXTENT, 1f)
+        val factor = targetExtent / currentExtent
+        val width = (current.width * factor).coerceIn(NormalizedRect.MIN_EXTENT, 1f)
+        val height = (current.height * factor).coerceIn(NormalizedRect.MIN_EXTENT, 1f)
+        val centerX = current.left + current.width / 2f
+        val centerY = current.top + current.height / 2f
+        return NormalizedRect(
+            left = (centerX - width / 2f).coerceIn(0f, 1f - width),
+            top = (centerY - height / 2f).coerceIn(0f, 1f - height),
+            width = width,
+            height = height,
+        ).normalized()
+    }
+
     fun aspectRatio(mode: ImageCropMode, metadata: ImageSourceMetadata, quarterTurns: Int): Float? {
         val base = when (mode) {
             ImageCropMode.FREE -> return null

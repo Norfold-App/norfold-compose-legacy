@@ -70,6 +70,10 @@ import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.ListItem
 import com.norfold.app.domain.LinkInline
 import com.norfold.app.domain.MermaidBlock
+import com.norfold.app.domain.MathBlock
+import com.norfold.app.domain.NumberedListBlock
+import com.norfold.app.domain.FileBlock
+import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.PageGeometry
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
@@ -264,7 +268,14 @@ private enum class QaEntry(
     Offline("Offline Workspace", "Local content with sync disabled and explicit offline status", QaScenario.Offline, QaSurface.Workspace),
     Legacy("Legacy Compatibility", "A positioned pre-cutover row routed through bounded conversion", QaScenario.Demo, QaSurface.Document, QaDemoCorpus.LegacyTitle),
     ResetDemo("Reset Demo Data", "Delete mutations and restore the exact QA baseline", QaScenario.Demo, QaSurface.Workspace),
-    Flow("Open Flow", "Rich long-form block corpus", QaScenario.Demo, QaSurface.Flow, QaDemoCorpus.FlowTitle),
+    Flow(
+        "Open Flow",
+        "Rich long-form block corpus",
+        QaScenario.Demo,
+        QaSurface.Flow,
+        QaDemoCorpus.FlowTitle,
+        "flow-phone-complete-set",
+    ),
     FlowResponsiveNested(
         "Flow · Responsive Nested",
         "Phone golden: nested columns stack into one writing-first stream",
@@ -369,7 +380,7 @@ private object QaDemoCorpus {
     const val FlowTitle = "QA Field Notes"
     const val FlowResponsiveNestedTitle = "Daily Log"
     const val FlowMermaidTitle = "Architecture Notes"
-    const val FlowReadingTitle = "Product Design Principles"
+    const val FlowReadingTitle = "Project Aurora"
     const val DocumentTitle = "QA Editorial Brief"
     const val SpreadsheetTitle = "QA Launch Workbook"
     const val LegacyTitle = "QA Legacy Positioned Document"
@@ -590,6 +601,10 @@ private object QaDemoCorpus {
             TodoListBlock("flow-todos", listOf(TodoItem("flow-todo-1", true, listOf(InlineText("Review information hierarchy"))), TodoItem("flow-todo-2", false, listOf(InlineText("Certify large text behavior"))))),
             QuoteBlock("flow-quote", listOf(ParagraphBlock("flow-quote-p", listOf(InlineText("Quiet interfaces make the document—not the chrome—the main character."))))),
             CalloutBlock("flow-callout", "note", "QA note", false, listOf(ParagraphBlock("flow-callout-p", listOf(InlineText("This callout must remain readable in light and dark themes."))))),
+            NumberedListBlock("flow-numbered", 1, listOf(
+                ListItem("flow-numbered-1", listOf(InlineText("Define the calm reading path"))),
+                ListItem("flow-numbered-2", listOf(InlineText("Reveal editing controls in context"))),
+            )),
             ContainerBlock(
                 id = "flow-container",
                 axis = ContainerAxis.Row,
@@ -603,13 +618,40 @@ private object QaDemoCorpus {
                 ),
             ),
             CodeBlock("flow-code", "kotlin", "val result = workspace.verifyLocally()\ncheck(result.isDeterministic)"),
+            CodeBlock("flow-html", "html", "<section style=\"font-family:sans-serif;padding:18px\"><h2>Launch brief</h2><p>Offline, script-free HTML preview.</p><button>Review</button></section>", editorHeightDp = 190f),
+            MermaidBlock(
+                "flow-mermaid",
+                "flowchart TD\n  Draft[Draft] --> Review{Approved?}\n  Review -->|Yes| Publish[Publish]\n  Review -->|No| Revise[Revise]",
+                editorHeightDp = 220f,
+            ),
+            MathBlock("flow-math", "E = mc^2"),
             TableBlock(
                 id = "flow-table",
                 headers = listOf(cell("Surface"), cell("Status"), cell("Owner")),
                 rows = listOf(listOf(cell("Flow"), cell("Ready"), cell("QA")), listOf(cell("Document"), cell("Review"), cell("Owner"))),
             ),
             ImageBlock("flow-image", "android.resource://com.norfold.app/drawable/cover_mountain_path", "Mountain path reference", displayHeightDp = 260f),
-            ChartBlock("flow-chart", "{\"mark\":\"line\",\"data\":{\"values\":[{\"day\":\"Mon\",\"score\":74},{\"day\":\"Tue\",\"score\":88},{\"day\":\"Wed\",\"score\":93}]},\"encoding\":{\"x\":{\"field\":\"day\"},\"y\":{\"field\":\"score\",\"type\":\"quantitative\"}}}"),
+            ChartBlock(
+                "flow-chart",
+                ChartSpecCodec.encode(
+                    ChartBuilderModel(
+                        type = ChartType.Line,
+                        title = "Launch confidence",
+                        xAxis = "Day",
+                        yAxis = "Score",
+                        showLegend = false,
+                        color = "#2E7D32",
+                        rows = listOf(
+                            ChartDataRow("flow-chart-mon", "Mon", "74", color = "#2E7D32"),
+                            ChartDataRow("flow-chart-tue", "Tue", "88", color = "#2E7D32"),
+                            ChartDataRow("flow-chart-wed", "Wed", "93", color = "#2E7D32"),
+                        ),
+                    ),
+                ),
+            ),
+            ShapeBlock("flow-shape", ShapeKind.RoundedRectangle, "READY", 0xFFDCEBD9, 0xFF2E7D32, displayHeightDp = 112f),
+            FileBlock("flow-file", "launch-brief.pdf", "application/pdf", 824_320L, "content://qa/launch-brief.pdf"),
+            EmbedBlock("flow-embed", "https://norfold.app/research", com.norfold.app.domain.EmbedMetadata("Research workspace", "Design evidence and product decisions")),
         ),
     ).withReviewCorpus(noteId = 100L, sourceId = "flow-intro", targetId = "flow-findings")
 
@@ -625,6 +667,7 @@ private object QaDemoCorpus {
                 listOf(ParagraphBlock("nested-callout-body", listOf(InlineText("Refine the onboarding flow and prepare the prototype for the weekly review.")))),
             ),
             HeadingBlock("nested-progress", 2, listOf(InlineText("Progress"))),
+            ParagraphBlock("nested-progress-intro", listOf(InlineText("Two parallel workstreams are moving the experience toward a calmer, clearer first run."))),
             ContainerBlock(
                 id = "nested-two-columns",
                 axis = ContainerAxis.Row,
@@ -660,15 +703,16 @@ private object QaDemoCorpus {
                 ChartSpecCodec.encode(
                     ChartBuilderModel(
                         type = ChartType.Line,
-                        title = "Weekly signal",
+                        title = "",
                         xAxis = "Day",
                         yAxis = "Progress",
                         showLegend = false,
+                        color = "#2E7D32",
                         rows = listOf(
-                            ChartDataRow("nested-chart-mon", "Mon", "42"),
-                            ChartDataRow("nested-chart-tue", "Tue", "58"),
-                            ChartDataRow("nested-chart-wed", "Wed", "76"),
-                            ChartDataRow("nested-chart-thu", "Thu", "84"),
+                            ChartDataRow("nested-chart-mon", "Mon", "42", color = "#2E7D32"),
+                            ChartDataRow("nested-chart-tue", "Tue", "58", color = "#2E7D32"),
+                            ChartDataRow("nested-chart-wed", "Wed", "76", color = "#2E7D32"),
+                            ChartDataRow("nested-chart-thu", "Thu", "84", color = "#2E7D32"),
                         ),
                     ),
                 ),
@@ -685,6 +729,7 @@ private object QaDemoCorpus {
                 code = "flowchart TD\n  Start[Open app] --> Session{Valid session?}\n  Session -->|Yes| Home[Workspace]\n  Session -->|No| SignIn[Sign in]\n  SignIn --> Home",
                 editorHeightDp = 270f,
             ),
+            ParagraphBlock("mermaid-caption", listOf(InlineText("A valid session continues directly to the workspace. Otherwise, sign-in resolves first and rejoins the same destination."))),
             HeadingBlock("mermaid-notes", 2, listOf(InlineText("Implementation notes"))),
             BulletListBlock("mermaid-notes-list", listOf(
                 ListItem("mermaid-note-1", listOf(InlineText("Source remains canonical and exportable"))),
@@ -697,6 +742,7 @@ private object QaDemoCorpus {
     private fun flowReadingDocument() = BlockDocument(
         listOf(
             HeadingBlock("reading-title", 1, listOf(InlineText("Designing for calm"))),
+            ParagraphBlock("reading-date", listOf(InlineText("Wednesday, April 24  ·  Product design"))),
             ParagraphBlock("reading-deck", listOf(InlineText("A content-first approach to interfaces that support focus instead of competing for it."))),
             ImageBlock(
                 "reading-image",
@@ -704,7 +750,6 @@ private object QaDemoCorpus {
                 "Soft coastal light across a quiet landscape",
                 displayHeightDp = 230f,
             ),
-            ParagraphBlock("reading-body", listOf(InlineText("Calm software makes its structure understandable without leaving every control on screen. The document leads; tools arrive only when the reader asks to change something."))),
             HeadingBlock("reading-principles", 2, listOf(InlineText("Principles"))),
             BulletListBlock("reading-list", listOf(
                 ListItem("reading-1", listOf(BoldInline(listOf(InlineText("Prioritize content."))), InlineText(" Keep the reading path continuous and predictable."))),
@@ -712,6 +757,25 @@ private object QaDemoCorpus {
                 ListItem("reading-3", listOf(BoldInline(listOf(InlineText("Preserve orientation."))), InlineText(" Local scroll regions must not steal the document scroll."))),
             )),
             QuoteBlock("reading-quote", listOf(ParagraphBlock("reading-quote-body", listOf(InlineText("Good tools become visible at the moment they are useful, then leave the work undisturbed."))))),
+            ChartBlock(
+                "reading-chart",
+                ChartSpecCodec.encode(
+                    ChartBuilderModel(
+                        type = ChartType.Line,
+                        title = "Weekly signal",
+                        xAxis = "Week",
+                        yAxis = "Score",
+                        showLegend = false,
+                        color = "#2E7D32",
+                        rows = listOf(
+                            ChartDataRow("reading-chart-1", "Mon", "42", color = "#2E7D32"),
+                            ChartDataRow("reading-chart-2", "Tue", "58", color = "#2E7D32"),
+                            ChartDataRow("reading-chart-3", "Wed", "76", color = "#2E7D32"),
+                            ChartDataRow("reading-chart-4", "Thu", "88", color = "#2E7D32"),
+                        ),
+                    ),
+                ),
+            ),
         ),
     )
 

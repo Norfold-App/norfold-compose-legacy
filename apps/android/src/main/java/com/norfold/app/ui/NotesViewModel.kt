@@ -4120,7 +4120,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     ): Job {
         val job = viewModelScope.launch {
             when (owner.type) {
-                DocumentOwnerType.Note -> state.value.notes.firstOrNull { it.id == owner.id }
+                DocumentOwnerType.Note -> (state.value.notes.firstOrNull { it.id == owner.id }
+                    // A newly-created note can be editable before the list collector has published its row.
+                    // Saving through the repository lookup keeps the first title/content change from being
+                    // silently dropped and leaving the person with an apparent permanent "Untitled note".
+                    ?: repository.noteById(owner.id))
                     ?.let { note ->
                         repository.updateNote(note, title, document, dirtyBlockIds, layoutMode, artifactKind)
                         if ((artifactKind ?: note.artifactKind) == DocumentArtifactKind.Document) {

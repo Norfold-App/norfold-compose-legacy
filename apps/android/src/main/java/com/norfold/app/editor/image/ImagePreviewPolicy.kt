@@ -106,13 +106,13 @@ class ImagePreviewCache<T>(private val capacity: Int = 24) {
     fun stats() = ImagePreviewCacheStats(hits, misses, evictions, values.size)
 }
 
-enum class ImagePipelineStage { SOURCE, CROP, GEOMETRY, FRAME, ADJUSTMENTS, EFFECTS, MASK, BORDER, SHADOW }
+enum class ImagePipelineStage { SOURCE, CROP, GEOMETRY, FRAME, ADJUSTMENTS, EFFECTS, MASK, MARKUP, BORDER, SHADOW }
 
 object ImageRenderPipeline {
     val semanticOrder = listOf(
         ImagePipelineStage.SOURCE, ImagePipelineStage.CROP, ImagePipelineStage.GEOMETRY,
         ImagePipelineStage.FRAME, ImagePipelineStage.MASK, ImagePipelineStage.ADJUSTMENTS,
-        ImagePipelineStage.EFFECTS, ImagePipelineStage.BORDER, ImagePipelineStage.SHADOW,
+        ImagePipelineStage.EFFECTS, ImagePipelineStage.MARKUP, ImagePipelineStage.BORDER, ImagePipelineStage.SHADOW,
     )
     fun stages(compareOriginal: Boolean): List<ImagePipelineStage> =
         if (compareOriginal) listOf(ImagePipelineStage.SOURCE) else semanticOrder

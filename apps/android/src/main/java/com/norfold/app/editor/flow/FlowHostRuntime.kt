@@ -48,9 +48,13 @@ import com.norfold.app.editor.selection.TextRange
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.MermaidBlock
+import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.InlineTypingStyle
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.editor.chart.ChartDocument
+import com.norfold.app.editor.image.ImageBlockAdapter
+import com.norfold.app.editor.image.ImageEditDocument
+import com.norfold.app.editor.image.ImageSourceMetadata
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.editor.calculation.CalculationRangeRuntime
 import com.norfold.app.editor.surface.BackOutcome
@@ -375,6 +379,28 @@ class FlowHostRuntime(
         } != null
         if (changed) revision++
         return changed
+    }
+
+    /**
+     * Inserts a picked local image after the current anchor through the same controller and history as every
+     * other structural edit. The source URI is deliberately retained; the host takes the persistable read
+     * grant before calling this method so reopening the note never relies on a transient picker permission.
+     */
+    fun insertImage(source: String, metadata: ImageSourceMetadata): String? {
+        if (source.isBlank()) return null
+        val block = ImageBlockAdapter.save(
+            ImageBlock(source = source),
+            ImageEditDocument(sourceMetadata = metadata),
+        )
+        val anchor = scope.anchorBlockId() ?: controller.document().blocks.lastOrNull()?.id
+        val inserted = controller.mutate("Insert image") { session ->
+            session.insertAfter(anchor, block)
+            BlockCursor(block.id, 0)
+        } != null
+        if (!inserted) return null
+        memory.put(MemoryScope.CONTEXT_PREFERENCE, FlowMemoryKeys.LAST_INSERT, FlowIds.INSERT_IMAGE)
+        revision++
+        return block.id
     }
 
     /** Commits one source-preserving Mermaid geometry gesture through canonical Flow history. */
@@ -771,7 +797,10 @@ class FlowHostRuntime(
             return FlowInlineText.itemsOf(block)?.firstOrNull { it.id == itemId }?.content?.plainText()?.length ?: 0
         }
         return when (block) {
+            is CalloutBlock -> block.title.length
             is CodeBlock -> block.code.length
+            is MermaidBlock -> block.code.length
+            is MathBlock -> block.tex.length
             else -> FlowInlineText.nodesOf(block)?.plainText()?.length ?: block.plainText().length
         }
     }
@@ -1375,7 +1404,15 @@ class FlowHostRuntime(
      * the *only* input the menu has — there is deliberately no second search field to keep in sync.
      */
     fun onTextInput(blockId: String, input: FlowSlashInput): FlowSlashSession? {
-        val session = slashResolver.resolve(input)
+        val resolved = slashResolver.resolve(input)
+        val previous = slashSession
+        val session = resolved?.copy(
+            selectedIndex = if (previous?.query == resolved.query) {
+                previous.selectedIndex.coerceIn(0, (resolved.results.size - 1).coerceAtLeast(0))
+            } else {
+                0
+            },
+        )
         slashBlockId = blockId
         slashInput = input
         val wasOpen = slashSession != null
@@ -1388,6 +1425,48 @@ class FlowHostRuntime(
         instrumentation.onSlashSessionChanged(session?.query?.query, session?.results?.size ?: -1)
         revision++
         return session
+    }
+
+    /** Moves the keyboard/touch highlight without changing typed text or opening a second search field. */
+    fun moveSlashSelection(delta: Int): Boolean {
+        val current = slashSession ?: return false
+        if (current.results.isEmpty()) return false
+        val size = current.results.size
+        val next = ((current.selectedIndex + delta) % size + size) % size
+        if (next == current.selectedIndex) return false
+        slashSession = current.copy(selectedIndex = next)
+        revision++
+        return true
+    }
+
+    /** Runs the currently highlighted slash result, exactly as if its row had been tapped. */
+    fun acceptSelectedSlash(): CommandResult =
+        slashSession?.selected?.command?.id?.let(::acceptSlash)
+            ?: CommandResult.Failure("No slash result is selected")
+
+    /**
+     * Removes the slash trigger before launching a system picker. The picked URI arrives asynchronously, so
+     * this must be its own undoable edit rather than pretending an external picker result is synchronous.
+     */
+    fun consumeSlashForImagePicker(): Boolean {
+        val blockId = slashBlockId ?: return false
+        val input = slashInput ?: return false
+        val query = slashResolver.detect(input) ?: return false
+        val block = controller.document().findById(blockId) ?: return false
+        if (input.itemId != null && FlowInlineText.itemsOf(block)?.any { it.id == input.itemId } != true) return false
+        val cleaned = input.text.removeRange(query.triggerOffset, query.endOffset.coerceAtMost(input.text.length))
+        val changed = controller.mutate("Prepare image insertion") { session ->
+            when {
+                input.itemId == null -> session.editText(blockId, input.text, cleaned)
+                block is TodoListBlock -> session.editTodoItem(blockId, input.itemId, input.text, cleaned)
+                else -> session.editListItem(blockId, input.itemId, input.text, cleaned)
+            }
+            BlockCursor(blockId, query.triggerOffset)
+        } != null
+        if (!changed) return false
+        memory.put(MemoryScope.CONTEXT_PREFERENCE, FlowMemoryKeys.LAST_INSERT, FlowIds.INSERT_IMAGE)
+        closeSlash(DismissTrigger.COMMAND_EXECUTED)
+        return true
     }
 
     /**

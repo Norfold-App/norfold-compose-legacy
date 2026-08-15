@@ -372,12 +372,24 @@ object ChartLayoutEngine {
     ): Built {
         val all = series.flatMap { it.points }
         if (all.isEmpty()) return Built(emptyList())
-        val xDomain = numericDomain(all.minOf { it.x }, all.maxOf { it.x })
+        val categories = all.map { it.category }.distinct()
+        val xDomain = if (scatter) {
+            numericDomain(all.minOf { it.x }, all.maxOf { it.x })
+        } else {
+            0.0 to categories.lastIndex.coerceAtLeast(1).toDouble()
+        }
         val yDomain = numericDomain(min(0.0, all.minOf { it.y }), max(0.0, all.maxOf { it.y }))
         val marks = buildList {
             series.forEach { entry ->
                 val points = entry.points.map { point ->
-                    ChartPoint(xFor(point.x, xDomain, plot), yFor(point.y, yDomain, plot))
+                    val x = if (scatter) {
+                        xFor(point.x, xDomain, plot)
+                    } else {
+                        val categoryIndex = categories.indexOf(point.category).coerceAtLeast(0)
+                        val slot = plot.width / categories.size.coerceAtLeast(1)
+                        plot.left + slot * (categoryIndex + .5f)
+                    }
+                    ChartPoint(x, yFor(point.y, yDomain, plot))
                 }
                 if (!scatter && points.isNotEmpty()) add(
                     ChartMark.Line(
@@ -407,7 +419,13 @@ object ChartLayoutEngine {
                 }
             }
         }
-        return Built(marks, numericXTicks(xDomain, plot), numericTicks(yDomain, plot), xDomain = xDomain, yDomain = yDomain)
+        val xTicks = if (scatter) {
+            numericXTicks(xDomain, plot)
+        } else {
+            val slot = plot.width / categories.size.coerceAtLeast(1)
+            categories.mapIndexed { index, label -> ChartTick(plot.left + slot * (index + .5f), label) }
+        }
+        return Built(marks, xTicks, numericTicks(yDomain, plot), xDomain = xDomain, yDomain = yDomain)
     }
 
     private fun arcs(

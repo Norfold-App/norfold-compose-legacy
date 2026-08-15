@@ -18,8 +18,9 @@ import com.norfold.app.editor.command.EditorCommand
  * Notably absent, on purpose:
  *  - **Inline text formatting** (bold/italic/link/highlight/font) — those are Phase-3 style/typography
  *    commands over the same registry; Phase 1 owns *structure*.
- *  - **Picker-backed insertion** (image, file, embed, chart, shape) — each needs a picker surface owned by a
- *    later phase; registering an insert command that cannot complete would be a false promise.
+ *  - **Picker-backed insertion** other than images (file, embed, shape) — each needs a dedicated source
+ *    contract before it can be offered. Image insertion is available through [FlowImagePickerCommand], whose
+ *    host obtains a persistable URI before [FlowHostRuntime] writes the block.
  *  - **Table deletion / calculation** — Phase 4 attaches those to the same `flow.table.*` family the
  *    directional insertion hooks establish here.
  */
@@ -32,6 +33,7 @@ object FlowCommands {
     fun catalogue(scope: FlowCommandScope, chartStudioEnabled: Boolean = false): List<EditorCommand> = buildList {
         val insertable = FlowBlockKind.insertable + listOfNotNull(FlowBlockKind.CHART.takeIf { chartStudioEnabled })
         insertable.forEach { add(FlowInsertCommand(scope, it)) }
+        add(FlowImagePickerCommand(scope))
         add(FlowInsertAboveCommand(scope))
 
         FlowBlockKind.convertTargets.forEach { add(FlowConvertCommand(scope, it)) }

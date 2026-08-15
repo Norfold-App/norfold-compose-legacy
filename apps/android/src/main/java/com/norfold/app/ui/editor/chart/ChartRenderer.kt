@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,6 +77,7 @@ fun ChartRenderer(
     heightDp: Int = 240,
     onRebind: (() -> Unit)? = null,
     directManipulation: ChartDirectManipulationCallbacks? = null,
+    compactChrome: Boolean = false,
 ) {
     when (resolution) {
         is ChartDataResolution.BrokenBinding -> ChartProblem(
@@ -85,7 +87,7 @@ fun ChartRenderer(
             modifier = modifier,
         )
         is ChartDataResolution.Invalid -> ChartProblem("Chart needs data", resolution.message, null, modifier)
-        is ChartDataResolution.Ready -> ReadyChart(document, resolution.data, modifier, heightDp, directManipulation)
+        is ChartDataResolution.Ready -> ReadyChart(document, resolution.data, modifier, heightDp, directManipulation, compactChrome)
     }
 }
 
@@ -96,6 +98,7 @@ private fun ReadyChart(
     modifier: Modifier,
     heightDp: Int,
     directManipulation: ChartDirectManipulationCallbacks?,
+    compactChrome: Boolean,
 ) {
     var showData by remember { mutableStateOf(false) }
     var inspectedMark by remember(document.id) { mutableStateOf<ChartMark?>(null) }
@@ -107,15 +110,16 @@ private fun ReadyChart(
     val table = remember(data) { ChartAccessibility.table(data) }
     Column(
         modifier
-            .background(background, RoundedCornerShape(12.dp))
-            .padding(12.dp)
+            .background(background, RoundedCornerShape(16.dp))
+            .border(1.dp, scheme.outlineVariant, RoundedCornerShape(16.dp))
+            .padding(14.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = description
                 customActions = listOf(CustomAccessibilityAction("View chart data") { showData = true; true })
             },
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        if (document.title.isNotBlank()) Text(document.title, style = MaterialTheme.typography.titleMedium)
+        if (document.title.isNotBlank()) Text(document.title, style = MaterialTheme.typography.titleLarge)
         if (document.subtitle.isNotBlank()) Text(document.subtitle, style = MaterialTheme.typography.bodySmall)
         if (document.legend.visible && document.legend.position == ChartLegendPosition.TOP) {
             ChartLegendRow(data, Alignment.Start)
@@ -335,11 +339,17 @@ private fun ReadyChart(
                 }
             }
         }
-        if (document.axes.x.visible && document.axes.x.title.isNotBlank()) {
-            Text(document.axes.x.title, Modifier.align(Alignment.CenterHorizontally), style = MaterialTheme.typography.labelMedium)
-        }
-        if (document.axes.y.visible && document.axes.y.title.isNotBlank()) {
-            Text(document.axes.y.title, style = MaterialTheme.typography.labelMedium)
+        if (!compactChrome) {
+            TextButton(
+                onClick = { showData = true },
+                modifier = Modifier.align(Alignment.End),
+            ) { Text("View data") }
+            if (document.axes.x.visible && document.axes.x.title.isNotBlank()) {
+                Text(document.axes.x.title, Modifier.align(Alignment.CenterHorizontally), style = MaterialTheme.typography.labelMedium)
+            }
+            if (document.axes.y.visible && document.axes.y.title.isNotBlank()) {
+                Text(document.axes.y.title, style = MaterialTheme.typography.labelMedium)
+            }
         }
         if (document.legend.visible && document.legend.position != ChartLegendPosition.TOP) {
             ChartLegendRow(
@@ -352,9 +362,6 @@ private fun ReadyChart(
             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
                 Text(markSummary(mark, data), Modifier.padding(horizontal = 10.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
             }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { showData = true }) { Text("View data") }
         }
         if (document.caption.isNotBlank()) Text(document.caption, style = MaterialTheme.typography.bodySmall)
     }

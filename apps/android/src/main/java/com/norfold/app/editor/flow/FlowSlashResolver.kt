@@ -65,7 +65,14 @@ data class FlowSlashQuery(val triggerOffset: Int, val query: String) {
 data class FlowSlashResult(val command: EditorCommand, val status: CommandStatus)
 
 /** An open slash menu: the query that produced it and its ranked, context-filtered results. */
-data class FlowSlashSession(val query: FlowSlashQuery, val results: List<FlowSlashResult>)
+data class FlowSlashSession(
+    val query: FlowSlashQuery,
+    val results: List<FlowSlashResult>,
+    /** Index used by hardware arrows / Enter as well as the visibly highlighted touch row. */
+    val selectedIndex: Int = 0,
+) {
+    val selected: FlowSlashResult? get() = results.getOrNull(selectedIndex)
+}
 
 /**
  * The Slash Local Command Resolver (roadmap Phase 1 deliverable 3).
@@ -96,9 +103,9 @@ class FlowSlashResolver(
      *
      *  - the block is code / an equation / a diagram, or the caret is inside an inline literal span;
      *  - there is no `/` before the caret on the current line;
-     *  - the `/` is **mid-token** — anything other than whitespace immediately precedes it. This single rule
-     *    covers `https://`, `path/to/file`, `12/07/2026` and `3/4`, which is why it is expressed as a token
-     *    boundary rather than a list of patterns to keep chasing;
+     *  - the `/` is not the first non-whitespace character on its line. Commands belong to an empty block
+     *    (or an indented list line), not after ordinary prose; that one rule also covers URLs, paths, dates
+     *    and fractions without an ever-growing exception list;
      *  - the trigger is doubled (`//`), which is how a user types a literal slash-comment;
      *  - the query runs past [MAX_QUERY_LENGTH] or crosses a line break — the user is writing prose.
      */
@@ -108,8 +115,8 @@ class FlowSlashResolver(
         val caret = input.caret.coerceIn(0, input.text.length)
         val trigger = input.text.lastIndexOf('/', caret - 1)
         if (trigger < 0) return null
-        val preceding = input.text.getOrNull(trigger - 1)
-        if (preceding != null && !preceding.isWhitespace()) return null
+        val lineStart = input.text.lastIndexOf('\n', trigger - 1).let { if (it < 0) 0 else it + 1 }
+        if (input.text.substring(lineStart, trigger).any { !it.isWhitespace() }) return null
         if (input.text.getOrNull(trigger + 1) == '/') return null
         val query = input.text.substring(trigger + 1, caret)
         if (query.length > MAX_QUERY_LENGTH) return null

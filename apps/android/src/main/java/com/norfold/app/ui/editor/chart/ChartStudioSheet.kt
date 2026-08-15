@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -28,6 +30,22 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.AreaChart
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.DataObject
+import androidx.compose.material.icons.outlined.DonutLarge
+import androidx.compose.material.icons.outlined.InsertChart
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.ShowChart
+import androidx.compose.material.icons.outlined.TableChart
+import androidx.compose.material.icons.outlined.Label
+import androidx.compose.material.icons.outlined.List
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -42,9 +60,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.text.input.ImeAction
 import com.norfold.app.domain.style.ColorValue
 import com.norfold.app.domain.style.ColorDomain
@@ -70,12 +90,57 @@ import com.norfold.app.editor.style.ColorStudioEngine
 import com.norfold.app.editor.style.ColorStudioHost
 import com.norfold.app.editor.style.ColorStudioInteractionController
 import com.norfold.app.editor.style.EditorStyleUiState
-import com.norfold.app.ui.components.NorfoldBottomSheet
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 
 private enum class ChartStudioSection(val label: String) {
     DATA("Data"), TYPE("Type"), SERIES("Series"), AXES("Axes"), LABELS("Labels"), LEGEND("Legend"), STYLE("Style")
+}
+
+@Composable
+private fun RowScope.ChartTypeButton(
+    label: String,
+    icon: ImageVector,
+    type: ChartType,
+    selectedType: ChartType,
+    readOnly: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = !readOnly,
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selectedType == type) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        color = if (selectedType == type) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        modifier = Modifier.weight(1f).height(68.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(icon, null, Modifier.size(24.dp))
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
+
+@Composable
+private fun ChartSettingRow(icon: ImageVector, title: String, detail: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text("›", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun chartDataSummary(document: ChartDocument): String = when (val source = document.source) {
+    is ChartDataSource.Manual -> "${source.rows.size} rows · ${source.columns.size} columns"
+    is ChartDataSource.CalculationRange -> "Linked workbook range"
 }
 
 private data class ChartFieldGesture(
@@ -116,34 +181,50 @@ fun ChartStudioSheet(
         if (runtime.commit(label, transform)) revision++
     }
 
-    NorfoldBottomSheet(onDismissRequest = {
-        if (colorStudio.engine.isOpen) colorStudio.close(commit = false)
-        runtime.cancelGesture()
-        onDismiss()
-    }) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Chart Studio", style = MaterialTheme.typography.headlineSmall)
-                    if (readOnly) Text("Read mode · editing unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                onOpenGuide?.let { com.norfold.app.ui.editor.guide.GuideEntryButton("Chart Studio", it) }
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = {
+                    if (colorStudio.engine.isOpen) colorStudio.close(commit = false)
+                    runtime.cancelGesture()
+                    onDismiss()
+                }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                Text("Chart Studio", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).padding(start = 8.dp))
                 TextButton(onClick = {
                     if (colorStudio.engine.isOpen) colorStudio.close(commit = true)
                     if (runtime.hasGesture()) runtime.endGesture("Finish chart edit")
                     onDone(runtime.document())
                 }) { Text("Done") }
             }
-            ChartRenderer(
-                document,
-                runtime.resolve(),
-                Modifier.fillMaxWidth(),
-                heightDp = 220,
-                onRebind = onRequestRangeBinding,
-                directManipulation = if (!readOnly && document.source is ChartDataSource.Manual) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Lock, null, tint = MaterialTheme.colorScheme.primary)
+                Column {
+                    Text("Chart preview is locked", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    Text("Edits update settings below.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                ChartRenderer(
+                    document,
+                    runtime.resolve(),
+                    Modifier.fillMaxWidth(),
+                    heightDp = 260,
+                    compactChrome = true,
+                    onRebind = onRequestRangeBinding,
+                    directManipulation = if (!readOnly && document.source is ChartDataSource.Manual) {
                     ChartDirectManipulationCallbacks(
                         onSelect = { seriesId, rowIndex, rowId ->
                             if (runtime.selectMark(seriesId, rowIndex, rowId)) revision++
@@ -168,17 +249,37 @@ fun ChartStudioSheet(
                             }
                         },
                     )
-                } else null,
-            )
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChartStudioSection.entries.forEachIndexed { index, item ->
-                    FilterChip(
-                        selected = sectionOrdinal == index,
-                        onClick = { sectionOrdinal = index },
-                        label = { Text(item.label) },
-                    )
+                    } else null,
+                )
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(Icons.Outlined.InsertChart, null)
+                        Text("Chart type", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ChartTypeButton("Line", Icons.Outlined.ShowChart, ChartType.LINE, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.LINE) } }
+                        ChartTypeButton("Area", Icons.Outlined.AreaChart, ChartType.AREA, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.AREA) } }
+                        ChartTypeButton("Bar", Icons.Outlined.BarChart, ChartType.BAR, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.BAR) } }
+                        ChartTypeButton("Column", Icons.Outlined.InsertChart, ChartType.STACKED_BAR, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.STACKED_BAR) } }
+                        ChartTypeButton("Donut", Icons.Outlined.DonutLarge, ChartType.DONUT, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.DONUT) } }
+                        ChartTypeButton("Table", Icons.Outlined.TableChart, ChartType.BAR, document.type, readOnly) { sectionOrdinal = ChartStudioSection.DATA.ordinal }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    ChartSettingRow(Icons.Outlined.DataObject, "Data", chartDataSummary(document)) { sectionOrdinal = ChartStudioSection.DATA.ordinal }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    ChartSettingRow(Icons.Outlined.Palette, "Appearance", "Colors, line style, gridlines") { sectionOrdinal = ChartStudioSection.STYLE.ordinal }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    ChartSettingRow(Icons.Outlined.List, "Legend", if (document.legend.visible) "Visible" else "Hidden") { sectionOrdinal = ChartStudioSection.LEGEND.ordinal }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    ChartSettingRow(Icons.Outlined.Label, "Labels", "Axis titles, data labels") { sectionOrdinal = ChartStudioSection.LABELS.ordinal }
                 }
-            }
+                }
             if (colorStudio.engine.isOpen) {
                 EditorStyleSurface(
                     surfaceId = "editor.surface.colorStudio",
@@ -222,6 +323,8 @@ fun ChartStudioSheet(
                 ChartStudioSection.STYLE -> StyleSection(document, readOnly, colorStudio::openPaletteLead) { next -> edit("Edit chart style") { next } }
             }
             Spacer(Modifier.height(12.dp))
+            Text("Changes apply to this chart only.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

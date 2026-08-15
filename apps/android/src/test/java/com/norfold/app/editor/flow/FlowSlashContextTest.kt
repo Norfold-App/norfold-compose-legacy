@@ -189,8 +189,9 @@ class FlowSlashContextTest {
     fun caseO_doubledSlashRemainsSuppressed() {
         val rt = runtime(para("p0"))
         assertFalse(rt.slashOpensIn("p0", "//foo"))
-        assertNotNull("but a single slash after whitespace still opens", rt.slashInputFor("p0", "x /f", 4, null).let {
-            rt.slashResolver.resolve(it)
-        })
+        assertFalse(
+            "a command trigger belongs at the start of a block, not after prose",
+            rt.slashInputFor("p0", "x /f", 4, null).let { rt.slashResolver.resolve(it) != null },
+        )
     }
 }

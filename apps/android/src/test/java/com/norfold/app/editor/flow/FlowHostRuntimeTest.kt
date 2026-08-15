@@ -143,13 +143,13 @@ class FlowHostRuntimeTest {
     fun surfaceParity_slashAndPaletteInsertProduceTheSameDocument() {
         val insertId = FlowIds.insert(FlowBlockKind.HEADING_1)
 
-        val palette = runtimeOf(paragraphs("intro"))
-        palette.setCaret("p0", 5)
+        val palette = runtimeOf(paragraphs(""))
+        palette.setCaret("p0", 0)
         palette.invoke(insertId, CommandSurface.DOCK)
 
-        val slash = runtimeOf(paragraphs("intro"))
-        slash.setCaret("p0", 5)
-        slash.onTextInput("p0", FlowSlashInput(text = "intro /h1", caret = 9))
+        val slash = runtimeOf(paragraphs("/h1"))
+        slash.setCaret("p0", 3)
+        slash.onTextInput("p0", FlowSlashInput(text = "/h1", caret = 3))
         assertNotNull(slash.slashSession())
         slash.acceptSlash(insertId)
 
@@ -306,6 +306,35 @@ class FlowHostRuntimeTest {
         assertNull(runtime.slashSession())
     }
 
+    @Test
+    fun slash_keyboardSelection_wrapsAndDoesNotMutateTheDocument() {
+        val runtime = runtimeOf(paragraphs("/"))
+        runtime.setCaret("p0", 1)
+        val opened = runtime.onTextInput("p0", FlowSlashInput(text = "/", caret = 1))!!
+        assertEquals(0, opened.selectedIndex)
+
+        assertTrue(runtime.moveSlashSelection(-1))
+        assertEquals(opened.results.lastIndex, runtime.slashSession()!!.selectedIndex)
+        assertTrue(runtime.moveSlashSelection(1))
+        assertEquals(0, runtime.slashSession()!!.selectedIndex)
+        assertEquals("/", runtime.controller.document().findById("p0")!!.plainText())
+    }
+
+    @Test
+    fun slash_photoPreparation_erasesOnlyTheSlashQueryBeforeThePickerReturns() {
+        val runtime = runtimeOf(paragraphs("/photo"))
+        runtime.setCaret("p0", 6)
+        runtime.onTextInput("p0", FlowSlashInput(text = "/photo", caret = 6))
+
+        assertTrue(runtime.consumeSlashForImagePicker())
+        assertEquals("", runtime.controller.document().findById("p0")!!.plainText())
+        assertNull(runtime.slashSession())
+        assertEquals(1, runtime.controller.undoDepth())
+
+        runtime.undo()
+        assertEquals("/photo", runtime.controller.document().findById("p0")!!.plainText())
+    }
+
     /** Slash never opens where `/` is content — the suppression rule the resolver owns, honored by the host. */
     @Test
     fun slash_isSuppressedInCodeBlocks() {
@@ -318,9 +347,9 @@ class FlowHostRuntimeTest {
     /** Accepting a slash row erases the query and runs the command as one undo unit. */
     @Test
     fun slash_acceptIsOneUndoUnit() {
-        val runtime = runtimeOf(paragraphs("hello "))
-        runtime.setCaret("p0", 6)
-        runtime.onTextInput("p0", FlowSlashInput(text = "hello /divider", caret = 14))
+        val runtime = runtimeOf(paragraphs("/divider"))
+        runtime.setCaret("p0", 8)
+        runtime.onTextInput("p0", FlowSlashInput(text = "/divider", caret = 8))
 
         val result = runtime.acceptSlash(FlowIds.insert(FlowBlockKind.DIVIDER))
         assertTrue(result is CommandResult.Success)
@@ -328,7 +357,7 @@ class FlowHostRuntimeTest {
         assertEquals(1, runtime.controller.undoDepth())
 
         runtime.undo()
-        assertEquals(listOf("hello "), runtime.controller.document().blocks.map { it.plainText() })
+        assertEquals(listOf("/divider"), runtime.controller.document().blocks.map { it.plainText() })
     }
 
     @Test
@@ -783,8 +812,9 @@ class FlowHostRuntimeTest {
     fun insertPalette_isNeverEmptyEvenWithNoSelection() {
         val runtime = runtimeOf(paragraphs("alpha"))
         val palette = runtime.insertPalette()
-        assertEquals(FlowBlockKind.insertable.size, palette.size)
+        assertEquals(FlowBlockKind.insertable.size + 1, palette.size)
         assertTrue(palette.all { it.enabled })
+        assertTrue(palette.any { it.id == FlowIds.INSERT_IMAGE })
     }
 
     @Test

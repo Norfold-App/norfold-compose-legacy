@@ -78,6 +78,31 @@ class BlockDocumentFoundationTest {
     }
 
     @Test
+    fun `plain source blocks and callout titles retain direct edits`() {
+        val session = BlockEditorSession(
+            BlockDocument(
+                listOf(
+                    CalloutBlock(id = "callout", title = "QA note"),
+                    CodeBlock(id = "code", language = "kotlin", code = "val answer = 42"),
+                    MermaidBlock(id = "mermaid", code = "flowchart TD\nA --> B"),
+                    MathBlock(id = "math", tex = "E = mc^2"),
+                ),
+            ),
+        )
+
+        session.editText("callout", "QA note", "Quality assurance")
+        session.editText("code", "val answer = 42", "val answer = 43")
+        session.editText("mermaid", "flowchart TD\nA --> B", "flowchart TD\nA --> C")
+        session.editText("math", "E = mc^2", "E = mc^3")
+
+        val blocks = session.document.blocks
+        assertEquals("Quality assurance", (blocks[0] as CalloutBlock).title)
+        assertEquals("val answer = 43", (blocks[1] as CodeBlock).code)
+        assertEquals("flowchart TD\nA --> C", (blocks[2] as MermaidBlock).code)
+        assertEquals("E = mc^3", (blocks[3] as MathBlock).tex)
+    }
+
+    @Test
     fun `seed style markdown import export is structurally stable`() {
         val markdown = """
             # Norfold Guide

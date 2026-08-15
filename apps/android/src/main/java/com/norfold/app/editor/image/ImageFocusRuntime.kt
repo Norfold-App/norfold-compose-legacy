@@ -9,7 +9,7 @@ fun interface ImageFocusCommitHost {
     fun commit(label: String, block: ImageBlock): Boolean
 }
 
-data class ImageFocusSnapshot(val source: String, val document: ImageEditDocument)
+data class ImageFocusSnapshot(val source: String, val caption: String, val document: ImageEditDocument)
 
 data class ImageFocusRuntimeStats(
     val undoDepth: Int,
@@ -30,7 +30,7 @@ class ImageFocusRuntime(
     private val locked = readOnly || !loaded.isEditable
     private val undo = ArrayDeque<ImageFocusSnapshot>()
     private val redo = ArrayDeque<ImageFocusSnapshot>()
-    private val initial = ImageFocusSnapshot(baseline.source, loaded.document)
+    private val initial = ImageFocusSnapshot(baseline.source, baseline.caption, loaded.document)
     private var working = initial
     private var gestureStart: ImageFocusSnapshot? = null
     private var comparingOriginal = false
@@ -42,6 +42,7 @@ class ImageFocusRuntime(
     fun snapshot(): ImageFocusSnapshot = working
     fun document(): ImageEditDocument = if (comparingOriginal) ImageEditDocument() else working.document
     fun source(): String = if (comparingOriginal) baseline.source else working.source
+    fun caption(): String = working.caption
     fun isReadOnly(): Boolean = locked || closed
     fun canUndo(): Boolean = !isReadOnly() && !comparingOriginal && gestureStart == null && undo.isNotEmpty()
     fun canRedo(): Boolean = !isReadOnly() && !comparingOriginal && gestureStart == null && redo.isNotEmpty()
@@ -90,6 +91,11 @@ class ImageFocusRuntime(
                 sourceMetadata = cleanMetadata,
             ).normalized(),
         ))
+    }
+
+    fun editCaption(caption: String): Boolean {
+        if (isReadOnly() || comparingOriginal || gestureStart != null) return false
+        return replaceWorking(working.copy(caption = caption.take(MAX_CAPTION_LENGTH)))
     }
 
     fun beginGesture(): Boolean {
@@ -165,7 +171,10 @@ class ImageFocusRuntime(
             closed = true
             return true
         }
-        val next = ImageBlockAdapter.save(baseline.copy(source = working.source), working.document)
+        val next = ImageBlockAdapter.save(
+            baseline.copy(source = working.source, caption = working.caption),
+            working.document,
+        )
         if (next == baseline) {
             closed = true
             return true
@@ -201,7 +210,10 @@ class ImageFocusRuntime(
         stack.addLast(value)
     }
 
-    companion object { const val DEFAULT_HISTORY_LIMIT = 100 }
+    companion object {
+        const val DEFAULT_HISTORY_LIMIT = 100
+        const val MAX_CAPTION_LENGTH = 2_000
+    }
 }
 
 @Serializable

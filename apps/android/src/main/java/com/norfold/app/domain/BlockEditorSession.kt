@@ -78,6 +78,29 @@ class BlockEditorSession(initial: BlockDocument) {
         var suffix = 0
         while (suffix < suffixLimit && oldText[oldText.lastIndex - suffix] == newText[newText.lastIndex - suffix]) suffix++
         val block = document.findById(blockId) ?: return BlockCursor(blockId, newText.length)
+        // These blocks deliberately own source as a single durable string instead of inline runs.  Routing
+        // them through `editableInline()` made a text field appear to accept a change while the document
+        // stayed identical, so the next composition restored the old value.  Keep their source canonical,
+        // but give it the exact same history/coalescing path as paragraph typing.
+        when (block) {
+            is CalloutBlock -> {
+                replaceBlock(block.copy(title = newText), "block:$blockId")
+                return BlockCursor(blockId, newText.length)
+            }
+            is CodeBlock -> {
+                replaceBlock(block.copy(code = newText), "block:$blockId")
+                return BlockCursor(blockId, newText.length)
+            }
+            is MermaidBlock -> {
+                replaceBlock(block.copy(code = newText), "block:$blockId")
+                return BlockCursor(blockId, newText.length)
+            }
+            is MathBlock -> {
+                replaceBlock(block.copy(tex = newText), "block:$blockId")
+                return BlockCursor(blockId, newText.length)
+            }
+            else -> Unit
+        }
         val content = block.editableInline() ?: return BlockCursor(blockId, newText.length)
         val replacement = newText.substring(prefix, newText.length - suffix)
         val style = typingStyle ?: content.typingStyleAt(prefix)
