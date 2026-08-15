@@ -196,6 +196,18 @@ object NorfoldGuideCatalog {
             completion = signals(GuideSignal.IMAGE_FOCUS_COMMITTED), priority = 20,
         ),
         topic(
+            "shape.builder", "Shape Builder", "Build custom vector shapes: move nodes and Bézier handles, combine layers with Union, Subtract, Intersect and Exclude, then style the result.",
+            GuideDomain.SHAPE, setOf(GuideHost.FLOW, GuideHost.DOCUMENT), requiredFeatures = setOf(EditorFeatureFlag.SHAPE_BUILDER),
+            target = GuideTarget.ContextTarget("shape.builder", "Open a shape's edit action."),
+            completion = signals(GuideSignal.SHAPE_BUILDER_OPENED), priority = 10,
+        ),
+        topic(
+            "shape.done-cancel", "Done and Cancel", "Done records the whole session as one undo step. Cancel restores the exact shape from before Shape Builder opened.",
+            GuideDomain.SHAPE, setOf(GuideHost.FLOW, GuideHost.DOCUMENT), requiredFeatures = setOf(EditorFeatureFlag.SHAPE_BUILDER),
+            target = GuideTarget.ContextTarget("shape.builder.done-cancel", "Use Done to keep changes or Cancel to restore the original shape."),
+            completion = signals(GuideSignal.SHAPE_BUILDER_COMMITTED), priority = 20,
+        ),
+        topic(
             "relationships.connect", "Connect mode", "Enter Connect mode deliberately, then choose a compatible target. Ordinary objects do not show permanent ports.",
             GuideDomain.RELATIONSHIPS, setOf(GuideHost.FLOW, GuideHost.DOCUMENT), requiredFeatures = setOf(EditorFeatureFlag.RELATIONSHIPS),
             target = command(RelationshipCommandIds.ENTER_CONNECT, "Select an eligible object or block, then choose Connect."),

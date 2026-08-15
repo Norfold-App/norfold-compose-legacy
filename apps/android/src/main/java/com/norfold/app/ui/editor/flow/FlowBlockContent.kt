@@ -101,6 +101,10 @@ import com.norfold.app.domain.BulletListBlock
 import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
+import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.editor.shape.LoadedShapeDocument
+import com.norfold.app.editor.shape.ShapeBlockAdapter
+import com.norfold.app.ui.editor.shape.ShapeDocumentPreview
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.ContainerAxis
 import com.norfold.app.domain.ContainerBlock
@@ -116,7 +120,6 @@ import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.NumberedListBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
-import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.effectiveStyleAssignment
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
@@ -205,6 +208,7 @@ class FlowBlockCallbacks(
     val onToggleCollapsed: (blockId: String) -> Unit = {},
     val onOpenChart: (blockId: String) -> Unit = {},
     val onOpenImage: (blockId: String) -> Unit = {},
+    val onOpenShape: (blockId: String) -> Unit = {},
     val onUpdateMermaid: (before: MermaidBlock, after: MermaidBlock) -> Unit = { _, _ -> },
     /** Reports real field focus so the host can keep editing chrome contextual. */
     val onEditorFocusChanged: (blockId: String, focused: Boolean) -> Unit = { _, _ -> },
@@ -549,7 +553,31 @@ fun FlowBlockContent(
 
         is MathBlock -> FlowMathBlock(block, callbacks, context, modifier)
         is MermaidBlock -> FlowMermaidBlock(block, callbacks, context, modifier)
-        is ShapeBlock -> FlowShapeBlock(block, context, modifier)
+
+        // Flow has no shape insert surface, but a shape reaches a Flow document through interchange. Only a
+        // shape that has actually been built draws its own geometry; anything else keeps the styled rendering
+        // Flow already gives a shape, so turning the flag on cannot alter a single existing Flow document. The
+        // Edit action is offered either way — it is what promotes a legacy shape into a document in the first
+        // place.
+        is ShapeBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.SHAPE_BUILDER)) {
+            val loaded = remember(block) { ShapeBlockAdapter.load(block) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (loaded.origin == LoadedShapeDocument.Origin.CANONICAL) {
+                    ShapeDocumentPreview(
+                        document = loaded.document,
+                        modifier = Modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(120f, 560f).dp),
+                    )
+                } else {
+                    FlowShapeBlock(block, context, Modifier.fillMaxWidth())
+                }
+                if (!context.selectionMode && loaded.isEditable) {
+                    TextButton(onClick = { callbacks.onOpenShape(block.id) }) { Text("Edit shape") }
+                }
+            }
+        } else {
+            FlowShapeBlock(block, context, modifier)
+        }
+
         is EmbedBlock -> FlowEmbedPreview(block, modifier)
         is FileBlock -> FlowFilePreview(block, modifier)
 

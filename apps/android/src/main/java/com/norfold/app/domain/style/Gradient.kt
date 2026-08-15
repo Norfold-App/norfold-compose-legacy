@@ -110,11 +110,16 @@ data class Gradient(
 
     /**
      * Normalizes into a state that always renders: finite positions, sane angle/center/radius, at least
-     * two stops, and no duplicate ids.
+     * two stops, at most [MAX_STOPS], and no duplicate ids.
      *
      * Ordering is *not* changed — the authored order is user intent. Only genuinely invalid data is
      * repaired, which is what "normalize deterministically" means: same input, same output, and nothing
      * silently rearranged.
+     *
+     * The truncation is the one place a stop can be *dropped*, and it only fires on a list no editor can
+     * build, because [addStop] refuses at the cap. It keeps the first [MAX_STOPS] in authored order rather
+     * than resampling the ramp: a payload with a hundred thousand stops has no intent to preserve, and
+     * picking the prefix is deterministic, which resampling across a hostile position list is not.
      */
     fun normalized(): Gradient {
         val seen = mutableSetOf<String>()
@@ -130,7 +135,7 @@ data class Gradient(
                 val far = if (only.position <= 0.5f) 1f else 0f
                 listOf(only, only.copy(id = GradientStop.newStopId(), position = far))
             }
-            else -> cleaned
+            else -> cleaned.take(MAX_STOPS)
         }
         return copy(
             stops = repaired,
@@ -143,8 +148,14 @@ data class Gradient(
 
     // ── Stop editing (each returns a new gradient; one gesture = one commit at the call site) ─────
 
-    /** Adds [stop], keeping it last in authored order. */
-    fun addStop(stop: GradientStop): Gradient = copy(stops = stops + stop.normalized())
+    /**
+     * Adds [stop], keeping it last in authored order.
+     *
+     * Refuses at [MAX_STOPS] rather than appending and letting normalization drop it later: a tap that
+     * appears to add a stop and then loses it on the next save is worse than a tap that does nothing.
+     */
+    fun addStop(stop: GradientStop): Gradient =
+        if (stops.size >= MAX_STOPS) this else copy(stops = stops + stop.normalized())
 
     /**
      * Adds a stop at [position] whose color is sampled from the gradient there — so inserting a stop in
@@ -235,6 +246,43 @@ data class Gradient(
     /** Every distinct color referenced by this gradient — what the Document palette indexes. */
     fun colors(): List<ColorValue> = stops.map { it.color }.distinct()
 
+    /**
+     * Render-order `(position, color)` pairs, with a conic gradient's [angle] already folded in.
+     *
+     * The sweep gradient a renderer offers starts at three o'clock and takes no angle, so the angle has to
+     * be expressed some other way. Rotating the *draw* — what the block background surface did — cannot work
+     * for a vector outline, because rotating the draw rotates the path with it: the shape would turn instead
+     * of its fill. It is not even right for a rectangle, since a rotated full-size rect leaves its corners
+     * unpainted on any box that is not square.
+     *
+     * Rotating the *ramp* works everywhere, because a sweep's angle and its stop positions are the same
+     * degree of freedom: turning the gradient a quarter turn and sliding every stop a quarter of the way
+     * around it draw the same picture. The ramp is cut at the position the seam lands on and the two arcs are
+     * emitted in order, each ending on the colour that was at the cut, so the wrap from the last stop back to
+     * the first stays the hard join it is instead of being interpolated across the whole circle.
+     */
+    fun renderStops(): List<Pair<Float, ColorValue>> {
+        val ordered = sortedStops.map { it.position to it.effectiveColor() }
+        if (kind != GradientKind.CONIC || ordered.isEmpty()) return ordered
+        val shift = normalizeAngle(angle) / 360f
+        if (shift == 0f) return ordered
+        val cut = 1f - shift
+        val seam = colorAt(cut)
+        val afterCut = ordered.filter { it.first >= cut }.map { (position, color) -> (position - cut) to color }
+        val beforeCut = ordered.filter { it.first < cut }.map { (position, color) -> (position + shift) to color }
+        val turned = listOf(0f to seam) + afterCut + beforeCut + listOf(1f to seam)
+        // The two arcs are shifted by arithmetic that agrees in theory and disagrees in the last bit of a
+        // float: a stop sitting exactly on the cut is `1 − cut` away from one side and `0 + shift` from the
+        // other. A renderer reads the list as non-decreasing and is entitled to; a pair out of order by a
+        // billionth is still out of order. Carrying the running maximum forward lands both on one position,
+        // which is what the join is.
+        var highest = 0f
+        return turned.map { (position, color) ->
+            highest = maxOf(highest, position.coerceIn(0f, 1f))
+            highest to color
+        }
+    }
+
     fun describe(): String = buildString {
         append(kind.label)
         append(" gradient, ${stops.size} stops")
@@ -242,6 +290,21 @@ data class Gradient(
     }
 
     companion object {
+        /**
+         * The most stops a gradient may hold.
+         *
+         * Every other collection a stored shape can name is bounded — layers, nodes, subpaths, Boolean
+         * children, identifiers. The stop list was not, and it is reachable from persisted bytes: a shape
+         * payload names its own fills, so a hostile document could ask for a ramp of a hundred thousand
+         * stops and every consumer downstream — normalization, the render stop list, the platform shader —
+         * would size itself from that number, once per frame.
+         *
+         * Sixty-four is far past authoring: a hand-built ramp is two stops, an elaborate one is a dozen, and
+         * the editor inserts them one tap at a time. The cap is there to bound a hostile payload, not to
+         * ration a real gradient, so no gradient a person could plausibly build ever meets it.
+         */
+        const val MAX_STOPS = 64
+
         fun defaultStops(): List<GradientStop> = listOf(
             GradientStop(color = ColorValue(0x6F, 0x36, 0xFF), position = 0f),
             GradientStop(color = ColorValue(0xD8, 0xC8, 0xFF), position = 1f),
@@ -290,12 +353,22 @@ sealed interface ColorPaint {
 
     fun describe(): String
 
+    /**
+     * Repaired for storage: finite numbers, ordered stops, real ids.
+     *
+     * The render path already normalizes on the way to a `Brush`, so this is not what keeps a bad number
+     * off the screen — it is what keeps one out of a *saved* document. A non-finite float cannot be
+     * serialized at all, so a paint that reaches persistence unrepaired takes the whole save down with it.
+     */
+    fun normalized(): ColorPaint
+
     @Serializable
     @SerialName("flat")
     data class Flat(val color: ColorValue) : ColorPaint {
         override fun colors(): List<ColorValue> = listOf(color)
         override fun representative(): ColorValue = color
         override fun describe(): String = color.accessibleLabel()
+        override fun normalized(): ColorPaint = this
     }
 
     @Serializable
@@ -304,6 +377,7 @@ sealed interface ColorPaint {
         override fun colors(): List<ColorValue> = gradient.colors()
         override fun representative(): ColorValue = gradient.colorAt(0.5f)
         override fun describe(): String = gradient.describe()
+        override fun normalized(): ColorPaint = copy(gradient = gradient.normalized())
     }
 }
 

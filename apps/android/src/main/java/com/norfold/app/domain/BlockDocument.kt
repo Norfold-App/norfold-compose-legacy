@@ -308,6 +308,14 @@ data class ShapeBlock(
     val fillPaint: ColorPaint? = null,
     val strokePaint: ColorPaint? = null,
     val style: StyleAssignment = StyleAssignment.NONE,
+    /**
+     * Shape Builder's canonical, non-destructive edit payload. Null preserves every shape authored before
+     * it exactly: the block still means whatever [kind] and the paint fields above say, and nothing about
+     * how it serializes changes. Once a shape has been built, this is the source of truth for its
+     * geometry, and the legacy fields are kept in step so consumers that predate it still render the
+     * right colours. [com.norfold.app.editor.shape.ShapeBlockAdapter] is the only thing that writes it.
+     */
+    val shapeEditDocument: String? = null,
 ) : DocumentBlock {
     override fun plainText() = text
 }

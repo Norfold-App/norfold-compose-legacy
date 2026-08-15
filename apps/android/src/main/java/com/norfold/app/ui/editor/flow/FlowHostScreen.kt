@@ -121,6 +121,7 @@ import kotlinx.coroutines.isActive
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
+import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.flow.FlowCommandItem
@@ -152,6 +153,7 @@ import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
 import com.norfold.app.ui.editor.image.ImageFocusSheet
 import com.norfold.app.editor.image.ImageSourceMetadata
+import com.norfold.app.ui.editor.shape.ShapeBuilderSheet
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.relationship.CommentAuthorRef
@@ -205,6 +207,7 @@ fun FlowHostScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     var chartEditingId by remember { mutableStateOf<String?>(null) }
     var imageEditingId by remember { mutableStateOf<String?>(null) }
+    var shapeEditingId by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -298,6 +301,7 @@ fun FlowHostScreen(
             when {
                 chartEditingId != null -> add(GuideDomain.CHART)
                 imageEditingId != null -> add(GuideDomain.IMAGE)
+                shapeEditingId != null -> add(GuideDomain.SHAPE)
                 state.activeSurfaceId in setOf(FlowSurfaces.COLOR_STUDIO, FlowSurfaces.FONT_BROWSER, FlowSurfaces.NAMED_STYLES) -> add(GuideDomain.STYLES)
                 state.activeSurfaceId in setOf(FlowSurfaces.RELATIONSHIP_MANAGER, FlowSurfaces.COMMENTS, FlowSurfaces.REVIEW) -> add(GuideDomain.RELATIONSHIPS)
             }
@@ -435,6 +439,7 @@ fun FlowHostScreen(
                                 onOpenTableInSpreadsheet = onOpenTableInSpreadsheet,
                                 onOpenChart = { chartEditingId = it; guide.signal(GuideSignal.CHART_STUDIO_OPENED) },
                                 onOpenImage = { imageEditingId = it; guide.signal(GuideSignal.IMAGE_FOCUS_OPENED) },
+                                onOpenShape = { shapeEditingId = it; guide.signal(GuideSignal.SHAPE_BUILDER_OPENED) },
                                 compact = compact,
                                 // A focused child remains inside the same top-level row.  Comparing only its
                                 // own id made nested callouts, quote text and container cells flip straight
@@ -617,6 +622,24 @@ fun FlowHostScreen(
         }
     }
 
+    shapeEditingId?.takeIf { editorFlags.isEnabled(EditorFeatureFlag.SHAPE_BUILDER) }?.let { blockId ->
+        val block = state.document.findById(blockId) as? ShapeBlock
+        if (block == null) {
+            shapeEditingId = null
+        } else {
+            ShapeBuilderSheet(
+                block = block,
+                readOnly = false,
+                onCommit = { edited -> presenter.act { updateShape(blockId, edited) } },
+                onDismiss = { shapeEditingId = null },
+                onDone = { shapeEditingId = null },
+                onOpenGuide = guide.runtime?.let { { guide.open() } },
+                onCommitted = { guide.signal(GuideSignal.SHAPE_BUILDER_COMMITTED) },
+                onFocusHistoryOwner = { presenter.runtime.setFocusHistoryOwner(it) },
+            )
+        }
+    }
+
     // Keep the edited line above the keyboard and the dock. Driven by the runtime's caret request rather than
     // by focus, so a caret the *runtime* moved (split, merge, undo) scrolls into view exactly like a tap does.
     val caretRequest = state.caretRequest
@@ -751,6 +774,7 @@ private fun FlowBlockRow(
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
     onOpenImage: (String) -> Unit,
+    onOpenShape: (String) -> Unit,
     compact: Boolean,
     editing: Boolean,
     onActivateEditor: (String) -> Unit,
@@ -799,6 +823,7 @@ private fun FlowBlockRow(
             onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },
             onOpenChart = onOpenChart,
             onOpenImage = onOpenImage,
+            onOpenShape = onOpenShape,
             onUpdateMermaid = { before, after -> presenter.act { updateMermaid(before, after) } },
             onEditorFocusChanged = onEditorFocusChanged,
         )

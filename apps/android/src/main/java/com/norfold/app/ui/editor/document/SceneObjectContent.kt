@@ -121,7 +121,12 @@ import com.norfold.app.editor.chart.ChartDataResolver
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
 import com.norfold.app.ui.editor.chart.ChartRenderer
 import com.norfold.app.editor.image.ImageBlockAdapter
+import com.norfold.app.editor.shape.LoadedShapeDocument
+import com.norfold.app.editor.shape.ShapeBlockAdapter
+import com.norfold.app.editor.shape.ShapeDocument
+import com.norfold.app.editor.shape.ShapeLayerEditor
 import com.norfold.app.ui.editor.image.ImageFocusRenderer
+import com.norfold.app.ui.editor.shape.ShapeDocumentPreview
 import androidx.compose.foundation.border
 
 /**
@@ -154,6 +159,7 @@ class SceneContentCallbacks(
     val onOpenTableInSpreadsheet: (String) -> Unit = {},
     val onOpenChart: (String) -> Unit = {},
     val onOpenImage: (String) -> Unit = {},
+    val onOpenShape: (String) -> Unit = {},
 )
 
 /**
@@ -359,15 +365,44 @@ fun SceneObjectContent(
 
         is TableBlock -> SceneTable(block, editing, callbacks, renderScale, modifier, activeTableCell, tableCellDraft)
 
-        is ShapeBlock -> SceneShape(
-            block,
-            stylesheet,
-            modifier,
-            previewRole,
-            previewPaint,
-            previewTargetIds,
-            renderScale,
-        )
+        // A shape that has been built renders its own geometry; one that never has keeps the legacy
+        // rounded-rectangle rendering byte for byte. That split is the non-destructive promise: opening
+        // Shape Builder is what turns a legacy shape into a document, not merely having the flag on.
+        is ShapeBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.SHAPE_BUILDER)) {
+            val loaded = remember(block) { ShapeBlockAdapter.load(block) }
+            Box(modifier.fillMaxWidth().fillMaxHeight()) {
+                if (loaded.origin == LoadedShapeDocument.Origin.CANONICAL) {
+                    SceneShapeDocument(
+                        loaded.document,
+                        previewRole,
+                        previewPaint,
+                        block.id in previewTargetIds,
+                        Modifier.fillMaxSize(),
+                    )
+                } else {
+                    SceneShape(
+                        block, stylesheet, Modifier.fillMaxSize(),
+                        previewRole, previewPaint, previewTargetIds, renderScale,
+                    )
+                }
+                if (editing && loaded.isEditable) {
+                    TextButton(
+                        onClick = { callbacks.onOpenShape(block.id) },
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    ) { Text("Edit shape") }
+                }
+            }
+        } else {
+            SceneShape(
+                block,
+                stylesheet,
+                modifier,
+                previewRole,
+                previewPaint,
+                previewTargetIds,
+                renderScale,
+            )
+        }
 
         // Blocks a later phase owns render as an honest, labelled placeholder rather than a half-working
         // editor. Silently showing nothing would make placed content look lost and invite the user to
@@ -881,6 +916,33 @@ private fun SceneShape(
             )
         }
     }
+}
+
+/**
+ * A built shape, drawn from its own document.
+ *
+ * The live colour preview is applied to the **top** layer only. A shape built from six layers has no single
+ * fill, so recolouring every layer at once would misrepresent what committing the swatch actually does —
+ * the picker writes one paint, and the preview has to show that one paint landing where it will land.
+ */
+@Composable
+private fun SceneShapeDocument(
+    document: ShapeDocument,
+    previewRole: ColorRole?,
+    previewPaint: ColorPaint?,
+    previewApplies: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val previewed = remember(document, previewRole, previewPaint, previewApplies) {
+        val target = document.topLayer()?.id
+        when {
+            !previewApplies || previewPaint == null || target == null -> document
+            previewRole == ColorRole.FILL -> ShapeLayerEditor.setFill(document, target, previewPaint)
+            previewRole == ColorRole.STROKE -> ShapeLayerEditor.setStrokePaint(document, target, previewPaint)
+            else -> document
+        }
+    }
+    ShapeDocumentPreview(previewed, modifier)
 }
 
 @Composable

@@ -381,6 +381,18 @@ class FlowHostRuntime(
         return changed
     }
 
+    /** Replaces one shape through the canonical Flow history as the single Shape Builder transaction. */
+    fun updateShape(blockId: String, after: ShapeBlock): Boolean {
+        val before = controller.document().findById(blockId) as? ShapeBlock ?: return false
+        if (after.id != before.id || after == before) return false
+        val changed = controller.mutate("Edit shape") { session ->
+            session.replaceBlock(after)
+            BlockCursor(blockId, 0)
+        } != null
+        if (changed) revision++
+        return changed
+    }
+
     /**
      * Inserts a picked local image after the current anchor through the same controller and history as every
      * other structural edit. The source URI is deliberately retained; the host takes the persistable read
