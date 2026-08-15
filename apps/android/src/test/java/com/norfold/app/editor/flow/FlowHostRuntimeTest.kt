@@ -2,6 +2,7 @@ package com.norfold.app.editor.flow
 
 import com.norfold.app.domain.BlockDocument
 import com.norfold.app.domain.BulletListBlock
+import com.norfold.app.domain.CalloutBlock
 import com.norfold.app.domain.CodeBlock
 import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.HeadingBlock
@@ -18,6 +19,7 @@ import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.memory.MemoryScope
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.presentation.PresentationMode
+import com.norfold.app.editor.style.CalloutTone
 import com.norfold.app.editor.surface.DismissTrigger
 import com.norfold.app.editor.surface.SurfaceClass
 import org.junit.Assert.assertEquals
@@ -874,5 +876,52 @@ class FlowHostRuntimeTest {
         val slash = recorder.events().filter { it.startsWith("slash:") }
         assertTrue(slash.any { it.startsWith("slash:h:") })
         assertTrue(slash.last().startsWith("slash:-:-1"))
+    }
+
+    // ── Callout tone ─────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The tone icon is the only control that can set a tone, so a cycle that did not persist would leave the
+     * palette reachable exclusively by importing Markdown.
+     */
+    @Test
+    fun calloutTone_cyclesAndPersistsTheCanonicalName() {
+        val runtime = runtimeOf(BlockDocument(listOf(CalloutBlock(id = "c0", tone = "note"))))
+
+        assertTrue(runtime.cycleCalloutTone("c0"))
+        assertEquals(CalloutTone.TIP.stored, (runtime.controller.document().findById("c0") as CalloutBlock).tone)
+
+        assertTrue(runtime.cycleCalloutTone("c0"))
+        assertEquals(CalloutTone.IMPORTANT.stored, (runtime.controller.document().findById("c0") as CalloutBlock).tone)
+    }
+
+    /**
+     * An alias arriving from another authoring tool normalises on the first deliberate change and not before:
+     * until the user touches the tone, `success` is left exactly as written so an export round-trips it.
+     */
+    @Test
+    fun calloutTone_normalisesAnAliasOnlyWhenTheUserChangesIt() {
+        val runtime = runtimeOf(BlockDocument(listOf(CalloutBlock(id = "c0", tone = "success"))))
+        assertEquals("success", (runtime.controller.document().findById("c0") as CalloutBlock).tone)
+
+        runtime.cycleCalloutTone("c0")
+        // `success` reads as TIP, so the step lands on IMPORTANT — not on TIP, which is where a naive
+        // "unknown tone means NOTE" reading would have put it.
+        assertEquals(CalloutTone.IMPORTANT.stored, (runtime.controller.document().findById("c0") as CalloutBlock).tone)
+    }
+
+    @Test
+    fun calloutTone_isUndoable() {
+        val runtime = runtimeOf(BlockDocument(listOf(CalloutBlock(id = "c0", tone = "note"))))
+        runtime.cycleCalloutTone("c0")
+        assertTrue(runtime.undo())
+        assertEquals("note", (runtime.controller.document().findById("c0") as CalloutBlock).tone)
+    }
+
+    @Test
+    fun calloutTone_ignoresABlockThatIsNotACallout() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        assertFalse(runtime.cycleCalloutTone("p0"))
+        assertFalse(runtime.cycleCalloutTone("missing"))
     }
 }

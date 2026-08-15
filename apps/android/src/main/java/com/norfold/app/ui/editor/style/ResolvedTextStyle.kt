@@ -91,15 +91,30 @@ fun resolvedTextStyle(
     previewPaint: ColorPaint? = null,
     previewTargetIds: Set<String> = emptySet(),
     adaptThemeTextTokens: Boolean = false,
+    adaptBuiltInTypeScale: Boolean = false,
 ): TextStyle {
     val values = resolvedTextValues(block, sheet, wrappersNearestFirst)
-    val weight = values[StyleProperty.FONT_WEIGHT]?.toIntOrNull()?.coerceIn(100, 900)
-    val identity = values[StyleProperty.FONT_FAMILY]?.let(FontIdentity::decode)
-    val resolvedFontSize = values[StyleProperty.FONT_SIZE]?.toFloatOrNull()?.takeIf { it in 4f..512f }?.sp
+    val wrappers = wrappersNearestFirst.map(WrapperStyleSource::assignment)
+    /**
+     * The value the renderer should use for a type property.
+     *
+     * With [adaptBuiltInTypeScale] the built-in print sizes stop out-voting [base]: only a value someone
+     * chose is read, so a screen renderer's own scale supplies the rest. See
+     * [StyleResolver.authorshipCascaded] for why "did anyone choose this" is the question and not
+     * "what is the value".
+     */
+    fun typeValue(property: StyleProperty): String? = if (!adaptBuiltInTypeScale) {
+        values[property]
+    } else {
+        StyleResolver.authoredLiteralCascaded(sheet, block.styleAssignment(), wrappers, property)
+    }
+    val weight = typeValue(StyleProperty.FONT_WEIGHT)?.toIntOrNull()?.coerceIn(100, 900)
+    val identity = typeValue(StyleProperty.FONT_FAMILY)?.let(FontIdentity::decode)
+    val resolvedFontSize = typeValue(StyleProperty.FONT_SIZE)?.toFloatOrNull()?.takeIf { it in 4f..512f }?.sp
         ?: base.fontSize
     val fontSizeValue = resolvedFontSize.value.takeIf { it.isFinite() && it > 0f }
     val resolvedLineHeight = resolvedLineHeightSp(
-        values[StyleProperty.LINE_HEIGHT]?.toFloatOrNull(),
+        typeValue(StyleProperty.LINE_HEIGHT)?.toFloatOrNull(),
         fontSizeValue ?: Float.NaN,
     )?.sp ?: base.lineHeight
     val previewApplies = previewAffectsTextBlock(block.id, wrappersNearestFirst, previewTargetIds)

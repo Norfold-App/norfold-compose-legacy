@@ -75,6 +75,90 @@ object StyleResolver {
         return null
     }
 
+    /** What a cascade found for a property: nothing, a value the app shipped, or a value a person chose. */
+    sealed interface Authorship {
+        /** Nothing in the cascade asserts the property. */
+        object Absent : Authorship
+
+        /** The nearest assertion is a built-in default exactly as shipped, so no one chose it. */
+        object Shipped : Authorship
+
+        /** Someone put this value here: a local override, a style they wrote, or a default they edited. */
+        data class Authored(val literal: String?) : Authorship
+    }
+
+    /** The stylesheet every document starts from — the reference for "was this value actually chosen?". */
+    private val shipped: Stylesheet by lazy(LazyThreadSafetyMode.PUBLICATION) { Stylesheet.defaults() }
+
+    /**
+     * Whether [property] was *chosen* for this block, and if so what it resolves to.
+     *
+     * The screen editor and the page host disagree about size on purpose. The built-in stylesheet is a
+     * print stylesheet — an 11 pt body on a modular scale — because a page has to match paper. A phone
+     * screen has no paper to match, and the reader's own preference (see
+     * `com.norfold.app.editor.style.ReadingScale`) is the better authority there. But the two must not
+     * fight: if the built-in 11 pt simply won, the reading-size preference would silently do nothing, and
+     * if the reading size simply won, a size the user typed would be discarded.
+     *
+     * So the question the renderer needs is not "what is the value" but "did anyone choose it". A shipped
+     * default yields to the renderer's own base; anything authored — a local override, a user-defined
+     * style, an edited built-in, or an edited token a built-in points at — wins as it always did.
+     *
+     * Precedence follows [rawValueCascaded]: the *nearest* assertion decides, and it decides both ways.
+     * A built-in that asserts a shipped default stops the walk with [Authorship.Shipped] rather than
+     * letting an outer wrapper's value leak into a block whose own style already spoke.
+     *
+     * The implicit semantic default is never consulted: it is by definition the shipped hierarchy.
+     */
+    fun authorshipCascaded(
+        sheet: Stylesheet,
+        child: StyleAssignment,
+        wrappersNearestFirst: List<StyleAssignment>,
+        property: StyleProperty,
+    ): Authorship {
+        child.overrides[property.key]?.let { return Authorship.Authored(literalOf(sheet, it)) }
+        authorshipInChain(sheet, child.styleId, property)?.let { return it }
+        for (wrapper in wrappersNearestFirst) {
+            wrapper.overrides[property.key]?.let { return Authorship.Authored(literalOf(sheet, it)) }
+            authorshipInChain(sheet, wrapper.styleId, property)?.let { return it }
+        }
+        return Authorship.Absent
+    }
+
+    /** [authorshipCascaded] reduced to the value a renderer would use, or null to keep its own base. */
+    fun authoredLiteralCascaded(
+        sheet: Stylesheet,
+        child: StyleAssignment,
+        wrappersNearestFirst: List<StyleAssignment>,
+        property: StyleProperty,
+    ): String? = (authorshipCascaded(sheet, child, wrappersNearestFirst, property) as? Authorship.Authored)?.literal
+
+    /** Null when the chain says nothing about [property]; otherwise how its nearest assertion got there. */
+    private fun authorshipInChain(
+        sheet: Stylesheet,
+        styleId: String?,
+        property: StyleProperty,
+    ): Authorship? {
+        for (definition in chainOf(sheet, styleId)) {
+            val value = definition.get(property) ?: continue
+            // A style the user wrote asserts nothing by accident.
+            if (!definition.builtIn) return Authorship.Authored(literalOf(sheet, value))
+            // A built-in id this build does not ship is a newer version's default arriving through a
+            // round-trip. Honouring it beats dropping a value we cannot prove is a default.
+            val original = shipped.style(definition.id) ?: return Authorship.Authored(literalOf(sheet, value))
+            if (value != original.get(property)) return Authorship.Authored(literalOf(sheet, value))
+            // Built-ins point at tokens (Body's size is `token.type.base`). Editing the token is how the
+            // print model is meant to be re-based, so an edited token counts as authorship even though the
+            // definition holding the reference is untouched.
+            if (value is StyleValue.TokenRef) {
+                val current = sheet.token(value.tokenId)?.value
+                if (current != shipped.token(value.tokenId)?.value) return Authorship.Authored(current)
+            }
+            return Authorship.Shipped
+        }
+        return null
+    }
+
     /**
      * Resolves a text property through a structural wrapper cascade.
      *

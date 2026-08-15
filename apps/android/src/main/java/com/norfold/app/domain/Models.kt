@@ -469,7 +469,18 @@ enum class WorkspaceIconKind { Text, Emoji, Image, Gif }
 enum class ThemeMode { System, Light, Dark }
 enum class ThemeProfile { Norfold, Neon, Sunset, Ocean, Forest, Fire, Candy, Midnight, Gold, Graphite }
 enum class EditorLineWidth { Narrow, Comfortable, Wide }
-enum class EditorFontFamily { Sans, Serif }
+
+/**
+ * The face a document's text uses by default.
+ *
+ * `Sans` is the shipped value and means "whatever face the app is set to", which is why it is not renamed:
+ * the string is persisted, and every decoder falls back to `Sans` for a name it does not know, so an older
+ * build reading a document written with `Mono` degrades to the app face instead of failing.
+ *
+ * A face asserted by a style the user wrote, or applied to a selection, still wins over this — this is the
+ * document's default, not a ceiling.
+ */
+enum class EditorFontFamily { Sans, Serif, Mono }
 enum class ControlLabelMode { Adaptive, IconsOnly, IconsAndText }
 enum class AppIconFamily {
     MaterialSymbolsRounded,

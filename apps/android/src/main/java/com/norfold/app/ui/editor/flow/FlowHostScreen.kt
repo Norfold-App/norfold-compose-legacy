@@ -509,7 +509,7 @@ fun FlowHostScreen(
                                 onEditorFocusChanged = { blockId, focused ->
                                     if (focused) presenter.act { enterTextEditing(blockId) }
                                 },
-                                modifier = Modifier.widthIn(max = FLOW_CONTENT_MAX_WIDTH),
+                                modifier = Modifier.widthIn(max = FlowContent.measure),
                             )
                         }
                     }
@@ -888,6 +888,7 @@ private fun FlowBlockRow(
             onNewLine = { presenter.act { newLine() } },
             onBackspaceAtStart = { presenter.act { backspaceAtStart() } },
             onToggleCollapsed = { blockId -> presenter.act { toggleCollapsed(blockId) } },
+            onCycleCalloutTone = { blockId -> presenter.act { cycleCalloutTone(blockId) } },
             onOpenChart = onOpenChart,
             onOpenImage = onOpenImage,
             onOpenShape = onOpenShape,
@@ -1747,7 +1748,13 @@ private fun FlowHostPresenter.invokeItem(
     if (result is com.norfold.app.editor.command.CommandResult.Failure) onNotice(result.reason)
 }
 
-/** Comfortable measure for continuous prose; wider windows gain margin, not line length. */
+/**
+ * How wide editor *chrome* may get — the floating command bar, not the text column.
+ *
+ * The document's own measure is [FlowContent.measure], which is derived from the reading scale and the
+ * stored line-width preference. This one stays fixed because a toolbar's comfortable width has nothing to
+ * do with how large the reader set their type.
+ */
 private val FLOW_CONTENT_MAX_WIDTH = 760.dp
 private val FLOW_PANE_WIDTH = 360.dp
 

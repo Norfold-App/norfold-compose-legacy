@@ -105,7 +105,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -126,7 +128,11 @@ import com.norfold.app.domain.Destination
 import com.norfold.app.domain.AppIconFamily
 import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.domain.EditorIconFamily
+import com.norfold.app.domain.EditorFontFamily
 import com.norfold.app.domain.EditorLineWidth
+import com.norfold.app.editor.style.ContentRole
+import com.norfold.app.editor.style.ReadingScale
+import com.norfold.app.editor.style.contentCharacters
 import com.norfold.app.domain.DeviceSettingsProfile
 import com.norfold.app.domain.SettingsProfileCategory
 import com.norfold.app.domain.NoteGestureAction
@@ -1008,6 +1014,7 @@ private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
     val fontCatalog = remember(context) { FontCatalogStore(context) }
     val lineWidths = EditorLineWidth.entries
     var showLinePicker by remember { mutableStateOf(false) }
+    var showDocumentFacePicker by remember { mutableStateOf(false) }
     var showEditorIconPicker by remember { mutableStateOf(false) }
     var editorIconImportStatus by remember { mutableStateOf<String?>(null) }
     var pendingEditorIcon by remember { mutableStateOf<SemanticActionId?>(null) }
@@ -1040,6 +1047,15 @@ private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
         if (showHiddenFonts) hiddenFontsSnapshot = fontCatalog.snapshot()
     }
     if (showLinePicker) OptionPickerDialog("Line width", lineWidths.map { it.name }, s.editorLineWidth.name, { showLinePicker = false }) { p -> viewModel.setEditorLineWidth(EditorLineWidth.valueOf(p)) }
+    if (showDocumentFacePicker) OptionPickerDialog(
+        "Document font",
+        EditorFontFamily.entries.map { it.documentFaceLabel },
+        s.editorFontFamily.documentFaceLabel,
+        { showDocumentFacePicker = false },
+    ) { picked ->
+        EditorFontFamily.entries.firstOrNull { it.documentFaceLabel == picked }
+            ?.let(viewModel::setEditorFontFamily)
+    }
     if (showEditorIconPicker) EditorIconFamilyPickerDialog(
         selected = s.editorIconFamily,
         appFamily = s.appIconFamily,
@@ -1131,7 +1147,25 @@ private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
                 trailing = { RowValue("View + Edit", accent = true) },
             )
             RowDivider(inset = false)
-            SettingsRow("Line width", trailing = { RowChevron(s.editorLineWidth.name) }, onClick = { showLinePicker = true })
+            ReadingSizeEditor(
+                fraction = s.editorFontSize,
+                lineWidth = s.editorLineWidth,
+                onValue = { v -> viewModel.patchSettings { it.copy(editorFontSize = v.coerceIn(0f, 1f)) } },
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "Line width",
+                subtitle = "Caps a line at about ${s.editorLineWidth.contentCharacters} characters; a wider window gains margin, not longer lines",
+                trailing = { RowChevron(s.editorLineWidth.name) },
+                onClick = { showLinePicker = true },
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "Document font",
+                subtitle = "The face a document's text starts from. App font follows your app typeface; a style you write, or a face you apply to a selection, still wins",
+                trailing = { RowChevron(s.editorFontFamily.documentFaceLabel) },
+                onClick = { showDocumentFacePicker = true },
+            )
             RowDivider(inset = false)
             SettingsRow(
                 "Selected text and next typing size",
@@ -1459,11 +1493,103 @@ private fun ToolbarPreviewStrip(labelMode: ControlLabelMode, toolbarScale: Float
     }
 }
 
+/**
+ * What the document-face row and its picker show for each stored face.
+ *
+ * `Sans` reads as "App font" rather than "Sans" because that is what it does: it defers to whichever
+ * typeface the app is set to instead of asserting a sans face of its own. Labelling it "Sans" would promise
+ * a face the setting does not choose, and would look wrong to anyone whose app font is a serif.
+ *
+ * The enum names stay untouched — they are the persisted strings — so the mapping lives here, at the one
+ * place a person reads them.
+ */
+private val EditorFontFamily.documentFaceLabel: String
+    get() = when (this) {
+        EditorFontFamily.Sans -> "App font"
+        EditorFontFamily.Serif -> "Serif"
+        EditorFontFamily.Mono -> "Monospace"
+    }
+
 @Composable
 private fun SliderRow(label: String, value: Float, onChange: (Float) -> Unit) {
     Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
         Text(label, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
         Slider(value, onChange, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * How large document text is, with a sample of the answer.
+ *
+ * The sample is not decoration. This is the one preference on this screen whose effect is invisible from
+ * this screen, and "140%" tells nobody whether 140% is what they want. So the sample renders a heading, a
+ * paragraph and a caption at the chosen scale inside the chosen measure — which puts all three of the
+ * scale's promises on screen at once: the hierarchy holds, prose stays comfortable, the column is capped.
+ *
+ * It reads [ReadingScale] directly rather than the editor's content typography, because this screen is not
+ * inside the editor and must not borrow the editor's canvas theme to show a preview of it.
+ */
+@Composable
+private fun ReadingSizeEditor(fraction: Float, lineWidth: EditorLineWidth, onValue: (Float) -> Unit) {
+    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Reading size",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                ReadingScale.percentLabel(fraction),
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+            )
+        }
+        Text(
+            "Sizes document text only — toolbars, menus and this screen keep the app size. " +
+                "It multiplies your system font size rather than replacing it.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+        )
+        Slider(value = fraction, onValueChange = onValue, modifier = Modifier.fillMaxWidth())
+        ReadingSample(fraction = fraction, lineWidth = lineWidth)
+    }
+}
+
+@Composable
+private fun ReadingSample(fraction: Float, lineWidth: EditorLineWidth) {
+    val characters = lineWidth.contentCharacters
+    val measure = with(LocalDensity.current) { ReadingScale.measureSp(fraction, characters).sp.toDp() }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+    ) {
+        Column(
+            Modifier.padding(14.dp).widthIn(max = measure),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Text(
+                "A heading keeps its rank",
+                fontFamily = FontFamily.Serif,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = ReadingScale.sizeSp(ContentRole.HEADING_2, fraction).sp,
+                lineHeight = ReadingScale.lineHeightSp(ContentRole.HEADING_2, fraction).sp,
+            )
+            Text(
+                "This is a paragraph at the size your documents will use. Long-form writing wants a line " +
+                    "you can return from without losing your place.",
+                fontSize = ReadingScale.sizeSp(ContentRole.BODY, fraction).sp,
+                lineHeight = ReadingScale.lineHeightSp(ContentRole.BODY, fraction).sp,
+            )
+            Text(
+                "About $characters characters per line · ${ReadingScale.percentLabel(fraction)}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = ReadingScale.sizeSp(ContentRole.SMALL, fraction).sp,
+                lineHeight = ReadingScale.lineHeightSp(ContentRole.SMALL, fraction).sp,
+            )
+        }
     }
 }
 

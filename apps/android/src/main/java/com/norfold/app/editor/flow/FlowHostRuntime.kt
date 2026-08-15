@@ -63,6 +63,7 @@ import com.norfold.app.editor.surface.DispatchResult
 import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.surface.SurfaceCoordinator
 import com.norfold.app.editor.surface.ToolSurface
+import com.norfold.app.editor.style.CalloutTone
 import com.norfold.app.editor.style.EditorStyleRuntime
 import com.norfold.app.editor.calculation.CalculationEngine
 import com.norfold.app.editor.calculation.CellCommitResult
@@ -1341,6 +1342,28 @@ class FlowHostRuntime(
             coalescingKey = null,
         ) { session ->
             session.replaceBlock(block.copy(collapsed = !block.collapsed))
+            BlockCursor(blockId, 0, null)
+        } ?: return false
+        revision++
+        return true
+    }
+
+    /**
+     * Steps a callout to the next tone, storing the canonical name for that tone.
+     *
+     * Writes [com.norfold.app.editor.style.CalloutTone.stored] rather than whatever string was there before,
+     * so a tone the user picks here re-exports as a valid GitHub alert (`> [!WARNING]`). An unrecognised tone
+     * arriving from elsewhere therefore normalises the first time someone touches it, and not before — which
+     * is the only moment a rewrite is the user's own doing.
+     *
+     * Through the canonical history, for the reason [toggleCollapsed] is: a visible change to the document
+     * that undo cannot reach is worse than no control at all.
+     */
+    fun cycleCalloutTone(blockId: String): Boolean {
+        val block = controller.document().findById(blockId) as? CalloutBlock ?: return false
+        val next = CalloutTone.of(block.tone).next()
+        controller.mutate("Callout tone ${next.defaultTitle}", coalescingKey = null) { session ->
+            session.replaceBlock(block.copy(tone = next.stored))
             BlockCursor(blockId, 0, null)
         } ?: return false
         revision++

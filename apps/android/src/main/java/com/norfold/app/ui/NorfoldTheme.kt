@@ -35,6 +35,7 @@ import com.norfold.app.domain.AppIconFamily
 import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.domain.EditorIconFamily
 import com.norfold.app.domain.ThemeMode
+import com.norfold.app.editor.style.ReadingPreference
 import com.norfold.app.ui.components.LocalPopupStyle
 import com.norfold.app.ui.components.LocalReduceMotion
 import com.norfold.app.ui.components.PopupStyle
@@ -49,6 +50,18 @@ val LocalControlLabelMode = staticCompositionLocalOf { ControlLabelMode.Adaptive
 val LocalAppIconFamily = staticCompositionLocalOf { AppIconFamily.MaterialSymbolsRounded }
 val LocalEditorIconFamily = staticCompositionLocalOf { EditorIconFamily.UseApp }
 val LocalEditorToolbarScale = staticCompositionLocalOf { 1f }
+
+/**
+ * How large document *content* is and how wide a line of it may get.
+ *
+ * A composition local rather than a parameter because the editor hosts are deep and take no [AppSettings] —
+ * threading two floats through `FlowHostScreen`, every block renderer and every canvas host would put the
+ * preference in dozens of signatures and still miss the next surface someone adds. Its default is the
+ * shipped default, so a surface that never receives one renders at 1.0x rather than at nothing.
+ *
+ * Read by block renderers only. Chrome reads [MaterialTheme] like the rest of the app.
+ */
+val LocalReadingPreference = staticCompositionLocalOf { ReadingPreference() }
 
 private fun Color.mix(other: Color, t: Float): Color = lerp(this, other, t)
 
@@ -170,6 +183,13 @@ fun NorfoldTheme(
                 // Provided here rather than threaded through each screen so a new editor surface
                 // inherits the accessibility preference by existing, not by remembering to ask.
                 LocalReduceMotion provides settings.reduceMotion,
+                // Same reasoning for the reading preference: two settings that were persisted but unread
+                // until now, resolved once here so every block renderer sees the same pair.
+                LocalReadingPreference provides ReadingPreference.of(
+                    fraction = settings.editorFontSize,
+                    lineWidth = settings.editorLineWidth,
+                    face = settings.editorFontFamily,
+                ),
                 content = content,
             )
             unscaledOverlay()

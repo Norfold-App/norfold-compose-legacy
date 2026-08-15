@@ -38,6 +38,11 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
@@ -90,6 +95,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -130,6 +136,7 @@ import com.norfold.app.editor.flow.FlowInlineStyle
 import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.editor.flow.FlowTableCursor
 import com.norfold.app.editor.flags.EditorFeatureFlag
+import com.norfold.app.editor.style.CalloutTone
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 import com.norfold.app.ui.screens.highlightColor
@@ -206,6 +213,8 @@ class FlowBlockCallbacks(
     val onBackspaceAtStart: () -> Boolean = { false },
     /** Expand/collapse a collapsible block (correction item 16). */
     val onToggleCollapsed: (blockId: String) -> Unit = {},
+    /** Step a callout to the next tone. The icon is the control, so this is how a tone gets chosen at all. */
+    val onCycleCalloutTone: (blockId: String) -> Unit = {},
     val onOpenChart: (blockId: String) -> Unit = {},
     val onOpenImage: (blockId: String) -> Unit = {},
     val onOpenShape: (blockId: String) -> Unit = {},
@@ -279,7 +288,7 @@ fun FlowBlockContent(
             blockId = block.id,
             itemId = null,
             nodes = block.content,
-            style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
+            style = resolvedFlowTextStyle(block, context, FlowContent.type.bodyLarge),
             placeholder = "Write something…",
             callbacks = callbacks,
             context = context,
@@ -304,7 +313,7 @@ fun FlowBlockContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
+                        style = resolvedFlowTextStyle(block, context, FlowContent.type.bodyLarge),
                         placeholder = "List item",
                         callbacks = callbacks,
                         context = context,
@@ -320,7 +329,7 @@ fun FlowBlockContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
+                        style = resolvedFlowTextStyle(block, context, FlowContent.type.bodyLarge),
                         placeholder = "List item",
                         callbacks = callbacks,
                         context = context,
@@ -343,7 +352,7 @@ fun FlowBlockContent(
                         blockId = block.id,
                         itemId = item.id,
                         nodes = item.content,
-                        style = resolvedFlowTextStyle(block, context, MaterialTheme.typography.bodyLarge),
+                        style = resolvedFlowTextStyle(block, context, FlowContent.type.bodyLarge),
                         placeholder = "To-do",
                         callbacks = callbacks,
                         context = context,
@@ -353,70 +362,98 @@ fun FlowBlockContent(
             }
         }
 
+        // A quote is ink on the page, not a panel on it. The accent tint and accent rule it used to wear made
+        // every quotation carry the user's theme colour, and on a white canvas a 7%-alpha fill reads as a
+        // rendering artefact rather than as a choice. What is left is the mark that has meant "quotation" in
+        // print for four centuries: a rule in the page's own ink, and the indent it creates.
         is QuoteBlock -> Row(
             modifier
                 .height(IntrinsicSize.Min)
-                .clip(RoundedCornerShape(14.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f))
-                .padding(horizontal = 16.dp, vertical = 15.dp),
+                .padding(vertical = 2.dp),
         ) {
             val childContext = context.copy(
                 wrapperStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + context.wrapperStyles,
             )
             Box(
                 Modifier
-                    .width(4.dp)
+                    .width(3.dp)
                     .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f), RoundedCornerShape(2.dp)),
             )
-            Column(Modifier.padding(start = 14.dp)) {
+            Column(Modifier.padding(start = 15.dp)) {
                 FlowStyledChildren(block.children, callbacks, childContext)
             }
         }
 
-        is CalloutBlock -> Column(
-            modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-        ) {
-            val childContext = context.copy(
-                wrapperStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + context.wrapperStyles,
-            )
-            // A collapsed callout with no control is content the user cannot reach at all, and structural
-            // commands would still operate on children nobody can see (correction item 16).
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Disabled in structural selection so a tap meant to select the callout block cannot instead
-                // expand/collapse it (correction item 6) — the same reason the Todo checkbox above is disabled.
-                if (context.editing) {
-                    IconButton(
-                        onClick = { callbacks.onToggleCollapsed(block.id) },
-                        enabled = !context.selectionMode,
-                    ) {
+        is CalloutBlock -> {
+            val tone = CalloutTone.of(block.tone)
+            val palette = flowTonePalette(tone)
+            Column(
+                modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.tint)
+                    .border(1.dp, palette.edge, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+            ) {
+                val childContext = context.copy(
+                    wrapperStyles = listOf(WrapperStyleSource(block.id, block.effectiveStyleAssignment())) + context.wrapperStyles,
+                )
+                // A collapsed callout with no control is content the user cannot reach at all, and structural
+                // commands would still operate on children nobody can see (correction item 16).
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Disabled in structural selection so a tap meant to select the callout block cannot instead
+                    // expand/collapse it (correction item 6) — the same reason the Todo checkbox above is disabled.
+                    if (context.editing) {
+                        IconButton(
+                            onClick = { callbacks.onToggleCollapsed(block.id) },
+                            enabled = !context.selectionMode,
+                        ) {
+                            Icon(
+                                imageVector = if (block.collapsed) Icons.Filled.ChevronRight else Icons.Filled.ExpandMore,
+                                contentDescription = if (block.collapsed) "Expand callout" else "Collapse callout",
+                            )
+                        }
+                    }
+                    // The tone icon *is* the tone control while editing. A tone nothing can change would be a
+                    // property only an imported Markdown alert could set — the palette would then exist for
+                    // documents that came from somewhere else and for no document written here.
+                    if (context.editing) {
+                        IconButton(
+                            onClick = { callbacks.onCycleCalloutTone(block.id) },
+                            enabled = !context.selectionMode,
+                        ) {
+                            Icon(
+                                imageVector = calloutToneIcon(tone),
+                                contentDescription = "Callout tone ${tone.defaultTitle}, change to ${tone.next().defaultTitle}",
+                                tint = palette.ink,
+                            )
+                        }
+                    } else {
                         Icon(
-                            imageVector = if (block.collapsed) Icons.Filled.ChevronRight else Icons.Filled.ExpandMore,
-                            contentDescription = if (block.collapsed) "Expand callout" else "Collapse callout",
+                            imageVector = calloutToneIcon(tone),
+                            contentDescription = tone.defaultTitle,
+                            tint = palette.ink,
+                            modifier = Modifier.padding(end = 10.dp),
                         )
                     }
+                    FlowEditableLine(
+                        blockId = block.id,
+                        itemId = null,
+                        nodes = listOf(InlineText(block.title)),
+                        style = resolvedFlowTextStyle(
+                            block,
+                            context,
+                            FlowContent.type.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        ),
+                        placeholder = "Callout title",
+                        callbacks = callbacks,
+                        context = context,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-                FlowEditableLine(
-                    blockId = block.id,
-                    itemId = null,
-                    nodes = listOf(InlineText(block.title)),
-                    style = resolvedFlowTextStyle(
-                        block,
-                        context,
-                        MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.primary),
-                    ),
-                    placeholder = "Callout title",
-                    callbacks = callbacks,
-                    context = context,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            if (!block.collapsed) {
-                FlowStyledChildren(block.children, callbacks, childContext)
+                if (!block.collapsed) {
+                    FlowStyledChildren(block.children, callbacks, childContext)
+                }
             }
         }
 
@@ -510,7 +547,7 @@ fun FlowBlockContent(
                 if (block.caption.isNotBlank() && context.editing) {
                     Text(
                         block.caption,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = FlowContent.type.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -611,7 +648,7 @@ private fun FlowShapeBlock(block: ShapeBlock, context: FlowBlockContext, modifie
             .semantics { contentDescription = "${block.kind.name.replace('_', ' ')} shape${block.text.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}" },
         contentAlignment = Alignment.Center,
     ) {
-        if (block.text.isNotBlank()) Text(block.text, style = MaterialTheme.typography.bodyLarge)
+        if (block.text.isNotBlank()) Text(block.text, style = FlowContent.type.bodyLarge)
     }
 }
 
@@ -626,7 +663,10 @@ private fun FlowEmbedPreview(block: EmbedBlock, modifier: Modifier = Modifier) {
     ) {
         Text(block.metadata.title.ifBlank { "Embedded link" }, style = MaterialTheme.typography.titleSmall)
         if (block.metadata.description.isNotBlank()) Text(block.metadata.description, style = MaterialTheme.typography.bodySmall, maxLines = 2)
-        Text(block.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+        // The URL is the card's caption, not its call to action — the whole card is the target. Accent here
+        // put the theme colour on every embed in the document and competed with the title above it for the
+        // eye, which is backwards: the title is what the reader is looking for.
+        Text(block.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
     }
 }
 
@@ -682,7 +722,7 @@ private fun FlowMathBlock(
         if (mode == FlowRenderableMode.Source && context.editing) {
             FlowEditableLine(
                 block.id, null, listOf(InlineText(block.tex)),
-                MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+                FlowContentMono,
                 "TeX source", callbacks, context, structuralEnter = false,
             )
         } else {
@@ -690,7 +730,7 @@ private fun FlowMathBlock(
                 block.tex.ifBlank { "Empty equation" },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp)
                     .semantics { contentDescription = "Equation ${block.tex}" },
-                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Serif),
+                style = FlowContent.type.bodyLarge.copy(fontFamily = FontFamily.Serif),
             )
         }
     }
@@ -708,10 +748,14 @@ private fun FlowCodeBlock(
         return
     }
     val scroll = rememberScrollState()
+    // Opaque fill plus a hairline, replacing a 58%-alpha tint. The alpha was tuned against the old ivory
+    // canvas; blended over a white page it lands two shades off white and the block loses its edge entirely,
+    // which for code is not cosmetic — the boundary is what says where the literal text starts and stops.
     Column(
         modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
             .horizontalScroll(scroll)
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
@@ -719,14 +763,7 @@ private fun FlowCodeBlock(
             blockId = block.id,
             itemId = null,
             nodes = listOf(InlineText(block.code)),
-            style = resolvedFlowTextStyle(
-                block,
-                context,
-                MaterialTheme.typography.bodyLarge.copy(
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 30.sp,
-                ),
-            ),
+            style = resolvedFlowTextStyle(block, context, FlowContentMono),
             placeholder = "Code",
             callbacks = callbacks,
             context = context,
@@ -770,7 +807,7 @@ private fun FlowHtmlBlock(
                     blockId = block.id,
                     itemId = null,
                     nodes = listOf(InlineText(block.code)),
-                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace, lineHeight = 30.sp),
+                    style = FlowContentMono,
                     placeholder = "HTML source",
                     callbacks = callbacks,
                     context = context,
@@ -848,7 +885,7 @@ private fun FlowWideSource(title: String, source: String, modifier: Modifier = M
         Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             Text(
                 source,
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                style = FlowContentMono,
                 softWrap = false,
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
@@ -924,10 +961,7 @@ private fun FlowMermaidBlock(
                     blockId = block.id,
                     itemId = null,
                     nodes = listOf(InlineText(block.code)),
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 30.sp,
-                    ),
+                    style = FlowContentMono,
                     placeholder = "Mermaid source",
                     callbacks = callbacks,
                     context = context,
@@ -1154,7 +1188,10 @@ private fun FlowBranchedDiagram(
                 }
             }
         }
-        val connector = MaterialTheme.colorScheme.primary.copy(alpha = .78f)
+        // Connectors are the diagram's own ink. Drawing them in the accent made every diagram a themed
+        // graphic and, worse, made an edge look selected — the accent is what selection uses two lines down.
+        // Only the Canvas is affected, so nothing here reaches the stored diagram source.
+        val connector = MaterialTheme.colorScheme.onSurfaceVariant
         Canvas(Modifier.fillMaxSize()) {
             edges.forEach { edge ->
                 val from = positions[edge.from] ?: return@forEach
@@ -1376,7 +1413,16 @@ private fun FlowTableCell(
     onDraft: (String) -> Unit = {},
     onCommit: (String) -> Unit = {},
 ) {
-    val cellStyle = if (header) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium
+    val cellStyle = if (header) FlowContent.type.labelLarge else FlowContent.type.bodyMedium
+    // The header row needed a fill of its own: semibold alone stops separating header from body the moment a
+    // body cell holds a short bold word, and on a white canvas with hairline rules the top row otherwise reads
+    // as data. A tint of the page, never the accent — a coloured header row is a spreadsheet's chrome, and this
+    // is a table inside a document. The addressed cell keeps the accent and is layered after, so it still wins.
+    val fill = when {
+        addressed -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        header -> MaterialTheme.colorScheme.surfaceContainerHigh
+        else -> Color.Transparent
+    }
     // Focus loss is a commit route, not a discard: tapping the next cell has always meant "keep what I typed"
     // in every grid the user has met. Tracked here because Compose reports the transition, not the state.
     var hadFocus by remember { mutableStateOf(false) }
@@ -1384,13 +1430,7 @@ private fun FlowTableCell(
         modifier = modifier
             .heightIn(min = 48.dp)
             .clickable(enabled = enabled && !addressed, onClick = onClick)
-            .then(
-                if (addressed) {
-                    Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
-                } else {
-                    Modifier
-                },
-            )
+            .background(fill)
             .semantics {
                 role = Role.Button
                 contentDescription = "${if (header) "Header" else "Table"} cell, ${text.ifBlank { "blank" }}${if (addressed) ", selected and editable" else ""}"
@@ -1425,9 +1465,9 @@ private fun FlowListRow(marker: String, content: @Composable () -> Unit) {
     Row(verticalAlignment = Alignment.Top) {
         Text(
             marker,
-            style = MaterialTheme.typography.bodyLarge,
+            style = FlowContent.type.bodyLarge,
             modifier = Modifier
-                .width(32.dp)
+                .width(FlowContent.gutter)
                 .padding(top = 1.dp),
         )
         Box(Modifier.weight(1f)) { content() }
@@ -1671,8 +1711,7 @@ private fun resolvedFlowTextStyle(
     block: DocumentBlock,
     context: FlowBlockContext,
     base: TextStyle,
-): TextStyle {
-    val resolved = resolvedTextStyle(
+): TextStyle = resolvedTextStyle(
     block = block,
     sheet = context.stylesheet,
     base = base,
@@ -1680,30 +1719,47 @@ private fun resolvedFlowTextStyle(
     previewRole = context.previewRole,
     previewPaint = context.previewPaint,
     previewTargetIds = context.previewTargetIds,
-    // Semantic H2/H3 use the Flow accent by default. Stored explicit colour still wins inside
-    // resolvedTextStyle; only the implicit theme text token is prevented from flattening that hierarchy.
-        adaptThemeTextTokens = block !is HeadingBlock || block.level !in 2..3,
-    )
-    return when (block) {
-        is HeadingBlock -> when (block.level) {
-            1 -> resolved.copy(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Medium)
-            2, 3 -> resolved.copy(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-            else -> resolved
-        }
-        else -> resolved
-    }
+    // The canvas is neutral: a heading is a heading by size and weight, not by wearing the app accent.
+    // Tinting H2/H3 with `primary` made every document carry the user's theme colour whether or not they
+    // put it there, which is the one thing the writing surface is not supposed to do. Stored explicit
+    // colour still wins inside resolvedTextStyle, so a heading the user coloured stays coloured.
+    adaptThemeTextTokens = true,
+    // …and the built-in *sizes* are a print stylesheet: an 11 pt body on a modular scale, correct on a page
+    // and far too small on a phone. Left in charge they also made the reading-size preference do nothing at
+    // all, since every paragraph resolved 11 pt before it ever looked at the base style. Here the shipped
+    // defaults yield to [FlowContent.type]; an authored size, weight or face still wins. The page host does
+    // *not* pass this, because paper has no reading preference.
+    adaptBuiltInTypeScale = true,
+)
+
+/**
+ * The glyph that says what kind of aside a callout is.
+ *
+ * Matched to the GitHub alert vocabulary the Markdown codec already imports from — info, lightbulb, megaphone,
+ * triangle, octagon — so a warning written in a README arrives looking like the warning it was. The icon does
+ * the work colour alone cannot: a tone that is only a tint is invisible to anyone who cannot separate a pale
+ * green panel from a pale amber one.
+ */
+private fun calloutToneIcon(tone: CalloutTone): ImageVector = when (tone) {
+    CalloutTone.NOTE -> Icons.Outlined.Info
+    CalloutTone.TIP -> Icons.Outlined.Lightbulb
+    CalloutTone.IMPORTANT -> Icons.Outlined.Campaign
+    CalloutTone.WARNING -> Icons.Outlined.WarningAmber
+    CalloutTone.CAUTION -> Icons.Outlined.ErrorOutline
 }
 
+/**
+ * The base style for a heading at [level] — family, size and weight all from the content typography.
+ *
+ * No `copy(fontWeight = …)` afterwards: the weight belongs to the role, the role is already expressed in
+ * [FlowContent.type], and re-asserting it here would beat a weight the user actually chose.
+ */
 @Composable
 private fun headingStyle(level: Int): TextStyle = when (level) {
-    1 -> MaterialTheme.typography.headlineLarge
-    2 -> MaterialTheme.typography.headlineMedium.copy(
-        color = MaterialTheme.colorScheme.primary,
-    )
-    3 -> MaterialTheme.typography.headlineSmall.copy(
-        color = MaterialTheme.colorScheme.primary,
-    )
-    4 -> MaterialTheme.typography.titleLarge
-    5 -> MaterialTheme.typography.titleMedium
-    else -> MaterialTheme.typography.titleSmall
-}.copy(fontWeight = if (level == 1) FontWeight.Medium else FontWeight.SemiBold)
+    1 -> FlowContent.type.headlineLarge
+    2 -> FlowContent.type.headlineMedium
+    3 -> FlowContent.type.headlineSmall
+    4 -> FlowContent.type.titleLarge
+    5 -> FlowContent.type.titleMedium
+    else -> FlowContent.type.titleSmall
+}
