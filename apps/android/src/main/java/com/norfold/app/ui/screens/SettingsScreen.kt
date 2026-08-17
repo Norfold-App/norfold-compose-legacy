@@ -674,9 +674,12 @@ private fun WorkspaceAdvancedSettings(state: DocsUiState, viewModel: DocsViewMod
         )
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-        SettingsGroup {
+        SettingsGroup(header = "Backup") {
             SettingsRow("Export workspace", subtitle = "Open encrypted backup and export tools", icon = Icons.Outlined.FileDownload, trailing = { RowChevron() }, onClick = onOpenExport)
-            RowDivider()
+        }
+        // Deletion sits in its own group under its own heading rather than one divider below a
+        // backup row, so the reader is told which neighbourhood they are in before they aim.
+        SettingsGroup(header = "Danger zone") {
             SettingsRow(
                 "Delete workspace",
                 subtitle = if (state.workspaces.size > 1) "Permanently remove this workspace and everything in it" else "Create another workspace before deleting this one",
