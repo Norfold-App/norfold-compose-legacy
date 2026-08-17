@@ -47,7 +47,6 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Difference
-import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.DragIndicator
@@ -270,10 +269,9 @@ private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
                             maxGlyphs = 1,
                         )
                         Text(ws.name, Modifier.weight(1f), fontSize = 14.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        // Deleting a workspace cascades every table it owns, so it is offered only on
+                        // the deliberate Settings path. A switcher row switches; it does not destroy.
                         if (selected) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                        else if (state.workspaces.size > 1) IconButton(onClick = { viewModel.deleteWorkspace(ws.id) }, modifier = Modifier.size(40.dp)) {
-                            Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
-                        }
                     }
                 }
                 Row(

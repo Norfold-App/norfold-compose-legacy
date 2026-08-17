@@ -639,13 +639,35 @@ private fun WorkspaceAdvancedSettings(state: DocsUiState, viewModel: DocsViewMod
     var confirmDelete by remember { mutableStateOf(false) }
     val active = state.workspaces.firstOrNull { it.id == state.settings.activeWorkspaceId }
     if (confirmDelete && active != null) {
+        // The widest destructive operation in the app: it empties every table this workspace owns and
+        // there is no undo. So the consent names what is lost and asks for the workspace name back,
+        // which a muscle-memory tap on a confirm button cannot supply.
+        var typed by remember(active.id) { mutableStateOf("") }
+        val nameMatches = typed.trim() == active.name
         NorfoldDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete workspace?") },
-            text = { Text("This permanently removes ${active.name} and its local content. The final workspace cannot be deleted.") },
+            title = { Text("Delete ${active.name}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("This permanently deletes every doc, note, notebook, task, board, chat, calendar event, goal and attached file in this workspace. It cannot be undone.")
+                    Text("Type the workspace name to confirm.", fontWeight = FontWeight.Medium)
+                    OutlinedTextField(
+                        typed,
+                        { typed = it },
+                        label = { Text("Workspace name") },
+                        placeholder = { Text(active.name) },
+                        singleLine = true,
+                        isError = typed.isNotBlank() && !nameMatches,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
             confirmButton = {
-                TextButton(onClick = { viewModel.deleteWorkspace(active.id); confirmDelete = false }, enabled = state.workspaces.size > 1) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                TextButton(
+                    onClick = { viewModel.deleteWorkspace(active.id); confirmDelete = false },
+                    enabled = nameMatches && state.workspaces.size > 1,
+                ) {
+                    Text("Delete workspace", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
@@ -657,7 +679,7 @@ private fun WorkspaceAdvancedSettings(state: DocsUiState, viewModel: DocsViewMod
             RowDivider()
             SettingsRow(
                 "Delete workspace",
-                subtitle = if (state.workspaces.size > 1) "Permanently remove this workspace" else "Create another workspace before deleting this one",
+                subtitle = if (state.workspaces.size > 1) "Permanently remove this workspace and everything in it" else "Create another workspace before deleting this one",
                 icon = Icons.Outlined.Difference,
                 iconTint = MaterialTheme.colorScheme.error,
                 titleColor = MaterialTheme.colorScheme.error,
