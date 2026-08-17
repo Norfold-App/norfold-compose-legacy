@@ -148,6 +148,60 @@ object ContrastAnalysis {
         }
         return null
     }
+
+    /**
+     * [base] darkened or lightened just enough to be *seen* on [backdrop] — the editor-chrome counterpart
+     * to [suggestAccessible].
+     *
+     * The distinction from [suggestAccessible] is consent, not arithmetic. That one adjusts a colour the
+     * *user* authored and therefore only ever suggests. This one adjusts a colour the *app* chose — a
+     * selection outline, an object edge — where there is no authored intent to respect and a silent
+     * adjustment is the correct behaviour rather than a presumptuous one. Chrome the user cannot see is a
+     * defect; a selection outline 1.56:1 against the page it sits on is not a subtle one.
+     *
+     * Hue and saturation are preserved because only lightness moves, which is what keeps the user's accent
+     * recognisably *theirs* on a dark page instead of being replaced by a neutral that would read as a
+     * different product. Measured across the ten shipped accents on seven page colours in both themes, the
+     * largest shift needed to clear [UI_COMPONENT] is 0.45 lightness and every case is reachable.
+     *
+     * Both are passed through untouched, but "preserved" is a claim about the arithmetic rather than about
+     * the 8-bit value that comes back: reading the hue out of a very dark result is lossy, because at that
+     * lightness one integer step per channel is a large fraction of the channel. The worst shipped case is
+     * the green accent on a slate page — `#3D7C45` needs lightness 0.363 to reach 0.102, landing on
+     * `#112314`, whose hue reads back 2.38° away. Both bounds are asserted in `ContrastAnalysisTest`.
+     *
+     * [base] is returned unchanged when it already clears [targetRatio], so on the ordinary white page the
+     * accent is used exactly as the user picked it and this function costs nothing visible.
+     *
+     * The fallback matters more than it looks. [suggestAccessible] returns null when no lightness of a hue
+     * can reach the target — impossible for chrome on a *fully* opaque backdrop, but reachable if a caller
+     * passes something odd — and chrome must draw *something* legible rather than nothing. So the fallback
+     * is the backdrop's own best ink, black or white, which is the highest-contrast choice available and
+     * always clears the target.
+     */
+    fun legibleChrome(
+        base: ColorValue,
+        backdrop: ColorValue,
+        targetRatio: Double = UI_COMPONENT,
+    ): ColorValue =
+        suggestAccessible(base, backdrop, targetRatio) ?: inkFor(backdrop)
+
+    /**
+     * Black or white, whichever is more legible on [backdrop].
+     *
+     * Chosen by measured ratio rather than by a luminance threshold, because the two genuinely disagree.
+     * `luminance() > 0.5` is the usual shortcut; measured against every one of the 256 greys, it picks the
+     * worse ink across the whole band `#767676` to `#BBBBBB` — 70 consecutive values. Black overtakes white
+     * at `#767676` (4.62:1 against 4.54:1), but luminance does not cross 0.5 until `#BCBCBC`, so every grey
+     * in between is told to use white ink when black is measurably better. Comparing the two ratios cannot
+     * get that band wrong because it asks the question the answer is defined by.
+     */
+    fun inkFor(backdrop: ColorValue): ColorValue =
+        if (ratio(ColorValue.WHITE, backdrop) >= ratio(ColorValue.BLACK, backdrop)) {
+            ColorValue.WHITE
+        } else {
+            ColorValue.BLACK
+        }
 }
 
 /** How much the engine actually knows about a contrast figure. */

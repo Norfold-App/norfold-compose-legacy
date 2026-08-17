@@ -12,8 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -29,6 +27,8 @@ import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.TableBlock
+import com.norfold.app.domain.style.ContrastAnalysis
+import com.norfold.app.ui.EditorChromeColors
 
 /**
  * The edge an object block draws around itself, at rest and when selected.
@@ -152,26 +152,32 @@ internal object FlowFrameMetrics {
      * all, so "this content is a framed object" was a claim the six old borders never actually made. Dark is
      * no better: 1.31:1 and 1.67:1.
      *
-     * So the edge is derived rather than picked: the theme's `outline` carried a measured fraction of the way
-     * toward `onSurface`. That keeps it a theme-following value — the user's accent and mode still drive it,
-     * and nothing here is a hardcoded colour — while landing both modes on the same *measured* result,
-     * **2.20:1** light and **2.22:1** dark. Deriving from two tokens is also why one factor cannot serve
-     * both: the light page starts 1.34:1 from its outline and the dark page 1.67:1, so equal factors would
-     * give visibly unequal edges.
+     * So the edge is *derived* rather than picked: the theme's `outline`, moved in lightness only until it
+     * measures [RESTING_EDGE_RATIO] against the page it sits on. That keeps it theme-following — the user's
+     * mode still drives it and nothing here is a hardcoded colour — while landing on a *measured* result
+     * rather than a chosen one. On the Flow canvas that is `#AEAEA7` light and `#515151` dark.
      *
      * 2.2:1 is a deliberate target, not a maximum. A resting edge states a boundary and then gets out of the
      * way; at 3:1 and above it reads as a rule competing with the content it contains, which is how a
      * document of framed objects starts looking like a spreadsheet. The one place it stays honest about its
-     * limits: on `surfaceContainerHighest` — a card inside a container — the same value measures 1.72:1, so a
-     * frame nested on the darkest light surface is weaker than a frame on the page. Framed objects nested
-     * that deep are the container work's problem, not this composable's.
+     * limits: on `surfaceContainerHighest` — a card inside a container — the same value measures 1.85:1
+     * light and 1.62:1 dark, so a frame nested on the darkest surface is weaker than a frame on the page.
+     * Framed objects nested that deep are the container work's problem, not this composable's.
+     *
+     * **Why this delegates instead of interpolating.** The first implementation carried `outline` toward
+     * `onSurface` with `androidx.compose.ui.graphics.lerp` and two per-mode factors solved by hand. That was
+     * wrong in a way worth recording, because the code looked right: `lerp` interpolates in **Oklab**, not
+     * sRGB — it converts both endpoints with `Color.convert(ColorSpaces.Oklab)` first — so the factors,
+     * which had been solved in sRGB, produced 2.31:1 light and 2.14:1 dark while the documentation beside
+     * them claimed 2.20 and 2.22. [ContrastAnalysis] measures and adjusts in the same 8-bit sRGB space
+     * throughout, so the number in this comment and the pixel on the screen cannot drift apart again — and
+     * unlike a pair of literal factors, it is asserted in a unit test rather than asserted in prose.
      */
     @Composable
     @ReadOnlyComposable
     private fun restingEdgeColor(): Color {
         val scheme = MaterialTheme.colorScheme
-        val dark = scheme.background.luminance() < 0.35f
-        return lerp(scheme.outline, scheme.onSurface, if (dark) DARK_EDGE_MIX else LIGHT_EDGE_MIX)
+        return EditorChromeColors.legible(scheme.outline, scheme.background, RESTING_EDGE_RATIO)
     }
 
     /** Media corners: what the image path used, kept because a larger radius crops the content. */
@@ -187,16 +193,13 @@ internal object FlowFrameMetrics {
     val SELECTED_WIDTH = 3.dp
 
     /**
-     * How far the light resting edge travels from `outline` toward `onSurface` — measured to land 2.20:1.
+     * What a resting edge has to measure against its own page to be seen without shouting.
      *
-     * Named constants rather than literals at the call site because the two numbers look arbitrary and are
-     * not: each is the solution for one canvas, and changing either without re-measuring silently unbalances
-     * the two modes.
+     * Below roughly 1.5:1 a non-text boundary is not visible at all; at 3:1 and above it competes with the
+     * content it frames. This is the same target the Document editor's resting object edge uses, which is
+     * deliberate — one page of framed objects should not read differently from the other.
      */
-    private const val LIGHT_EDGE_MIX = 0.285f
-
-    /** The dark counterpart — 2.22:1, and a much smaller factor because the dark outline starts closer. */
-    private const val DARK_EDGE_MIX = 0.105f
+    const val RESTING_EDGE_RATIO = 2.2
 }
 
 /**

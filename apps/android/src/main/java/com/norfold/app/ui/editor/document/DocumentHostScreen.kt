@@ -113,6 +113,8 @@ import com.norfold.app.domain.stylesheet
 import com.norfold.app.domain.findById
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.norfold.app.domain.style.resolvedPageBackground
+import com.norfold.app.domain.style.ColorPaint
+import com.norfold.app.ui.EditorChromeColors
 import com.norfold.app.ui.editor.style.backgroundPaint
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
@@ -146,6 +148,31 @@ private val HANDLE_TARGET = 44.dp
 
 /** How far above the object's top edge the rotation handle sits, in page points. */
 private const val ROTATION_HANDLE_OFFSET_PT = 28f
+
+// ── Chrome weights ──────────────────────────────────────────────────────────────────────────────────
+//
+// Every one of these is dp and is converted with `.toPx()` at the draw call. They were literal floats
+// passed straight to `Stroke(width = ...)`, which a `DrawScope` reads as **pixels** — so the 3 "dp" primary
+// outline was 3 px, a third of its intended weight on a 3× phone and half of it on a 2× tablet. The file's
+// own units comment below warns about exactly this confusion; the chrome was the code ignoring it.
+
+/** The primary object's edge, and a selected page's — the heaviest chrome, and the only 3 dp in the file. */
+private val PRIMARY_EDGE = 3.dp
+
+/** A secondary selection's edge, and the active page's. Distinguished from resting by weight and colour. */
+private val SELECTED_EDGE = 2.dp
+
+/** An unselected object's edge: enough to bound the object, not enough to compete with its content. */
+private val RESTING_EDGE = 1.dp
+
+/** Print production marks — one device-independent line, whatever the density. */
+private val HAIRLINE = 1.dp
+
+/** A live snap guide is momentary and must be seen instantly, so it is heavier than a static hint. */
+private val SNAP_GUIDE_WIDTH = 1.5.dp
+
+/** The lock badge's radius. Its inset from the corner is derived from this so the two cannot drift. */
+private val LOCK_BADGE_RADIUS = 5.dp
 
 /**
  * DocumentHost — the bounded-page host (roadmap Phase 2).
@@ -618,6 +645,16 @@ private fun PageSheet(
         ).filter { it.visible }
     }
 
+    // The page's paint is resolved once and used twice: to fill the sheet, and to measure the chrome drawn on
+    // it. Resolving it separately in the two places is how a page could end up with an edge measured against a
+    // colour it is no longer painted with — including mid-Color-Studio, where `previewPaint` means the sheet
+    // is showing a colour the document has not committed yet and the chrome has to follow it live.
+    val pagePaint = state.editorStyle.previewPaint.takeIf {
+        state.editorStyle.colorStudio.target?.role == com.norfold.app.domain.style.ColorRole.PAGE_BACKGROUND &&
+            page.id in state.editorStyle.colorStudio.target.targetIds
+    } ?: resolvedPageBackground(page, state.document.stylesheet())
+    val chrome = rememberDocumentChromeColors(pagePaint)
+
     Box(
         Modifier
             .offset {
@@ -627,19 +664,14 @@ private fun PageSheet(
                 )
             }
             .size(page.geometry.width.ptToDp(scale), page.geometry.height.ptToDp(scale))
-            .backgroundPaint(
-                state.editorStyle.previewPaint.takeIf {
-                    state.editorStyle.colorStudio.target?.role == com.norfold.app.domain.style.ColorRole.PAGE_BACKGROUND &&
-                        page.id in state.editorStyle.colorStudio.target.targetIds
-                } ?: resolvedPageBackground(page, state.document.stylesheet()),
-            )
+            .backgroundPaint(pagePaint)
             .drawBehind {
-                drawPageStructure(page, scale, editing, isActive, isSelected)
+                drawPageStructure(page, scale, editing, isActive, isSelected, chrome)
                 // Guides belong to the page being manipulated, not to every page on screen: the positions are
                 // page-relative, so drawing them on a neighbour would put the line in the wrong place.
                 val manipulation = state.manipulation
                 if (manipulation != null && manipulation.objectIds.any { page.objectById(it) != null }) {
-                    drawSnapGuides(manipulation.guides, scale)
+                    drawSnapGuides(manipulation.guides, scale, chrome)
                 }
             }
             .pointerInput(page.id, scale, state.revision) {
@@ -668,7 +700,7 @@ private fun PageSheet(
         // Back-to-front: the front-most object is drawn last, so it is the one that overlaps the others.
         visible.sortedBy { it.z }.forEach { obj ->
             SceneObjectBox(
-                obj, page, scale, presenter,
+                obj, page, scale, presenter, chrome,
                 onOpenTableInSpreadsheet, onOpenChart, onOpenImage, onOpenShape,
             )
         }
@@ -751,6 +783,7 @@ private fun SceneObjectBox(
     page: DocumentPageBlock,
     scale: Float,
     presenter: DocumentHostPresenter,
+    chrome: DocumentChromeColors,
     onOpenTableInSpreadsheet: (String) -> Unit,
     onOpenChart: (String) -> Unit,
     onOpenImage: (String) -> Unit,
@@ -796,7 +829,7 @@ private fun SceneObjectBox(
                 rotationZ = geometry.rotation
                 transformOrigin = TransformOrigin.Center
             }
-            .drawBehind { drawObjectChrome(obj, selected, isPrimary) }
+            .drawBehind { drawObjectChrome(obj, selected, isPrimary, chrome) }
             .then(
                 if (state.relationshipReview.connectMode != null) {
                     Modifier.pointerInput(obj.id, state.revision) {
@@ -1184,6 +1217,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPageStructure(
     editing: Boolean,
     isActive: Boolean,
     isSelected: Boolean,
+    chrome: DocumentChromeColors,
 ) {
     val geo = page.geometry
     val k = scale * DP_PER_POINT * density
@@ -1201,7 +1235,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPageStructure(
     // Structure aids appear only where they can be acted on: in Original + Edit. Drawing them while reading
     // is clutter, and drawing them in Adaptive would imply a margin the adapted layout is not honouring.
     if (editing) {
-        val guide = Color.Gray.copy(alpha = 0.35f)
+        val guide = chrome.marginGuide
         val left = geo.margins.left * k
         val right = size.width - geo.margins.right * k
         val top = geo.margins.top * k
@@ -1212,14 +1246,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPageStructure(
         drawLine(guide, Offset(0f, bottom), Offset(size.width, bottom))
 
         // Bleed and safe area are print-production marks, so they are drawn distinctly from margins: mistaking
-        // one for the other is exactly the error that gets content trimmed off a printed page.
+        // one for the other is exactly the error that gets content trimmed off a printed page. Their hues are
+        // print convention and stay literal — green means safe area to every printer in the world, so
+        // theme-following would destroy the meaning rather than modernise it. Only the widths change, from
+        // raw pixels to dp.
         if (geo.bleed.safeArea > 0f) {
             val inset = geo.bleed.safeArea * k
             drawRect(
                 color = Color(0xFF4CAF50).copy(alpha = 0.4f),
                 topLeft = Offset(inset, inset),
                 size = androidx.compose.ui.geometry.Size(size.width - inset * 2f, size.height - inset * 2f),
-                style = Stroke(width = 1f),
+                style = Stroke(width = HAIRLINE.toPx()),
             )
         }
         if (geo.bleed.bleed > 0f) {
@@ -1228,13 +1265,13 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPageStructure(
                 color = Color(0xFFE91E63).copy(alpha = 0.4f),
                 topLeft = Offset(-out, -out),
                 size = androidx.compose.ui.geometry.Size(size.width + out * 2f, size.height + out * 2f),
-                style = Stroke(width = 1f),
+                style = Stroke(width = HAIRLINE.toPx()),
             )
         }
 
         if (geo.grid.visible && geo.grid.spacing > 0f) {
             val step = geo.grid.spacing * k
-            val grid = Color.Gray.copy(alpha = 0.15f)
+            val grid = chrome.grid
             var x = step
             while (x < size.width) {
                 drawLine(grid, Offset(x, 0f), Offset(x, size.height))
@@ -1259,36 +1296,126 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPageStructure(
 
         for (index in 1 until geo.columns.count) {
             val x = geo.columnLeft(index) * k
-            drawLine(Color.Gray.copy(alpha = 0.25f), Offset(x, top), Offset(x, bottom))
+            drawLine(chrome.columnDivider, Offset(x, top), Offset(x, bottom))
         }
     }
 
     // Explicitly selected pages are marked distinctly from the merely-active one, because "Selected pages" is
     // a Page Control scope and the user has to be able to see what it names.
+    //
+    // Both used to be literal hex, and the selected page used the *same* cyan as a user's custom guide — so a
+    // selected page and a guide line were the same colour on the same canvas. They are now the accent and its
+    // secondary, each carried to legibility against this page's own colour.
     if (isSelected) {
-        drawRect(color = Color(0xFF00BCD4), style = Stroke(width = 3f))
+        drawRect(color = chrome.selection, style = Stroke(width = PRIMARY_EDGE.toPx()))
     } else if (isActive) {
-        drawRect(color = Color(0xFF6750A4), style = Stroke(width = 2f))
+        drawRect(color = chrome.activePage, style = Stroke(width = SELECTED_EDGE.toPx()))
     }
 }
 
-/** Object chrome: the selection outline, the primary marker and the lock badge. */
+/**
+ * Every chrome colour for one page, already measured against that page's own background.
+ *
+ * A data holder rather than eight parameters, and resolved in the composable rather than inside `DrawScope`,
+ * for two separate reasons. The first is mechanical: `MaterialTheme.colorScheme` is only readable in a
+ * `@Composable`, and a `DrawScope` is not one — the same reason [com.norfold.app.ui.editor.shape.ShapeCanvasOverlay]
+ * resolves its palette up front and threads it down. The second is that these values depend on the *page*,
+ * so a document whose pages are different colours needs a different answer per page, and a single
+ * theme-resolved set computed once for the whole host would be wrong for all but one of them.
+ *
+ * Every field is derived from the theme via [EditorChromeColors.legible], so the user's accent still drives
+ * the chrome on an ordinary white page and is adjusted only as far as the page colour forces.
+ */
+private data class DocumentChromeColors(
+    /** Every "this is the selection" state — primary object, secondary selection, selected page. */
+    val selection: Color,
+    val restingObject: Color,
+    val badge: Color,
+    val activePage: Color,
+    val marginGuide: Color,
+    val grid: Color,
+    val columnDivider: Color,
+)
+
+/**
+ * [DocumentChromeColors] for a page painted with [paint].
+ *
+ * The three selection tiers get [ContrastAnalysis.UI_COMPONENT] — WCAG 1.4.11's 3:1 for a non-text control —
+ * because a selection outline *is* a control boundary: it is the feedback that says which object the next
+ * command will act on. The structure aids ask for less. A margin guide at 3:1 competes with the text it is
+ * measuring, so it targets 2.2:1, and the grid asks only 1.6:1 because a grid legible enough to read as
+ * content is a grid that has stopped being a background. Those two are judgements about how loud a hint
+ * should be; the 3:1 is a requirement.
+ *
+ * The resting edge derives from the page's own ink rather than from the accent: an unselected object is not
+ * in an accent-worthy state, and tinting every object edge with the user's brand colour would make a page of
+ * ordinary objects look like a page of selected ones.
+ */
+@Composable
+private fun rememberDocumentChromeColors(paint: ColorPaint): DocumentChromeColors {
+    val scheme = MaterialTheme.colorScheme
+    val accent = scheme.primary
+    val secondary = scheme.secondary
+    val ink = scheme.onSurface
+    return remember(paint, accent, secondary, ink) {
+        val page = EditorChromeColors.pageBackdrop(paint)
+        // One accent for every "this is the selection" state. Two hues for one concept would read as two
+        // kinds of selection; weight is what separates the tiers, which is why RESTING/SELECTED/PRIMARY_EDGE
+        // differ by whole dp rather than by alpha.
+        val selectionAccent = EditorChromeColors.legible(accent, page)
+        DocumentChromeColors(
+            selection = selectionAccent,
+            restingObject = EditorChromeColors.legible(ink, page, target = RESTING_EDGE_RATIO),
+            badge = EditorChromeColors.badgeInk(page),
+            activePage = EditorChromeColors.legible(secondary, page),
+            marginGuide = EditorChromeColors.legible(ink, page, target = GUIDE_RATIO),
+            grid = EditorChromeColors.legible(ink, page, target = GRID_RATIO),
+            columnDivider = EditorChromeColors.legible(ink, page, target = GUIDE_RATIO),
+        )
+    }
+}
+
+/** A resting object edge states a boundary without competing with the content it bounds. */
+private const val RESTING_EDGE_RATIO = 2.2
+
+/** A margin or column hint: visible when looked for, not while reading. */
+private const val GUIDE_RATIO = 2.2
+
+/** A grid is a background. Legible enough to align against, quiet enough to forget. */
+private const val GRID_RATIO = 1.6
+
+/**
+ * Object chrome: the selection outline, the primary marker and the lock badge.
+ *
+ * Every colour arrives in [chrome] rather than being written here, because none of them can be decided
+ * without knowing the page colour — see [DocumentChromeColors]. The widths are dp converted at draw time:
+ * a bare `Stroke(width = 3f)` inside a `DrawScope` is 3 **px**, which is a hairline on a 3× phone.
+ */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawObjectChrome(
     obj: SceneObject,
     selected: Boolean,
     isPrimary: Boolean,
+    chrome: DocumentChromeColors,
 ) {
     when {
         // The primary object is the one handles and single-target commands act on, so it reads differently
         // from the rest of a multi-selection rather than the user having to infer which one is which.
-        isPrimary -> drawRect(color = Color(0xFF6750A4), style = Stroke(width = 3f))
-        selected -> drawRect(color = Color(0xFF6750A4).copy(alpha = 0.6f), style = Stroke(width = 2f))
-        else -> drawRect(color = Color.Gray.copy(alpha = 0.4f), style = Stroke(width = 1f))
+        isPrimary -> drawRect(color = chrome.selection, style = Stroke(width = PRIMARY_EDGE.toPx()))
+        // Opacity is deliberately not how a secondary selection differs from the primary one: a translucent
+        // outline's real ratio depends on the content beneath it, so the difference is carried by weight
+        // against a colour that has been measured to be legible.
+        selected -> drawRect(color = chrome.selection, style = Stroke(width = SELECTED_EDGE.toPx()))
+        else -> drawRect(color = chrome.restingObject, style = Stroke(width = RESTING_EDGE.toPx()))
     }
     // A lock the user cannot see is a lock they will fight: the badge is why "this will not move" is legible
     // before the drag rather than after it.
     if (obj.lock != SceneLock.None) {
-        drawCircle(color = Color.Gray, radius = 5f, center = Offset(size.width - 9f, 9f))
+        val radius = LOCK_BADGE_RADIUS.toPx()
+        drawCircle(
+            color = chrome.badge,
+            radius = radius,
+            center = Offset(size.width - radius * 1.8f, radius * 1.8f),
+        )
     }
 }
 
@@ -1330,21 +1457,27 @@ private fun Float.toPagePoints(scale: Float, density: Density): Float =
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSnapGuides(
     guides: List<SnapGuideEngine.Guide>,
     scale: Float,
+    chrome: DocumentChromeColors,
 ) {
     val k = scale * DP_PER_POINT * density
+    val width = SNAP_GUIDE_WIDTH.toPx()
     guides.forEach { guide ->
+        // The four hues say *what* captured the edge — page, margin, another object, the grid — and a user who
+        // has learned them reads the reason without reading a label, so they are kept literal. The grid case is
+        // the exception: `Color.Gray` was invisible on a grey sheet, and "the grid" has no colour convention to
+        // preserve, so it borrows the same measured guide colour the static grid lines use.
         val color = when (guide.kind) {
             SnapGuideEngine.Kind.PAGE_EDGE, SnapGuideEngine.Kind.PAGE_CENTER -> Color(0xFFE91E63)
             SnapGuideEngine.Kind.MARGIN -> Color(0xFF4CAF50)
             SnapGuideEngine.Kind.OBJECT_EDGE, SnapGuideEngine.Kind.OBJECT_CENTER -> Color(0xFF00BCD4)
-            SnapGuideEngine.Kind.GRID -> Color.Gray
+            SnapGuideEngine.Kind.GRID -> chrome.marginGuide
         }
         val at = guide.position * k
         when (guide.orientation) {
             SnapGuideEngine.Orientation.VERTICAL ->
-                drawLine(color, Offset(at, 0f), Offset(at, size.height), strokeWidth = 1.5f)
+                drawLine(color, Offset(at, 0f), Offset(at, size.height), strokeWidth = width)
             SnapGuideEngine.Orientation.HORIZONTAL ->
-                drawLine(color, Offset(0f, at), Offset(size.width, at), strokeWidth = 1.5f)
+                drawLine(color, Offset(0f, at), Offset(size.width, at), strokeWidth = width)
         }
     }
 }
