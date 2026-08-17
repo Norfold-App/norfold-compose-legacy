@@ -1429,7 +1429,7 @@ private fun TaskTableHeaderCell(column: TaskTableColumn, compact: Boolean) {
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Icon(icon, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(column.label, fontSize = if (compact) 10.sp else 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        Text(column.label, fontSize = if (compact) 10.sp else 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -3767,7 +3767,7 @@ private fun AssigneeAvatar(name: String) {
 @Composable
 private fun TinyMeta(text: String) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f), shape = RoundedCornerShape(10.dp)) {
-        Text(text, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Text(text, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

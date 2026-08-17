@@ -525,7 +525,7 @@ private fun MiniTag(label: String, accent: Color) {
             .background(accent.copy(alpha = 0.14f))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
-        Text(label, color = accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(label, color = accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

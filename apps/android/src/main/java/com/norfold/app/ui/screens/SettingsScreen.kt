@@ -706,7 +706,7 @@ private fun ProfileBannerCard(
                 }
                 Column(Modifier.weight(1f)) {
                     Text(publicName.ifBlank { username }, color = Color.White, fontWeight = FontWeight.Black, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("@$username", color = Color.White.copy(alpha = 0.76f), fontSize = 12.sp, maxLines = 1)
+                    Text("@$username", color = Color.White.copy(alpha = 0.76f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1289,6 +1289,7 @@ private fun IconFamilyPickerDialog(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 11.sp,
                                         maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                                 if (selected == info.family) Icon(Icons.Outlined.Check, "Selected", tint = MaterialTheme.colorScheme.primary)

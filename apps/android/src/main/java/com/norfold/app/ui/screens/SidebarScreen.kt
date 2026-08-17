@@ -668,7 +668,7 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
             }
             Column(Modifier.weight(1f)) {
                 Text(publicName, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("@${state.settings.syncUserName.ifBlank { "owner" }}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1)
+                Text("@${state.settings.syncUserName.ifBlank { "owner" }}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Icon(Icons.Outlined.UnfoldMore, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -977,7 +977,7 @@ private fun DocSidebarContent(
                                 Modifier.size(15.dp),
                             )
                             Spacer(Modifier.width(4.dp))
-                            Text(tab.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            Text(tab.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }

@@ -1880,14 +1880,14 @@ private fun ChatPersonaBar(
                 Text(title.take(1).uppercase().ifBlank { "W" }, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
             Column(Modifier.weight(1f).clickable(onClick = onTitleClick)) {
-                Text(title, fontWeight = FontWeight.Black, fontSize = 18.sp, maxLines = 1)
+                Text(title, fontWeight = FontWeight.Black, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(
                     modifier = Modifier.clickable(onClick = onStatusClick),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) SemanticColors.signalGreen else MaterialTheme.colorScheme.outline))
-                    Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (showGeneralAction) {
@@ -3487,7 +3487,7 @@ private fun ChatLinkPreviewCard(url: String, tint: Color) {
                 if (metadata.description.isNotBlank()) {
                     Text(metadata.description, color = tint.copy(alpha = 0.75f), fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                if (host.isNotBlank()) Text(host, color = tint.copy(alpha = 0.55f), fontSize = 10.sp, maxLines = 1)
+                if (host.isNotBlank()) Text(host, color = tint.copy(alpha = 0.55f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

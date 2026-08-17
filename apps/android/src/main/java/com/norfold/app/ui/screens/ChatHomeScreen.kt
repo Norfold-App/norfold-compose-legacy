@@ -1138,7 +1138,7 @@ private fun ConversationAvatar(row: ConversationRowData) {
             row.channel?.icon?.isNotBlank() == true &&
             row.channel.icon.startsWith("app.").not()
         ) {
-            Text(row.channel.icon, fontSize = 21.sp, maxLines = 1)
+            Text(row.channel.icon, fontSize = 21.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         } else {
             Icon(icon, null, Modifier.size(20.dp), tint = content)
         }
@@ -1695,7 +1695,7 @@ private fun ContactRow(contact: NorfoldSocial.RemoteContact, onLongPress: () -> 
         Column(Modifier.weight(1f)) {
             Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             contact.handle?.let {
-                Text("@$it", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
+                Text("@$it", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         Surface(

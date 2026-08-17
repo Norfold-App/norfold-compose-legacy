@@ -147,7 +147,7 @@ fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: 
                             ) {
                                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
                                     Text(note.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(note.document.plainText().trim(), fontSize = 11.sp, maxLines = 2, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(note.document.plainText().trim(), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text(relative(note.updatedAt), fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
                                 }
                             }
@@ -609,7 +609,7 @@ private fun DatabaseObjectCard(obj: WorkspaceObject, state: DocsUiState, viewMod
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(iconForObject(obj.objectType), null, tint = Color(obj.color), modifier = Modifier.size(18.dp))
-                Text(obj.objectType.label(), color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, maxLines = 1)
+                Text(obj.objectType.label(), color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(obj.title, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(obj.summary.ifBlank { obj.tags.ifBlank { "No preview available." } }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
