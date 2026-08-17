@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -237,6 +239,13 @@ fun DocumentHostScreen(
     Column(
         modifier
             .fillMaxSize()
+            // The root Scaffold passes WindowInsets(0,0,0,0) and only pads the status bar, so every screen
+            // owns its own bottom edge. Without this the keyboard covers the docks and the inspector — the
+            // caret ends up behind the IME with no way to see what is being typed — and on a
+            // gesture-navigation device the last dock row sits under the navigation pill. IME padding first,
+            // navigation bars only when the keyboard is closed, matching FlowHostScreen's dock.
+            .imePadding()
+            .navigationBarsPadding()
             // Keys a text field owns fall through untouched — see DocumentKeyboardMap.resolve. Unbound keys
             // fall through too, so ordinary typing is never intercepted.
             .onPreviewKeyEvent { event ->

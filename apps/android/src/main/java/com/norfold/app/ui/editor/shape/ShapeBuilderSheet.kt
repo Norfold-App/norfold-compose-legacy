@@ -63,6 +63,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.style.ColorDomain
@@ -690,6 +691,7 @@ private fun LayersSection(
                     Text(
                         layer.displayName(),
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         style = if (selected) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium,
                     )
                 },

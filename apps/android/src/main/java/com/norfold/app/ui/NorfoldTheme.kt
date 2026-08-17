@@ -79,7 +79,11 @@ private fun lightScheme(accent: Color) = lightColorScheme(
     surface = Color.White,
     onSurface = LightInk,
     surfaceVariant = Color(0xFFF1F2F7),
-    onSurfaceVariant = Color(0xFF72738A),
+    // Secondary ink has to clear AA on all three light surfaces, not just the whitest one. The previous
+    // 0xFF72738A is 4.63:1 on `surface` but 4.36:1 on `background` — which is the colour most screens
+    // actually stand on — and 4.14:1 on `surfaceVariant`. This value clears 4.5:1 on all three (5.05 /
+    // 4.76 / 4.52) with the same blue-grey cast, so nothing about the palette's character changes.
+    onSurfaceVariant = Color(0xFF6C6D84),
     outline = Color(0xFFE4E6EF),
     outlineVariant = Color(0xFFEEF0F5),
     primaryContainer = accent.mix(Color.White, 0.88f),

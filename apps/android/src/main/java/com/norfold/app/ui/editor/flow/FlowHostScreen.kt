@@ -114,6 +114,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -124,6 +125,7 @@ import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.DropTarget
+import com.norfold.app.domain.deriveFlowObject
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.flow.FlowCommandItem
 import com.norfold.app.editor.flow.FlowDragGeometry
@@ -896,6 +898,24 @@ private fun FlowBlockRow(
             onEditorFocusChanged = onEditorFocusChanged,
         )
     }
+    /**
+     * How this block is presented, as opposed to what it contains.
+     *
+     * Derived rather than stored, so no saved note changed and this row renders exactly as it did before the
+     * type existed. It replaces two copies of `block is ImageBlock || block is ChartBlock` that had drifted
+     * into meaning different things — one gated the selection chrome, the other decided what a tap opens —
+     * and being one value means they can no longer disagree about whether a block is an object.
+     */
+    val flowObject = remember(block) { block.deriveFlowObject() }
+
+    /**
+     * Whether tapping this block opens a dedicated editor for it.
+     *
+     * Deliberately narrower than [FlowObject.selectable]: a table and a shape are selectable objects, but
+     * neither has a full-screen editor to open, and a tap on one must still place a caret. So this stays a
+     * question about which editors exist, and the `when` below is the list — kept adjacent to it rather than
+     * restated as a boolean somewhere else.
+     */
     val isObject = block is ImageBlock || block is ChartBlock
 
     // Structural selection means the *row* owns every gesture inside it (correction item 6). The defect this
@@ -1044,7 +1064,7 @@ private fun FlowBlockRow(
                     chartDataRevision = state.revision,
                     compact = compact,
                     editing = editing,
-                    objectSelected = editing && (block is ImageBlock || block is ChartBlock),
+                    objectSelected = editing && flowObject.selectable,
                 ),
             )
         }
@@ -1233,6 +1253,7 @@ private fun FlowTitleField(
                 value.ifBlank { "Untitled" },
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth(),
             )
         } else BasicTextField(
@@ -1401,7 +1422,15 @@ private fun FlowDockButton(
                 label.contains("strike", true) -> "Strike"
                 else -> label
             }
-            if (showLabel) Text(compactLabel, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
+            if (showLabel) {
+                Text(
+                    compactLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = color,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

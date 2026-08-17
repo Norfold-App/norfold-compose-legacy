@@ -52,7 +52,13 @@ internal fun FlowVisualTheme(content: @Composable () -> Unit) {
         outlineVariant = if (dark) Color(0xFF2F2F2F) else Color(0xFFE9E9E7),
         onBackground = if (dark) Color(0xFFE9E9E7) else Color(0xFF37352F),
         onSurface = if (dark) Color(0xFFE9E9E7) else Color(0xFF37352F),
-        onSurfaceVariant = if (dark) Color(0xFF9B9B9B) else Color(0xFF787774),
+        // Secondary ink — captions, an embed's URL, a preview's explanatory line. The light value used to
+        // be 0xFF787774, which is 4.48:1 on white: it misses AA on the page it is most often drawn on, and
+        // falls to 3.72:1 on `surfaceContainerHighest`. This value clears 4.5:1 on *every* light surface in
+        // this scheme (5.49 on the page, 4.56 on the darkest container), and stays two stops lighter than
+        // the primary ink above it so the hierarchy the token exists for still reads. Dark is unchanged —
+        // 0xFF9B9B9B is already 6.33:1 on the near-black page.
+        onSurfaceVariant = if (dark) Color(0xFF9B9B9B) else Color(0xFF6A6966),
     )
 
     // `primary` is deliberately *not* overridden: it arrives from the outer scheme, which is how the user's
@@ -92,9 +98,10 @@ internal val LocalFlowContentTypography = staticCompositionLocalOf { Typography(
 /**
  * What a block renderer reads instead of `MaterialTheme`.
  *
- * Two members, both content-only: [type] for document text and [measure] for how wide a line of it may get.
- * Anything that is not the document — a toolbar, a card, a tab strip, a placeholder — keeps reading
- * `MaterialTheme` directly.
+ * Content-only, every member: [type] for document text, [measure] for how wide a line of it may get, and
+ * [gutter]/[columnMinimum] for the two structural widths that have to track the type or the block stops
+ * fitting its own content. Anything that is not the document — a toolbar, a card, a tab strip, a placeholder —
+ * keeps reading `MaterialTheme` directly.
  */
 internal object FlowContent {
     val type: Typography
@@ -122,6 +129,19 @@ internal object FlowContent {
     val gutter: Dp
         @Composable @ReadOnlyComposable get() = with(LocalDensity.current) {
             (LocalReadingPreference.current.sizeSp(ContentRole.BODY) * 1.8f).sp.toDp().coerceIn(28.dp, 64.dp)
+        }
+
+    /**
+     * The narrowest a table column may be drawn.
+     *
+     * Scaled with the type for the same reason as [gutter], and against the same role a body cell uses: a
+     * fixed 72 dp column holds about five characters of 16 sp text and one and a half of 36 sp, so a reader
+     * at 2.0x would be handed a grid of ellipses. Clamped at both ends — the floor is a width a short word
+     * still survives in, and the ceiling stops a wide table from becoming one column per screen.
+     */
+    val columnMinimum: Dp
+        @Composable @ReadOnlyComposable get() = with(LocalDensity.current) {
+            (LocalReadingPreference.current.sizeSp(ContentRole.SECONDARY) * 4.5f).sp.toDp().coerceIn(72.dp, 168.dp)
         }
 }
 

@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -90,6 +92,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -181,16 +184,27 @@ fun SpreadsheetHostScreen(
     }
 
     Column(
-        modifier.fillMaxSize().focusRequester(rootFocus).focusable().onKeyEvent { event ->
-            event.toSpreadsheetShortcut()?.let { shortcut ->
-                runtime.handleShortcut(shortcut).also { handled ->
-                    if (handled) { refresh++; onChanged() }
-                    // Ctrl+Z reaches History through the runtime, not through this controller: without
-                    // this a reversal that must be disclosed would refuse and show nothing.
-                    history.syncFromRuntime()
-                }
-            } ?: false
-        },
+        modifier
+            .fillMaxSize()
+            // The root Scaffold passes WindowInsets(0,0,0,0) and only pads the status bar, so every screen
+            // owns its own bottom edge. Without this the keyboard covers the sheet tabs and the advanced
+            // bar, and the cell being edited can sit behind the IME while its formula bar is off screen.
+            // IME padding first, navigation bars only when the keyboard is closed — the same order
+            // FlowHostScreen uses for its dock.
+            .imePadding()
+            .navigationBarsPadding()
+            .focusRequester(rootFocus)
+            .focusable()
+            .onKeyEvent { event ->
+                event.toSpreadsheetShortcut()?.let { shortcut ->
+                    runtime.handleShortcut(shortcut).also { handled ->
+                        if (handled) { refresh++; onChanged() }
+                        // Ctrl+Z reaches History through the runtime, not through this controller: without
+                        // this a reversal that must be disclosed would refuse and show nothing.
+                        history.syncFromRuntime()
+                    }
+                } ?: false
+            },
     ) {
         SpreadsheetTopBar(
             title = title,
@@ -948,6 +962,10 @@ private fun GridCell(
                     textAlign = textAlign,
                 ),
                 maxLines = if (format.wrap == true) Int.MAX_VALUE else 1,
+                // A cell that runs past its column must say so. The default Clip cuts mid-glyph, which reads
+                // as a rendering fault rather than as "there is more here" — and in a grid, where the next
+                // column starts immediately, there is nothing else to signal it.
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

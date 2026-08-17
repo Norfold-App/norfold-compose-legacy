@@ -3,8 +3,10 @@ package com.norfold.app.ui.editor.document
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -69,7 +71,9 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -94,6 +98,7 @@ import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
 import com.norfold.app.domain.effectiveStyleAssignment
 import com.norfold.app.domain.ShapeBlock
+import com.norfold.app.domain.TableAlignment
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.UnknownBlock
@@ -102,6 +107,7 @@ import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.editor.flow.FlowInlineStyle
 import com.norfold.app.editor.flow.FlowInlineText
+import com.norfold.app.editor.flow.FlowTableLayout
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 import com.norfold.app.ui.screens.highlightColor
 import com.norfold.app.domain.style.Stylesheet
@@ -745,8 +751,19 @@ private fun SceneCompactPreview(
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f))
             .padding(renderScale.pointToDp(8f)),
     ) {
-        Text(title, style = renderScale.pointTextStyle(MaterialTheme.typography.titleSmall), maxLines = 1)
-        Text(detail, style = renderScale.pointTextStyle(MaterialTheme.typography.bodySmall), maxLines = 2, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            title,
+            style = renderScale.pointTextStyle(MaterialTheme.typography.titleSmall),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            detail,
+            style = renderScale.pointTextStyle(MaterialTheme.typography.bodySmall),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -758,7 +775,23 @@ private fun sceneFileSize(bytes: Long): String = when {
     else -> "${bytes / 1_073_741_824} GB"
 }
 
-/** A table placed on a page: readable at its real content. Cell editing belongs to the Phase-4 table work. */
+/**
+ * A table placed on a page: readable at its real content. Cell editing belongs to the Phase-4 table work.
+ *
+ * Column widths come from [FlowTableLayout], the same rule Flow's table uses, so a table dragged from a note onto
+ * a page keeps the proportions it was authored with instead of being re-divided by its column count. Two things
+ * differ here because a page is not a phone card:
+ *
+ * The floor is in **page points**, converted through [DocumentRenderScale]. A document column has an authored
+ * physical width, so the narrowest readable column is a property of the page — 44pt, about six characters of 11pt
+ * text — and it must shrink along with everything else as the reader zooms out. Borrowing `FlowContent.columnMinimum`
+ * would have pinned a screen-space floor onto a scaled page, which is how a table stops shrinking at 40% zoom while
+ * the paper around it keeps going.
+ *
+ * And the frame is what bounds the fit. A scene object has an authored width the user set by dragging its handles,
+ * so that width — not the viewport — is the space the grid is fitted into. Overflow scrolls **inside the frame**, so
+ * a wide table stays in the box it was placed in rather than spilling across the page.
+ */
 @Composable
 private fun SceneTable(
     block: TableBlock,
@@ -769,58 +802,99 @@ private fun SceneTable(
     activeCell: Pair<Int, Int>? = null,
     cellDraft: String? = null,
 ) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(renderScale.pointToDp(6f)))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        // Read mode exposes no way into an editing host, and the flag governs this route exactly as it
-        // governs the sidebar entry — otherwise a disabled host would still be one tap away.
-        if (editing && editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(
-                    onClick = { callbacks.onOpenTableInSpreadsheet(block.id) },
-                    modifier = Modifier.heightIn(min = renderScale.pointToDp(48f)),
-                ) { Text("Open in Spreadsheet") }
-            }
+    // One state for the header row and every body row: separate states would let a heading drift out of register
+    // with the column under it, and a table that mislabels its own data is worse than one that does not scroll.
+    val scroll = rememberScrollState()
+    val columns = maxOf(block.headers.size, block.rows.maxOfOrNull { it.size } ?: 0)
+    val minimum = renderScale.pointToDp(MINIMUM_TABLE_COLUMN_POINTS)
+    BoxWithConstraints(modifier) {
+        // `hasBoundedWidth` rather than a test on `maxWidth`: an unbounded constraint arrives as a *finite* and
+        // enormous Dp, and fitting a grid against that scales it up against imaginary paper. Zero is
+        // [FlowTableLayout]'s documented "unknown", which returns the authored widths untouched.
+        val available = if (constraints.hasBoundedWidth) maxWidth else 0.dp
+        val resolved = remember(block.columnWidthsDp, columns, minimum, available) {
+            FlowTableLayout.resolve(
+                storedWidthsDp = block.columnWidthsDp,
+                columnCount = columns,
+                minimumDp = minimum.value,
+                availableDp = available.value,
+            )
         }
-        Row(Modifier.fillMaxWidth()) {
-            block.headers.forEachIndexed { column, cell ->
-                SceneTableCell(
-                    text = cell.content.plainText(),
-                    header = true,
-                    editing = editing,
-                    active = activeCell == (-1 to column),
-                    editorText = cellDraft.orEmpty(),
-                    onActivate = { callbacks.onTableCellActivate(-1, column) },
-                    onDraft = { callbacks.onTableCellDraft(-1, column, it) },
-                    onCommit = { callbacks.onTableCellCommit(-1, column, it) },
-                    renderScale = renderScale,
-                    modifier = Modifier.weight(1f),
-                )
+        val widths = remember(resolved) { resolved.columnsDp.map { it.dp } }
+        val gridWidth = resolved.totalDp.dp
+        Column(
+            Modifier
+                .clip(RoundedCornerShape(renderScale.pointToDp(6f)))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            // Read mode exposes no way into an editing host, and the flag governs this route exactly as it
+            // governs the sidebar entry — otherwise a disabled host would still be one tap away.
+            if (editing && editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(
+                        onClick = { callbacks.onOpenTableInSpreadsheet(block.id) },
+                        modifier = Modifier.heightIn(min = renderScale.pointToDp(48f)),
+                    ) { Text("Open in Spreadsheet") }
+                }
             }
-        }
-        block.rows.forEachIndexed { rowIndex, row ->
-            HorizontalDivider(thickness = renderScale.pointToDp(1f))
-            Row(Modifier.fillMaxWidth()) {
-                row.forEachIndexed { column, cell ->
-                    SceneTableCell(
-                        text = cell.content.plainText(),
-                        header = false,
-                        editing = editing,
-                        active = activeCell == (rowIndex to column),
-                        editorText = cellDraft.orEmpty(),
-                        onActivate = { callbacks.onTableCellActivate(rowIndex, column) },
-                        onDraft = { callbacks.onTableCellDraft(rowIndex, column, it) },
-                        onCommit = { callbacks.onTableCellCommit(rowIndex, column, it) },
-                        renderScale = renderScale,
-                        modifier = Modifier.weight(1f),
+            Column(Modifier.horizontalScroll(scroll)) {
+                Row(Modifier.width(gridWidth)) {
+                    block.headers.forEachIndexed { column, cell ->
+                        SceneTableCell(
+                            text = cell.content.plainText(),
+                            header = true,
+                            editing = editing,
+                            active = activeCell == (-1 to column),
+                            editorText = cellDraft.orEmpty(),
+                            onActivate = { callbacks.onTableCellActivate(-1, column) },
+                            onDraft = { callbacks.onTableCellDraft(-1, column, it) },
+                            onCommit = { callbacks.onTableCellCommit(-1, column, it) },
+                            renderScale = renderScale,
+                            alignment = block.columnAlignments.getOrNull(column),
+                            modifier = Modifier.width(widths.getOrElse(column) { minimum }),
+                        )
+                    }
+                }
+                block.rows.forEachIndexed { rowIndex, row ->
+                    // Explicitly as wide as the grid. Inside a scroll container `fillMaxWidth` resolves against an
+                    // unbounded constraint and collapses to nothing, so a divider written the obvious way is a
+                    // divider that silently is not there.
+                    HorizontalDivider(
+                        modifier = Modifier.width(gridWidth),
+                        thickness = renderScale.pointToDp(1f),
                     )
+                    Row(Modifier.width(gridWidth)) {
+                        row.forEachIndexed { column, cell ->
+                            SceneTableCell(
+                                text = cell.content.plainText(),
+                                header = false,
+                                editing = editing,
+                                active = activeCell == (rowIndex to column),
+                                editorText = cellDraft.orEmpty(),
+                                onActivate = { callbacks.onTableCellActivate(rowIndex, column) },
+                                onDraft = { callbacks.onTableCellDraft(rowIndex, column, it) },
+                                onCommit = { callbacks.onTableCellCommit(rowIndex, column, it) },
+                                renderScale = renderScale,
+                                alignment = block.columnAlignments.getOrNull(column),
+                                modifier = Modifier.width(widths.getOrElse(column) { minimum }),
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+/**
+ * The narrowest a document table column may be, in page points.
+ *
+ * Points rather than dp because this is a floor on the *authored page*, not on the screen: at 44pt a column holds
+ * roughly six characters of 11pt body text, and expressing it in points means the floor scales with the zoom
+ * exactly like the type inside it. A dp floor would stop shrinking partway through a zoom-out and leave the table
+ * bulging out of a page that kept getting smaller.
+ */
+private const val MINIMUM_TABLE_COLUMN_POINTS = 44f
 
 @Composable
 private fun SceneTableCell(
@@ -833,11 +907,21 @@ private fun SceneTableCell(
     onDraft: (String) -> Unit,
     onCommit: (String) -> Unit,
     renderScale: DocumentRenderScale = DocumentRenderScale.At100Percent,
+    alignment: TableAlignment? = null,
     modifier: Modifier = Modifier,
 ) {
     val style = renderScale.pointTextStyle(if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall)
     val rowHeight = renderScale.pointToDp(24f)
     val minimumHeight = if (editing) maxOf(48.dp, rowHeight) else rowHeight
+    // `columnAlignments` is authored data that reached no renderer until now: a numeric column the user right-
+    // aligned was drawn left-aligned, which for a column of figures is a visible defect rather than a nicety.
+    // Applied to the text inside the cell, not as a Box alignment — both children fill the cell's width, so a
+    // container alignment would have no slack to work with and would silently do nothing.
+    val textAlign = when (alignment) {
+        TableAlignment.Center -> TextAlign.Center
+        TableAlignment.End -> TextAlign.End
+        else -> TextAlign.Start
+    }
     // Focus loss commits, matching every grid the user has met. The draft itself lives in the runtime.
     var hadFocus by remember { mutableStateOf(false) }
     Box(
@@ -858,7 +942,7 @@ private fun SceneTableCell(
             BasicTextField(
                 value = editorText,
                 onValueChange = onDraft,
-                textStyle = style.copy(color = LocalContentColor.current),
+                textStyle = style.copy(color = LocalContentColor.current, textAlign = textAlign),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -871,7 +955,17 @@ private fun SceneTableCell(
                     },
             )
         } else {
-            Text(text.ifBlank { " " }, style = style)
+            // One line, ellipsized, to match the field above it. The display path used to wrap freely while the
+            // edit path was `singleLine`, so tapping a long cell collapsed a three-line row to one and shifted
+            // every row below it — the table visibly jumped at the moment of the tap.
+            Text(
+                text.ifBlank { " " },
+                style = style,
+                textAlign = textAlign,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

@@ -96,6 +96,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -177,7 +178,7 @@ private fun ImagePrimaryTab(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(icon, contentDescription = null, Modifier.size(18.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -257,7 +258,13 @@ private fun ImageCompactSlider(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(86.dp), maxLines = 1)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.width(86.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Slider(
             value = value.coerceIn(range.start, range.endInclusive),
             onValueChange = { next ->
@@ -662,7 +669,7 @@ private fun ImageStudioModeButton(mode: ImageStudioMode, selected: Boolean, onCl
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (selected) Icon(mode.icon, null, Modifier.size(18.dp))
-            Text(mode.label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            Text(mode.label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -887,7 +894,13 @@ private fun ImageEditorValueRail(
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f), maxLines = 1)
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(display(value), style = MaterialTheme.typography.labelLarge)
             }
             Slider(
@@ -1344,7 +1357,13 @@ private fun ImageVisualChoice(
                     .background(Brush.linearGradient(swatch)),
                 contentAlignment = Alignment.Center,
             ) { preview?.invoke(this) }
-            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.align(Alignment.CenterHorizontally))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
         }
     }
 }

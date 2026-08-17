@@ -15,6 +15,7 @@ import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.UnknownBlock
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.locate
+import com.norfold.app.domain.supportsFlowHeight
 import com.norfold.app.editor.command.Capability
 
 /**
@@ -44,6 +45,15 @@ object FlowCapabilities {
         if (block is TableBlock) add(Capability.TABLE_STRUCTURE)
         // Un-nesting is only meaningful for a block that actually lives inside a container.
         if (document.blocks.locate(block.id)?.first != null) add(Capability.FRAMING)
+        // Resizable means "stores a height", which is a narrower and more honest claim than "is an object":
+        // a table is an object and cannot be resized, because its height is the sum of its rows. The answer
+        // comes from `supportsFlowHeight` rather than from a list of kinds here, so this offer and the write
+        // that fulfils it are derived from the same fact and cannot drift apart.
+        //
+        // Unlike Document there is no lock to consult: a Flow block has no `SceneLock`, so nothing can
+        // withdraw this capability once the kind supports it. When Flow gains per-object locking, this line
+        // gains the same `&&` Document's already has.
+        if (block.supportsFlowHeight()) add(Capability.RESIZE)
     }
 
     /** Union of the capabilities offered by [blockIds] — the selection-level offer set for a command context. */

@@ -94,7 +94,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -118,6 +120,7 @@ import com.norfold.app.domain.DividerBlock
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.EmbedBlock
 import com.norfold.app.domain.FileBlock
+import com.norfold.app.domain.FlowSizePolicy
 import com.norfold.app.domain.HeadingBlock
 import com.norfold.app.domain.InlineNode
 import com.norfold.app.domain.InlineText
@@ -127,6 +130,7 @@ import com.norfold.app.domain.NumberedListBlock
 import com.norfold.app.domain.ParagraphBlock
 import com.norfold.app.domain.QuoteBlock
 import com.norfold.app.domain.effectiveStyleAssignment
+import com.norfold.app.domain.TableAlignment
 import com.norfold.app.domain.TableBlock
 import com.norfold.app.domain.TodoListBlock
 import com.norfold.app.domain.UnknownBlock
@@ -135,6 +139,7 @@ import com.norfold.app.editor.flow.FlowCaretRequest
 import com.norfold.app.editor.flow.FlowInlineStyle
 import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.editor.flow.FlowTableCursor
+import com.norfold.app.editor.flow.FlowTableLayout
 import com.norfold.app.editor.flags.EditorFeatureFlag
 import com.norfold.app.editor.style.CalloutTone
 import com.norfold.app.ui.editor.editorFlags
@@ -520,7 +525,7 @@ fun FlowBlockContent(
                         block = block,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(block.displayHeightDp.coerceIn(120f, 560f).dp)
+                            .height(FlowSizePolicy.MEDIA.clamp(block.displayHeightDp).dp)
                             .semantics {
                                 contentDescription = "Image${block.caption.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}"
                             },
@@ -581,7 +586,7 @@ fun FlowBlockContent(
                             role = Role.Button,
                             onClickLabel = "Open Chart Studio",
                         ) { callbacks.onOpenChart(block.id) } else Modifier),
-                    heightDp = block.editorHeightDp.toInt().coerceIn(120, 560),
+                    heightDp = FlowSizePolicy.MEDIA.clamp(block.editorHeightDp).toInt(),
                 )
             }
         } else {
@@ -602,7 +607,10 @@ fun FlowBlockContent(
                 if (loaded.origin == LoadedShapeDocument.Origin.CANONICAL) {
                     ShapeDocumentPreview(
                         document = loaded.document,
-                        modifier = Modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(120f, 560f).dp),
+                        // The shape policy, not the media policy this used to borrow: a shape that had been
+                        // built clamped to a 120dp floor while the same shape unbuilt clamped to 72dp, so
+                        // promoting a 90dp shape into a document silently made it taller.
+                        modifier = Modifier.fillMaxWidth().height(FlowSizePolicy.SHAPE.clamp(block.displayHeightDp).dp),
                     )
                 } else {
                     FlowShapeBlock(block, context, Modifier.fillMaxWidth())
@@ -642,7 +650,7 @@ private fun FlowShapeBlock(block: ShapeBlock, context: FlowBlockContext, modifie
     val stroke = context.previewPaint.takeIf { previewApplies && context.previewRole == ColorRole.STROKE }
         ?: resolvedShapeStroke(block, context.stylesheet)
     Box(
-        modifier.fillMaxWidth().height(block.displayHeightDp.coerceIn(72f, 560f).dp)
+        modifier.fillMaxWidth().height(FlowSizePolicy.SHAPE.clamp(block.displayHeightDp).dp)
             .clip(shape).backgroundPaint(fill)
             .border(metrics.strokeWidthDp.dp, Color(stroke.representative().toArgb()), shape)
             .semantics { contentDescription = "${block.kind.name.replace('_', ' ')} shape${block.text.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}" },
@@ -662,11 +670,24 @@ private fun FlowEmbedPreview(block: EmbedBlock, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Text(block.metadata.title.ifBlank { "Embedded link" }, style = MaterialTheme.typography.titleSmall)
-        if (block.metadata.description.isNotBlank()) Text(block.metadata.description, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+        if (block.metadata.description.isNotBlank()) {
+            Text(
+                block.metadata.description,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         // The URL is the card's caption, not its call to action — the whole card is the target. Accent here
         // put the theme colour on every embed in the document and competed with the title above it for the
         // eye, which is backwards: the title is what the reader is looking for.
-        Text(block.url, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Text(
+            block.url,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -684,7 +705,12 @@ private fun FlowFilePreview(block: FileBlock, modifier: Modifier = Modifier) {
             contentAlignment = Alignment.Center,
         ) { Text(block.name.substringAfterLast('.', "FILE").take(4).uppercase(), style = MaterialTheme.typography.labelSmall) }
         Column(Modifier.weight(1f).padding(start = 10.dp)) {
-            Text(block.name.ifBlank { "Attachment" }, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+            Text(
+                block.name.ifBlank { "Attachment" },
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(listOf(block.mimeType, humanFileSize(block.sizeBytes)).filter(String::isNotBlank).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
         }
     }
@@ -799,7 +825,7 @@ private fun FlowHtmlBlock(
         }
         Box(
             Modifier.fillMaxWidth()
-                .heightIn(min = 180.dp, max = block.editorHeightDp.coerceIn(180f, 560f).dp)
+                .heightIn(min = 180.dp, max = FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
                 .clip(RoundedCornerShape(8.dp)),
         ) {
             when (mode) {
@@ -815,7 +841,7 @@ private fun FlowHtmlBlock(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
                 )
                 FlowRenderableMode.Preview -> AndroidView(
-                    modifier = Modifier.fillMaxWidth().height(block.editorHeightDp.coerceIn(180f, 560f).dp)
+                    modifier = Modifier.fillMaxWidth().height(FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
                         .semantics { contentDescription = "Sandboxed HTML preview" },
                     factory = { androidContext ->
                         WebView(androidContext).apply {
@@ -951,7 +977,7 @@ private fun FlowMermaidBlock(
         Box(
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = 156.dp, max = block.editorHeightDp.coerceIn(156f, 360f).dp)
+                .heightIn(min = 156.dp, max = FlowSizePolicy.DIAGRAM.clamp(block.editorHeightDp).dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
                 .padding(12.dp),
@@ -1333,6 +1359,20 @@ private fun FlowStyledChildren(
  *
  * The addressed cell is drawn from [FlowBlockContext.tableCursor], i.e. from the runtime's own cursor. That is
  * the correction for item 7: a cell can only *look* selected when the command system agrees it is.
+ *
+ * **Columns have widths, and the table scrolls.** Every cell used to be `weight(1f)` inside a
+ * `fillMaxWidth()` row, which divides the phone's ~360 dp of measure by the column count: a six-column table
+ * gave each column 50 dp — under four characters — and `columnWidthsDp` was never read at all, so a width the
+ * spreadsheet bridge had already computed from the workbook was discarded on the way to the screen. Fixed
+ * widths plus one shared horizontal scroll is the only arrangement where a wide table stays a table on a
+ * phone rather than becoming a column of truncated stubs.
+ *
+ * Scrolling is the fallback, not the first resort. [FlowTableLayout] scales the authored widths in proportion to
+ * fit the card exactly — up for a narrow table, down for a wide one — and the grid only overflows when fitting
+ * would push a column under [FlowContent.columnMinimum]. So a three-column table on a phone still renders
+ * full-width and non-scrolling, exactly as before this change; a ten-column import scrolls, because the
+ * alternative was ten 36 dp stubs. That rule is arithmetic about widths, so it lives in pure Kotlin next to
+ * `FlowDragGeometry` and is asserted on the JVM rather than trusted here.
  */
 @Composable
 private fun FlowTablePreview(
@@ -1342,7 +1382,29 @@ private fun FlowTablePreview(
     modifier: Modifier = Modifier,
 ) {
     val cursor = context.tableCursor?.takeIf { it.blockId == block.id }
-    Box(modifier.fillMaxWidth()) {
+    // One scroll state for the header row and every body row. Separate states would let the header drift out
+    // of register with the data underneath it, which is worse than no scrolling: a column heading over the
+    // wrong column is a table that lies.
+    val scroll = rememberScrollState()
+    val columns = maxOf(block.headers.size, block.rows.maxOfOrNull { it.size } ?: 0)
+    val minimum = FlowContent.columnMinimum
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        // `hasBoundedWidth` rather than a test on `maxWidth`: an unbounded constraint arrives here as a *finite*
+        // and enormous Dp, so a table nested inside another horizontally scrolling container would otherwise be
+        // fitted against half a million dp of imaginary page. Zero is [FlowTableLayout]'s "unknown".
+        val available = if (constraints.hasBoundedWidth) maxWidth else 0.dp
+        val resolved = remember(block.columnWidthsDp, columns, minimum, available) {
+            FlowTableLayout.resolve(
+                storedWidthsDp = block.columnWidthsDp,
+                columnCount = columns,
+                minimumDp = minimum.value,
+                availableDp = available.value,
+            )
+        }
+        // Remembered against the resolved value rather than mapped inline, so a table whose widths cannot have
+        // changed does not rebuild its width list on every keystroke in one of its cells.
+        val widths = remember(resolved) { resolved.columnsDp.map { it.dp } }
+        val gridWidth = resolved.totalDp.dp
         Column(
             Modifier
                 .fillMaxWidth()
@@ -1350,50 +1412,75 @@ private fun FlowTablePreview(
                 .background(MaterialTheme.colorScheme.surface)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp)),
         ) {
-        // Gated on the same flag as the route itself: an escape hatch into a host the build has not
-        // enabled would make the flag decorative. §25 — this opens the *same* table identity, so it is a
-        // deeper surface, not a conversion.
-        if (editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(
-                    onClick = { callbacks.onOpenTableInSpreadsheet(block.id) },
-                    enabled = context.editing && !context.selectionMode,
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text("Open in Spreadsheet") }
+            // Gated on the same flag as the route itself: an escape hatch into a host the build has not
+            // enabled would make the flag decorative. §25 — this opens the *same* table identity, so it is a
+            // deeper surface, not a conversion.
+            if (editorFlags.isEnabled(EditorFeatureFlag.SPREADSHEET_HOST)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(
+                        onClick = { callbacks.onOpenTableInSpreadsheet(block.id) },
+                        enabled = context.editing && !context.selectionMode,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text("Open in Spreadsheet") }
+                }
             }
-        }
-        Row(Modifier.fillMaxWidth()) {
-            block.headers.forEachIndexed { column, cell ->
-                FlowTableCell(
-                    text = cell.content.plainText(),
-                    header = true,
-                    addressed = cursor?.row == -1 && cursor.column == column,
-                    // In structural selection a cell tap must select the table block, not address a cell
-                    // (correction item 6); the click is disabled so the row's own gesture sees it instead.
-                    enabled = context.editing && !context.selectionMode,
-                    modifier = Modifier.weight(1f),
-                    onClick = { callbacks.onTableCell(FlowTableCursor(block.id, row = -1, column = column)) },
-                    editableText = if (cursor?.row == -1 && cursor.column == column) context.tableDraft else null,
-                    onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, -1, column), it) },
-                    onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, -1, column), it) },
-                )
-            }
-        }
-            block.rows.forEachIndexed { rowIndex, row ->
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(Modifier.fillMaxWidth()) {
-                    row.forEachIndexed { column, cell ->
+            // The scroll lives on an inner Column so the card's own edge, fill and the button above stay put
+            // while the grid moves inside it. Scrolling the card itself would drag its rounded border off
+            // screen and leave the block looking clipped.
+            Column(Modifier.horizontalScroll(scroll)) {
+                // The header tint lives on the row, not on each cell: an imported table can have fewer headers
+                // than data columns, and per-cell fills would end the tint partway across and leave a white
+                // notch above real columns. `width(gridWidth)` is what gives the row something to tint — inside
+                // a scroll container it would otherwise shrink to its content.
+                Row(
+                    Modifier
+                        .width(gridWidth)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                ) {
+                    block.headers.forEachIndexed { column, cell ->
                         FlowTableCell(
                             text = cell.content.plainText(),
-                            header = false,
-                            addressed = cursor?.row == rowIndex && cursor.column == column,
+                            header = true,
+                            addressed = cursor?.row == -1 && cursor.column == column,
+                            alignment = block.columnAlignments.getOrNull(column),
+                            // In structural selection a cell tap must select the table block, not address a
+                            // cell (correction item 6); the click is disabled so the row's own gesture sees it.
                             enabled = context.editing && !context.selectionMode,
-                            modifier = Modifier.weight(1f),
-                            onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
-                            editableText = if (cursor?.row == rowIndex && cursor.column == column) context.tableDraft else null,
-                            onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, rowIndex, column), it) },
-                            onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, rowIndex, column), it) },
+                            modifier = Modifier.width(widths.getOrElse(column) { minimum }),
+                            onClick = { callbacks.onTableCell(FlowTableCursor(block.id, row = -1, column = column)) },
+                            editableText = if (cursor?.row == -1 && cursor.column == column) context.tableDraft else null,
+                            onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, -1, column), it) },
+                            onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, -1, column), it) },
                         )
+                    }
+                }
+                block.rows.forEachIndexed { rowIndex, row ->
+                    // An explicit width, because a divider is `fillMaxWidth()` inside and the scroll container
+                    // hands its children an *unbounded* width constraint — under which fillMaxWidth resolves to
+                    // the minimum, i.e. zero. Every row rule would have silently vanished.
+                    HorizontalDivider(
+                        modifier = Modifier.width(gridWidth),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                    // A row shorter than the header — an imported table can be ragged — is left short rather
+                    // than padded with placeholder cells. A body cell draws no fill, so the gap is already
+                    // invisible, and a tappable cell the model does not contain would hand the runtime a cursor
+                    // it never agreed to.
+                    Row {
+                        row.forEachIndexed { column, cell ->
+                            FlowTableCell(
+                                text = cell.content.plainText(),
+                                header = false,
+                                addressed = cursor?.row == rowIndex && cursor.column == column,
+                                alignment = block.columnAlignments.getOrNull(column),
+                                enabled = context.editing && !context.selectionMode,
+                                modifier = Modifier.width(widths.getOrElse(column) { minimum }),
+                                onClick = { callbacks.onTableCell(FlowTableCursor(block.id, rowIndex, column)) },
+                                editableText = if (cursor?.row == rowIndex && cursor.column == column) context.tableDraft else null,
+                                onDraft = { callbacks.onTableCellDraft(FlowTableCursor(block.id, rowIndex, column), it) },
+                                onCommit = { callbacks.onTableCellCommit(FlowTableCursor(block.id, rowIndex, column), it) },
+                            )
+                        }
                     }
                 }
             }
@@ -1408,20 +1495,28 @@ private fun FlowTableCell(
     addressed: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    alignment: TableAlignment? = null,
     enabled: Boolean = true,
     editableText: String? = null,
     onDraft: (String) -> Unit = {},
     onCommit: (String) -> Unit = {},
 ) {
     val cellStyle = if (header) FlowContent.type.labelLarge else FlowContent.type.bodyMedium
-    // The header row needed a fill of its own: semibold alone stops separating header from body the moment a
+    // The header row needs a fill of its own: semibold alone stops separating header from body the moment a
     // body cell holds a short bold word, and on a white canvas with hairline rules the top row otherwise reads
     // as data. A tint of the page, never the accent — a coloured header row is a spreadsheet's chrome, and this
-    // is a table inside a document. The addressed cell keeps the accent and is layered after, so it still wins.
-    val fill = when {
-        addressed -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-        header -> MaterialTheme.colorScheme.surfaceContainerHigh
-        else -> Color.Transparent
+    // is a table inside a document. That tint is painted by the header *row* so it spans a ragged header too;
+    // only the addressed accent is per-cell, drawn over whatever the row put down, so it still wins.
+    val fill = if (addressed) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent
+    // `columnAlignments` reached the renderer as dead data too: a column the user centred, or that the
+    // calculation bridge derived a right alignment for from the workbook, was drawn start-aligned anyway.
+    // Numbers in particular need the End case — a right-aligned column is how a reader compares magnitudes.
+    // Applied as `TextAlign` on a full-width child rather than as the Box's `contentAlignment`, because both
+    // children fill the cell: a Box alignment would have no slack to act on and the setting would look ignored.
+    val textAlign = when (alignment) {
+        TableAlignment.Center -> TextAlign.Center
+        TableAlignment.End -> TextAlign.End
+        else -> TextAlign.Start
     }
     // Focus loss is a commit route, not a discard: tapping the next cell has always meant "keep what I typed"
     // in every grid the user has met. Tracked here because Compose reports the transition, not the state.
@@ -1448,14 +1543,25 @@ private fun FlowTableCell(
                         if (hadFocus && !focus.isFocused) onCommit(editableText)
                         hadFocus = focus.isFocused
                     },
-                textStyle = cellStyle.copy(color = LocalContentColor.current),
+                textStyle = cellStyle.copy(color = LocalContentColor.current, textAlign = textAlign),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { onCommit(editableText) }),
             )
         } else {
-            Text(text = text.ifBlank { " " }, style = cellStyle)
+            // One line, matching `singleLine = true` above. The display path used to be unbounded, so a
+            // two-word cell wrapped to two lines while idle and snapped back to one the instant it was
+            // tapped — the row's height changed under the finger, and every row below it jumped. Same
+            // shape in both states, and the ellipsis is what says the rest of the text is still there.
+            Text(
+                text = text.ifBlank { " " },
+                style = cellStyle,
+                textAlign = textAlign,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
