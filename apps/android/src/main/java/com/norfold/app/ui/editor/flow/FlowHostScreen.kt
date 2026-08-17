@@ -139,6 +139,8 @@ import com.norfold.app.editor.presentation.PresentationMode
 import com.norfold.app.editor.surface.DismissTrigger
 import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.style.EditorStyleCommandIds
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.NorfoldChromeSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.collapsedBlockSpacing
 import com.norfold.app.ui.editor.style.resolvedBlockMetrics
@@ -1313,10 +1315,17 @@ private fun FlowContextDock(
     val selectedObject = state.primaryId?.let(state.document::findById)
     val allCommands = state.dock + state.moreActions
     fun command(label: String): FlowCommandItem? = allCommands.firstOrNull { it.label.contains(label, ignoreCase = true) }
-    Surface(
-        tonalElevation = 2.dp,
-        shadowElevation = 8.dp,
-        shape = RoundedCornerShape(22.dp),
+    // The dock is the substrate's canonical floating capsule: it covers content the user is still reading
+    // and it is shaped rather than merely rounded. Its own 2/8/22 dp were what the substrate's Floating and
+    // Capsule tiers were derived from, so this delegates rather than restates them.
+    //
+    // No edge, and not for appearance: the dock floats over whatever the document happens to contain, so
+    // there is no backdrop a resting-edge ratio could honestly be measured against. Its 8 dp of shadow is
+    // the separation it actually has.
+    NorfoldChromeSurface(
+        lift = ChromeGeometry.Lift.Floating,
+        corner = ChromeGeometry.Corner.Capsule,
+        edge = false,
         modifier = Modifier
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .widthIn(max = FLOW_CONTENT_MAX_WIDTH)

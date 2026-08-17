@@ -1,0 +1,185 @@
+package com.norfold.app.domain.style
+
+/**
+ * The geometry every piece of floating interaction chrome in Norfold shares, as plain numbers.
+ *
+ * This is the substrate half of the substrate/semantics split: what a surface *looks and measures* like,
+ * with nothing in it about what the surface means. A destructive confirmation, a segmented mode strip, a
+ * position pill, a loading placeholder and an object inspector are five different conversations with the
+ * user; they are one rectangle with one corner radius, one edge weight and one resting elevation.
+ *
+ * **Why plain numbers in the domain layer rather than `Dp` in the UI layer.** The values below were chosen
+ * against a measured inventory, and the only way a chosen number stays chosen is if a test can read it.
+ * `Dp` is a Compose type and the unit source set has no Compose test harness, so a tokens object built out
+ * of `Dp` can be *documented* as consistent and never *asserted* as consistent — which is exactly how the
+ * tree arrived at nine distinct shadow elevations and four distinct chrome radii. `ChromeTokens` in the UI
+ * layer is a thin `.dp` translation of this, the same way [ContrastAnalysis] carries the arithmetic that
+ * `EditorChromeColors` only translates.
+ *
+ * **What the inventory found.** Across `apps/android/src/main`, floating chrome used **9 distinct
+ * `shadowElevation` values** over 25 sites (1dp x7, 8dp x4, 6dp x2, 2dp x2, 16dp x2, 14dp x2, 12dp x2, 5dp,
+ * 0dp) and **8 distinct `tonalElevation` values** (3dp x16, 1dp x11, 2dp x10, 8dp x9, 6dp x6, 4dp x5, 10dp,
+ * 0dp), with four unrelated chrome radii already in play: the popup card's 12 dp, `PopupStyle`'s 28 dp, the
+ * Flow object frame's 14/16 dp, and the Flow dock's 22 dp. None of those spreads encodes a distinction a
+ * user could name. A 12 dp and a 14 dp shadow on two panels that appear in the same session is not two
+ * meanings; it is two afternoons.
+ *
+ * The tiers below are the distinctions that *are* real, and there are only three of them.
+ */
+object ChromeGeometry {
+
+    /**
+     * How far a piece of chrome is lifted off what it covers.
+     *
+     * Three tiers, because there are three answers to "what does this chrome interrupt": nothing (it is
+     * part of the page), the content under it (it floats but the page is still the subject), or the whole
+     * surface (the page is suspended until this is dealt with). A fourth tier would have to name a fourth
+     * relationship, and the inventory's nine values do not contain one.
+     */
+    enum class Lift(val shadowDp: Float, val tonalDp: Float) {
+
+        /**
+         * Chrome that belongs to the page: a framed object, an inline card, a settings group.
+         *
+         * No shadow at all. Its boundary is stated by [RESTING_EDGE_RATIO] instead, which is a claim about
+         * *containment* rather than about height — an object frame that casts a shadow is asserting that the
+         * paragraph beside it is further away, which is false.
+         */
+        Flat(shadowDp = 0f, tonalDp = 0f),
+
+        /**
+         * Chrome that floats over content the user is still reading: a dock, a toolbar, a position pill,
+         * an inspector sheet, a menu.
+         *
+         * The common case, and the one the inventory spread widest. 8 dp was already the most-used
+         * non-trivial shadow (4 sites, including the Flow dock) so this consolidates toward what the tree
+         * had rather than toward a fresh number.
+         */
+        Floating(shadowDp = 8f, tonalDp = 2f),
+
+        /**
+         * Chrome that suspends the surface: a modal dialog, a destructive confirmation.
+         *
+         * 16 dp, which the FAB already used and which reads as unmistakably separate from [Floating] at
+         * arm's length. The gap between 8 and 16 is the point — 12 dp against 8 dp is a difference the
+         * renderer can draw and a user cannot see, which is why the inventory's 12 and 14 dp values
+         * collapse into one of these two rather than becoming tiers of their own.
+         */
+        Modal(shadowDp = 16f, tonalDp = 3f),
+    }
+
+    /**
+     * The corner radius for a piece of chrome, keyed to what reaches the corner.
+     *
+     * Deliberately three values, not the seven the tree held. The split is by whether content touches the
+     * curve, which is the only thing a radius can be wrong about:
+     *
+     * - [MEDIA_RADIUS] — content is full-bleed, so the frame's corner *is* the content's corner and a
+     *   larger radius visibly crops a photograph.
+     * - [CARD_RADIUS] — content is inset by its own padding, so the radius belongs to the container.
+     * - [CAPSULE_RADIUS] — the shape is the affordance: a pill, a dock, a segmented strip. Large enough to
+     *   read as a capsule rather than as a rounded rectangle.
+     *
+     * The Flow object frame already shipped the first two at these exact values, so this generalises a
+     * decision that was made and reviewed rather than making a new one.
+     */
+    enum class Corner(val radiusDp: Float) {
+        Media(MEDIA_RADIUS),
+        Card(CARD_RADIUS),
+        Capsule(CAPSULE_RADIUS),
+    }
+
+    /** Media corners: a larger radius crops full-bleed content. */
+    const val MEDIA_RADIUS = 14f
+
+    /** Card corners: what the chart card, the callout wrapper and the container wrapper already use. */
+    const val CARD_RADIUS = 16f
+
+    /**
+     * Capsule corners.
+     *
+     * 22 dp rather than the 28 dp `PopupStyle` used, because 28 dp on the 68 dp-high nav bar is only 6 dp
+     * short of a true capsule and reads as one already, while 28 dp on the Flow dock's shorter row *would*
+     * be a full capsule and starts eating the outermost button's tap target. 22 dp is what the dock
+     * shipped and it survives both heights.
+     */
+    const val CAPSULE_RADIUS = 22f
+
+    /**
+     * A resting edge states a boundary. It is not a rule.
+     *
+     * One weight, not the five the inventory found (0.25, 1, 2, 3, 5 dp), because 60 of the 65 border
+     * declarations in the tree were already 1 dp — the spread was four outliers, not a vocabulary.
+     */
+    const val RESTING_EDGE_WIDTH = 1f
+
+    /**
+     * A selection edge has to read at arm's length, which one dp of extra weight does not.
+     *
+     * Selection also changes the *colour*, and the colour is the part that carries; the weight is what
+     * keeps it legible when the accent is close to the page.
+     */
+    const val SELECTED_EDGE_WIDTH = 3f
+
+    /**
+     * What a resting edge has to measure against its own backdrop to be seen without shouting.
+     *
+     * **Neither theme outline token can do this job, on any surface, in either mode.** Measured on the
+     * shipped palette, `outline` reaches 1.17:1 on the light page, 1.25:1 on `surface` and 1.11:1 on
+     * `surfaceVariant`; `outlineVariant` reaches 1.07:1, 1.14:1 and 1.02:1. Dark is better and still not
+     * enough: 1.41/1.33/1.23 and 1.24/1.16/1.08. Below roughly 1.5:1 a non-text boundary is not visible at
+     * all, so **every one of the 39 `BorderStroke(1.dp, outlineVariant)` sites in the tree is drawing an
+     * edge that states a boundary the user cannot see** — and the eight sites that additionally reduce the
+     * alpha (0.7 down to 0.18) land between 1.02:1 and 1.11:1, which is a border that exists only in the
+     * source.
+     *
+     * So the edge is *derived*, not picked: the theme's own `outline`, moved in lightness only until it
+     * measures this ratio against the backdrop it sits on. Theme-following, because the user's mode still
+     * drives the input; measured, because the output is solved rather than chosen.
+     *
+     * 2.2:1 is a deliberate target and not a maximum. At 3:1 and above a resting edge reads as a rule
+     * competing with its content, which is how a page of framed objects starts looking like a spreadsheet.
+     * This is the value the Flow object frame and the Document object edge already share, and generalising
+     * it here is what keeps a third surface from picking a fourth number.
+     */
+    const val RESTING_EDGE_RATIO = 2.2
+
+    /**
+     * What a *focus* ring has to measure. Not the same question as a resting edge, and not the same answer.
+     *
+     * A resting edge may be quiet because the user is not looking for it. A focus ring is the only thing
+     * telling a keyboard or switch-access user where their next action lands, so it is held to WCAG
+     * 1.4.11's [ContrastAnalysis.UI_COMPONENT] — 3:1 — with no negotiation. This is the one number in this
+     * object taken from a standard rather than from the inventory, because the inventory had nothing to
+     * take: **the tree has no focus-visible affordance anywhere.** One `.focusable()` call, no
+     * `collectIsFocusedAsState` outside text-commit bookkeeping, and 58 hand-rolled `.clickable` chrome
+     * sites that therefore show nothing at all when focused. The 559 Material buttons get a ring from the
+     * library; the 58 do not.
+     */
+    const val FOCUS_RING_RATIO = ContrastAnalysis.UI_COMPONENT
+
+    /** A focus ring sits outside the edge it decorates, so it needs weight the edge does not. */
+    const val FOCUS_RING_WIDTH = 2f
+
+    /**
+     * The gap between a focus ring and the shape it surrounds.
+     *
+     * Non-zero so the ring is not mistaken for a thicker border on a shape that already has one — which
+     * is the failure mode for all 39 outlined chrome sites, where a ring drawn flush would read as the
+     * border changing weight rather than as focus arriving.
+     */
+    const val FOCUS_RING_GAP = 2f
+
+    /**
+     * Interior padding for a piece of chrome at each corner tier.
+     *
+     * Padding tracks the radius rather than being chosen beside it: content set closer to a corner than
+     * its radius gets visibly clipped by the curve, so a 16 dp card cannot carry 6 dp padding without its
+     * first character crowding the arc. These are the smallest values that clear their own curve.
+     */
+    fun paddingFor(corner: Corner): Float = when (corner) {
+        Corner.Media -> 0f
+        Corner.Card -> 14f
+        Corner.Capsule -> 8f
+    }
+}

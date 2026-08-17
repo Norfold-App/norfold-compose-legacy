@@ -27,6 +27,7 @@ import com.norfold.app.domain.MathBlock
 import com.norfold.app.domain.MermaidBlock
 import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.TableBlock
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ContrastAnalysis
 import com.norfold.app.ui.EditorChromeColors
 
@@ -85,6 +86,12 @@ fun FlowObjectFrame(
  * A separate object from the composable so the shape can be read by a renderer that needs to clip its own
  * content to the same curve — a chart canvas and a `WebView` both paint to their own bounds and would
  * otherwise square off the corner the frame just rounded.
+ *
+ * **Every number here now comes from [ChromeGeometry].** This file chose these five values first, against a
+ * measured inventory of what the object paths were already doing; the substrate generalised them to all
+ * floating chrome rather than replacing them, so delegating changes nothing on screen and makes the object
+ * frame the first consumer rather than a second vocabulary beside the substrate. The names stay because the
+ * object frame's own vocabulary — media versus card, resting versus selected — is what its call sites read.
  */
 internal object FlowFrameMetrics {
 
@@ -181,16 +188,16 @@ internal object FlowFrameMetrics {
     }
 
     /** Media corners: what the image path used, kept because a larger radius crops the content. */
-    val MEDIA_RADIUS = 14.dp
+    val MEDIA_RADIUS = ChromeGeometry.MEDIA_RADIUS.dp
 
     /** Card corners: the chart card's radius, and the callout and container wrappers' radius. */
-    val CARD_RADIUS = 16.dp
+    val CARD_RADIUS = ChromeGeometry.CARD_RADIUS.dp
 
     /** A resting edge states a boundary; it is not a rule. */
-    val RESTING_WIDTH = 1.dp
+    val RESTING_WIDTH = ChromeGeometry.RESTING_EDGE_WIDTH.dp
 
     /** A selection edge has to read at arm's length, which one dp of extra weight does not. */
-    val SELECTED_WIDTH = 3.dp
+    val SELECTED_WIDTH = ChromeGeometry.SELECTED_EDGE_WIDTH.dp
 
     /**
      * What a resting edge has to measure against its own page to be seen without shouting.
@@ -199,7 +206,7 @@ internal object FlowFrameMetrics {
      * content it frames. This is the same target the Document editor's resting object edge uses, which is
      * deliberate — one page of framed objects should not read differently from the other.
      */
-    const val RESTING_EDGE_RATIO = 2.2
+    const val RESTING_EDGE_RATIO = ChromeGeometry.RESTING_EDGE_RATIO
 }
 
 /**
