@@ -1064,7 +1064,12 @@ private fun FlowBlockRow(
                     chartDataRevision = state.revision,
                     compact = compact,
                     editing = editing,
-                    objectSelected = editing && flowObject.selectable,
+                    objectActive = editing && flowObject.selectable,
+                    // Structural selection only, and deliberately not `block.id in state.selectedIds`: that
+                    // set also holds the ordinary caret owner, so dropping a caret into a code block or a
+                    // table cell would draw a 3 dp accent frame around it underneath the keyboard. This is the
+                    // same distinction the row background above already makes.
+                    objectSelected = rowSelectable && selected && flowObject.selectable,
                 ),
             )
         }

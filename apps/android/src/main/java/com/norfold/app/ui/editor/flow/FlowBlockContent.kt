@@ -267,7 +267,26 @@ data class FlowBlockContext(
     val compact: Boolean = false,
     /** False renders a quiet reading surface. Tapping the owning row activates the editor. */
     val editing: Boolean = true,
-    /** True for the active object block so media can expose a deliberate select-then-edit interaction. */
+    /**
+     * True for an object block in an editable document, so media can expose its own way in.
+     *
+     * This is what [objectSelected] used to be, under a name that claimed more than it delivered: it was
+     * `editing && (block is ImageBlock || block is ChartBlock)` when it was written and
+     * `editing && flowObject.selectable` after the object model landed — a *kind* test either way, never once
+     * fed the selection. It gates the image's Edit affordance and the chart's tap-into-Studio, both of which
+     * should indeed be offered on every editable object rather than only on a selected one, so the behaviour
+     * was right and only the name was wrong.
+     */
+    val objectActive: Boolean = false,
+    /**
+     * True when this object *is* the structural selection — the frame's accent edge, and nothing else.
+     *
+     * Structural selection, deliberately, and not mere membership of `selectedIds`: that set also holds the
+     * ordinary caret owner, so a caret dropped into a code block or a table cell would put a 3 dp accent frame
+     * around it on top of the caret and the keyboard. `FlowHostScreen` already settled this question for the
+     * row background — structural selection is the only state that earns a selection treatment — and a frame
+     * is the same kind of statement.
+     */
     val objectSelected: Boolean = false,
     /** Nested container shells stay visually flat; only the authored outer group owns the card. */
     val insideContainer: Boolean = false,
@@ -512,15 +531,9 @@ fun FlowBlockContent(
         is ImageBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.IMAGE_FOCUS)) {
             val loaded = remember(block.imageEditDocument) { ImageBlockAdapter.load(block) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .then(
-                            if (context.objectSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
-                            else Modifier
-                        ),
-                ) {
+                // Media carries no resting edge: the photograph is its own boundary, and a hairline around a
+                // full-bleed image reads as a frame the user did not ask for.
+                FlowObjectFrame(block, selected = context.objectSelected, resting = false) {
                     ImageFocusRenderer(
                         block = block,
                         modifier = Modifier
@@ -530,7 +543,7 @@ fun FlowBlockContent(
                                 contentDescription = "Image${block.caption.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}"
                             },
                     )
-                    if (context.objectSelected && loaded.isEditable) {
+                    if (context.objectActive && loaded.isEditable) {
                         Surface(
                             onClick = { callbacks.onOpenImage(block.id) },
                             modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
@@ -541,12 +554,17 @@ fun FlowBlockContent(
                         ) {
                             Icon(Icons.Filled.Image, "Edit image", Modifier.padding(12.dp).size(20.dp))
                         }
+                    }
+                    // The badge belongs to selection, where the border is. It used to ride on the same flag as
+                    // the Edit button above, which meant every image in an editable document announced itself
+                    // as "Image selected" to a screen reader whether or not anything was selected.
+                    if (context.objectSelected) {
                         Surface(
                             modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
                             color = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary,
                             shape = CircleShape,
-                        ) { Icon(Icons.Filled.Check, "Image selected", Modifier.padding(6.dp).size(16.dp)) }
+                        ) { Icon(Icons.Filled.Check, null, Modifier.padding(6.dp).size(16.dp)) }
                     }
                 }
                 if (block.caption.isNotBlank() && context.editing) {
@@ -563,31 +581,27 @@ fun FlowBlockContent(
 
         is ChartBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
-            Column(
-                modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(
-                        if (context.objectSelected) 2.dp else 1.dp,
-                        if (context.objectSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                        RoundedCornerShape(16.dp),
+            FlowObjectFrame(block, selected = context.objectSelected, modifier = modifier) {
+                Column(
+                    Modifier
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    ChartRenderer(
+                        document = loaded.document,
+                        resolution = remember(loaded.document, context.chartDataRevision) {
+                            ChartDataResolver.resolve(loaded.document, context.chartCalculationProvider)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (context.objectActive && loaded.isEditable) Modifier.clickable(
+                                role = Role.Button,
+                                onClickLabel = "Open Chart Studio",
+                            ) { callbacks.onOpenChart(block.id) } else Modifier),
+                        heightDp = FlowSizePolicy.MEDIA.clamp(block.editorHeightDp).toInt(),
                     )
-                    .padding(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                ChartRenderer(
-                    document = loaded.document,
-                    resolution = remember(loaded.document, context.chartDataRevision) {
-                        ChartDataResolver.resolve(loaded.document, context.chartCalculationProvider)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(if (context.objectSelected && loaded.isEditable) Modifier.clickable(
-                            role = Role.Button,
-                            onClickLabel = "Open Chart Studio",
-                        ) { callbacks.onOpenChart(block.id) } else Modifier),
-                    heightDp = FlowSizePolicy.MEDIA.clamp(block.editorHeightDp).toInt(),
-                )
+                }
             }
         } else {
             FlowPlaceholder("Chart", block.plainText().take(120).ifBlank { "empty" }, modifier)
@@ -604,27 +618,44 @@ fun FlowBlockContent(
         is ShapeBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.SHAPE_BUILDER)) {
             val loaded = remember(block) { ShapeBlockAdapter.load(block) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (loaded.origin == LoadedShapeDocument.Origin.CANONICAL) {
-                    ShapeDocumentPreview(
-                        document = loaded.document,
-                        // The shape policy, not the media policy this used to borrow: a shape that had been
-                        // built clamped to a 120dp floor while the same shape unbuilt clamped to 72dp, so
-                        // promoting a 90dp shape into a document silently made it taller.
-                        modifier = Modifier.fillMaxWidth().height(FlowSizePolicy.SHAPE.clamp(block.displayHeightDp).dp),
-                    )
-                } else {
-                    FlowShapeBlock(block, context, Modifier.fillMaxWidth())
+                // No resting edge and no clip: the shape's authored stroke *is* its edge, and clipping a
+                // square shape to this frame's radius would round corners the document says are sharp.
+                FlowObjectFrame(
+                    block = block,
+                    selected = context.objectSelected,
+                    resting = false,
+                    clipContent = false,
+                ) {
+                    if (loaded.origin == LoadedShapeDocument.Origin.CANONICAL) {
+                        ShapeDocumentPreview(
+                            document = loaded.document,
+                            // The shape policy, not the media policy this used to borrow: a shape that had been
+                            // built clamped to a 120dp floor while the same shape unbuilt clamped to 72dp, so
+                            // promoting a 90dp shape into a document silently made it taller.
+                            modifier = Modifier.fillMaxWidth().height(FlowSizePolicy.SHAPE.clamp(block.displayHeightDp).dp),
+                        )
+                    } else {
+                        FlowShapeBlock(block, context, Modifier.fillMaxWidth())
+                    }
                 }
                 if (!context.selectionMode && loaded.isEditable) {
                     TextButton(onClick = { callbacks.onOpenShape(block.id) }) { Text("Edit shape") }
                 }
             }
         } else {
-            FlowShapeBlock(block, context, modifier)
+            FlowObjectFrame(
+                block = block,
+                selected = context.objectSelected,
+                modifier = modifier,
+                resting = false,
+                clipContent = false,
+            ) {
+                FlowShapeBlock(block, context, Modifier.fillMaxWidth())
+            }
         }
 
-        is EmbedBlock -> FlowEmbedPreview(block, modifier)
-        is FileBlock -> FlowFilePreview(block, modifier)
+        is EmbedBlock -> FlowEmbedPreview(block, context, modifier)
+        is FileBlock -> FlowFilePreview(block, context, modifier)
 
         is UnknownBlock -> FlowPlaceholder(
             title = "Preserved content",
@@ -661,57 +692,62 @@ private fun FlowShapeBlock(block: ShapeBlock, context: FlowBlockContext, modifie
 }
 
 @Composable
-private fun FlowEmbedPreview(block: EmbedBlock, modifier: Modifier = Modifier) {
-    Column(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-            .padding(12.dp)
-            .semantics { contentDescription = "Embedded link ${block.metadata.title.ifBlank { block.url }}" },
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Text(block.metadata.title.ifBlank { "Embedded link" }, style = MaterialTheme.typography.titleSmall)
-        if (block.metadata.description.isNotBlank()) {
+private fun FlowEmbedPreview(block: EmbedBlock, context: FlowBlockContext, modifier: Modifier = Modifier) {
+    FlowObjectFrame(block, selected = context.objectSelected, modifier = modifier) {
+        Column(
+            Modifier
+                .padding(12.dp)
+                .semantics { contentDescription = "Embedded link ${block.metadata.title.ifBlank { block.url }}" },
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(block.metadata.title.ifBlank { "Embedded link" }, style = MaterialTheme.typography.titleSmall)
+            if (block.metadata.description.isNotBlank()) {
+                Text(
+                    block.metadata.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // The URL is the card's caption, not its call to action — the whole card is the target. Accent here
+            // put the theme colour on every embed in the document and competed with the title above it for the
+            // eye, which is backwards: the title is what the reader is looking for.
             Text(
-                block.metadata.description,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
+                block.url,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // The URL is the card's caption, not its call to action — the whole card is the target. Accent here
-        // put the theme colour on every embed in the document and competed with the title above it for the
-        // eye, which is backwards: the title is what the reader is looking for.
-        Text(
-            block.url,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 
 @Composable
-private fun FlowFilePreview(block: FileBlock, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f))
-            .padding(12.dp)
-            .semantics { contentDescription = "File ${block.name}, ${humanFileSize(block.sizeBytes)}" },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.secondaryContainer),
-            contentAlignment = Alignment.Center,
-        ) { Text(block.name.substringAfterLast('.', "FILE").take(4).uppercase(), style = MaterialTheme.typography.labelSmall) }
-        Column(Modifier.weight(1f).padding(start = 10.dp)) {
-            Text(
-                block.name.ifBlank { "Attachment" },
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(listOf(block.mimeType, humanFileSize(block.sizeBytes)).filter(String::isNotBlank).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+private fun FlowFilePreview(block: FileBlock, context: FlowBlockContext, modifier: Modifier = Modifier) {
+    // A file card had no edge of any kind — only a 55%-alpha fill — so on the light canvas it was a faint
+    // rectangle with no boundary, and being `FlowFrame.Framed` it could be selected with nothing to show.
+    FlowObjectFrame(block, selected = context.objectSelected, modifier = modifier) {
+        Row(
+            Modifier
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f))
+                .padding(12.dp)
+                .semantics { contentDescription = "File ${block.name}, ${humanFileSize(block.sizeBytes)}" },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.secondaryContainer),
+                contentAlignment = Alignment.Center,
+            ) { Text(block.name.substringAfterLast('.', "FILE").take(4).uppercase(), style = MaterialTheme.typography.labelSmall) }
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(
+                    block.name.ifBlank { "Attachment" },
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(listOf(block.mimeType, humanFileSize(block.sizeBytes)).filter(String::isNotBlank).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }
@@ -734,30 +770,31 @@ private fun FlowMathBlock(
     // Source is the writing surface.  A formula no longer looks editable while quietly forcing the user to
     // discover a hidden mode switch; Preview remains one tap away once the expression is written.
     var mode by rememberSaveable(block.id, context.editing) { mutableStateOf(if (context.editing) FlowRenderableMode.Source else FlowRenderableMode.Preview) }
-    Column(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp)).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (context.editing && !context.selectionMode) {
-            Row(Modifier.fillMaxWidth()) {
-                FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
-                FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
+    FlowObjectFrame(block, selected = context.objectSelected, modifier = modifier) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (context.editing && !context.selectionMode) {
+                Row(Modifier.fillMaxWidth()) {
+                    FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
+                    FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
+                }
             }
-        }
-        if (mode == FlowRenderableMode.Source && context.editing) {
-            FlowEditableLine(
-                block.id, null, listOf(InlineText(block.tex)),
-                FlowContentMono,
-                "TeX source", callbacks, context, structuralEnter = false,
-            )
-        } else {
-            Text(
-                block.tex.ifBlank { "Empty equation" },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp)
-                    .semantics { contentDescription = "Equation ${block.tex}" },
-                style = FlowContent.type.bodyLarge.copy(fontFamily = FontFamily.Serif),
-            )
+            if (mode == FlowRenderableMode.Source && context.editing) {
+                FlowEditableLine(
+                    block.id, null, listOf(InlineText(block.tex)),
+                    FlowContentMono,
+                    "TeX source", callbacks, context, structuralEnter = false,
+                )
+            } else {
+                Text(
+                    block.tex.ifBlank { "Empty equation" },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp)
+                        .semantics { contentDescription = "Equation ${block.tex}" },
+                    style = FlowContent.type.bodyLarge.copy(fontFamily = FontFamily.Serif),
+                )
+            }
         }
     }
 }
@@ -777,25 +814,28 @@ private fun FlowCodeBlock(
     // Opaque fill plus a hairline, replacing a 58%-alpha tint. The alpha was tuned against the old ivory
     // canvas; blended over a white page it lands two shades off white and the block loses its edge entirely,
     // which for code is not cosmetic — the boundary is what says where the literal text starts and stops.
-    Column(
-        modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-            .horizontalScroll(scroll)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-    ) {
-        FlowEditableLine(
-            blockId = block.id,
-            itemId = null,
-            nodes = listOf(InlineText(block.code)),
-            style = resolvedFlowTextStyle(block, context, FlowContentMono),
-            placeholder = "Code",
-            callbacks = callbacks,
-            context = context,
-            structuralEnter = false,
-            modifier = Modifier.widthIn(min = 360.dp),
-        )
+    //
+    // The scroll stays *inside* the frame, for the reason the table states below: scrolling the card itself
+    // would drag its own border off screen and leave the block looking clipped.
+    FlowObjectFrame(block, selected = context.objectSelected, modifier = modifier) {
+        Column(
+            Modifier
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .horizontalScroll(scroll)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            FlowEditableLine(
+                blockId = block.id,
+                itemId = null,
+                nodes = listOf(InlineText(block.code)),
+                style = resolvedFlowTextStyle(block, context, FlowContentMono),
+                placeholder = "Code",
+                callbacks = callbacks,
+                context = context,
+                structuralEnter = false,
+                modifier = Modifier.widthIn(min = 360.dp),
+            )
+        }
     }
 }
 
@@ -809,82 +849,81 @@ private fun FlowHtmlBlock(
     modifier: Modifier = Modifier,
 ) {
     var mode by rememberSaveable(block.id, context.editing) { mutableStateOf(if (context.editing) FlowRenderableMode.Source else FlowRenderableMode.Preview) }
-    Column(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .62f)),
+    FlowObjectFrame(block, selected = context.objectSelected, modifier = modifier) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
-            FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
-        }
-        Box(
-            Modifier.fillMaxWidth()
-                .heightIn(min = 180.dp, max = FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
-                .clip(RoundedCornerShape(8.dp)),
-        ) {
-            when (mode) {
-                FlowRenderableMode.Source -> FlowEditableLine(
-                    blockId = block.id,
-                    itemId = null,
-                    nodes = listOf(InlineText(block.code)),
-                    style = FlowContentMono,
-                    placeholder = "HTML source",
-                    callbacks = callbacks,
-                    context = context,
-                    structuralEnter = false,
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
-                )
-                FlowRenderableMode.Preview -> AndroidView(
-                    modifier = Modifier.fillMaxWidth().height(FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
-                        .semantics { contentDescription = "Sandboxed HTML preview" },
-                    factory = { androidContext ->
-                        WebView(androidContext).apply {
-                            settings.javaScriptEnabled = false
-                            settings.javaScriptCanOpenWindowsAutomatically = false
-                            settings.domStorageEnabled = false
-                            settings.databaseEnabled = false
-                            settings.allowFileAccess = false
-                            settings.allowContentAccess = false
-                            settings.allowFileAccessFromFileURLs = false
-                            settings.allowUniversalAccessFromFileURLs = false
-                            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-                            isLongClickable = false
-                            setNetworkAvailable(false)
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = true
-                                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                                    val scheme = request?.url?.scheme?.lowercase()
-                                    return if (scheme in setOf("http", "https", "file", "content")) {
-                                        WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
-                                    } else null
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .62f)),
+            ) {
+                FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
+                FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
+            }
+            Box(
+                Modifier.fillMaxWidth()
+                    .heightIn(min = 180.dp, max = FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
+                    .clip(RoundedCornerShape(8.dp)),
+            ) {
+                when (mode) {
+                    FlowRenderableMode.Source -> FlowEditableLine(
+                        blockId = block.id,
+                        itemId = null,
+                        nodes = listOf(InlineText(block.code)),
+                        style = FlowContentMono,
+                        placeholder = "HTML source",
+                        callbacks = callbacks,
+                        context = context,
+                        structuralEnter = false,
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
+                    )
+                    FlowRenderableMode.Preview -> AndroidView(
+                        modifier = Modifier.fillMaxWidth().height(FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
+                            .semantics { contentDescription = "Sandboxed HTML preview" },
+                        factory = { androidContext ->
+                            WebView(androidContext).apply {
+                                settings.javaScriptEnabled = false
+                                settings.javaScriptCanOpenWindowsAutomatically = false
+                                settings.domStorageEnabled = false
+                                settings.databaseEnabled = false
+                                settings.allowFileAccess = false
+                                settings.allowContentAccess = false
+                                settings.allowFileAccessFromFileURLs = false
+                                settings.allowUniversalAccessFromFileURLs = false
+                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                                isLongClickable = false
+                                setNetworkAvailable(false)
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = true
+                                    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                        val scheme = request?.url?.scheme?.lowercase()
+                                        return if (scheme in setOf("http", "https", "file", "content")) {
+                                            WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
+                                        } else null
+                                    }
                                 }
                             }
-                        }
-                    },
-                    update = { webView ->
-                        webView.loadDataWithBaseURL(
-                            "about:blank",
-                            htmlSandboxDocument(block.code),
-                            "text/html",
-                            "UTF-8",
-                            null,
-                        )
-                    },
-                )
+                        },
+                        update = { webView ->
+                            webView.loadDataWithBaseURL(
+                                "about:blank",
+                                htmlSandboxDocument(block.code),
+                                "text/html",
+                                "UTF-8",
+                                null,
+                            )
+                        },
+                    )
+                }
             }
+            Text(
+                "Offline preview · scripts, navigation, files, and network requests are blocked",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Text(
-            "Offline preview · scripts, navigation, files, and network requests are blocked",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -947,11 +986,17 @@ private fun FlowMermaidBlock(
     }
     val effectiveMode = if (model == null) FlowRenderableMode.Source else mode
 
+    // Composed rather than wrapped in [FlowObjectFrame]: this body is 130 lines of nested diagram editing, and
+    // re-indenting all of it to gain one Box would make the change unreviewable. The frame's shape and edge
+    // are the parts that must be shared, and those are exactly what [FlowFrameMetrics] exposes.
+    val frameShape = FlowFrameMetrics.shapeOf(block)
     Column(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-            .padding(12.dp),
+        with(FlowFrameMetrics) {
+            modifier
+                .clip(frameShape)
+                .flowFrameEdge(frameShape, context.objectSelected, resting = true)
+                .padding(12.dp)
+        },
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(
@@ -1405,12 +1450,15 @@ private fun FlowTablePreview(
         // changed does not rebuild its width list on every keystroke in one of its cells.
         val widths = remember(resolved) { resolved.columnsDp.map { it.dp } }
         val gridWidth = resolved.totalDp.dp
+        val frameShape = FlowFrameMetrics.shapeOf(block)
         Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp)),
+            with(FlowFrameMetrics) {
+                Modifier
+                    .fillMaxWidth()
+                    .clip(frameShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .flowFrameEdge(frameShape, context.objectSelected, resting = true)
+            },
         ) {
             // Gated on the same flag as the route itself: an escape hatch into a host the build has not
             // enabled would make the flag decorative. §25 — this opens the *same* table identity, so it is a
