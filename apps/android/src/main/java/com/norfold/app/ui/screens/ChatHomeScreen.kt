@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAddAlt
+import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Tune
@@ -91,6 +93,7 @@ import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.NorfoldContentDialog
 import com.norfold.app.ui.components.NorfoldDialog
 import com.norfold.app.ui.components.NorfoldEmptyState
+import com.norfold.app.ui.components.NorfoldPopupRow
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -1512,22 +1515,34 @@ private fun ContactsSheet(state: DocsUiState, viewModel: DocsViewModel, onDismis
 
     contactMenu?.let { contact ->
         val name = contact.displayName.ifBlank { contact.handle ?: "This contact" }
+        // Remove and Block are two different operations, not a confirm and a cancel. Putting them in
+        // the confirm/dismiss slots left Block — the stronger of the two — where a finger lands to
+        // back out, and left no way out at all except the scrim. Rows carry their own weight instead.
         NorfoldDialog(
             onDismissRequest = { contactMenu = null },
             title = { Text(name) },
-            text = { Text("Remove $name from your contacts, or block them so they can't reach you at all.") },
-            dismissButton = {
-                TextButton(onClick = {
-                    viewModel.blockContact(contact.contactId)
-                    contactMenu = null
-                }) { Text("Block") }
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    NorfoldPopupRow(
+                        "Remove from contacts",
+                        onClick = { viewModel.removeContact(contact.contactId); contactMenu = null },
+                        icon = Icons.Outlined.PersonRemove,
+                        destructive = true,
+                    )
+                    NorfoldPopupRow(
+                        "Block $name",
+                        onClick = { viewModel.blockContact(contact.contactId); contactMenu = null },
+                        icon = Icons.Outlined.Block,
+                        destructive = true,
+                    )
+                    Text(
+                        "Removing drops them from your contacts. Blocking also stops them reaching you.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             },
-            confirmButton = {
-                Button(onClick = {
-                    viewModel.removeContact(contact.contactId)
-                    contactMenu = null
-                }) { Text("Remove") }
-            },
+            confirmButton = { TextButton(onClick = { contactMenu = null }) { Text("Cancel") } },
         )
     }
 
