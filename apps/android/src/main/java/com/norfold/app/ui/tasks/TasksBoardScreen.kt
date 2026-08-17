@@ -60,6 +60,7 @@ import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
@@ -84,6 +85,8 @@ import androidx.compose.material.icons.outlined.TableRows
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material.icons.outlined.ViewAgenda
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.automirrored.outlined.Send
 import com.norfold.app.ui.components.NorfoldDialog
 import com.norfold.app.ui.components.popOnChange
@@ -518,6 +521,8 @@ fun TasksBoardScreen(
                 viewModel.createTaskColumn(selectedBoardId, newColumnName)
                 newColumnName = ""
             },
+            properties = taskProperties,
+            viewModel = viewModel,
             onDismiss = { activeRailAction = null },
         )
         }
@@ -2361,7 +2366,7 @@ private fun TaskGalleryView(
     }
 }
 
-private enum class TaskRailSheet { Filter, Sort, Boards }
+private enum class TaskRailSheet { Filter, Sort, Boards, Properties }
 
 @Composable
 private fun TaskRailPanel(
@@ -2393,6 +2398,8 @@ private fun TaskRailPanel(
     newColumnName: String,
     onNewColumnNameChange: (String) -> Unit,
     onCreateColumn: () -> Unit,
+    properties: List<TaskPropertyDefinition>,
+    viewModel: DocsViewModel,
     onDismiss: () -> Unit,
 ) {
     var openSheet by remember(action) { mutableStateOf<TaskRailSheet?>(null) }
@@ -2425,6 +2432,16 @@ private fun TaskRailPanel(
                     title = "Boards",
                     summary = selectedBoardName,
                     onClick = { openSheet = TaskRailSheet.Boards },
+                )
+                TaskRailRow(
+                    icon = Icons.Outlined.TableRows,
+                    title = "Properties",
+                    summary = when (properties.size) {
+                        0 -> "None yet"
+                        1 -> "1 property"
+                        else -> "${properties.size} properties"
+                    },
+                    onClick = { openSheet = TaskRailSheet.Properties },
                 )
                 TaskRailRow(
                     icon = Icons.Outlined.Settings,
@@ -2535,6 +2552,9 @@ private fun TaskRailPanel(
                 )
             }
         }
+        TaskRailSheet.Properties -> NorfoldBottomSheet(onDismissRequest = { openSheet = null }) {
+            TaskPropertyManagerSheet(properties = properties, viewModel = viewModel)
+        }
         null -> Unit
     }
 }
@@ -2561,6 +2581,208 @@ private fun TaskRailRow(
             Icon(Icons.Outlined.ExpandMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+/**
+ * Board-scoped property management: rename, retype, hide-when-empty, duplicate, reorder and delete.
+ *
+ * Properties belong to a board, not to the task you happen to have open, so they are managed from
+ * the board rail rather than from a task page. The task page keeps a door to here so the surface is
+ * reachable from where a property is noticed.
+ */
+@Composable
+private fun TaskPropertyManagerSheet(
+    properties: List<TaskPropertyDefinition>,
+    viewModel: DocsViewModel,
+) {
+    val ordered = remember(properties) {
+        properties.sortedWith(compareBy<TaskPropertyDefinition> { it.sortOrder }.thenBy { it.id })
+    }
+    var editing by remember { mutableStateOf<TaskPropertyDefinition?>(null) }
+    var confirmingDelete by remember { mutableStateOf<TaskPropertyDefinition?>(null) }
+    Column(
+        Modifier.padding(horizontal = 18.dp, vertical = 6.dp).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Properties", fontWeight = FontWeight.Black, fontSize = 18.sp)
+        if (ordered.isEmpty()) {
+            Text(
+                "This board has no properties yet. Add one from the table header or a task page.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+            )
+        } else {
+            Text(
+                "Drag to reorder. Tap a property to rename or change its type.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+        }
+        ordered.forEachIndexed { index, property ->
+            var menuOpen by remember(property.id) { mutableStateOf(false) }
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    VerticalReorderHandle(enabled = ordered.size > 1, rowHeight = 56.dp, size = 20.dp) { delta ->
+                        viewModel.reorderTaskPropertyToIndex(property, (index + delta).coerceIn(0, ordered.lastIndex))
+                    }
+                    Icon(property.type.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { editing = property }.padding(vertical = 8.dp),
+                    ) {
+                        Text(property.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            if (property.hiddenWhenEmpty) "${property.type.defaultPropertyName()} · hidden when empty" else property.type.defaultPropertyName(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Outlined.MoreVert, "More options for ${property.name}")
+                    }
+                    NorfoldTaskMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Rename or change type") },
+                            leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                            onClick = { editing = property; menuOpen = false },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (property.hiddenWhenEmpty) "Always show" else "Hide when empty") },
+                            leadingIcon = { Icon(if (property.hiddenWhenEmpty) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff, null) },
+                            onClick = {
+                                viewModel.updateTaskPropertyDefinition(property, property.name, property.type, !property.hiddenWhenEmpty)
+                                menuOpen = false
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Duplicate") },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                            onClick = { viewModel.duplicateTaskProperty(property); menuOpen = false },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                            // Name carries the task title and the New-property picker excludes it, so
+                            // deleting it could not be undone by re-adding it. It is the one exception.
+                            enabled = property.type != TaskPropertyType.Name,
+                            onClick = { confirmingDelete = property; menuOpen = false },
+                        )
+                    }
+                }
+            }
+        }
+    }
+    editing?.let { property ->
+        TaskPropertyDefinitionDialog(
+            property = property,
+            onDismiss = { editing = null },
+            onSave = { name, type ->
+                viewModel.updateTaskPropertyDefinition(property, name, type, property.hiddenWhenEmpty)
+                editing = null
+            },
+        )
+    }
+    confirmingDelete?.let { property ->
+        // Deleting a definition drops every value and checklist item stored against it on every task
+        // of this board, and there is no undo — so the consent says how much is going, by name.
+        NorfoldDialog(
+            onDismissRequest = { confirmingDelete = null },
+            title = { Text("Delete ${property.name}?") },
+            text = {
+                Text("This removes the property from this board and deletes its value on every task here. It cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.deleteTaskProperty(property); confirmingDelete = null }) {
+                    Text("Delete property", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDelete = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Renames a property and optionally retypes it. Retyping is offered only among the addable types. */
+@Composable
+private fun TaskPropertyDefinitionDialog(
+    property: TaskPropertyDefinition,
+    onDismiss: () -> Unit,
+    onSave: (String, TaskPropertyType) -> Unit,
+) {
+    var draft by remember(property.id) { mutableStateOf(property.name) }
+    var type by remember(property.id) { mutableStateOf(property.type) }
+    // A built-in type is not in the picker list, and switching a Name or Status column to something
+    // else would orphan the board's own plumbing. Those keep their type and only rename.
+    val retypable = property.type in TaskPropertyPickerTypes
+    NorfoldDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit property", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("Name") },
+                    placeholder = { Text(property.type.defaultPropertyName()) },
+                    colors = taskTextFieldColors(),
+                )
+                if (retypable) {
+                    Text("Type", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 240.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        items(TaskPropertyPickerTypes) { option ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { type = option }
+                                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                RadioButton(selected = type == option, onClick = { type = option })
+                                Icon(option.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                Text(option.defaultPropertyName(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                    if (type != property.type) {
+                        Text(
+                            "Changing the type keeps the stored values, which may not read correctly under ${type.defaultPropertyName()}.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                        )
+                    }
+                } else {
+                    Text(
+                        "${property.type.defaultPropertyName()} is a built-in property, so its type cannot be changed.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(draft.trim(), type) },
+                enabled = draft.isNotBlank() && (draft.trim() != property.name || type != property.type),
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -2632,6 +2854,7 @@ private fun AdaptiveTaskPage(
                 .imePadding(),
         ) {
             var showPicker by remember { mutableStateOf(false) }
+            var showPropertyManager by remember { mutableStateOf(false) }
             var commentDraft by remember(task.id) { mutableStateOf("") }
             val sortedProperties = properties.sortedWith(compareBy<TaskPropertyDefinition> { it.sortOrder }.thenBy { it.id })
             val nameProperty = sortedProperties.firstOrNull { it.type == TaskPropertyType.Name }
@@ -2815,6 +3038,25 @@ private fun AdaptiveTaskPage(
                 item {
                     DashedActionButton(text = "New property", onClick = { showPicker = true })
                 }
+                if (sortedProperties.isNotEmpty()) {
+                    item {
+                        // Properties belong to the board, so managing them is the board's surface;
+                        // this is the door to it from where a property is actually noticed.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { showPropertyManager = true }
+                                .padding(vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.Tune, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(7.dp))
+                            Text("Manage board properties", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        }
+                    }
+                }
                 item {
                     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2860,6 +3102,11 @@ private fun AdaptiveTaskPage(
                         showPicker = false
                     },
                 )
+            }
+            if (showPropertyManager) {
+                NorfoldBottomSheet(onDismissRequest = { showPropertyManager = false }) {
+                    TaskPropertyManagerSheet(properties = sortedProperties, viewModel = viewModel)
+                }
             }
         }
     }
