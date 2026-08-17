@@ -115,6 +115,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -132,6 +133,10 @@ import com.norfold.app.editor.flow.FlowDragGeometry
 import com.norfold.app.editor.flow.FlowDropPlacement
 import com.norfold.app.editor.flow.FlowHostUiState
 import com.norfold.app.editor.flow.FlowIds
+import com.norfold.app.editor.flow.FlowInspector
+import com.norfold.app.editor.inspector.InspectorAction
+import com.norfold.app.editor.inspector.InspectorRole
+import com.norfold.app.ui.editor.ObjectInspectorContent
 import com.norfold.app.editor.flow.FlowRowBounds
 import com.norfold.app.editor.flow.FlowSurfaces
 import com.norfold.app.editor.presentation.FormFactor
@@ -617,6 +622,19 @@ fun FlowHostScreen(
             presenter = presenter,
             onNotice = { notice = it },
             onPickImage = { imagePicker.launch(arrayOf("image/*")) },
+            onEditObject = { block ->
+                when (block) {
+                    is ImageBlock -> {
+                        imageEditingId = block.id
+                        guide.signal(GuideSignal.IMAGE_FOCUS_OPENED)
+                    }
+                    is ChartBlock -> {
+                        chartEditingId = block.id
+                        guide.signal(GuideSignal.CHART_STUDIO_OPENED)
+                    }
+                    else -> Unit
+                }
+            },
         )
         if (state.interchange.requestedAction == null && state.interchange.rawDraft == null) {
             GuideHostLayer(guide, guideContext)
@@ -1314,7 +1332,11 @@ private fun FlowContextDock(
     }
     val selectedObject = state.primaryId?.let(state.document::findById)
     val allCommands = state.dock + state.moreActions
-    fun command(label: String): FlowCommandItem? = allCommands.firstOrNull { it.label.contains(label, ignoreCase = true) }
+    // Looked up by id, not by label. This read `allCommands.firstOrNull { it.label.contains(label, true) }`,
+    // and because the dock is built in `FlowIds.DOCK_ORDER`, whose first entry is `MOVE_UP`, the button
+    // captioned "Move" with a drag-to-reposition icon ran *move up*. A caption is not an identifier.
+    fun command(id: String): FlowCommandItem? = allCommands.firstOrNull { it.id == id }
+    val objectEditRoute = flowObjectEditRoute(selectedObject)
     // The dock is the substrate's canonical floating capsule: it covers content the user is still reading
     // and it is shaped rather than merely rounded. Its own 2/8/22 dp were what the substrate's Floating and
     // Capsule tiers were derived from, so this delegates rather than restates them.
@@ -1337,26 +1359,30 @@ private fun FlowContextDock(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (selectedObject is ImageBlock && !state.selectionMode) {
-                FlowDockButton("Edit image", Icons.Filled.Edit, { onOpenImage(selectedObject.id) }, Modifier.weight(1f), showLabel = showLabels)
-                command("Move")?.let { item ->
+            if (selectedObject != null && !state.selectionMode && objectEditRoute != null) {
+                // One branch for every object kind that has an editor of its own. This was two — an `ImageBlock`
+                // arm and a `ChartBlock` arm — whose Move/Duplicate/Delete rows were transcribed twice, which is
+                // how the two drifted from each other and from the sheet.
+                FlowDockButton(
+                    objectEditRoute.label,
+                    objectEditRoute.icon,
+                    {
+                        when (selectedObject) {
+                            is ImageBlock -> onOpenImage(selectedObject.id)
+                            is ChartBlock -> onOpenChart(selectedObject.id)
+                            else -> Unit
+                        }
+                    },
+                    Modifier.weight(1f),
+                    showLabel = showLabels,
+                )
+                command(com.norfold.app.editor.flow.FlowIds.DROP)?.let { item ->
                     FlowDockButton("Move", Icons.Filled.OpenWith, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
                 }
-                command("Duplicate")?.let { item ->
+                command(com.norfold.app.editor.flow.FlowIds.DUPLICATE)?.let { item ->
                     FlowDockButton("Duplicate", Icons.Filled.ContentCopy, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
                 }
-                command("Delete")?.let { item ->
-                    FlowDockButton("Delete", Icons.Filled.Delete, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
-                }
-            } else if (selectedObject is ChartBlock && !state.selectionMode) {
-                FlowDockButton("Edit chart", Icons.Filled.BarChart, { onOpenChart(selectedObject.id) }, Modifier.weight(1f), showLabel = showLabels)
-                command("Move")?.let { item ->
-                    FlowDockButton("Move", Icons.Filled.OpenWith, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
-                }
-                command("Duplicate")?.let { item ->
-                    FlowDockButton("Duplicate", Icons.Filled.ContentCopy, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
-                }
-                command("Delete")?.let { item ->
+                command(com.norfold.app.editor.flow.FlowIds.DELETE)?.let { item ->
                     FlowDockButton("Delete", Icons.Filled.Delete, { onCommand(item) }, Modifier.weight(1f), item.enabled, showLabels)
                 }
             } else if (state.selectionMode) {
@@ -1552,6 +1578,7 @@ private fun FlowPaletteSurface(
     presenter: FlowHostPresenter,
     onNotice: (String) -> Unit,
     onPickImage: () -> Unit,
+    onEditObject: (DocumentBlock) -> Unit,
 ) {
     val surfaceId = state.activeSurfaceId ?: return
     if (surfaceId == FlowSurfaces.COLOR_STUDIO || surfaceId == FlowSurfaces.FONT_BROWSER ||
@@ -1575,20 +1602,33 @@ private fun FlowPaletteSurface(
     val compact = state.presentationMode == PresentationMode.PHONE_SHEET ||
         state.presentationMode == PresentationMode.PHONE_POPOVER
     val body = @Composable {
-        FlowPaletteList(
-            heading = heading,
-            items = items,
-            recentId = state.recentInsertId.takeIf { surfaceId == FlowSurfaces.INSERT_PALETTE },
-            compact = compact,
-            onPick = { item ->
-                if (item.id == FlowIds.INSERT_IMAGE) {
-                    presenter.act { closeSurface(FlowSurfaces.INSERT_PALETTE, DismissTrigger.COMMAND_EXECUTED) }
-                    onPickImage()
-                } else {
-                    presenter.invokeItem(item, CommandSurface.DOCK, onNotice)
-                }
-            },
-        )
+        if (surfaceId == FlowSurfaces.MORE_ACTIONS) {
+            // The object inspector, not a flat list. Insert and Turn into stay lists below: both are catalogues
+            // of *kinds to choose*, where every row does the same thing to a different target, so a shared head
+            // and typed slots have nothing to group. More is the one that is about the selected object.
+            FlowObjectInspector(
+                state = state,
+                items = items,
+                compact = compact,
+                onCommand = { item -> presenter.invokeItem(item, CommandSurface.DOCK, onNotice) },
+                onEdit = onEditObject,
+            )
+        } else {
+            FlowPaletteList(
+                heading = heading,
+                items = items,
+                recentId = state.recentInsertId.takeIf { surfaceId == FlowSurfaces.INSERT_PALETTE },
+                compact = compact,
+                onPick = { item ->
+                    if (item.id == FlowIds.INSERT_IMAGE) {
+                        presenter.act { closeSurface(FlowSurfaces.INSERT_PALETTE, DismissTrigger.COMMAND_EXECUTED) }
+                        onPickImage()
+                    } else {
+                        presenter.invokeItem(item, CommandSurface.DOCK, onNotice)
+                    }
+                },
+            )
+        }
     }
 
     when (state.presentationMode) {
@@ -1753,6 +1793,73 @@ private fun FlowPaletteList(
         }
     }
 }
+
+/**
+ * Flow's selection, presented through the one object inspector.
+ *
+ * A thin bridge on purpose: the arrangement — which rows head the sheet, which slots follow, in what order —
+ * lives in [FlowInspector] and [com.norfold.app.editor.inspector.ObjectInspector], where a desktop unit test
+ * can fail on it. This function only supplies Flow's three pieces of context: what the selected object is
+ * called, whether it has an editor of its own, and how to run a command.
+ *
+ * The title is the object's own type via [flowObjectKindLabel] — the same helper the selection badge uses, so
+ * the sheet and the frame cannot disagree about what the user has selected. That replaces the literal
+ * `"More actions"`, which named the button the user had just pressed rather than the thing they had selected.
+ */
+@Composable
+private fun FlowObjectInspector(
+    state: FlowHostUiState,
+    items: List<FlowCommandItem>,
+    compact: Boolean,
+    onCommand: (FlowCommandItem) -> Unit,
+    onEdit: (DocumentBlock) -> Unit,
+) {
+    val selected = state.primaryId?.let(state.document::findById)
+    val editRoute = flowObjectEditRoute(selected)?.let { route ->
+        InspectorAction(FLOW_INSPECTOR_EDIT_ID, route.label, InspectorRole.Edit)
+    }
+    val model = FlowInspector.build(
+        title = selected?.let(::flowObjectKindLabel) ?: FlowInspector.BLOCK_TITLE,
+        items = items,
+        editRoute = editRoute,
+    )
+    ObjectInspectorContent(
+        model = model,
+        maxHeight = if (compact) FLOW_COMPACT_LIST_MAX_HEIGHT else Dp.Unspecified,
+        onAction = { action ->
+            if (action.id == FLOW_INSPECTOR_EDIT_ID) {
+                selected?.let(onEdit)
+            } else {
+                items.firstOrNull { it.id == action.id }?.let(onCommand)
+            }
+        },
+    )
+}
+
+/** The inspector row that opens the selected object's own editor. Not a command id — no command backs it. */
+private const val FLOW_INSPECTOR_EDIT_ID = "flow.host.editObject"
+
+/**
+ * How to present [block]'s own editor, or null for a kind that has none.
+ *
+ * The single answer to "does this object have an editor" for both surfaces that ask. The dock draws it as its
+ * leading button and the inspector as its first slot row, and before this they answered it separately — the
+ * dock with two `is ImageBlock` / `is ChartBlock` branches, the sheet not at all — so a third editable kind
+ * would have had to be added in two places and would have been forgotten in one.
+ *
+ * Carries what to *say* and what to *draw*, and deliberately not what to open: the two surfaces route
+ * differently — the dock opens the editor directly, the sheet must dismiss itself on the way — so a callback
+ * baked in here would have to be supplied by a caller that does not use it. What each surface opens stays at
+ * the surface.
+ */
+private fun flowObjectEditRoute(block: DocumentBlock?): FlowObjectEditRoute? = when (block) {
+    is ImageBlock -> FlowObjectEditRoute("Edit image", Icons.Filled.Edit)
+    is ChartBlock -> FlowObjectEditRoute("Edit chart", Icons.Filled.BarChart)
+    else -> null
+}
+
+/** A leading "edit this object" affordance: what to call it and what to draw. */
+private data class FlowObjectEditRoute(val label: String, val icon: ImageVector)
 
 @Composable
 private fun FlowNotice(message: String, onDismiss: () -> Unit) {

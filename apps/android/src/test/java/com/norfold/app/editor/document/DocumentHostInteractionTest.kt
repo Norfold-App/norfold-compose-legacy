@@ -21,8 +21,10 @@ import com.norfold.app.editor.command.CommandResult
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.flow.FlowShortcut
 import com.norfold.app.editor.history.EditTarget
+import com.norfold.app.editor.inspector.InspectorRole
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.surface.DismissTrigger
+import com.norfold.app.editor.surface.SurfaceClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -1066,5 +1068,78 @@ class DocumentHostInteractionTest {
         rt.openSurface(DocumentSurfaces.PAGE_CONTROL)
         rt.dismiss(DismissTrigger.OUTSIDE_TAP)
         assertNull(rt.activeSurfaceId())
+    }
+
+    /**
+     * The object inspector is a `COMMAND_MENU`, and that choice has consequences the host has to honour.
+     *
+     * Every other Document sheet is a `PICKER_BROWSER` and closes on `OUTSIDE_TAP`, so copying a neighbouring
+     * call site is the natural mistake: an `AFTER_COMMAND` surface ignores an outside tap, which would hide
+     * the sheet while leaving the surface on the coordinator's stack — and the next Back press would then be
+     * spent closing something the user cannot see. Asserted rather than commented, because the failure is
+     * invisible on screen and only shows up as one wasted Back.
+     */
+    @Test
+    fun theObjectInspectorClosesOnTheTriggersItsOwnPolicyAccepts() {
+        val rt = editing(page("p1", obj("a")))
+        rt.selectObjects(listOf("a"))
+
+        rt.openSurface(DocumentSurfaces.OBJECT_INSPECTOR, SurfaceClass.COMMAND_MENU)
+        assertEquals(DocumentSurfaces.OBJECT_INSPECTOR, rt.activeSurfaceId())
+
+        rt.dismiss(DismissTrigger.OUTSIDE_TAP)
+        assertEquals(
+            "an AFTER_COMMAND surface must not be closed by an outside tap, or the host is free to " +
+                "hide the sheet and orphan the surface",
+            DocumentSurfaces.OBJECT_INSPECTOR,
+            rt.activeSurfaceId(),
+        )
+
+        rt.dismiss(DismissTrigger.COMMAND_EXECUTED)
+        assertNull("a tapped row closes it", rt.activeSurfaceId())
+
+        // And the swipe-away/Back route, which the host reports as a cancel.
+        rt.openSurface(DocumentSurfaces.OBJECT_INSPECTOR, SurfaceClass.COMMAND_MENU)
+        rt.dismiss(DismissTrigger.CANCEL)
+        assertNull("dismissing without acting closes it too", rt.activeSurfaceId())
+    }
+
+    /**
+     * The inspector's entry point is offered from the selection, and the dock it groups is the selection's own.
+     *
+     * This is the invariant behind `openInspector` being nullable at the call site. With nothing selected the
+     * dock is not empty — it is the *page* dock, insertion and page structure — so the inspector cannot simply
+     * render whatever the dock currently holds and call it an object: it would title itself with an object's
+     * type while listing "Insert text" and "Delete page".
+     */
+    @Test
+    fun theInspectorGroupsEverySelectionDockActionUnderARealHeading() {
+        val rt = editing(page("p1", obj("a", kind = SceneObjectKind.Shape)))
+        val pageDock = rt.uiState().dock.map { it.id }
+        assertTrue(
+            "with nothing selected the dock is the page dock, which is not an object's actions",
+            pageDock.any { it.startsWith(DocumentIds.PAGE_PREFIX) },
+        )
+        assertNull("and there is no object to inspect", rt.uiState().primaryObject)
+
+        rt.selectObjects(listOf("a"))
+        val dock = rt.uiState().dock
+        assertTrue("a selected object offers actions", dock.isNotEmpty())
+        assertNotEquals("and they are different actions", pageDock, dock.map { it.id })
+
+        val kind = rt.uiState().primaryObject?.kind
+        assertEquals(SceneObjectKind.Shape, kind)
+
+        val model = DocumentInspector.build(title = DocumentInspector.titleFor(kind!!), items = dock)
+        assertEquals("Shape", model.title)
+        assertEquals(
+            "every dock action reaches the inspector exactly once",
+            dock.map { it.id }.toSet(),
+            model.allActions.map { it.id }.toSet(),
+        )
+        assertTrue(
+            "and none of them lands in the unclassified group",
+            model.slots.none { it.label == InspectorRole.Other.groupLabel },
+        )
     }
 }

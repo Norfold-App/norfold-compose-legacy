@@ -191,6 +191,15 @@ object DocumentSurfaces {
     /** Exact X/Y/W/H/Rotation entry for the primary selected object. */
     const val GEOMETRY_INSPECTOR = "document.surface.geometry"
 
+    /**
+     * Every action the selected object offers, grouped — the object inspector.
+     *
+     * Distinct from [GEOMETRY_INSPECTOR], which is numeric *value* entry for one object's box. This is the
+     * object's *actions*, and Document had no surface for them at all: they were reachable only as chips on a
+     * dock that scrolls sideways past sixteen entries, or by keyboard chord.
+     */
+    const val OBJECT_INSPECTOR = "document.surface.objectInspector"
+
     /** The page list, where pages are selected for the "Selected pages" scope and reordered. */
     const val PAGE_LIST = "document.surface.pageList"
 }

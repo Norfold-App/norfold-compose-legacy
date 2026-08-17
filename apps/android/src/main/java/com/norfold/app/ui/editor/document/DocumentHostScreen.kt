@@ -92,6 +92,7 @@ import com.norfold.app.editor.document.ActiveManipulation
 import com.norfold.app.editor.document.DocumentBackResult
 import com.norfold.app.editor.document.DocumentCommandItem
 import com.norfold.app.editor.document.DocumentHostUiState
+import com.norfold.app.editor.document.DocumentInspector
 import com.norfold.app.editor.document.DocumentPageValueItem
 import com.norfold.app.editor.document.DocumentSurfaces
 import com.norfold.app.editor.document.GeometryInspector
@@ -102,7 +103,9 @@ import com.norfold.app.editor.document.SnapGuideEngine
 import com.norfold.app.editor.document.WorkingIntent
 import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.surface.DismissTrigger
+import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.style.EditorStyleCommandIds
+import com.norfold.app.ui.editor.ObjectInspectorContent
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.resolvedBlockMetrics
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
@@ -373,13 +376,19 @@ fun DocumentHostScreen(
                 else -> Unit
             }
         }
+        // The object inspector's entry point. Offered only when an object is selected, because the inspector
+        // titles itself with that object's type and groups that object's actions — with nothing selected it
+        // would be a sheet about nothing.
+        val openInspector: (() -> Unit)? = state.primaryObject?.let {
+            { presenter.act { openSurface(DocumentSurfaces.OBJECT_INSPECTOR, SurfaceClass.COMMAND_MENU) }; Unit }
+        }
         if (state.formFactor.isPhone && (state.dock.isNotEmpty() || hasStyleDock)) {
             HorizontalDivider()
-            DocumentCompactDock(state.dock, state, invokeDockItem, invokeStyleItem)
+            DocumentCompactDock(state.dock, state, invokeDockItem, invokeStyleItem, openInspector)
         } else {
             if (state.dock.isNotEmpty()) {
                 HorizontalDivider()
-                DocumentDock(state.dock, invokeDockItem)
+                DocumentDock(state.dock, invokeDockItem, openInspector)
             }
             if (hasStyleDock) {
                 HorizontalDivider()
@@ -389,6 +398,25 @@ fun DocumentHostScreen(
     }
 
     when (state.activeSurfaceId) {
+        DocumentSurfaces.OBJECT_INSPECTOR -> DocumentObjectInspectorSheet(
+            state = state,
+            // The triggers this surface's own policy accepts, not the ones its neighbours use. Every other
+            // sheet here is a `PICKER_BROWSER` and closes on `OUTSIDE_TAP`; the inspector is a `COMMAND_MENU`,
+            // whose `AFTER_COMMAND` policy ignores an outside tap — so passing `OUTSIDE_TAP` would hide the
+            // sheet while leaving the surface open on the coordinator's stack, and the next Back press would
+            // be spent closing something invisible. A sheet dismissed without acting is a cancel; a row tapped
+            // is a command executed, which is precisely what this class is for.
+            onCancel = { presenter.act { dismiss(DismissTrigger.CANCEL) } },
+            // No disabled branch: the inspector draws a disabled row with the editor's own reason beneath it
+            // and does not make it clickable, so an unavailable action explains itself in place rather than
+            // through a notice the user has to trigger.
+            onInvoke = { item ->
+                presenter.act {
+                    invoke(item.id, CommandSurface.DOCK)
+                    dismiss(DismissTrigger.COMMAND_EXECUTED)
+                }
+            },
+        )
         DocumentSurfaces.PAGE_CONTROL -> PageControlSheet(
             state = state,
             onDismiss = { presenter.act { dismiss(DismissTrigger.OUTSIDE_TAP) } },
@@ -1850,7 +1878,11 @@ private fun NoticeRow(message: String, onDismiss: () -> Unit) {
  * onto a phone is what makes a document editor unusable there.
  */
 @Composable
-private fun DocumentDock(items: List<DocumentCommandItem>, onInvoke: (DocumentCommandItem) -> Unit) {
+private fun DocumentDock(
+    items: List<DocumentCommandItem>,
+    onInvoke: (DocumentCommandItem) -> Unit,
+    onOpenInspector: (() -> Unit)? = null,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -1864,6 +1896,9 @@ private fun DocumentDock(items: List<DocumentCommandItem>, onInvoke: (DocumentCo
                 enabled = item.enabled,
                 label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
             )
+        }
+        onOpenInspector?.let { open ->
+            AssistChip(onClick = open, label = { Text("More", style = MaterialTheme.typography.labelSmall) })
         }
     }
 }
@@ -1900,12 +1935,19 @@ private fun DocumentCompactDock(
     state: DocumentHostUiState,
     onInvoke: (DocumentCommandItem) -> Unit,
     invokeStyle: (String) -> Unit,
+    onOpenInspector: (() -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Leads the rail on a phone rather than trailing it. The rail scrolls, so a trailing entry on a
+        // sixteen-chip row is off-screen — which is the reachability problem the inspector exists to fix, and
+        // putting its own entry point behind the same scroll would reintroduce it.
+        onOpenInspector?.let { open ->
+            AssistChip(onClick = open, label = { Text("More", style = MaterialTheme.typography.labelSmall) })
+        }
         items.forEach { item ->
             AssistChip(
                 onClick = { onInvoke(item) },
@@ -2097,6 +2139,49 @@ private fun PageListSheet(
  * why a control already applied there reads as on. "Apply settings to…" changes what the rows *answer about*,
  * not just what a tap will do — picking Whole document immediately re-resolves every row against every page.
  */
+/**
+ * Document's selection, presented through the one object inspector.
+ *
+ * The counterpart to Flow's bridge, and the same thinness: [DocumentInspector] decides the arrangement where a
+ * unit test can fail on it, and this supplies Document's context — what the selected object is called, and how
+ * to run a command.
+ *
+ * This surface is new. Document's object actions previously existed only as chips on a dock that scrolls
+ * sideways — up to sixteen of them, undifferentiated — or as keyboard chords, which a phone does not have. So
+ * for Document the inspector is not a reorganisation of an existing sheet but the first grouped view of what a
+ * selected object can do.
+ *
+ * No edit route: unlike Flow, Document opens an object's own editor by tapping the object on the page rather
+ * than through a dock button, so there is no host route for the inspector to offer and inventing one here
+ * would be a second way to do something that already works.
+ *
+ * @param onCancel the sheet closed without acting — swipe-away or Back.
+ * @param onInvoke a row was tapped. The caller both runs the command and closes the surface, because
+ *   Document's `invoke` does not dispatch `COMMAND_EXECUTED` itself the way Flow's does.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DocumentObjectInspectorSheet(
+    state: DocumentHostUiState,
+    onCancel: () -> Unit,
+    onInvoke: (DocumentCommandItem) -> Unit,
+) {
+    val selected = state.primaryObject
+    val model = DocumentInspector.build(
+        title = selected?.kind?.let(DocumentInspector::titleFor) ?: DocumentInspector.OBJECT_TITLE,
+        items = state.dock,
+    )
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onCancel, sheetState = sheetState) {
+        ObjectInspectorContent(
+            model = model,
+            // Mapped back to the editor's own item rather than invoked from the action: the action is a view of
+            // the command, and the runtime's enablement and failure reason live on the item.
+            onAction = { action -> state.dock.firstOrNull { it.id == action.id }?.let(onInvoke) },
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PageControlSheet(
