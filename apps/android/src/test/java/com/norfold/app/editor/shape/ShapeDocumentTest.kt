@@ -380,6 +380,48 @@ class ShapeDocumentTest {
         assertFalse("a blank path document has nothing to render yet", ShapeDocument.emptyPathDocument().isRenderable())
     }
 
+    @Test
+    fun theLayerContentDiscriminatorIsTheFullyQualifiedNameEveryStoredShapeWasWrittenWith() {
+        // `ShapeLayer.content` is polymorphic, so kotlinx-serialization writes a type discriminator for
+        // it, and with no `@SerialName` on the three implementors that discriminator is each one's
+        // fully-qualified name. Those exact strings are already on disk in every shape anyone has saved.
+        //
+        // Two things could change them, both looking like tidying up: adding `@SerialName`, or moving a
+        // class to another package. Either would leave existing shapes undecodable — they would load as
+        // MALFORMED_CANONICAL, which preserves the payload but makes the shape uneditable. Pinning the
+        // strings here means such a change fails this test instead of orphaning a user's work.
+        //
+        // Minification does not threaten them: the serial name is a string constant in the generated
+        // `$$serializer`, and R8 renames classes without rewriting string literals.
+        val encoded = ShapeDocumentCodec.encode(rich)
+
+        listOf(
+            "com.norfold.app.editor.shape.ShapePrimitiveLayer",
+            "com.norfold.app.editor.shape.ShapePathLayer",
+            "com.norfold.app.editor.shape.ShapeBooleanLayer",
+        ).forEach { discriminator ->
+            assertTrue(
+                "the wire format must keep writing \"type\":\"$discriminator\"",
+                encoded.contains("\"type\":\"$discriminator\""),
+            )
+        }
+
+        // And the other direction: a payload carrying those names still decodes to those types. This is
+        // the upgrade path — every shape saved by any prior build arrives looking exactly like this.
+        val stored = """
+            {"schemaVersion":1,"document":{"schemaVersion":1,"layers":[
+              {"id":"p","content":{"type":"com.norfold.app.editor.shape.ShapePrimitiveLayer","kind":"STAR"}},
+              {"id":"q","content":{"type":"com.norfold.app.editor.shape.ShapePathLayer"}},
+              {"id":"r","content":{"type":"com.norfold.app.editor.shape.ShapeBooleanLayer"}}
+            ],"accessibility":{"alternativeText":"stored by an earlier build"}}}
+        """.trimIndent()
+        val restored = decoded(stored)
+        assertTrue(restored.layers[0].content is ShapePrimitiveLayer)
+        assertTrue(restored.layers[1].content is ShapePathLayer)
+        assertTrue(restored.layers[2].content is ShapeBooleanLayer)
+        assertEquals("stored by an earlier build", restored.accessibility.alternativeText)
+    }
+
     private fun decoded(raw: String): ShapeDocument =
         (ShapeDocumentCodec.decode(raw) as ShapeDecodeResult.Success).document
 

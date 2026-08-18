@@ -641,6 +641,59 @@ class ShapeAdversarialTest {
         assertTrue(ShapeDocumentCodec.decode(payload.substring(0, payload.length / 2)) is ShapeDecodeResult.Malformed)
     }
 
+    @Test
+    fun decodingIsTotalEvenWhenTheNestingIsDeepEnoughToExhaustTheStack() {
+        // The test above uses forty levels, which decodes successfully. Far deeper than that, the
+        // *deserializer itself* runs out of stack before any Norfold code gets a say — kotlinx's generated
+        // readers recurse once per nesting level, so the failure is a StackOverflowError rather than an
+        // exception. Measured on a 1 MB desktop stack it appears somewhere past two hundred levels; the
+        // exact number is a property of the runtime's stack, not of this document, which is precisely why
+        // this test asserts the contract instead of the threshold.
+        //
+        // The contract is that `decode` is total: every payload produces one of the three verdicts and the
+        // bytes come back untouched. That is what lets [ShapeBlockAdapter.load] report
+        // MALFORMED_CANONICAL and keep the payload for a later build, instead of taking down whatever was
+        // drawing the block.
+        //
+        // This is also the reason the codec's `runCatching` must keep catching Throwable rather than being
+        // narrowed to Exception: an Error here is reachable from data alone, so narrowing the catch would
+        // convert a contained, reported failure into a crash in the editor. A payload this deep cannot be
+        // built through the editor — [ShapeBooleans.MAX_DEPTH] is eight and
+        // [ShapeLayerEditor.groupAsBoolean] enforces it — so it only arrives from somewhere else, which is
+        // exactly the case a codec has to survive.
+        val depth = 4_000
+        val raw = buildString {
+            append("{\"schemaVersion\":1,\"document\":{\"schemaVersion\":1,\"layers\":[{\"id\":\"l\",\"content\":")
+            repeat(depth) {
+                append("{\"type\":\"com.norfold.app.editor.shape.ShapeBooleanLayer\",")
+                append("\"group\":{\"children\":[{\"id\":\"c$it\",\"content\":")
+            }
+            append("{\"type\":\"com.norfold.app.editor.shape.ShapePrimitiveLayer\",\"kind\":\"STAR\"}")
+            repeat(depth) { append("}]}}") }
+            append("}],\"accessibility\":{}}}")
+        }
+
+        // No try/catch: an escaping Throwable must fail this test rather than be absorbed by it.
+        val decoded = ShapeDocumentCodec.decode(raw)
+        assertTrue(
+            "a payload too deep to deserialize is a verdict, not a crash, got $decoded",
+            decoded is ShapeDecodeResult.Malformed,
+        )
+        assertSame(
+            "the payload a later build might still read is handed back exactly as it arrived",
+            raw,
+            (decoded as ShapeDecodeResult.Malformed).raw,
+        )
+
+        // And through the real ingress, which is where a crash would actually reach a user: the block opens
+        // read-only with its bytes intact rather than failing to open at all.
+        val loaded = ShapeBlockAdapter.load(ShapeBlock(kind = ShapeKind.Star, shapeEditDocument = raw))
+        assertEquals(LoadedShapeDocument.Origin.MALFORMED_CANONICAL, loaded.origin)
+        assertEquals(raw, loaded.preservedPayload)
+        assertFalse("editing it would overwrite geometry this build could not read", loaded.isEditable)
+        assertTrue("something still draws: the legacy shape it was before", loaded.document.isRenderable())
+    }
+
     // ── Hit targets and disambiguation ──────────────────────────────────────────────────────────────
 
     @Test
