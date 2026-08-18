@@ -134,7 +134,13 @@ ksp {
 }
 
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    // The BOM must not be older than what the graph resolves, or it stops governing anything. The
+    // com.composables icon packs below depend on org.jetbrains.compose.foundation 1.9.3, which maps
+    // onto androidx.compose.foundation 1.9.4; under 2024.12.01 (foundation 1.7.6) Gradle resolved
+    // that conflict in favour of 1.9.4 and left material3 behind at the BOM's 1.3.1 — a material3
+    // built against foundation 1.7.x running on 1.9.4. 2025.11.00 declares the 1.9.4 the graph
+    // already picked and pairs it with material3 1.4.0, so the declared versions are the real ones.
+    implementation(platform("androidx.compose:compose-bom:2025.11.00"))
     implementation("androidx.activity:activity-compose:1.10.0")
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.compose.material3:material3")
@@ -191,7 +197,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     // Compose behavior that JVM logic cannot prove — a field genuinely taking focus, a tap reaching the row
     // instead of the text field, a drop marker actually drawn — is asserted with the Compose test rule.
-    androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.11.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("androidx.arch.core:core-testing:2.2.0")
