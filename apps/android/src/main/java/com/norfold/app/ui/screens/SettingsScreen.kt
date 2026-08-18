@@ -2568,9 +2568,9 @@ private fun AppInfoSettings() {
             RowDivider()
             SettingsRow("Help & Support", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/Norfold-App/Norfold/issues") })
             RowDivider()
-            SettingsRow("Privacy policy", icon = Icons.Outlined.Lock, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://sheikhti1205.github.io/Norfold/privacy.html") })
+            SettingsRow("Privacy policy", icon = Icons.Outlined.Lock, trailing = { RowChevron() }, onClick = { uriHandler.openUri(BuildConfig.PRIVACY_URL) })
             RowDivider()
-            SettingsRow("Terms of service", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://sheikhti1205.github.io/Norfold/terms.html") })
+            SettingsRow("Terms of service", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { uriHandler.openUri(BuildConfig.TERMS_URL) })
             RowDivider()
             SettingsRow("Open source licenses", icon = Icons.Outlined.Code, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/Norfold-App/Norfold") })
         }

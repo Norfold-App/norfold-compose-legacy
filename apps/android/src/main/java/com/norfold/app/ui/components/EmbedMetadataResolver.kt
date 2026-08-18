@@ -18,7 +18,7 @@ import okhttp3.Request
 object EmbedMetadataResolver {
     private const val MaxHtmlBytes = 512 * 1024L
     private const val MaxIconBytes = 1024 * 1024L
-    private const val UserAgent = "Norfold/0.1 (+https://sheikhti1205.github.io/Norfold/)"
+    private const val UserAgent = "Norfold/0.1 (+https://norfold-app.github.io/Norfold/)"
     private const val HtmlAccept = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.2"
     private const val ImageAccept = "image/png,image/webp,image/jpeg,image/gif,image/x-icon,image/*;q=0.8,*/*;q=0.1"
 

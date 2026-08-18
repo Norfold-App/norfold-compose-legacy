@@ -67,9 +67,12 @@ android {
         buildConfigField("String", "KLIPY_API_KEY", buildConfigString(publicConfig("KLIPY_API_KEY")))
         buildConfigField("String", "AUTH_CALLBACK", buildConfigString("norfold://auth/callback"))
         buildConfigField("String", "CALENDAR_CALLBACK", buildConfigString("norfold://integrations/calendar"))
-        buildConfigField("String", "HOMEPAGE_URL", buildConfigString("https://sheikhti1205.github.io/Norfold/"))
-        buildConfigField("String", "PRIVACY_URL", buildConfigString("https://sheikhti1205.github.io/Norfold/privacy.html"))
-        buildConfigField("String", "TERMS_URL", buildConfigString("https://sheikhti1205.github.io/Norfold/terms.html"))
+        // The published site moved with the repository to the Norfold-App organisation. The old
+        // user-site host serves 404 for every one of these paths, so anything still pointing there
+        // sends a reader looking for the privacy policy to a GitHub error page instead.
+        buildConfigField("String", "HOMEPAGE_URL", buildConfigString("https://norfold-app.github.io/Norfold/"))
+        buildConfigField("String", "PRIVACY_URL", buildConfigString("https://norfold-app.github.io/Norfold/privacy.html"))
+        buildConfigField("String", "TERMS_URL", buildConfigString("https://norfold-app.github.io/Norfold/terms.html"))
     }
 
     buildFeatures {
