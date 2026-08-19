@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AlertDialogDefaults
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
@@ -23,6 +25,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +48,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.norfold.app.ui.EditorChromeColors
+import com.norfold.app.ui.LocalChromeContainer
 import com.norfold.app.ui.rememberChromeFocus
 
 enum class NorfoldPopupPlacement { Auto, Below, Above }
@@ -159,12 +164,32 @@ fun NorfoldAnchoredPopup(
     }
 }
 
+/**
+ * The anchored popup's card.
+ *
+ * Provides [LocalChromeContainer] for the reason [NorfoldDialog] states, and here the container is not a token
+ * but the colour this `Surface` actually ends up painting: `surface` plus the 3 dp of tonal tint Material
+ * composites over it, which on this app is a wash of the user's accent because `NorfoldTheme` never sets
+ * `surfaceTint`. [NorfoldPopupRow]'s selected fill is translucent, so it composites onto that — and onto the
+ * page instead, the ring failed **1 of 10** accents (Sunset 2.95:1) where all ten now pass.
+ *
+ * `EditorChromeColors.elevated` is called here rather than left to the substrate because the substrate's own
+ * elevation correction applies only to a backdrop that *is* `colorScheme.surface`, matching Material's gate.
+ * The row's fill is not — it is `secondaryContainer` at 55% alpha — so it takes the alpha path, and the colour
+ * that path composites onto has to already carry the tint.
+ */
 @Composable
 fun NorfoldPopupCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val tokens = LocalNorfoldPopupTokens.current
+    val scheme = MaterialTheme.colorScheme
+    val container = EditorChromeColors.elevated(
+        surface = scheme.surface,
+        tint = scheme.surfaceTint,
+        elevationDp = CardTonalElevation.value,
+    )
     Surface(
         modifier = modifier.widthIn(min = tokens.minWidth, max = tokens.maxWidth),
         shape = RoundedCornerShape(tokens.cardRadius),
@@ -172,11 +197,16 @@ fun NorfoldPopupCard(
         contentColor = MaterialTheme.colorScheme.onSurface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 14.dp,
-        tonalElevation = 3.dp,
+        tonalElevation = CardTonalElevation,
     ) {
-        Column(Modifier.padding(tokens.cardPadding), content = content)
+        CompositionLocalProvider(LocalChromeContainer provides container) {
+            Column(Modifier.padding(tokens.cardPadding), content = content)
+        }
     }
 }
+
+/** The tonal elevation the popup card and the dropdown menu share, named so the two cannot drift. */
+private val CardTonalElevation = 3.dp
 
 @Composable
 fun NorfoldPopupRow(
@@ -190,6 +220,11 @@ fun NorfoldPopupRow(
 ) {
     val tokens = LocalNorfoldPopupTokens.current
     val color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+    // Selected rows paint a translucent fill, which `NorfoldChrome.focusRing` composites onto the card before
+    // measuring — a colour carrying alpha is one the contrast arithmetic cannot search against at all. What it
+    // composites onto is `LocalChromeContainer`, which [NorfoldPopupCard] and [NorfoldDropdownMenu] set to the
+    // card's own painted colour including its accent tint; against the page instead, one of the ten accents
+    // fell to 2.95:1. The unselected fill is plain `surface`, which takes the substrate's elevation path.
     val fill = if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .55f) else MaterialTheme.colorScheme.surface
     val focus = rememberChromeFocus()
     Surface(
@@ -236,7 +271,13 @@ fun NorfoldPopupDivider() {
     HorizontalDivider(Modifier.padding(horizontal = 4.dp, vertical = 5.dp), color = MaterialTheme.colorScheme.outlineVariant)
 }
 
-/** Material menu compatibility entry point using the same card tokens as anchored popups. */
+/**
+ * Material menu compatibility entry point using the same card tokens as anchored popups.
+ *
+ * Provides [LocalChromeContainer] for the same reason [NorfoldPopupCard] does, resolved the same way — this is
+ * the other surface that paints `surface` plus [CardTonalElevation] of accent tint, and menu content is often
+ * the same [NorfoldPopupRow] the card holds.
+ */
 @Composable
 fun NorfoldDropdownMenu(
     expanded: Boolean,
@@ -247,6 +288,12 @@ fun NorfoldDropdownMenu(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val tokens = LocalNorfoldPopupTokens.current
+    val scheme = MaterialTheme.colorScheme
+    val container = EditorChromeColors.elevated(
+        surface = scheme.surface,
+        tint = scheme.surfaceTint,
+        elevationDp = CardTonalElevation.value,
+    )
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
@@ -256,10 +303,14 @@ fun NorfoldDropdownMenu(
         shape = RoundedCornerShape(tokens.cardRadius),
         containerColor = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        tonalElevation = 3.dp,
+        tonalElevation = CardTonalElevation,
         shadowElevation = 14.dp,
-        content = content,
-    )
+    ) {
+        val scope = this
+        CompositionLocalProvider(LocalChromeContainer provides container) {
+            with(scope) { content() }
+        }
+    }
 }
 
 /**
@@ -278,6 +329,26 @@ val LocalPopupStyle = staticCompositionLocalOf { PopupStyle() }
  * The single dialog entry point. Every alert-style dialog in the app goes through here so popup
  * styling stays consistent and future customization lands in one place. Signature mirrors
  * [AlertDialog] for mechanical migration.
+ *
+ * ## Why it provides [LocalChromeContainer]
+ *
+ * A dialog is a container, and chrome inside a container is drawn on the container rather than on the page.
+ * Every focus ring and resting edge in the substrate is solved against the colour it is drawn on, so a row
+ * inside this dialog measured against the page is measured against a colour that is nowhere on screen. On the
+ * ten shipped accents in light mode that cost **3 of 10** rows WCAG 1.4.11's 3:1 — Gold 2.60:1, Sunset 2.61:1,
+ * Forest 2.74:1 — and all ten pass against the real container. The rows do not have to know: they read the
+ * local, which is provided here because this is the only place that knows what the container is.
+ *
+ * **The colour comes from [AlertDialogDefaults.containerColor], not from a literal.** That accessor resolves
+ * `DialogTokens.ContainerColor` through the active scheme, so whatever the container is *now* is what the ring
+ * is measured against, and it stays correct the day the theme sets the token it currently leaves unset. Today
+ * that resolves to Material's baseline `surfaceContainerHigh` — `#ECE6F0` light, `#2B2930` dark — because
+ * `NorfoldTheme` sets none of the container tokens. Making that a Norfold colour is a separate, product-level
+ * decision; measuring against whatever it is, is not.
+ *
+ * It is also passed to `containerColor` rather than left to default, even though the default is this same
+ * accessor. One expression paints the container and informs the local, so the two cannot drift apart — not
+ * from a change here, and not from a Material release that redirects `AlertDialog`'s own default.
  */
 @Composable
 fun NorfoldDialog(
@@ -291,20 +362,43 @@ fun NorfoldDialog(
     properties: DialogProperties = DialogProperties(),
 ) {
     val style = LocalPopupStyle.current
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        confirmButton = confirmButton,
-        modifier = modifier,
-        dismissButton = dismissButton,
-        icon = icon,
-        title = title,
-        text = text,
-        shape = RoundedCornerShape(style.dialogCornerRadius),
-        properties = properties,
-    )
+    val container = AlertDialogDefaults.containerColor
+    CompositionLocalProvider(LocalChromeContainer provides container) {
+        AlertDialog(
+            onDismissRequest = onDismissRequest,
+            confirmButton = confirmButton,
+            modifier = modifier,
+            dismissButton = dismissButton,
+            icon = icon,
+            title = title,
+            text = text,
+            shape = RoundedCornerShape(style.dialogCornerRadius),
+            containerColor = container,
+            properties = properties,
+        )
+    }
 }
 
-/** The single modal-bottom-sheet entry point; wraps [ModalBottomSheet]. */
+/**
+ * The single modal-bottom-sheet entry point; wraps [ModalBottomSheet].
+ *
+ * Provides [LocalChromeContainer] for the reason [NorfoldDialog] states: chrome inside a sheet is drawn on the
+ * sheet. This host is where the cost showed up worst, because the sidebar's nav rows appear in it — a selected
+ * destination's 12% accent wash, composited onto the page instead of onto the sheet, failed **4 of 10** accents
+ * (Gold 2.9430:1, Sunset 2.9747:1, Forest 2.9936:1, Candy 2.9999964:1) and a resting one failed 2 of 10. All ten
+ * pass once the wash composites onto the colour the sheet actually paints.
+ *
+ * Candy's seven decimals are not affectation. `Color.copy(alpha = 0.12f)` composites at 31/255 = 0.121569 rather
+ * than 0.12, because sRGB `Color` stores 8-bit channels — enough to move one channel by one bit, and on the
+ * narrowest of these populations one bit is the difference between 2.9999964 and passing. This population was
+ * documented as 3 of 10 until `ChromeGeometryTest` ran against `ColorValue`'s arithmetic instead of a
+ * hand-computed model.
+ *
+ * That colour is [BottomSheetDefaults.containerColor], which resolves `SheetBottomTokens.DockedContainerColor`
+ * — `surfaceContainerLow`, another token `NorfoldTheme` leaves unset, so today it paints Material's baseline
+ * `#F7F2FA` light and `#1D1B20` dark. Passed to `containerColor` as well as to the local so the painted colour
+ * and the measured one are one expression.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NorfoldBottomSheet(
@@ -313,12 +407,20 @@ fun NorfoldBottomSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val style = LocalPopupStyle.current
+    val container = BottomSheetDefaults.containerColor
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         modifier = modifier,
         shape = RoundedCornerShape(topStart = style.sheetCornerRadius, topEnd = style.sheetCornerRadius),
-        content = content,
-    )
+        containerColor = container,
+    ) {
+        // The sheet's own `ColumnScope`, captured so `content` still receives it inside the provider — the
+        // provider's lambda has no receiver of its own, and every caller writes column-scoped content.
+        val scope = this
+        CompositionLocalProvider(LocalChromeContainer provides container) {
+            with(scope) { content() }
+        }
+    }
 }
 
 /** Free-form dialog for fully custom card content (platform default width). */

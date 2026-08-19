@@ -7,6 +7,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalAbsoluteTonalElevation
+import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.ripple
@@ -14,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
@@ -22,12 +25,58 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.domain.style.ChromeGeometry.Lift
+
+/**
+ * The colour of the container the chrome below this point is drawn inside.
+ *
+ * ## Why the substrate needs a local for this
+ *
+ * Everything the substrate measures is measured against *the pixel the chrome is drawn on*, and
+ * `NorfoldChrome.resolvedBackdrop` already corrects for the two ways a declared colour differs from a painted
+ * one: tonal elevation, and alpha. The alpha correction has to composite onto something, and until now that
+ * something was `colorScheme.background` — the page. That is right for chrome on the page and wrong for chrome
+ * inside a container, which is where a large part of the app's chrome lives.
+ *
+ * It is wrong twice over, and both were measured on the ten shipped accents in light mode:
+ *
+ * - **A translucent fill inside a container composites onto the container, not onto the page.** A selected
+ *   sidebar destination is a 12% accent wash; inside [com.norfold.app.ui.components.NorfoldBottomSheet] the
+ *   ring solved against wash-over-page and drawn on wash-over-sheet failed **4 of 10** (Gold 2.9430:1, Sunset
+ *   2.9747:1, Forest 2.9936:1, Candy 2.9999964:1). A selected [com.norfold.app.ui.components.NorfoldPopupRow]
+ *   is `secondaryContainer` at 55% over a 3 dp card, and failed **1 of 10** (Sunset 2.95:1).
+ *
+ *   Candy is quoted to seven decimals deliberately: it fails by 3.6 millionths, and every other figure in this
+ *   file is quoted to two or four. It was counted as passing — this population was documented as 3 of 10 — until
+ *   `ChromeGeometryTest` was actually run against `ColorValue`'s own arithmetic rather than a hand-computed
+ *   model. `Color.copy(alpha = 0.12f)` composites at 31/255 = 0.121569, not at 0.12, because sRGB `Color` holds
+ *   8-bit channels; on the narrowest population that 1.3% shifts one channel by one bit and one bit decides it.
+ * - **An opaque row inside a container is drawn on the container, so the default is simply the wrong colour.**
+ *   Rows inside [com.norfold.app.ui.components.NorfoldDialog] failed **3 of 10** against the page default
+ *   (Gold 2.60:1, Sunset 2.61:1, Forest 2.74:1) and pass **10 of 10** against the real container.
+ *
+ * With this local provided, all of those populations pass 10 of 10, in both modes.
+ *
+ * ## Why a local rather than a parameter at each site
+ *
+ * The value is a property of the *host*, not of the chrome. A `SettingsRow` does not know whether it was
+ * placed on a page, in a dialog or in a sheet — the sidebar's nav rows appear in all three — so asking each of
+ * 116 substrate calls to name its container asks every caller to know something only its ancestor does, and to
+ * keep knowing it when the ancestor changes. Threading it through the one place that *does* know is the same
+ * arrangement Material already uses for [LocalAbsoluteTonalElevation], and for the same reason.
+ *
+ * **It defaults to `Color.Unspecified`, not to a colour**, so that "nobody said" stays distinguishable from
+ * "the page". A default of `background` would read as an assertion, and the fallback belongs where the theme is
+ * known — `resolvedBackdrop` resolves an unspecified value to `colorScheme.background`, which is the correct
+ * answer for chrome that genuinely is on the page.
+ */
+val LocalChromeContainer = staticCompositionLocalOf { Color.Unspecified }
 
 /**
  * The one interaction-chrome substrate: what a floating surface in Norfold measures, and nothing about
@@ -72,18 +121,17 @@ object NorfoldChrome {
      * boundary needs roughly 1.5:1 to be visible at all, so both tokens draw an edge that states a boundary
      * the user cannot see.
      *
-     * [backdrop] is composited onto the page first, for the reason [focusRing] states at length: a
-     * translucent backdrop is not a colour the measurement can use, and an edge solved against one is solved
-     * against a pixel that is never painted. This matters more here than it looks, because #62 will route
-     * the tree's 39 invisible `outlineVariant` borders through this function and a majority of those sites
-     * sit on translucent cards.
+     * [backdrop] is resolved to the pixel actually on screen before it is measured — see [resolvedBackdrop]
+     * for the two corrections and why each is needed. Both matter more here than they look, because #62 will
+     * route the tree's 39 invisible `outlineVariant` borders through this function, a majority of those sites
+     * sit on translucent cards, and a good number of the rest sit inside elevated sheets.
      */
     @Composable
     @ReadOnlyComposable
-    fun restingEdge(backdrop: Color = MaterialTheme.colorScheme.background): Color =
+    fun restingEdge(backdrop: Color = Color.Unspecified): Color =
         EditorChromeColors.legible(
             MaterialTheme.colorScheme.outline,
-            EditorChromeColors.opaque(backdrop, MaterialTheme.colorScheme.background),
+            resolvedBackdrop(backdrop),
             ChromeGeometry.RESTING_EDGE_RATIO,
         )
 
@@ -97,24 +145,90 @@ object NorfoldChrome {
      * The ordinary case adjusts nothing, because a user accent that already contrasts with the page is
      * returned exactly as chosen.
      *
-     * **[backdrop] is composited onto the page before it is measured.** A translucent backdrop is a colour
-     * the arithmetic cannot use at all: [EditorChromeColors.legible] can neither measure it nor search
-     * against it, so it abandons the accent and returns flat black or white chosen from a colour that is
-     * never painted. 42 of the app's 88 interactive `Surface`s paint a translucent or transparent fill, and on
-     * the worst of them — a workspace object tile at 16% alpha over the dark page — that ink draws at
-     * **1.22:1**, with 60 of the 120 accent-by-tile cases failing 3:1. [EditorChromeColors.opaque] states the
-     * arithmetic and the measured cases; `ChromeGeometryTest` pins them.
+     * **[backdrop] is resolved to the pixel actually on screen before it is measured.** [resolvedBackdrop]
+     * states both corrections; the reason each is load-bearing is that a ring solved against a colour that is
+     * never painted is measured against nothing. A translucent backdrop is a colour the arithmetic cannot use
+     * at all: [EditorChromeColors.legible] can neither measure it nor search against it, so it abandons the
+     * accent and returns flat black or white chosen from a colour that is never painted. 42 of the app's 88
+     * interactive `Surface`s paint a translucent or transparent fill, and on the worst of them — a workspace
+     * object tile at 16% alpha over the dark page — that ink draws at **1.22:1**, with 60 of the 120
+     * accent-by-tile cases failing 3:1. [EditorChromeColors.opaque] states the arithmetic and the measured
+     * cases; `ChromeGeometryTest` pins them.
      */
     @Composable
     @ReadOnlyComposable
     fun focusRing(
         accent: Color = MaterialTheme.colorScheme.primary,
-        backdrop: Color = MaterialTheme.colorScheme.background,
+        backdrop: Color = Color.Unspecified,
     ): Color = EditorChromeColors.legible(
         accent,
-        EditorChromeColors.opaque(backdrop, MaterialTheme.colorScheme.background),
+        resolvedBackdrop(backdrop),
         ChromeGeometry.FOCUS_RING_RATIO,
     )
+
+    /**
+     * [backdrop] turned into the colour that is actually on screen behind the chrome.
+     *
+     * Three corrections, applied in the order the renderer applies them:
+     *
+     * 1. **The page is not always the page.** Whatever [LocalChromeContainer] names is what "behind this
+     *    chrome" means here — the dialog's container inside a dialog, the sheet's inside a sheet, the theme's
+     *    `background` on bare page. Every step below then works from that colour instead of from the page, and
+     *    [LocalChromeContainer] states what it cost to get this wrong: five populations, up to 4 of 10 accents
+     *    each, failing 1.4.11 in light mode. An unspecified [backdrop] resolves to it too, so a caller that
+     *    names nothing gets its real host rather than an assumption about one.
+     *
+     *    **This is why every `backdrop` parameter in this file defaults to `Color.Unspecified` rather than to
+     *    `colorScheme.background`.** The two look interchangeable and are not: `background` is a *specified*
+     *    colour, so it would satisfy the check below and win over the container at every defaulting call site
+     *    — which is all but a handful of the 116. A literal default would have made this whole step dead code
+     *    for the callers that need it most, and the ten measured populations would have been unchanged while
+     *    appearing to be fixed. The sentinel is what keeps "nobody named a backdrop" answerable by the host.
+     *
+     * 2. **Tonal elevation.** Material composites `surfaceTint` over `surface` on any elevated surface, and
+     *    `lightColorScheme` defaults `surfaceTint` to the `primary` *parameter* — so on this app, which never
+     *    sets the token, the tint is the user's own accent. Chrome inside an elevated `Surface` is therefore
+     *    drawn on accent-shifted surface while its measurement believed it was on plain `surface`, and the
+     *    ring is the one colour that suffers most from being solved against a paler version of itself:
+     *    **2 of 10 shipped accents fail 3:1 at 1–4 dp and 3 of 10 at 6–10 dp**, against 0 of 10 once the
+     *    painted colour is used. [ChromeGeometry.tonalTintAlpha] carries the curve and the figures.
+     *
+     *    Both of Material's own gates are honoured, because applying the tint where Material does not would
+     *    be the same class of error in the other direction. The tint lands only when the backdrop **is**
+     *    `colorScheme.surface` — a `Surface` painted `surfaceVariant` or `surface.copy(alpha = …)` gets none,
+     *    which is why the app's four translucent-surface sites are corrected by step 3 and not by this one —
+     *    and only while [LocalTonalElevationEnabled] is true. The elevation read is
+     *    [LocalAbsoluteTonalElevation], the **accumulated** value `Surface` provides to its content, so a 1 dp
+     *    row inside a 6 dp sheet resolves at 7 dp rather than at the literal its caller typed.
+     *
+     * 3. **Alpha.** Composited onto the resolved container, for the reason [EditorChromeColors.opaque] states
+     *    at length: a translucent backdrop is not a colour the arithmetic can measure at all, so the search is
+     *    abandoned and flat ink is returned instead — measured at 1.22:1 on the worst of the app's tiles.
+     *
+     * Ordered this way because that is the order the pixels arrive in: the container is painted, then the
+     * elevated surface on top of it, then a translucent fill over that. Reversing the last two would
+     * composite onto a surface that has not been tinted yet.
+     */
+    @Composable
+    @ReadOnlyComposable
+    private fun resolvedBackdrop(backdrop: Color): Color {
+        val scheme = MaterialTheme.colorScheme
+        // `if` rather than `takeIf { … } ?: …`: `Color` is a value class, so the elvis form boxes it into a
+        // `Color?` on every composition of all 116 chrome sites to express something a branch expresses free.
+        val ambient = LocalChromeContainer.current
+        val container = if (ambient.isSpecified) ambient else scheme.background
+        val declared = if (backdrop.isSpecified) backdrop else container
+        val tinted = if (declared == scheme.surface && LocalTonalElevationEnabled.current) {
+            EditorChromeColors.elevated(
+                surface = declared,
+                tint = scheme.surfaceTint,
+                elevationDp = LocalAbsoluteTonalElevation.current.value,
+            )
+        } else {
+            declared
+        }
+        return EditorChromeColors.opaque(tinted, container)
+    }
 
     /**
      * A resting edge on this modifier, at the substrate's one weight and measured colour.
@@ -128,7 +242,7 @@ object NorfoldChrome {
     @ReadOnlyComposable
     fun Modifier.chromeEdge(
         corner: Corner,
-        backdrop: Color = MaterialTheme.colorScheme.background,
+        backdrop: Color = Color.Unspecified,
     ): Modifier = border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, restingEdge(backdrop), shape(corner))
 
     /**
@@ -159,7 +273,7 @@ object NorfoldChrome {
         focused: Boolean,
         corner: Corner,
         accent: Color = MaterialTheme.colorScheme.primary,
-        backdrop: Color = MaterialTheme.colorScheme.background,
+        backdrop: Color = Color.Unspecified,
     ): Modifier {
         val width = ChromeGeometry.FOCUS_RING_WIDTH.dp
         val inset = width + ChromeGeometry.FOCUS_RING_GAP.dp
@@ -203,7 +317,7 @@ object NorfoldChrome {
         focused: Boolean,
         corner: Corner,
         accent: Color = MaterialTheme.colorScheme.primary,
-        backdrop: Color = MaterialTheme.colorScheme.background,
+        backdrop: Color = Color.Unspecified,
     ): Modifier = innerFocusRing(focused, corner.radiusDp, accent, backdrop)
 
     /**
@@ -231,7 +345,7 @@ object NorfoldChrome {
         focused: Boolean,
         containerRadiusDp: Float,
         accent: Color = MaterialTheme.colorScheme.primary,
-        backdrop: Color = MaterialTheme.colorScheme.background,
+        backdrop: Color = Color.Unspecified,
         inset: Float = ChromeGeometry.FOCUS_RING_INSET,
     ): Modifier {
         // Read before the early return so the measured colour is resolved on every composition rather
@@ -281,7 +395,7 @@ object NorfoldChrome {
     fun Modifier.innerFocusRingPill(
         focused: Boolean,
         accent: Color = MaterialTheme.colorScheme.primary,
-        backdrop: Color = MaterialTheme.colorScheme.background,
+        backdrop: Color = Color.Unspecified,
         inset: Float = ChromeGeometry.FOCUS_RING_INSET,
     ): Modifier {
         val ringColor = focusRing(accent, backdrop)
@@ -356,7 +470,7 @@ class ChromeFocus internal constructor(
      * should use `NorfoldChrome.focusRing` directly instead.
      */
     @Composable
-    fun ring(corner: Corner, backdrop: Color = MaterialTheme.colorScheme.background): Modifier =
+    fun ring(corner: Corner, backdrop: Color = Color.Unspecified): Modifier =
         with(NorfoldChrome) { Modifier.innerFocusRing(focused, corner, backdrop = backdrop) }
 
     /**
@@ -491,7 +605,7 @@ fun rememberChromeFocus(source: MutableInteractionSource? = null): ChromeFocus {
 fun Modifier.chromeFocusRing(
     source: MutableInteractionSource,
     radiusDp: Float,
-    surface: Color = MaterialTheme.colorScheme.background,
+    surface: Color = Color.Unspecified,
     boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
 ): Modifier = this.then(rememberChromeFocus(source).ringOnShape(radiusDp, surface, boundaryWidthDp))
 
@@ -502,7 +616,7 @@ fun Modifier.chromeFocusRing(
 fun Modifier.chromeFocusRing(
     source: MutableInteractionSource,
     corner: Corner,
-    surface: Color = MaterialTheme.colorScheme.background,
+    surface: Color = Color.Unspecified,
 ): Modifier = chromeFocusRing(source, corner.radiusDp, surface)
 
 /**
@@ -548,7 +662,7 @@ fun Modifier.chromeFocusRing(
 @Composable
 fun Modifier.focusableChrome(
     radiusDp: Float,
-    surface: Color = MaterialTheme.colorScheme.background,
+    surface: Color = Color.Unspecified,
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
@@ -577,7 +691,7 @@ fun Modifier.focusableChrome(
 @Composable
 fun Modifier.focusableChrome(
     corner: Corner,
-    surface: Color = MaterialTheme.colorScheme.background,
+    surface: Color = Color.Unspecified,
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
@@ -596,7 +710,7 @@ fun Modifier.focusableChrome(
  */
 @Composable
 fun Modifier.focusablePill(
-    surface: Color = MaterialTheme.colorScheme.background,
+    surface: Color = Color.Unspecified,
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
@@ -641,7 +755,7 @@ fun NorfoldChromeSurface(
     corner: Corner = Corner.Card,
     edge: Boolean = true,
     color: Color = MaterialTheme.colorScheme.surface,
-    backdrop: Color = MaterialTheme.colorScheme.background,
+    backdrop: Color = Color.Unspecified,
     content: @Composable () -> Unit,
 ) {
     Surface(

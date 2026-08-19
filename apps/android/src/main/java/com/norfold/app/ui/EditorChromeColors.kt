@@ -2,6 +2,7 @@ package com.norfold.app.ui
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ContrastAnalysis
 import com.norfold.app.domain.style.ContrastConfidence
@@ -92,6 +93,36 @@ object EditorChromeColors {
      */
     fun opaque(surface: Color, page: Color): Color =
         surface.asColorValue().compositedOver(page.asColorValue()).asColor()
+
+    /**
+     * [surface] as Material actually paints it at [elevationDp] of tonal elevation, given [tint].
+     *
+     * The elevation sibling of [opaque], and it exists for the same reason: chrome must be measured against
+     * the pixel it is drawn on, not the colour its caller declared. [opaque] covers a fill that is
+     * translucent; this covers a fill that is opaque and *still* not what appears on screen, because
+     * Material composites [tint] over it.
+     *
+     * Returns [surface] unchanged at zero elevation and whenever [tint] is fully transparent, matching
+     * `Surface`'s own short-circuit, so a caller may apply this unconditionally.
+     *
+     * **The two gates a caller must respect, because this function cannot see them.** Material applies the
+     * tint only when the colour passed to `Surface` is `== colorScheme.surface`, and only while
+     * `LocalTonalElevationEnabled` is true. So a `Surface` painted `surface.copy(alpha = …)` or
+     * `surfaceVariant` receives **no** tint however high its elevation — the app has four of the former, and
+     * for those [opaque] is the correct call and this one is not. `NorfoldChrome.focusRing` resolves both
+     * gates before calling this; a caller passing an explicit fill of its own has already answered them.
+     *
+     * The alpha curve is [ChromeGeometry.tonalTintAlpha], which is domain code with unit tests, for the
+     * reason this file's header gives: a figure asserted in the unit source set is a figure CI can hold to,
+     * and a figure in a KDoc is a claim.
+     */
+    fun elevated(surface: Color, tint: Color, elevationDp: Float): Color {
+        val alpha = ChromeGeometry.tonalTintAlpha(elevationDp)
+        if (alpha <= 0f || tint.alpha <= 0f) return surface
+        return tint.copy(alpha = alpha).asColorValue()
+            .compositedOver(surface.asColorValue())
+            .asColor()
+    }
 
     /**
      * The backdrop a piece of page chrome is measured against, given the page's resolved paint.

@@ -1,5 +1,6 @@
 package com.norfold.app.domain.style
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -627,6 +628,716 @@ class ChromeGeometryTest {
             "composited ring measures %.2f:1".format(ContrastAnalysis.ratio(composited, drawn)),
             ContrastAnalysis.ratio(composited, drawn) >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
         )
+    }
+
+    // ── Tonal elevation ──────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The tint curve is Material's own, transcribed rather than approximated.
+     *
+     * `4.5·ln(dp+1) + 2`, over 100. Read out of material3 1.4.0's `surfaceColorAtElevation` bytecode rather
+     * than from memory, because every figure below depends on it and an invented curve would produce
+     * plausible-looking numbers that describe nothing on screen. Zero at zero, because `Surface`
+     * short-circuits to plain `surface` there instead of compositing a 2% tint — the discontinuity is real and
+     * intended.
+     *
+     * The eight elevations asserted are the eight distinct `tonalElevation` values the tree actually passes.
+     */
+    @Test
+    fun `the tonal tint curve matches Material's own arithmetic`() {
+        assertEquals("no tint at all at rest", 0f, ChromeGeometry.tonalTintAlpha(0f), 0f)
+        assertEquals("negative elevation cannot tint", 0f, ChromeGeometry.tonalTintAlpha(-1f), 0f)
+
+        val expected = mapOf(
+            1f to 0.0512f, 2f to 0.0694f, 3f to 0.0824f, 4f to 0.0924f,
+            6f to 0.1076f, 8f to 0.1189f, 10f to 0.1279f,
+        )
+        for ((dp, alpha) in expected) {
+            assertEquals(
+                "%.0f dp should tint at %.4f".format(dp, alpha),
+                alpha,
+                ChromeGeometry.tonalTintAlpha(dp),
+                0.0001f,
+            )
+        }
+
+        // Monotonic and always a minority of the surface: a tint that could reach half would be a repaint.
+        val ramp = expected.keys.sorted().map { ChromeGeometry.tonalTintAlpha(it) }
+        assertEquals("the curve must rise with elevation", ramp.sorted(), ramp)
+        assertTrue("even 10 dp stays well under half", ramp.last() < 0.5f)
+    }
+
+    /**
+     * A ring solved against flat `surface` and drawn on the *elevated* surface fails for real accents.
+     *
+     * This is the defect [ChromeGeometry.tonalTintAlpha] exists to close, and it is entirely invisible from
+     * the call site: the caller passes `colorScheme.surface`, which is honestly what it asked `Surface` to
+     * paint, and Material then composites `surfaceTint` on top. Because `lightColorScheme` defaults
+     * `surfaceTint` to the `primary` *parameter* and `NorfoldTheme` never sets the token, that tint is the
+     * user's own accent — so the ring is measured against the one colour guaranteed to be nearest itself.
+     *
+     * Exhaustive over the ten shipped accents at the seven elevations the tree passes. The counts are the
+     * point: **2 of 10 fail at 1–4 dp, 3 of 10 at 6–10 dp**, and the floor is 2.6923:1 against a 3:1
+     * requirement. Asserted as exact counts rather than as "some fail", so that a change which fixes some and
+     * breaks others cannot pass.
+     *
+     * Which accent is worst depends on the elevation, which is why the two are asserted together — and the
+     * dependence is not the clean crossing it reads as. Gold and Sunset trade places repeatedly: Gold is worst
+     * at 1 dp (2.9064), Sunset at 2 dp (2.8618), Gold again at 3 and 4 dp (2.8162, 2.7954), Sunset from 6 dp
+     * on (2.7656 down to 2.6923). At 4 dp they both round to 2.80 and Gold is still the lower of the two by
+     * 0.0066. So the pair is interleaved rather than crossing once, which matters only because a summary that
+     * says "Gold then Sunset" invites someone to assert the wrong accent at 2 dp.
+     *
+     * **Forest is the third failure and it fails by 0.0035, not by rounding.** It measures **2.9965:1** at
+     * 6 dp. That is the same trap [`the container populations are the ones the substrate documents`] records
+     * for Candy: quoted to two decimals it reads `3.00`, which is where this paragraph previously left it —
+     * described as a case that "fails by rounding", as though 3.00 were the measurement and the failure an
+     * artifact of it. The measurement is 2.9965 and the failure is real. Forest actually crosses below 3:1
+     * between 5 and 5.5 dp (3.0038 → 2.9965), earlier than the swept set can see.
+     *
+     * Two elevations in that crossing return the *identical* ratio — 5.5 dp and 6 dp both give 2.996495,
+     * despite tinting at 0.104231 and 0.107566 — because 8-bit channels put the two composites on the same
+     * pixel. The same quantization that hid Candy, showing up as a plateau instead of as a wrong count.
+     */
+    @Test
+    fun `a ring solved against flat surface fails once the surface is elevated`() {
+        val surface = ColorValue.WHITE
+        val failuresByElevation = mutableMapOf<Float, Int>()
+        val byElevation = mutableMapOf<Float, Map<Int, Double>>()
+        var worst = Double.MAX_VALUE
+        var worstAccent = ""
+
+        for (dp in listOf(1f, 2f, 3f, 4f, 6f, 8f, 10f)) {
+            var failures = 0
+            val ratios = mutableMapOf<Int, Double>()
+            for (accent in shippedAccents) {
+                // surfaceTint == primary == the accent, which is the whole trap.
+                val painted = hex(accent)
+                    .withAlphaFraction(ChromeGeometry.tonalTintAlpha(dp))
+                    .compositedOver(surface)
+                val ring = ContrastAnalysis.legibleChrome(hex(accent), surface, ChromeGeometry.FOCUS_RING_RATIO)
+                val asDrawn = ContrastAnalysis.ratio(ring, painted)
+                ratios[accent] = asDrawn
+                if (asDrawn < ChromeGeometry.FOCUS_RING_RATIO) failures++
+                if (asDrawn < worst) {
+                    worst = asDrawn
+                    worstAccent = accent.let(::hex).toHex()
+                }
+            }
+            failuresByElevation[dp] = failures
+            byElevation[dp] = ratios
+        }
+
+        assertEquals(
+            "the failure count by elevation is the measured claim in the substrate's documentation",
+            mapOf(1f to 2, 2f to 2, 3f to 2, 4f to 2, 6f to 3, 8f to 3, 10f to 3),
+            failuresByElevation,
+        )
+        assertEquals("the floor is Sunset at the highest elevation", "#F75C7A", worstAccent)
+        assertEquals("Sunset's worst drawn ratio, at 10 dp", 2.6923, worst, 0.0001)
+
+        // Which of the two leads is asserted per elevation, not summarized. The pair interleaves — Gold, Sunset,
+        // Gold, Gold, then Sunset — and a summary that says "Gold below 6 dp" is wrong at 2 dp by 0.0002.
+        val leader = mapOf(1f to 0xE08A12, 2f to 0xF75C7A, 3f to 0xE08A12, 4f to 0xE08A12, 6f to 0xF75C7A, 8f to 0xF75C7A, 10f to 0xF75C7A)
+        for ((dp, expected) in leader) {
+            val ratios = byElevation.getValue(dp)
+            assertEquals(
+                "at %.0f dp the worst accent should be %s".format(dp, hex(expected).toHex()),
+                hex(expected).toHex(),
+                hex(ratios.keys.minByOrNull { ratios.getValue(it) }!!).toHex(),
+            )
+        }
+
+        // Forest at four decimals, because at two it reads 3.00 and this KDoc used to call it a rounding
+        // artifact. It is a 0.0035 failure, and the only way to keep that honest is to pin the digits.
+        assertEquals("Forest's ratio at 6 dp", 2.9965, byElevation.getValue(6f).getValue(0x1F9E7E), 0.0001)
+        assertEquals("Forest still passes at 4 dp", 3.0359, byElevation.getValue(4f).getValue(0x1F9E7E), 0.0001)
+
+        // Two adjacent elevations landing on the same pixel: 0.104231 and 0.107566 of tint composite
+        // identically over white, so the ratio is not merely close but equal.
+        val forest = hex(0x1F9E7E)
+        val ring = ContrastAnalysis.legibleChrome(forest, surface, ChromeGeometry.FOCUS_RING_RATIO)
+        fun forestAt(dp: Float) = forest.withAlphaFraction(ChromeGeometry.tonalTintAlpha(dp)).compositedOver(surface)
+        assertEquals("5.5 dp and 6 dp quantize onto one pixel", forestAt(5.5f).toHex(), forestAt(6f).toHex())
+        assertEquals(
+            "so the two measure identically, not merely closely",
+            ContrastAnalysis.ratio(ring, forestAt(5.5f)),
+            ContrastAnalysis.ratio(ring, forestAt(6f)),
+            0.0,
+        )
+    }
+
+    /**
+     * The theme's own `outline` tokens are not visible boundaries, which is why the resting edge is solved.
+     *
+     * `NorfoldChrome.restingEdge` derives its colour from `outline` and moves it in lightness until it measures
+     * [ChromeGeometry.RESTING_EDGE_RATIO]. The obvious alternative — using `outline` directly, which 39 sites in
+     * the app do — is pinned here as measurably not a boundary at all. WCAG 1.4.11 asks 3:1 of a control's
+     * boundary; these four are between a fifteenth and a half of that.
+     *
+     * The four figures are the entire justification for routing those sites through the substrate, and none of
+     * them had ever been asserted. They are also the sort of claim that rots quietly: a designer nudging
+     * `outlineVariant` two steps lighter would leave the prose intact and the reasoning wrong.
+     *
+     * `outlineVariant` is the worse of the two in both modes and is the token most of the 39 sites reach for,
+     * which is the least fortunate combination available.
+     */
+    @Test
+    fun `the theme outline tokens do not measure as boundaries`() {
+        val lightOutline = hex(0xE4E6EF)
+        val lightOutlineVariant = hex(0xEEF0F5)
+        val darkOutline = hex(0x252C3A)
+        val darkOutlineVariant = hex(0x1B2230)
+        val darkPage = hex(0x070A12)
+
+        val measured = mapOf(
+            "light outline on page" to ContrastAnalysis.ratio(lightOutline, hex(lightPage)),
+            "light outlineVariant on page" to ContrastAnalysis.ratio(lightOutlineVariant, hex(lightPage)),
+            "dark outline on page" to ContrastAnalysis.ratio(darkOutline, darkPage),
+            "dark outlineVariant on page" to ContrastAnalysis.ratio(darkOutlineVariant, darkPage),
+        )
+
+        assertEquals("light outline", 1.1734, measured.getValue("light outline on page"), 0.0001)
+        assertEquals("light outlineVariant", 1.0744, measured.getValue("light outlineVariant on page"), 0.0001)
+        assertEquals("dark outline", 1.4135, measured.getValue("dark outline on page"), 0.0001)
+        assertEquals("dark outlineVariant", 1.2421, measured.getValue("dark outlineVariant on page"), 0.0001)
+
+        for ((label, ratio) in measured) {
+            assertTrue(
+                "$label measures %.4f:1 — if a raw token ever clears %.1f:1 on its own, the resting edge stops "
+                    .format(ratio, ChromeGeometry.RESTING_EDGE_RATIO) + "being load-bearing and this test should " +
+                    "be the thing that says so",
+                ratio < ChromeGeometry.RESTING_EDGE_RATIO,
+            )
+        }
+
+        // The variant is the weaker token in both modes, and it is the one most call sites reach for.
+        assertTrue(
+            "outlineVariant must be the weaker of the two in light mode",
+            measured.getValue("light outlineVariant on page") < measured.getValue("light outline on page"),
+        )
+        assertTrue(
+            "outlineVariant must be the weaker of the two in dark mode",
+            measured.getValue("dark outlineVariant on page") < measured.getValue("dark outline on page"),
+        )
+    }
+
+    /**
+     * Resolving the painted colour first clears the target for every accent at every elevation.
+     *
+     * The counterpart to the test above, and the reason the fix is a resolution rather than a tolerance: there
+     * is no elevation at which any of the ten accents needs an exception. The hue survives too, because the
+     * lightness search is the only thing that moves — a ring that passed by abandoning the user's colour would
+     * satisfy 1.4.11 and still be the wrong fix.
+     */
+    @Test
+    fun `resolving the elevated backdrop clears the target at every elevation`() {
+        for (dp in listOf(1f, 2f, 3f, 4f, 6f, 8f, 10f)) {
+            for (accent in shippedAccents) {
+                val painted = hex(accent)
+                    .withAlphaFraction(ChromeGeometry.tonalTintAlpha(dp))
+                    .compositedOver(ColorValue.WHITE)
+                val ring = ContrastAnalysis.legibleChrome(hex(accent), painted, ChromeGeometry.FOCUS_RING_RATIO)
+                val measured = ContrastAnalysis.ratio(ring, painted)
+                assertTrue(
+                    "accent %s at %.0f dp measures %.2f:1 on the painted surface %s".format(
+                        hex(accent).toHex(), dp, measured, painted.toHex(),
+                    ),
+                    measured >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
+                )
+
+                val before = hex(accent).toHsl()
+                val after = ring.toHsl()
+                if (!before.achromatic && !after.achromatic) {
+                    val drift = abs(after.hue - before.hue).let { minOf(it, 360f - it) }
+                    assertTrue(
+                        "accent %s became %s at %.0f dp — hue moved %.2f degrees".format(
+                            hex(accent).toHex(), ring.toHex(), dp, drift,
+                        ),
+                        drift <= 1f,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Elevation accumulates, so a nested surface is tinted more than its own parameter says.
+     *
+     * `Surface` reads `LocalAbsoluteTonalElevation`, adds its own elevation and provides the sum to its
+     * content. A 1 dp row inside a 6 dp sheet is therefore drawn at 7 dp of tint, and chrome that measured
+     * against 1 dp would be measuring against a surface that does not exist anywhere in the tree. This is why
+     * the substrate reads the ambient local rather than accepting an elevation argument: a call site knows the
+     * literal it typed and cannot know what it is nested inside.
+     */
+    @Test
+    fun `nested elevation tints more than the inner surface alone`() {
+        val inner = ChromeGeometry.tonalTintAlpha(1f)
+        val accumulated = ChromeGeometry.tonalTintAlpha(7f)
+        assertTrue(
+            "1 dp inside 6 dp must tint like 7 dp (%.4f), not like 1 dp (%.4f)".format(accumulated, inner),
+            accumulated > inner,
+        )
+        assertEquals("the accumulated alpha", 0.1136f, accumulated, 0.0001f)
+    }
+
+    /**
+     * The settled selection pill is the hardest frame of its own fade-in, so solving against it covers the tween.
+     *
+     * `SideNavItem` animates its selected pill from transparent to `primary.copy(alpha = 0.12f)` and passes the
+     * **settled** 0.12 to the substrate rather than the animating value. That is a claim about every intermediate
+     * frame, and this is the sweep behind it: the ring is solved once against the settled pill, then measured
+     * against the pill at every 0.001 step of alpha from 0 to 0.12, across all ten accents in all five hosts the
+     * row appears on — light page, overlay drawer, sheet, and both dark surfaces.
+     *
+     * Two properties, and the second is the one that matters:
+     *
+     *  - **Monotone.** The drawn ratio never increases as alpha rises, in any of the 50 accent-host pairs. A
+     *    thinner wash is closer to the host, and the host is lighter than the accent in light mode and darker in
+     *    dark mode, so the ring's own contrast against it can only improve.
+     *  - **No frame fails while the settled pill passes.** Which is the actual requirement. Monotonicity implies
+     *    it here, but it is asserted directly because it is what a user would experience, and because the
+     *    implication would silently stop holding if the fade ever animated something other than alpha.
+     *
+     * Nine of the 50 pairs reach their minimum at alpha 0.116 rather than 0.120. That is not a counterexample —
+     * the ratio there *equals* the settled value to four decimals, because 8-bit channels put both alphas on the
+     * same composited pixel. It is the same quantization that made `sheet nav selected` 4 of 10 rather than 3,
+     * seen from the other side: alpha resolution is coarser than the arithmetic suggests, which flattens the tail
+     * of the sweep into a plateau.
+     *
+     * Threading the animated alpha through instead would re-solve the ring on every frame of a 200 ms tween, so
+     * the ring's own colour would drift while the row settles. This test is why that cost buys nothing.
+     */
+    @Test
+    fun `the settled selection pill is the worst frame of its fade`() {
+        val hosts = listOf(
+            "light page" to hex(lightPage),
+            "overlay drawer" to ColorValue.WHITE,
+            "sheet" to hex(containerLow),
+            "dark page" to hex(0x070A12),
+            "dark surface" to hex(0x0E131F),
+        )
+        val settledAlpha = 0.12f
+        var pairs = 0
+
+        for ((hostName, host) in hosts) {
+            for (accent in shippedAccents) {
+                val tint = hex(accent)
+                val settled = tint.withAlphaFraction(settledAlpha).compositedOver(host)
+                val ring = ContrastAnalysis.legibleChrome(tint, settled, ChromeGeometry.FOCUS_RING_RATIO)
+                val settledRatio = ContrastAnalysis.ratio(ring, settled)
+                var previous = Double.MAX_VALUE
+                pairs++
+
+                for (step in 0..120) {
+                    val alpha = step * 0.001f
+                    val frame = tint.withAlphaFraction(alpha).compositedOver(host)
+                    val measured = ContrastAnalysis.ratio(ring, frame)
+
+                    assertTrue(
+                        "%s / %s: the ratio rose from %.6f to %.6f as alpha reached %.3f — the fade is not " +
+                            "monotone, so the settled pill is no longer the hardest frame".format(
+                                hostName, tint.toHex(), previous, measured, alpha,
+                            ),
+                        measured <= previous + 1e-9,
+                    )
+                    assertTrue(
+                        "%s / %s: alpha %.3f measures %.6f — below 3:1 while the settled pill passes at %.6f"
+                            .format(hostName, tint.toHex(), alpha, measured, settledRatio),
+                        measured >= settledRatio - 1e-9,
+                    )
+                    previous = measured
+                }
+            }
+        }
+
+        assertEquals("every accent in every host the row appears on", 50, pairs)
+    }
+
+    // ── The container correction ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Material's baseline container tokens, which `NorfoldTheme` leaves unset, so these are what a dialog and a
+     * modal sheet actually paint today: `surfaceContainerHigh` and `surfaceContainerLow`. `secondaryContainer` is
+     * the same story and is what a selected [com.norfold.app.ui.components.NorfoldPopupRow] fills with at 55%.
+     *
+     * Written as literals rather than read from a theme for the reason [shippedAccents] is: no Compose harness.
+     * The stronger reason here is that these are not Norfold's colours at all — they are the fallbacks a theme
+     * that never set them inherits, and the point of the test is that chrome is measured against *whatever is
+     * really painted*. Pinning them means the day the owner picks real container colours, these figures change
+     * and the test says so, which is the notification worth having.
+     */
+    private val containerHigh = 0xECE6F0
+    private val containerLow = 0xF7F2FA
+    private val secondaryContainer = 0xE8DEF8
+
+    /** The light page, from `NorfoldTheme` — and the colour the substrate used to measure everything against. */
+    private val lightPage = 0xF7F8FC
+
+    /**
+     * The four populations `LocalChromeContainer` was added for, each one a real host in the shipped tree.
+     *
+     * Each case carries what the ring is drawn on, what the substrate used to solve against, and what it solves
+     * against now. The last two differ in exactly the way the local fixes: a row cannot know its own host, so
+     * before the local every one of these resolved to the page.
+     */
+    private fun containerCases(): List<ContainerCase> = buildList {
+        for (accent in shippedAccents) {
+            val tint = hex(accent)
+            val page = hex(lightPage)
+
+            // 1. A ChoiceRow inside NorfoldDialog. No fill of its own, so drawn == container.
+            add(ContainerCase("dialog row resting", tint, hex(containerHigh), page, hex(containerHigh)))
+
+            // 2. A resting SideNavItem inside NorfoldBottomSheet. Also no fill.
+            add(ContainerCase("sheet nav resting", tint, hex(containerLow), page, hex(containerLow)))
+
+            // 3. The same destination selected: a 12% accent pill. The row *did* pass its pill as an explicit
+            //    backdrop, and it was still wrong, because the substrate composited that translucent pill onto
+            //    the page rather than onto the sheet. This is the case that shows the two halves of the fix are
+            //    not the same fix.
+            val pillOnSheet = tint.withAlphaFraction(0.12f).compositedOver(hex(containerLow))
+            val pillOnPage = tint.withAlphaFraction(0.12f).compositedOver(page)
+            add(ContainerCase("sheet nav selected", tint, pillOnSheet, pillOnPage, pillOnSheet))
+
+            // 4. A selected NorfoldPopupRow: secondaryContainer at 55% over the card, and the card is `surface`
+            //    plus 3 dp of tonal tint — which on this app is a wash of the user's own accent, because
+            //    NorfoldTheme never sets surfaceTint. Two corrections stacked, which is why the popup card
+            //    resolves its container through EditorChromeColors.elevated rather than naming a token.
+            val card = tint.withAlphaFraction(ChromeGeometry.tonalTintAlpha(3f)).compositedOver(ColorValue.WHITE)
+            val fillOnCard = hex(secondaryContainer).withAlphaFraction(0.55f).compositedOver(card)
+            val fillOnPage = hex(secondaryContainer).withAlphaFraction(0.55f).compositedOver(page)
+            add(ContainerCase("popup row selected", tint, fillOnCard, fillOnPage, fillOnCard))
+        }
+    }
+
+    /** One measured population: the accent, the pixel the ring lands on, and the two candidate backdrops. */
+    private data class ContainerCase(
+        val label: String,
+        val accent: ColorValue,
+        val drawn: ColorValue,
+        val wrongBackdrop: ColorValue,
+        val rightBackdrop: ColorValue,
+    )
+
+    /**
+     * Chrome inside a container is drawn on the container, and solving it against the page fails 1.4.11.
+     *
+     * This is the arithmetic behind `LocalChromeContainer`, and both halves are asserted because the good number
+     * alone would not establish that the change was load-bearing. Failures are asserted as **exact counts per
+     * population** rather than as "some fail", so a change that fixes some and breaks others cannot pass:
+     *
+     *  - dialog row resting — **3 of 10**, worst Gold 2.6024:1
+     *  - sheet nav resting — **2 of 10**, worst Gold 2.8897:1
+     *  - sheet nav selected — **4 of 10**, worst Gold 2.9430:1
+     *  - popup row selected — **1 of 10**, worst Sunset 2.9536:1
+     *
+     * Note how narrow the two selected populations are: they fall short by 0.057 and 0.046 respectively, which is
+     * why they survived review for as long as they did and why the count matters more than the floor. A tolerance
+     * loose enough to feel comfortable would erase both findings. The dialog row is the outlier in the other
+     * direction — 0.40 short, a plainly invisible ring — and it is also the population with the most call sites.
+     *
+     * ## Why `sheet nav selected` is 4 and was documented as 3
+     *
+     * Candy measures **2.9999964:1**. Rounded to the four decimals every other figure here is quoted at, that is
+     * `3.0000` — a failing accent that prints as the passing threshold. It was counted as passing until this test
+     * ran, and the arithmetic that produced the wrong count is worth naming because it is a trap this file can
+     * fall into again.
+     *
+     * `Color.copy(alpha = 0.12f)` does **not** composite at 0.12. Compose stores sRGB colours with 8-bit
+     * channels, so the alpha quantizes to 31/255 = **0.121569**, and [ColorValue.withAlphaFraction] rounds to the
+     * same 31 — which is why the model above is right and a hand-computed `fg * 0.12 + bg * 0.88` is not. That
+     * 1.3% difference moves one channel by one LSB on Sunset, Candy and Gold (Candy's green lands on 225, not
+     * 226), and on the narrowest population one LSB decides the count.
+     *
+     * The other two translucent populations are unaffected because their alphas — 0.55f and
+     * [ChromeGeometry.tonalTintAlpha]'s 3 dp value — happen to quantize onto the same pixel either way. So the
+     * defect appeared in exactly one of four places, which is the shape of error that survives a spot check.
+     */
+    @Test
+    fun `chrome solved against the page fails inside the four real container hosts`() {
+        val failures = mutableMapOf<String, Int>()
+        val worst = mutableMapOf<String, Double>()
+        for (case in containerCases()) {
+            val ring = ContrastAnalysis.legibleChrome(
+                case.accent, case.wrongBackdrop, ChromeGeometry.FOCUS_RING_RATIO,
+            )
+            val measured = ContrastAnalysis.ratio(ring, case.drawn)
+            if (measured < ChromeGeometry.FOCUS_RING_RATIO) {
+                failures[case.label] = (failures[case.label] ?: 0) + 1
+            }
+            worst[case.label] = minOf(worst[case.label] ?: Double.MAX_VALUE, measured)
+        }
+
+        assertEquals(
+            "the failure count per host is the measured claim in LocalChromeContainer's documentation",
+            mapOf(
+                "dialog row resting" to 3,
+                "sheet nav resting" to 2,
+                "sheet nav selected" to 4,
+                "popup row selected" to 1,
+            ),
+            failures,
+        )
+        // Four decimals, not two. Candy fails this population at 2.9999964:1, which a 0.01 tolerance on a 2.96
+        // claim would have accepted — and did, until this test ran. The floors are the instrument that catches a
+        // model drifting from the app, so they are quoted at the precision that makes the drift visible.
+        assertEquals("dialog row floor", 2.6024, worst.getValue("dialog row resting"), 0.0001)
+        assertEquals("sheet nav resting floor", 2.8897, worst.getValue("sheet nav resting"), 0.0001)
+        assertEquals("sheet nav selected floor", 2.9430, worst.getValue("sheet nav selected"), 0.0001)
+        assertEquals("popup row selected floor", 2.9536, worst.getValue("popup row selected"), 0.0001)
+    }
+
+    /**
+     * Solving against the real container clears the target in all four hosts, for all ten accents.
+     *
+     * The counterpart to the test above, and the reason the fix is a resolution rather than a per-host tolerance:
+     * no host and no accent needs an exception. The hue is checked too, because a ring that passed by discarding
+     * the user's accent would satisfy 1.4.11 and still be the wrong fix.
+     *
+     * **The margins split cleanly, and the split is the interesting part.** On 6 of the 10 accents the solver
+     * returns the accent unchanged, because it already clears 3:1 — those pass by 0.004 (Midnight on the sheet
+     * pill) up to 7.66 (Graphite on a resting sheet row, a near-black on a near-white sheet). On the 4 it does
+     * move — Sunset, Forest, Candy, Gold — it never clears by more than **0.14**, because the lightness search
+     * steps in hundredths and stops at the first value that satisfies the requirement. So the accents the fix
+     * actually acts on all sit within a tenth of the boundary, which is why the tolerance here is one hundredth
+     * and not one tenth: a looser one would stop distinguishing a solved ring from an unsolved one.
+     *
+     * The tightest figure in the whole set is Midnight's 3.0039:1 on the sheet's selected pill, and it passes
+     * *unchanged* — the accent is natively 0.004 clear of the bar. It is the reason the sibling test's floors are
+     * quoted to four decimals rather than two.
+     */
+    @Test
+    fun `chrome solved against its real container clears the target in every host`() {
+        for (case in containerCases()) {
+            val ring = ContrastAnalysis.legibleChrome(
+                case.accent, case.rightBackdrop, ChromeGeometry.FOCUS_RING_RATIO,
+            )
+            val measured = ContrastAnalysis.ratio(ring, case.drawn)
+            assertTrue(
+                "%s: accent %s on %s measures %.4f:1".format(
+                    case.label, case.accent.toHex(), case.drawn.toHex(), measured,
+                ),
+                measured >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
+            )
+
+            val before = case.accent.toHsl()
+            val after = ring.toHsl()
+            if (!before.achromatic && !after.achromatic) {
+                val drift = abs(after.hue - before.hue).let { minOf(it, 360f - it) }
+                assertTrue(
+                    "%s: accent %s became %s — hue moved %.2f degrees".format(
+                        case.label, case.accent.toHex(), ring.toHex(), drift,
+                    ),
+                    drift <= 1f,
+                )
+            }
+        }
+    }
+
+    /**
+     * `surface` is not a usable stand-in for "some container", which is what the old [ChoiceRow] default assumed.
+     *
+     * Before the local, `ChoiceRow` defaulted its backdrop to `colorScheme.surface` — a plausible guess, since a
+     * row usually sits on *something* raised. Measured, it is worse than the page default it replaced: solving
+     * against white and drawing on a dialog floors at **2.49:1** where the page floors at **2.60:1**. Both fail
+     * 3 of 10. The lesson pinned here is not that one literal beat another; it is that no literal can be right,
+     * because the row's host is not a property of the row.
+     */
+    @Test
+    fun `guessing surface as the container is worse than guessing the page`() {
+        val dialog = hex(containerHigh)
+        var worstFromSurface = Double.MAX_VALUE
+        var worstFromPage = Double.MAX_VALUE
+        var failFromSurface = 0
+        var failFromPage = 0
+
+        for (accent in shippedAccents) {
+            val tint = hex(accent)
+            val fromSurface = ContrastAnalysis.ratio(
+                ContrastAnalysis.legibleChrome(tint, ColorValue.WHITE, ChromeGeometry.FOCUS_RING_RATIO), dialog,
+            )
+            val fromPage = ContrastAnalysis.ratio(
+                ContrastAnalysis.legibleChrome(tint, hex(lightPage), ChromeGeometry.FOCUS_RING_RATIO), dialog,
+            )
+            if (fromSurface < ChromeGeometry.FOCUS_RING_RATIO) failFromSurface++
+            if (fromPage < ChromeGeometry.FOCUS_RING_RATIO) failFromPage++
+            worstFromSurface = minOf(worstFromSurface, fromSurface)
+            worstFromPage = minOf(worstFromPage, fromPage)
+        }
+
+        assertEquals("both guesses fail the same number of accents", 3, failFromSurface)
+        assertEquals("both guesses fail the same number of accents", 3, failFromPage)
+        assertEquals("the surface guess floors at 2.49:1", 2.49, worstFromSurface, 0.01)
+        assertEquals("the page guess floors at 2.60:1", 2.60, worstFromPage, 0.01)
+        assertTrue(
+            "surface must measure worse than the page here, or the ChoiceRow default was not the regression it " +
+                "is documented as",
+            worstFromSurface < worstFromPage,
+        )
+    }
+
+    /**
+     * The ten accents as `NorfoldTheme` actually hands them to a dark-mode focus ring.
+     *
+     * `darkScheme` sets `primary = accent.mix(White, 0.35f)`, so the colour the substrate solves from on a dark
+     * page is never the raw palette entry — a graphite accent would vanish on `#070A12` without the lift.
+     *
+     * **These are measured outputs, not a formula, because the formula is not the one it looks like.**
+     * `NorfoldTheme.mix` is `androidx.compose.ui.graphics.lerp`, which converts both endpoints to **Oklab**,
+     * interpolates there, and converts back. It is not a per-channel sRGB mix, and the difference is not
+     * academic: writing `red + (255 - red) * 0.35f` by hand puts Graphite at `#7A7D89` and claims a **4.53:1**
+     * floor, where the shipped colour is `#747785` and the real floor is **4.17:1**. That wrong figure reached a
+     * KDoc before this table replaced it. Oklab also leaves the sRGB gamut and clips on the way back — Sunset's
+     * red channel saturates at `FF` — which no channel-wise mix reproduces at all.
+     *
+     * Hard-coded for the reason [shippedAccents] is: this source set has no Compose harness, so `lerp` is not
+     * callable from here. The values were taken from `androidx.compose.ui.graphics.lerp` itself, read back
+     * through `Color.toArgb`, against the `ui-graphics` build the app resolves. The cost is that a change to
+     * either the palette or the 0.35f lift does not automatically reach this test; the benefit is that the test
+     * runs at all, and it is the same trade the rest of this file already makes.
+     */
+    private val liftedAccents = listOf(
+        0x81A983, 0xC08FD5, 0xFF9AA7, 0x7AABF1, 0x7EC0A9,
+        0xF4897A, 0xCD9ECE, 0x85B5C1, 0xEDB47A, 0x747785,
+    )
+
+    /**
+     * A dark-mode measurement must lift the accent the way the theme does, or it manufactures failures.
+     *
+     * This is pinned because feeding the raw accent into a dark measurement produced a *false* failure during
+     * this work: `SettingsRow` on the dark card measured **2.88:1** where the shipped ring is **4.17:1**. That
+     * 2.88 needed both mistakes at once — the raw accent *and* the page as the backdrop — which is why it is
+     * worth keeping as a figure rather than paraphrasing. A false failure is more expensive than a missed one,
+     * because someone fixes it.
+     *
+     * Both directions are asserted: the lift must change the answer (or it would not be worth stating) and the
+     * lifted figure must be the passing one. Note that the raw accent *also* clears 3:1 once it is at least
+     * measured against the right backdrop — floor 3.11:1 — because the solver searches until it does. The claim
+     * here is not that one input fails and the other passes; it is that the two are not interchangeable, and
+     * 1.06 of ratio separates them.
+     */
+    @Test
+    fun `a dark mode ring must be solved from the lifted primary, not the raw accent`() {
+        val darkCard = hex(0x0E131F)
+        var worstRaw = Double.MAX_VALUE
+        var worstLifted = Double.MAX_VALUE
+        var rawFailures = 0
+
+        for ((accent, liftedAccent) in shippedAccents.zip(liftedAccents)) {
+            val raw = hex(accent)
+            val lifted = hex(liftedAccent)
+            val fromRaw = ContrastAnalysis.ratio(
+                ContrastAnalysis.legibleChrome(raw, darkCard, ChromeGeometry.FOCUS_RING_RATIO), darkCard,
+            )
+            val fromLifted = ContrastAnalysis.ratio(
+                ContrastAnalysis.legibleChrome(lifted, darkCard, ChromeGeometry.FOCUS_RING_RATIO), darkCard,
+            )
+            if (fromRaw < ChromeGeometry.FOCUS_RING_RATIO) rawFailures++
+            worstRaw = minOf(worstRaw, fromRaw)
+            worstLifted = minOf(worstLifted, fromLifted)
+
+            assertTrue(
+                "the lift must brighten every accent, and %s did not".format(raw.toHex()),
+                lifted.relativeLuminance() > raw.relativeLuminance(),
+            )
+        }
+
+        // Both clear the bar on their own terms — the solver searches until it does. The claim is about which
+        // input is the *right* one, so what is asserted is that the two are not interchangeable.
+        assertEquals("solving from the raw accent still clears the bar arithmetically", 0, rawFailures)
+        assertEquals("the raw accent floors at Graphite 3.11:1", 3.11, worstRaw, 0.01)
+        assertEquals(
+            "the lifted primary floors at Graphite 4.17:1 — the Oklab figure, not the 4.53:1 a per-channel " +
+                "mix would predict",
+            4.17,
+            worstLifted,
+            0.01,
+        )
+        assertTrue(
+            "the lifted primary must not measure identically to the raw accent, or this distinction is not " +
+                "worth documenting",
+            abs(worstLifted - worstRaw) > 0.001,
+        )
+    }
+
+    /**
+     * Every backdrop parameter in `NorfoldChrome` defaults to the sentinel, not to a theme colour.
+     *
+     * This is a source-level assertion, which is unusual here and is the only kind available: `resolvedBackdrop`
+     * is `private` and `@Composable`, so no unit test can observe which branch it takes. The manifest tests in
+     * this module establish the pattern — some invariants are not reachable from the arithmetic.
+     *
+     * The defect it pins is a real one, and it was silent. `resolvedBackdrop` tells "the caller named a backdrop"
+     * apart from "the caller named nothing" by asking whether the value `isSpecified`, and falls back to the
+     * ambient [com.norfold.app.ui.LocalChromeContainer] in the second case. Fourteen parameters across nine
+     * entry points originally defaulted to the literal `MaterialTheme.colorScheme.background` — a perfectly
+     * specified colour. So the check passed at every defaulting call site, the declared value won over the
+     * container, and the container branch was **never reached by any caller that did not pass a colour
+     * explicitly**, which is all but a handful of the 116 chrome sites in `ui/`.
+     *
+     * Nothing about that fails to compile, nothing renders visibly differently in a screenshot, and the four
+     * measured populations above would have been unchanged while appearing to be fixed. `Color.Unspecified` is
+     * what keeps "nobody named a backdrop" answerable by the host.
+     */
+    @Test
+    fun `no chrome entry point defaults its backdrop to a theme colour`() {
+        // Every default is captured and then filtered in code, deliberately, rather than excluded by a negative
+        // lookahead in the pattern. `=\s*(?!Color\.Unspecified)` looks like it works and does not: `\s*`
+        // backtracks to zero width so the lookahead is applied at the space, ` Color.Unspecified` does not begin
+        // with `Color.Unspecified`, and the offender list comes back full of the very value it was meant to
+        // exclude. A test that passes vacuously is worse than no test, and this one exists because a silent
+        // default is exactly what it is pinning.
+        val defaults = Regex("""(?:backdrop|surface)\s*:\s*Color\s*=\s*([^,)\n]+)""")
+            .findAll(chromeSource())
+            .map { it.groupValues[1].trim() }
+            .toList()
+
+        assertEquals(
+            "a backdrop default other than Color.Unspecified silently shadows LocalChromeContainer at every " +
+                "call site that omits it",
+            emptyList<String>(),
+            defaults.filter { it != "Color.Unspecified" },
+        )
+        assertEquals("the fourteen defaulting parameters, all on the sentinel", 14, defaults.size)
+    }
+
+    /**
+     * The three corrections in `resolvedBackdrop` are ordered, and the order is not a style choice.
+     *
+     * Container, then tonal elevation, then alpha — the order the pixels are actually painted in. Reversing the
+     * last two would composite a translucent fill onto an *untinted* surface and then tint the result, which is
+     * a colour the renderer never produces. Asserted from the source because the arithmetic cannot see a private
+     * composable's statement order, and a future edit that reorders them would be invisible to every other test
+     * in this file.
+     */
+    @Test
+    fun `the backdrop resolution applies container then elevation then alpha`() {
+        val body = chromeSource()
+            .substringAfter("private fun resolvedBackdrop(")
+            .substringBefore("\n    }")
+        val container = body.indexOf("LocalChromeContainer.current")
+        val elevation = body.indexOf("LocalAbsoluteTonalElevation.current")
+        val alpha = body.indexOf("EditorChromeColors.opaque")
+        assertTrue("resolvedBackdrop must read the ambient container", container >= 0)
+        assertTrue("resolvedBackdrop must read the ambient tonal elevation", elevation >= 0)
+        assertTrue("resolvedBackdrop must composite away any alpha", alpha >= 0)
+        assertTrue(
+            "the container must be resolved before the elevation tint, which is painted on top of it",
+            container < elevation,
+        )
+        assertTrue(
+            "alpha must be composited last, onto the already-tinted colour — otherwise a translucent fill " +
+                "lands on a surface that is never painted",
+            elevation < alpha,
+        )
+    }
+
+    /** The substrate's source, for the two invariants that are not reachable from the arithmetic. */
+    private fun chromeSource(): String {
+        val relative = "src/main/java/com/norfold/app/ui/NorfoldChrome.kt"
+        val candidates = listOf(File(relative), File("apps/android/$relative"))
+        return (candidates.firstOrNull(File::isFile) ?: error("NorfoldChrome.kt not found")).readText()
     }
 
     private fun hex(rgb: Int) = ColorValue.of((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF)

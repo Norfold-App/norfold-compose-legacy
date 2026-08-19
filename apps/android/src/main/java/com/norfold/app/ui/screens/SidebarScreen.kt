@@ -219,16 +219,32 @@ private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
     }
     val active = state.workspaces.firstOrNull { it.id == state.settings.activeWorkspaceId }
     val activeColor = (active?.palette ?: state.settings.themeProfile).palette().accent
+    val groupFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+    val toggleFocus = rememberChromeFocus()
 
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+            .clip(RoundedCornerShape(Corner.Card.radiusDp.dp))
+            .background(groupFill),
     ) {
         // Current workspace / toggle
+        //
+        // The ring is measured against the *group's* fill rather than the page, because that translucent
+        // card is what this row is drawn on; it paints nothing of its own. Its radius is the group's too:
+        // collapsed, this row is the whole clipped card, so 16 dp is exactly concentric. Expanded, the row
+        // is the card's top band and its bottom corners are square — the ring still closes with a curve
+        // there, which reads as "this row is the target" rather than as a mismatched edge, because the
+        // divider below is the only thing at that boundary and it is not a shape the ring could echo.
         Row(
-            Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(12.dp),
+            Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = toggleFocus.source,
+                    indication = ripple(),
+                ) { expanded = !expanded }
+                .then(toggleFocus.ring(Corner.Card, backdrop = groupFill))
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1015,6 +1031,31 @@ private fun DocSidebarContent(
     }
 }
 
+/**
+ * Who else is in this document, and the sync status.
+ *
+ * ## The status line is also a button, some of the time
+ *
+ * When presence fails to connect, [NotesViewModel] sets the status to `"Couldn't connect presence · tap to
+ * retry"` and the strip's own status text becomes the retry control. That is discovered here by a substring
+ * match on the status, which is worth naming as fragile rather than leaving implicit: the producer sets eight
+ * different strings and only that one is retryable, so if its wording ever loses the word "retry" the
+ * affordance disappears silently — no compile error, no test failure, just a dead control. The match is kept
+ * because the alternative is a second state flow for one boolean, but it belongs in the same commit as any
+ * change to that string.
+ *
+ * The match is also now gated on `activeBlockId == null`, which fixes a real mismatch rather than tightening
+ * a condition for its own sake: with a block selected the strip shows `"N on selected block"` instead of the
+ * status, but the old guard still read the *hidden* status, so a failed connection made the block-count line
+ * silently retry-on-tap. The control is offered only when the text the user can read is the one that asked
+ * for it.
+ *
+ * When it *is* a button it now says so: an `onClickLabel` and `Role.Button`, so a screen reader announces an
+ * action instead of reading a sentence, and a ring, so a keyboard user can see where the action is. The
+ * padding exists for the ring — a bare 11 sp line is ~14 dp tall, and an inward ring at the substrate's 3 dp
+ * inset would leave 4 dp of text between its two strokes. Six dp of padding makes the box ~26 dp, still under
+ * the 30 dp avatars beside it, so the strip does not change height.
+ */
 @Composable
 private fun DocumentPresenceStrip(
     presence: List<com.norfold.app.cloud.DocumentPresenceState>,
@@ -1023,6 +1064,8 @@ private fun DocumentPresenceStrip(
     onRetry: () -> Unit,
 ) {
     val relevant = if (activeBlockId == null) presence else presence.filter { it.blockId == activeBlockId || it.blockId == null }
+    val canRetry = activeBlockId == null && status.contains("retry", ignoreCase = true)
+    val retryFocus = rememberChromeFocus()
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1038,7 +1081,25 @@ private fun DocumentPresenceStrip(
         }
         Text(
             if (activeBlockId == null) status else "${relevant.size} on selected block",
-            Modifier.weight(1f).clickable(enabled = status.contains("retry", ignoreCase = true), onClick = onRetry),
+            Modifier
+                .weight(1f)
+                .then(
+                    if (canRetry) {
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(
+                                interactionSource = retryFocus.source,
+                                indication = ripple(),
+                                onClickLabel = "Retry connecting presence",
+                                role = Role.Button,
+                                onClick = onRetry,
+                            )
+                            .then(retryFocus.ringOnShape(8f, MaterialTheme.colorScheme.surface))
+                            .padding(horizontal = 6.dp, vertical = 6.dp)
+                    } else {
+                        Modifier
+                    },
+                ),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -1352,15 +1413,30 @@ private fun DocTableOfContents(documentKey: String, document: BlockDocument, loc
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (id in hasChildren) {
+                            val twistFocus = rememberChromeFocus()
                             Icon(
                                 if (id in collapsed) Icons.Outlined.ChevronRight else Icons.Outlined.ExpandMore,
                                 if (id in collapsed) "Expand" else "Collapse",
+                                // A second focus stop *inside* a row that is itself a focus stop, so when
+                                // this holds focus the row's ring is not drawn and this is the only
+                                // indication there is. Ringed at its own 22 dp rather than expanded to 48 by
+                                // `minimumInteractiveComponentSize`: the two clear buttons in this file can
+                                // expand because each is alone in its trailing slot, whereas this sits in a
+                                // ~33 dp outline row, and growing its layout box would grow every row in the
+                                // panel by half again. The undersized *target* is real and is a target-size
+                                // question, not a focus one; the ring does not need the extra space, because
+                                // a 22 dp circle leaves 8 dp of radius inside the inset.
                                 Modifier
                                     .size(22.dp)
                                     .clip(CircleShape)
-                                    .clickable(enabled = !filtering) {
+                                    .clickable(
+                                        interactionSource = twistFocus.source,
+                                        indication = ripple(),
+                                        enabled = !filtering,
+                                    ) {
                                         collapsed = if (id in collapsed) collapsed - id else collapsed + id
                                     }
+                                    .then(twistFocus.ringOnCircle(22f, MaterialTheme.colorScheme.surface))
                                     .padding(3.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -1445,6 +1521,19 @@ private fun DocTableOfContents(documentKey: String, document: BlockDocument, loc
 /**
  * Top-level nav row with an expandable child list: tapping the row navigates,
  * tapping the trailing chevron only toggles the dropdown.
+ *
+ * ## Focus
+ *
+ * Eight call sites, and the sibling of [SideNavItem] in every way that matters to a keyboard user: same
+ * width, same 14 dp radius, same flush packing, stacked directly among the plain nav items. It got no ring
+ * while the plain items did, which is the worst arrangement of the two — tabbing down the sidebar, the
+ * indicator would appear on "All notes" and vanish on "Notes" directly above it, so the section headers read
+ * as unreachable rather than as focused.
+ *
+ * The ring is measured against the row's **own fill**, not the page, because this row paints one: a selected
+ * header sits under `primary` at 12%. That is the case [ChromeFocus.ringOnCircle] documents at length — a
+ * ring solved against a colour it is not drawn on is solved against a pixel that is never painted — and the
+ * unselected branch costs nothing, because `Color.Transparent` composited onto the page *is* the page.
  */
 @Composable
 private fun SidebarDropdownHeader(
@@ -1479,12 +1568,16 @@ private fun SidebarDropdownHeader(
     onClick: () -> Unit,
     iconContent: @Composable (Color) -> Unit,
 ) {
+    val focus = rememberChromeFocus()
+    val fill =
+        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-            .clickable(onClick = onClick)
+            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
+            .background(fill)
+            .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
+            .then(focus.ring(Corner.Media, backdrop = fill))
             .padding(start = 14.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1532,6 +1625,50 @@ private fun SideNavItem(label: String, icon: SemanticActionId, selected: Boolean
  * ring outside the bounds would overlap the neighbour above and below. Inward also costs no layout space,
  * which matters here because the selection pill is `matchParentSize` — a ring that resized the row would
  * resize the pill with it.
+ *
+ * ## The ring is measured against the pill, not against the page
+ *
+ * Being right about the *difference* between selection and focus is not the same as being right about the
+ * contrast of either. This row draws its focus ring **on top of** the `matchParentSize` selection pill, and
+ * the pill is a 12% wash of `primary` — while the ring's own default colour is `primary` too. Solved against
+ * the page and drawn on the pill, the ring is measured against a colour it is never drawn on, and it is
+ * measured against the one colour guaranteed to be closest to itself.
+ *
+ * Measured over the ten shipped accents on the light page, that cost **3 of 10 accents** WCAG 1.4.11's 3:1
+ * whenever the row was selected — Sunset 2.64:1, Gold 2.70:1, Forest 2.79:1 — which is a focus indicator that
+ * disappears on the destination the user is currently in. Solved against the pill instead, the page and the
+ * 300 dp overlay drawer both pass **10 of 10 in both states**: worst on the page is Gold 3.0629:1 selected and
+ * Gold 3.0037:1 resting, worst in the drawer is Sunset 3.0172:1 selected and Gold 3.0485:1 resting. Dark mode
+ * passed either way.
+ *
+ * **The alpha passed is the settled 0.12, not the animating `bgAlpha`.** Two reasons, and the first is the
+ * substantive one: sweeping the whole fade shows the ratio is monotone in the pill's alpha for every accent in
+ * every host, so the settled pill is the *hardest* case and solving against it covers every frame on the way
+ * there. Threading the animated value through would also re-solve the ring on every frame of a 200 ms tween
+ * and make the ring's own colour visibly drift, which is a second signal the user did not ask for.
+ *
+ * **The third host needed the other half of the fix.** [SidebarContent] appears on the expanded page, in a
+ * 300 dp overlay drawer, and inside [NorfoldBottomSheet] — and the backdrop argument above reaches only the
+ * first two. In the sheet the pill is a *translucent* wash composited onto whatever the sheet paints, which is
+ * Material's `surfaceContainerLow`; the substrate was compositing it onto the page instead, and the selected
+ * ring still failed **4 of 10** there — Gold 2.9430:1, Sunset 2.9747:1, Forest 2.9936:1 and Candy
+ * **2.9999964:1**, all within 0.06 of the bar and one of them within four millionths of it. That is not
+ * something this row can state, because a row cannot know its own host. It is
+ * [com.norfold.app.ui.LocalChromeContainer], which [NorfoldBottomSheet] provides and the substrate composites
+ * onto; with it the sheet passes **10 of 10 in both states** (worst Midnight 3.0039:1 selected, Gold 3.0233:1
+ * resting), the same one root that fixed the dialog rows and the popup rows.
+ *
+ * **Every figure here is quoted to four decimals, and Candy is why.** This population was documented as 3 of 10
+ * until `ChromeGeometryTest` was run against `ColorValue`'s own arithmetic instead of a hand-computed model.
+ * `Color.copy(alpha = 0.12f)` does not composite at 0.12: sRGB `Color` holds 8-bit channels, so the alpha
+ * quantizes to 31/255 = 0.121569. That 1.3% moves one channel by a single bit on three accents — Candy's green
+ * lands on 225 rather than 226 — and on the narrowest population a single bit is the whole finding. Rounded to
+ * two decimals Candy reads `3.00`, which is indistinguishable from passing.
+ *
+ * What remains is not an accessibility question. The ring is now measured against whatever the sheet actually
+ * paints, and stays measured against it if that changes — but `surfaceContainerLow` is a token `NorfoldTheme`
+ * never sets, so today it paints Material's baseline `#F7F2FA` rather than a colour Norfold chose. *Which*
+ * colour a Norfold sheet should be is a product decision, and it is not this row's.
  */
 @Composable
 private fun SideNavItem(
@@ -1580,7 +1717,9 @@ private fun SideNavItem(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
                 .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
-                .then(focus.ring(Corner.Media))
+                // The settled pill, translucent — the substrate composites it over the page itself, so this
+                // stays one expression of "the wash this row draws" rather than a second copy of the maths.
+                .then(focus.ring(Corner.Media, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)))
                 .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

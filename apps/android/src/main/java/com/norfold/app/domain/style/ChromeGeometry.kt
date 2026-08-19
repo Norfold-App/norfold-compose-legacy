@@ -249,6 +249,40 @@ object ChromeGeometry {
         (boundaryWidthDp + FOCUS_RING_GAP).coerceAtLeast(FOCUS_RING_INSET)
 
     /**
+     * How much of the surface tint Material paints onto an elevated surface at [elevationDp].
+     *
+     * `4.5·ln(dp+1) + 2`, over 100 — Material3's own curve, transcribed rather than invented, so that a
+     * backdrop resolved here is the colour `Surface` actually paints. Zero at zero elevation, because
+     * `Surface` short-circuits to plain `surface` there rather than compositing a 2% tint.
+     *
+     * **Why the substrate has to know this at all.** A focus ring is solved against the colour it is drawn
+     * on. Material composites `surfaceTint` over `surface` for any elevated surface, and
+     * `lightColorScheme`/`darkColorScheme` default `surfaceTint` to *the `primary` parameter* — not to the
+     * baseline M3 token. `NorfoldTheme` never sets `surfaceTint`, so on this app the tint **is the user's
+     * accent**, and every elevated surface is quietly painted with it. A ring solved against the declared
+     * `surface` is then measured against a colour that is never painted, and it is measured against the one
+     * colour guaranteed to be closest to the ring itself.
+     *
+     * That is not a rounding error. Across the ten shipped accents on the light page, a ring solved against
+     * flat `surface` and drawn on the painted surface **fails 1.4.11's 3:1 for 2 of 10 accents at 1–4 dp** and
+     * **3 of 10 at 6–10 dp**, where Forest joins them at **2.9965:1**. Which accent is worst depends on the
+     * elevation, and Gold and Sunset interleave rather than crossing once — Gold at 1 dp, Sunset at 2 dp, Gold
+     * at 3 and 4 dp, Sunset from 6 dp — with the floor at 2.6923:1. Solved against the painted colour instead,
+     * **all ten pass at every elevation**. Dark mode passes either way, because its tint is the accent lifted
+     * 35% toward white over a near-black surface.
+     *
+     * Forest's figure is quoted to four decimals for the reason `ChromeGeometryTest` records: at two decimals it
+     * reads `3.00`, and this paragraph previously said "exactly 3.00:1" — a figure that describes a pass. It is
+     * a failure by 0.0035. Same shape of error as the container populations documented as 3 of 10 that measure 4.
+     *
+     * The elevation to pass is the **accumulated** one: `Surface` reads `LocalAbsoluteTonalElevation`, adds
+     * its own, and provides the sum to its content, so a 1 dp row inside a 6 dp sheet is drawn at 7 dp of
+     * tint. Callers read that local rather than the literal they typed.
+     */
+    fun tonalTintAlpha(elevationDp: Float): Float =
+        if (elevationDp <= 0f) 0f else ((4.5f * kotlin.math.ln(elevationDp + 1f)) + 2f) / 100f
+
+    /**
      * Interior padding for a piece of chrome at each corner tier.
      *
      * Padding tracks the radius rather than being chosen beside it: content set closer to a corner than

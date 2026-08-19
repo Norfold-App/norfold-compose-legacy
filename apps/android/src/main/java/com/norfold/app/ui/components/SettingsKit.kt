@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.style.ChromeGeometry.Corner
+import com.norfold.app.ui.LocalChromeContainer
 import com.norfold.app.ui.rememberChromeFocus
 
 /**
@@ -72,7 +74,33 @@ fun SettingsSectionLabel(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** A rounded card that clips a vertical stack of rows and paints hairline dividers between them. */
+/**
+ * A rounded card that clips a vertical stack of rows and paints hairline dividers between them.
+ *
+ * Provides [LocalChromeContainer] because the card's fill is **not** the page, and in light mode it is not a
+ * theme colour either: it is `Color.White`, deliberately brighter than the `#F7F8FC` page so the group reads as
+ * raised. Every row inside draws its focus ring on that card, so a ring solved against the page is solved
+ * against a colour that is nowhere inside this group.
+ *
+ * **This one is measured as correct either way, and is stated anyway.** All ten shipped accents clear WCAG
+ * 1.4.11's 3:1 with or without the container — worst Gold 3.19:1 light and Graphite 4.17:1 dark solved against
+ * the page, worst Gold 3.05:1 and Graphite 4.17:1 solved against the card. So this line fixes no present
+ * failure. It is here because the *reason* it passes is luck: white is close enough to `#F7F8FC` that a ring
+ * solved against one lands legibly on the other, and nothing keeps that true. A group that tinted its card, or
+ * a row that painted a selection wash of its own, would composite onto the page and be wrong immediately —
+ * which is exactly how the five populations [LocalChromeContainer] documents came to fail. Naming the container
+ * costs one line and removes the coincidence.
+ *
+ * The dark figures are equal because both backdrops are dark enough that the solver lands on the same colour;
+ * they are also the *Oklab* figures. The dark accent reaches this row as `accent.mix(White, 0.35f)`, and
+ * `NorfoldTheme.mix` is `androidx.compose.ui.graphics.lerp`, which interpolates in Oklab rather than per
+ * channel — Graphite lifts to `#747785`, not the `#7A7D89` a channel-wise mix gives, and 4.17:1 rather than
+ * 4.53:1. `ChromeGeometryTest.liftedAccents` holds the measured table.
+ *
+ * Note the light figure got *smaller* when the measurement got correct (3.19 → 3.05). A ring is solved by
+ * searching outward from the accent until it clears the ratio, so a search against the wrong backdrop can
+ * overshoot as easily as undershoot; a bigger number is not evidence of a better measurement.
+ */
 @Composable
 fun SettingsGroup(
     header: String? = null,
@@ -93,8 +121,14 @@ fun SettingsGroup(
                     color = MaterialTheme.colorScheme.outline.copy(alpha = if (dark) 0.5f else 0.7f),
                     shape = GroupShape,
                 ),
-            content = content,
-        )
+        ) {
+            // The card's own `ColumnScope`, captured so `content` still receives it inside the provider —
+            // the provider's lambda has no receiver and every group writes column-scoped rows.
+            val scope = this
+            CompositionLocalProvider(LocalChromeContainer provides cardColor) {
+                with(scope) { content() }
+            }
+        }
     }
 }
 
@@ -212,6 +246,16 @@ fun SettingsRow(
  *   the point rather than a side effect.
  * @param contentPadding interior padding, which varies legitimately: a radio row needs less than an
  *   icon-and-two-lines row.
+ * @param backdrop the colour the row is drawn on, which is what its ring is measured against. Defaults to
+ *   `Color.Unspecified`, which the substrate resolves to [com.norfold.app.ui.LocalChromeContainer] — the colour
+ *   of whatever container the row was placed in, set by the dialog, sheet or popup that placed it. That is the
+ *   right default because a row cannot know its own host: five of these rows appear in a dialog, one on a page,
+ *   and the same composable is reused in both. Naming a colour here would have been an assertion about the
+ *   caller's ancestor, and the earlier default — `surface` — was measurably the wrong one inside a dialog, where
+ *   3 of the 10 shipped accents fell under 3:1. Pass a colour only when the row paints a fill of its own that
+ *   the container does not: a selection wash, a swatch, a coloured tile. A row inside an *elevated* surface
+ *   still needs nothing — `NorfoldChrome.focusRing` reads the ambient elevation itself and corrects for the
+ *   accent tint Material paints on top.
  */
 @Composable
 fun ChoiceRow(
@@ -221,6 +265,7 @@ fun ChoiceRow(
     contentPadding: PaddingValues = PaddingValues(8.dp),
     horizontalArrangement: Arrangement.Horizontal = Arrangement.spacedBy(10.dp),
     verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
+    backdrop: Color = Color.Unspecified,
     content: @Composable RowScope.() -> Unit,
 ) {
     val focus = rememberChromeFocus()
@@ -229,7 +274,7 @@ fun ChoiceRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(corner.radiusDp.dp))
             .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
-            .then(focus.ring(corner))
+            .then(focus.ring(corner, backdrop))
             .padding(contentPadding),
         verticalAlignment = verticalAlignment,
         horizontalArrangement = horizontalArrangement,

@@ -187,7 +187,7 @@ fun NorfoldStatusPill(label: String, color: Color) {
  *
  * **A swatch with no border can be invisible.** WCAG 1.4.11 asks 3:1 of a control's own boundary, and a bare
  * disc of colour has no boundary but the colour itself. The chart and diagram rows offer
- * `primaryContainer` — `accent.mix(White, 0.88f)` — which measures **1.12:1 to 1.23:1** against the white
+ * `primaryContainer` — `accent.mix(White, 0.88f)` — which measures **1.11:1 to 1.26:1** against the white
  * surface it sits on, across all ten shipped accents. The image-markup row's first pen is pure white on
  * `surface`: **1.00:1**, a swatch that is not there. So the resting edge is not optional here and is drawn
  * unconditionally, from [NorfoldChrome.restingEdge] rather than from `outlineVariant`, which is itself only
