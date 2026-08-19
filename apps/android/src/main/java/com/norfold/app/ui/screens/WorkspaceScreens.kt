@@ -3238,11 +3238,13 @@ private fun ChatBubble(
                     // No focus ring, deliberately. Two reasons, both structural rather than stylistic: the
                     // bubble's shape is four independent corner radii (a tail corner squares off to point at
                     // its author), so there is no single radius a concentric ring could hold; and its `onClick`
-                    // is a no-op — the only real action is the long-press, which a keyboard or switch user
-                    // cannot reach at all. Ringing it would advertise a focusable control that does nothing.
-                    // Reaching the message actions without touch is a product gap, not a ring to draw here.
+                    // is a no-op — the only real action is the long-press. Ringing it would advertise a
+                    // focusable control that does nothing on activation. The long-press is labelled, which
+                    // puts the message actions in TalkBack's actions menu; reaching them by keyboard or
+                    // switch access is still a product gap, not a ring to draw here.
                     .combinedClickable(
                         onClick = {},
+                        onLongClickLabel = "Message actions",
                         onLongClick = {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             onLongPress(chat)
@@ -3417,6 +3419,8 @@ private fun ChatBubble(
                                 .combinedClickable(
                                     interactionSource = reactionFocus.source,
                                     indication = androidx.compose.material3.ripple(),
+                                    onClickLabel = if (reactedByMe) "Remove your $emoji reaction" else "React with $emoji",
+                                    onLongClickLabel = "See who reacted",
                                     onClick = { onTapReaction(chat, emoji) },
                                     onLongClick = { onLongPressReactions(chat) },
                                 ),
@@ -3442,6 +3446,9 @@ private fun ChatBubble(
                                 .combinedClickable(
                                     interactionSource = overflowFocus.source,
                                     indication = androidx.compose.material3.ripple(),
+                                    onClickLabel = "See all reactions",
+                                    // Tap and long-press are the same action, so there is nothing extra to
+                                    // announce for the gesture — the click label already covers it.
                                     onClick = { onLongPressReactions(chat) },
                                     onLongClick = { onLongPressReactions(chat) },
                                 ),

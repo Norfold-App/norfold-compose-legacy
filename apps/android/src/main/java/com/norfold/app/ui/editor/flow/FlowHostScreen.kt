@@ -1042,6 +1042,8 @@ private fun FlowBlockRow(
                 // resolves indication from that composition local. Passing it explicitly keeps the press
                 // feedback byte-identical to what this row showed before the ring was added.
                 indication = androidx.compose.foundation.LocalIndication.current,
+                onClickLabel = if (state.selectionMode) "Toggle selection" else "Edit block",
+                onLongClickLabel = if (state.relationshipReview.connectMode != null) null else "Select blocks",
                 onClick = {
                     if (state.selectionMode) presenter.act { toggleSelection(block.id) }
                     else {

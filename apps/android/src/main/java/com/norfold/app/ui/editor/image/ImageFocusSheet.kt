@@ -892,6 +892,10 @@ private fun ImageTransformAction(
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     onClick()
                 },
+                // No `onLongClickLabel`, deliberately: this long-press exists to *reveal the button's name*
+                // to a sighted user, and the icon below already carries that name as its content
+                // description. A screen reader has therefore already read what the gesture would show, so
+                // labelling it would announce a second route to information the user just heard.
                 onLongClick = { onLongPress(label) },
             ),
     ) {

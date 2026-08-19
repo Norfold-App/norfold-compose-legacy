@@ -1051,7 +1051,9 @@ internal fun ConversationRow(
                 interactionSource = rowFocus.source,
                 indication = androidx.compose.material3.ripple(),
                 onClick = onOpen,
-                // General has no pin/delete; its long-press is a no-op instead of a dead menu.
+                // General has no pin/delete; its long-press is a no-op instead of a dead menu, so it gets
+                // no label either — TalkBack should not announce an action this row does not have.
+                onLongClickLabel = if (row.channel != null) "Conversation actions" else null,
                 onLongClick = { if (row.channel != null) menuOpen = true },
             )
             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -1741,7 +1743,11 @@ private fun ContactRow(contact: NorfoldSocial.RemoteContact, onLongPress: () -> 
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = {}, onLongClick = onLongPress)
+            // No focus ring: `onClick` is a no-op, so ringing this row would advertise a focusable control
+            // that does nothing on activation. The long-press *is* labelled, though — that puts the contact
+            // actions in TalkBack's actions menu, which is the one route to them that does not require
+            // holding a finger on the right pixel. Keyboard and switch access still cannot reach them.
+            .combinedClickable(onClick = {}, onLongClickLabel = "Contact actions", onLongClick = onLongPress)
             .padding(horizontal = 6.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

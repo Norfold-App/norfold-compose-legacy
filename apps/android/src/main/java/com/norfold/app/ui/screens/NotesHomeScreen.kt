@@ -342,6 +342,23 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, availableTags
     if (showActions) {
         NoteQuickActionsDialog(note, availableTags, viewModel) { showActions = false }
     }
+    /**
+     * What TalkBack calls this card's long-press, derived from the gesture the user configured.
+     *
+     * A long-press is not discoverable by touch exploration: without a label the semantics action is
+     * announced generically, so the one gesture this card's whole quick-action system hangs on is
+     * invisible to a screen-reader user. `None` gets no label because there is nothing to announce —
+     * labelling it would advertise an action that does nothing.
+     */
+    fun gestureLabel(action: NoteGestureAction): String? = when (action) {
+        NoteGestureAction.Actions -> "Note actions"
+        NoteGestureAction.Pin -> if (note.pinned) "Unpin" else "Pin"
+        NoteGestureAction.Star -> if (note.starred) "Unstar" else "Star"
+        NoteGestureAction.Lock -> if (note.locked) "Unlock" else "Lock"
+        NoteGestureAction.Archive -> "Archive"
+        NoteGestureAction.Delete -> "Delete"
+        NoteGestureAction.None -> null
+    }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             when (value) {
@@ -396,6 +413,8 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, availableTags
                 .combinedClickable(
                     interactionSource = cardInteraction,
                     indication = androidx.compose.material3.ripple(),
+                    onClickLabel = "Open note",
+                    onLongClickLabel = gestureLabel(settings.noteLongPressAction),
                     onClick = { viewModel.select(note) },
                     onLongClick = { runAction(settings.noteLongPressAction) },
                 ),

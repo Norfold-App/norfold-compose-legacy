@@ -1302,6 +1302,8 @@ private fun DocTableOfContents(documentKey: String, document: BlockDocument, loc
                             .combinedClickable(
                                 interactionSource = tocFocus.source,
                                 indication = androidx.compose.material3.ripple(),
+                                onClickLabel = "Jump to heading",
+                                onLongClickLabel = if (isSection && !locked) "Section actions" else null,
                                 onClick = {
                                     viewModel.scrollToBlock(id)
                                     viewModel.closeSidebar()
