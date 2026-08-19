@@ -41,6 +41,7 @@ import com.norfold.app.data.SyncSecretStore
 import com.norfold.app.data.SecureChatOutboxEntity
 import com.norfold.app.data.SecureChatTombstoneEntity
 import com.norfold.app.data.SecureChatUserHiddenEntity
+import com.norfold.app.data.TaskReminderScheduler
 import com.norfold.app.domain.AppSettings
 import com.norfold.app.domain.AppIconFamily
 import com.norfold.app.domain.BackupCodec
@@ -961,6 +962,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 refreshCloudAccountState()
                 refreshTeamBinding()
                 NorfoldWorkScheduler.reconcile(app, repository.settingsValue())
+                // Task reminders. The one-shot pass posts anything that came due while the process
+                // was dead and arms the next alarm; the observer keeps that alarm in step with
+                // every later edit, restore, or sync pull for the life of this view model.
+                TaskReminderScheduler.reconcile(app)
+                TaskReminderScheduler.observe(app, viewModelScope)
                 if (NorfoldSupabase.isSignedIn()) coordinateCloudAccount()
                 // Attachment deliveries interrupted by a process death resume where they left off.
                 Log.i(InitLogTag, "uploads")
@@ -1111,6 +1117,20 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val navigationHistory = ArrayDeque<Destination>()
     private val _highlightedChatMessageId = MutableStateFlow<Long?>(null)
     val highlightedChatMessageId: StateFlow<Long?> = _highlightedChatMessageId.asStateFlow()
+
+    /**
+     * The task a reminder notification was about, so the board can open its detail sheet.
+     *
+     * Consumed once and cleared, rather than held: the board reads it, opens the task, and reports
+     * back. Left set, a rotation or a return to Tasks would re-open the sheet the owner had closed.
+     */
+    private val _pendingTaskFocusId = MutableStateFlow<Long?>(null)
+    val pendingTaskFocusId: StateFlow<Long?> = _pendingTaskFocusId.asStateFlow()
+
+    /** Called by the board once it has opened — or failed to find — the requested task. */
+    fun consumeTaskFocus() {
+        _pendingTaskFocusId.value = null
+    }
 
     /** Briefly flash a chat message (reply-to-jump / pinned-banner tap), then clear the marker. */
     fun flashChatMessage(localId: Long) {
@@ -1298,7 +1318,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 go(Destination.Chat)
                 selectChatSection(com.norfold.app.domain.ChatSection.Requests)
             }
-            "Tasks" -> go(Destination.Tasks)
+            "Tasks" -> openTaskFromNotification(intent)
             "ObjectDetail" -> {
                 val localObjectId = intent.getStringExtra("norfold.objectId")?.toLongOrNull()
                 val local = state.value.workspaceObjects.firstOrNull { it.id == localObjectId }
@@ -1308,6 +1328,37 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             "Activity" -> go(Destination.Activity)
             else -> if (intent.hasExtra("norfold.destination")) go(Destination.WorkspaceHub)
         }
+    }
+
+    /**
+     * Open the Tasks board on the task a notification was about.
+     *
+     * The workspace matters as much as the task id. `tasks` is scoped to the active workspace, so a
+     * reminder set in a workspace the owner has since switched away from would otherwise open a
+     * board that does not contain it — a notification that tapped through to nothing. Switching
+     * first costs a workspace change the owner did not explicitly ask for, but they asked for the
+     * reminder, and tapping it is an unambiguous request to see that task.
+     *
+     * The id is published for the board to consume rather than acted on here, because the task
+     * detail sheet is the board's own state. If the id is absent or the row is gone — deleted
+     * between the post and the tap — this degrades to opening the board, which is what the caller
+     * did before this existed.
+     */
+    private fun openTaskFromNotification(intent: Intent) {
+        val taskId = intent.getLongExtra("norfold.taskId", -1L).takeIf { it > 0L }
+        val workspaceId = intent.getStringExtra("norfold.workspaceId")?.toLongOrNull()
+        val active = state.value.settings.activeWorkspaceId
+        if (workspaceId != null && workspaceId != active && state.value.workspaces.any { it.id == workspaceId }) {
+            // switchWorkspace resets navigation to the hub, so the Tasks hop has to follow it.
+            viewModelScope.launch {
+                switchWorkspace(workspaceId).join()
+                _pendingTaskFocusId.value = taskId
+                go(Destination.Tasks)
+            }
+            return
+        }
+        _pendingTaskFocusId.value = taskId
+        go(Destination.Tasks)
     }
 
     /**

@@ -1,7 +1,6 @@
 package com.norfold.app.cloud
 
 import android.Manifest
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
@@ -66,7 +65,7 @@ class NorfoldMessagingService : FirebaseMessagingService() {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val manager = getSystemService(NotificationManager::class.java)
         val channelId = channelFor(data["kind"])
-        manager.createNotificationChannel(NotificationChannel(channelId, channelName(channelId), NotificationManager.IMPORTANCE_DEFAULT))
+        NorfoldNotificationChannels.ensure(manager, channelId)
         val destination = data["destination"] ?: when {
             data["channelId"] != null || data["messageId"] != null -> "Chat"
             data["taskId"] != null -> "Tasks"
@@ -133,23 +132,9 @@ class NorfoldMessagingService : FirebaseMessagingService() {
     }
 
     private fun channelFor(kind: String?): String = when {
-        kind?.startsWith("chat") == true -> ChatChannelId
-        kind?.startsWith("task") == true -> TaskChannelId
-        kind == "backup" || kind == "sync" -> SyncChannelId
-        else -> WorkspaceChannelId
-    }
-
-    private fun channelName(channelId: String): String = when (channelId) {
-        ChatChannelId -> "Messages"
-        TaskChannelId -> "Tasks and reminders"
-        SyncChannelId -> "Backup and sync"
-        else -> "Workspace activity"
-    }
-
-    private companion object {
-        const val WorkspaceChannelId = "norfold_workspace"
-        const val ChatChannelId = "norfold_chat"
-        const val TaskChannelId = "norfold_tasks"
-        const val SyncChannelId = "norfold_sync"
+        kind?.startsWith("chat") == true -> NorfoldNotificationChannels.Chat
+        kind?.startsWith("task") == true -> NorfoldNotificationChannels.Tasks
+        kind == "backup" || kind == "sync" -> NorfoldNotificationChannels.Sync
+        else -> NorfoldNotificationChannels.Workspace
     }
 }

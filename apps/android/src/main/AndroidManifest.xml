@@ -4,6 +4,14 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Task reminders. SCHEDULE_EXACT_ALARM rather than USE_EXACT_ALARM: the latter is granted
+         automatically but Play policy reserves it for alarm-clock and calendar apps, which Norfold
+         is not. This one the user grants, so the scheduler checks canScheduleExactAlarms() and
+         falls back to a delivery window rather than assuming it and throwing SecurityException. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- AlarmManager keeps nothing across a restart, so without this one reboot silently disarms
+         every future reminder. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Chat voice messages; requested at first tap of the mic button. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -60,5 +68,27 @@
         <receiver
             android:name=".cloud.NorfoldNotificationActionReceiver"
             android:exported="false" />
+        <!-- Task reminders. Not exported: only AlarmManager and the system broadcasts below reach
+             it, and nothing another app sends should be able to make Norfold post a reminder.
+             android:directBootAware is deliberately absent — the reminder rows live in the
+             credential-encrypted database, so there is nothing to read before first unlock. -->
+        <receiver
+            android:name=".data.TaskReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.norfold.app.action.DELIVER_TASK_REMINDERS" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

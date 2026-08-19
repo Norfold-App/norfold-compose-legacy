@@ -238,6 +238,27 @@ interface NotesDao {
     @Query("SELECT * FROM tasks ORDER BY updatedAt DESC")
     suspend fun allTasks(): List<TaskEntity>
 
+    /**
+     * Every task that could owe a reminder, across all workspaces.
+     *
+     * Workspace-scoped like [observeTasks] would be wrong here: a reminder set in a workspace the
+     * owner has since switched away from is still a reminder they asked for. The projection is
+     * narrow so the reminder reconciler is not re-run by an unrelated edit — Room re-emits on any
+     * write to `tasks`, but the emitted value only changes when a reminder field does, which
+     * `distinctUntilChanged` on the caller's side then collapses.
+     */
+    @Query(
+        "SELECT id, workspaceId, title, startAt, dueAt, allDay, reminderMinutesBefore, status " +
+            "FROM tasks WHERE reminderMinutesBefore IS NOT NULL ORDER BY id ASC",
+    )
+    fun observeTaskReminderRows(): Flow<List<TaskReminderRow>>
+
+    @Query(
+        "SELECT id, workspaceId, title, startAt, dueAt, allDay, reminderMinutesBefore, status " +
+            "FROM tasks WHERE reminderMinutesBefore IS NOT NULL ORDER BY id ASC",
+    )
+    suspend fun taskReminderRows(): List<TaskReminderRow>
+
     @Query("SELECT COALESCE(MAX(sortOrder), -1) FROM tasks WHERE taskBoardId = :boardId AND taskColumnId = :columnId")
     suspend fun maxTaskSortOrder(boardId: Long, columnId: Long): Int
 

@@ -124,6 +124,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -250,6 +251,16 @@ fun TasksBoardScreen(
     var newColumnName by remember { mutableStateOf("") }
     var interactionStatus by remember { mutableStateOf(TaskInteractionStatus(engine = kanbanEngine)) }
     LaunchedEffect(editingTask?.id) { onTaskDetailOpenChange(editingTask != null) }
+    // A tapped reminder notification asked for one specific task. Keyed on the task list as well as
+    // the id because the board can arrive before the rows do — switching workspace re-collects them —
+    // and a request that found nothing must not be consumed, or the sheet never opens.
+    val pendingTaskFocusId by viewModel.pendingTaskFocusId.collectAsState()
+    LaunchedEffect(pendingTaskFocusId, state.tasks) {
+        val requested = pendingTaskFocusId ?: return@LaunchedEffect
+        val task = state.tasks.firstOrNull { it.id == requested } ?: return@LaunchedEffect
+        editingTask = task
+        viewModel.consumeTaskFocus()
+    }
     val selectedBoard = state.taskBoards.firstOrNull { it.id == state.settings.taskSelectedBoardId }
         ?: state.taskBoards.firstOrNull()
     val selectedBoardId = selectedBoard?.id ?: 1L

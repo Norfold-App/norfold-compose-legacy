@@ -1205,6 +1205,25 @@ data class DocumentWithBlocks(
     val blocks: List<DocumentBlockEntity>,
 )
 
+/**
+ * The eight columns of a task that decide whether, and when, a reminder is owed.
+ *
+ * A projection rather than [TaskEntity] because the reminder reconciler observes this query: Room
+ * re-emits on any write to `tasks`, so reading the whole row would re-run reconciliation when a
+ * description or a column position changed. Narrowed to these columns, the emitted value only
+ * differs when something reminder-relevant actually moved.
+ */
+data class TaskReminderRow(
+    val id: Long,
+    val workspaceId: Long,
+    val title: String,
+    val startAt: Long?,
+    val dueAt: Long?,
+    val allDay: Boolean,
+    val reminderMinutesBefore: Int?,
+    val status: String,
+)
+
 data class NoteWithRelations(
     @Embedded val note: NoteEntity,
     @Relation(parentColumn = "id", entityColumn = "owner_id", entity = DocumentEntity::class)
