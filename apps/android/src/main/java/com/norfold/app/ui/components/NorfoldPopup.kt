@@ -423,14 +423,53 @@ fun NorfoldBottomSheet(
     }
 }
 
-/** Free-form dialog for fully custom card content (platform default width). */
+/**
+ * Free-form dialog for fully custom card content (platform default width).
+ *
+ * **Why this one names a container it does not paint.** The other four providers in this file each wrap a
+ * surface they own, so the colour they announce is a colour they drew. This dialog draws nothing: it is a
+ * bare [Dialog], and its seventeen callers each build their own `Surface` inside it. That is the whole point
+ * of the composable — a confirmation, a picker, a report form and a video player have nothing in common but
+ * the window.
+ *
+ * It still has to announce something, because the alternative is measurably wrong. With no provider,
+ * [LocalChromeContainer] stays unspecified and `NorfoldChrome.resolvedBackdrop` falls back to
+ * `colorScheme.background` — the page *behind* the dialog, which no chrome inside it is drawn on. Worse, that
+ * fallback also defeats the tonal-tint correction: Material applies the tint only when the resolved backdrop
+ * **is** `colorScheme.surface` (verified in `ColorScheme.applyTonalElevation`, which gates on
+ * `Color.equals-impl0(color, scheme.surface)` before compositing), so resolving to `background` skips a step
+ * that exists precisely for this case. Chrome in here was therefore solved against the page and drawn on
+ * accent-tinted surface: **2 of the 10 shipped accents fell under 1.4.11's 3:1 at 4 dp, floor 2.8816:1
+ * (Sunset, then Gold 2.9230:1)**, and 3 of 10 at 6 dp. Naming `surface` puts the tint gate back in play, and
+ * all ten pass at every elevation used here. `ChromeGeometryTest` holds the measured table.
+ *
+ * So the claim is narrow and true: *every one* of the seventeen callers paints `colorScheme.surface`, at
+ * elevations from 0 to 6 dp. Sixteen name the colour; `NotesHomeScreen`'s note-actions sheet omits it and
+ * takes `Surface`'s own default, which is the same token — verified in bytecode, where every `Surface` overload
+ * loads `ColorScheme."getSurface-0d7_KjU"` for that parameter. The elevation is not guessed either: `Surface`
+ * provides the accumulated `LocalAbsoluteTonalElevation` to its own content, so a row inside a 6 dp dialog
+ * resolves at 6 dp without this dialog knowing which caller it is. Only the *colour* has to be stated here,
+ * and there is one answer.
+ *
+ * **This is a light-mode fix.** In dark mode the two solvers return the *same colour* for all ten accents at
+ * every one of these elevations, because each lifted primary already clears 3:1 against both candidate
+ * backdrops and the solver returns its input unchanged. Dark floors at 3.74:1 either way. A fix that only
+ * moves one theme is still a fix, but it should not be described as if it moved both.
+ *
+ * A caller that paints something else would have to pass its own backdrop at the chrome site, exactly as
+ * chrome on any coloured fill already does. [NorfoldFullscreenDialog] gets no provider for that reason: one
+ * of its two callers fills `Color.Black` for a video player, so there is no single answer to state.
+ */
 @Composable
 fun NorfoldContentDialog(
     onDismissRequest: () -> Unit,
     properties: DialogProperties = DialogProperties(),
     content: @Composable () -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismissRequest, properties = properties, content = content)
+    val container = MaterialTheme.colorScheme.surface
+    Dialog(onDismissRequest = onDismissRequest, properties = properties) {
+        CompositionLocalProvider(LocalChromeContainer provides container) { content() }
+    }
 }
 
 /** Edge-to-edge dialog (no platform width cap) for fullscreen surfaces. */

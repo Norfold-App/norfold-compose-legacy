@@ -253,9 +253,17 @@ fun SettingsRow(
  *   and the same composable is reused in both. Naming a colour here would have been an assertion about the
  *   caller's ancestor, and the earlier default — `surface` — was measurably the wrong one inside a dialog, where
  *   3 of the 10 shipped accents fell under 3:1. Pass a colour only when the row paints a fill of its own that
- *   the container does not: a selection wash, a swatch, a coloured tile. A row inside an *elevated* surface
- *   still needs nothing — `NorfoldChrome.focusRing` reads the ambient elevation itself and corrects for the
- *   accent tint Material paints on top.
+ *   the container does not: a selection wash, a swatch, a coloured tile.
+ *
+ *   A row inside an *elevated* surface needs nothing either, **but only because its host announces itself.**
+ *   `NorfoldChrome.focusRing` does read the ambient elevation, and it also honours Material's own gate: the
+ *   tint is applied only when the resolved backdrop **is** `colorScheme.surface`. So an unspecified backdrop
+ *   inside a host that provides no container resolved to `background` and skipped the correction entirely —
+ *   the two rows placed in [com.norfold.app.ui.components.NorfoldContentDialog] were solved against the page
+ *   behind the dialog and drawn on 4-6 dp of accent-tinted surface, at **2 of 10 accents under 3:1, floor
+ *   2.8816:1** in light mode (dark was unaffected: the solver returns the lifted primary unchanged there).
+ *   That is fixed where it belonged, at the dialog, which now names the colour all seventeen of its callers
+ *   paint. The rule for a caller here is unchanged and now actually holds.
  */
 @Composable
 fun ChoiceRow(

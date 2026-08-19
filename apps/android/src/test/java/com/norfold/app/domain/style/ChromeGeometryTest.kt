@@ -1178,6 +1178,266 @@ class ChromeGeometryTest {
     }
 
     /**
+     * The four tonal elevations the seventeen [com.norfold.app.ui.components.NorfoldContentDialog] callers pass.
+     *
+     * Unlike the four hosts above, this dialog paints nothing itself — it is a bare `Dialog`, and each caller
+     * builds its own `Surface` inside. Sixteen name `colorScheme.surface`; the seventeenth omits the parameter
+     * and takes `Surface`'s own default, which every overload resolves to the same token. That unanimity is what
+     * makes one provider on the dialog correct rather than seventeen patches, so it is asserted below as a
+     * source-level count and not left to prose.
+     */
+    private val contentDialogElevations = listOf(0f, 3f, 4f, 6f)
+
+    /**
+     * A host that provides no container does not merely pick the wrong colour — it disables the tint correction.
+     *
+     * This is the sharpest form of the container defect and it is worth its own test, because the mechanism is
+     * not the one the four-host pair above pins. There, the wrong backdrop was a *different colour* and the
+     * arithmetic was otherwise intact. Here the wrong backdrop also silently switches a whole correction off:
+     * `resolvedBackdrop` applies the tonal tint only when the declared backdrop **is** `colorScheme.surface`,
+     * matching Material's own gate in `ColorScheme.applyTonalElevation`. A host that provides nothing makes the
+     * declared value fall back to `background`, so the equality fails, so step 2 never runs at all — on a surface
+     * whose entire problem is that it carries elevation tint.
+     *
+     * [com.norfold.app.ui.components.NorfoldContentDialog] was that host, for all seventeen of its callers. Its
+     * rows were solved against the page behind the dialog and drawn on up to 6 dp of accent-tinted surface:
+     *
+     *  - 0 dp — 0 of 10 fail (no tint to miss, so nothing to get wrong)
+     *  - 3 dp — **2 of 10**, floor Sunset 2.9213:1
+     *  - 4 dp — **2 of 10**, floor Sunset 2.8816:1
+     *  - 6 dp — **3 of 10**, floor Sunset 2.8442:1
+     *
+     * The 0 dp row is the control and is the reason the counts are asserted per elevation rather than summed: it
+     * shows the failure is caused by the tint being missed, not by the page being a different colour in general.
+     *
+     * **The floors here are the rounding model, not a curve.** [ColorValue.withAlphaFraction] and
+     * [ColorValue.compositedOver] both `roundToInt`, matching Compose's 8-bit channels. A probe written with
+     * truncating arithmetic instead put the 4 dp floor at 2.8638 and the 3 dp floor at 2.9033 — close enough to
+     * pass a glance, wrong in the third decimal, and wrong in the direction that overstates the defect. The whole
+     * value of this file is that it uses the same arithmetic the app does.
+     */
+    @Test
+    fun `a host that names no container also loses the elevation tint correction`() {
+        val page = hex(lightPage)
+        val failures = mutableMapOf<Float, Int>()
+        val floors = mutableMapOf<Float, Double>()
+        var worstAccent = ""
+
+        for (dp in contentDialogElevations) {
+            for (accent in shippedAccents) {
+                val tint = hex(accent)
+                // What the seventeen callers actually paint: `surface` plus Material's tint at this elevation.
+                val drawn = tint.withAlphaFraction(ChromeGeometry.tonalTintAlpha(dp)).compositedOver(ColorValue.WHITE)
+                val ring = ContrastAnalysis.legibleChrome(tint, page, ChromeGeometry.FOCUS_RING_RATIO)
+                val measured = ContrastAnalysis.ratio(ring, drawn)
+                if (measured < ChromeGeometry.FOCUS_RING_RATIO) {
+                    failures[dp] = (failures[dp] ?: 0) + 1
+                }
+                if (measured < (floors[dp] ?: Double.MAX_VALUE)) {
+                    floors[dp] = measured
+                    if (dp == 4f) worstAccent = tint.toHex()
+                }
+            }
+        }
+
+        assertEquals(
+            "the failure count per elevation is the measured claim in NorfoldContentDialog's documentation",
+            mapOf(3f to 2, 4f to 2, 6f to 3),
+            failures,
+        )
+        assertEquals("a flat dialog has no tint to miss, so the page is not wrong enough to fail", null, failures[0f])
+        assertEquals("3 dp floor", 2.9213, floors.getValue(3f), 0.0001)
+        assertEquals("4 dp floor", 2.8816, floors.getValue(4f), 0.0001)
+        assertEquals("6 dp floor", 2.8442, floors.getValue(6f), 0.0001)
+        assertEquals("the floor is Sunset at every elevation that fails", "#F75C7A", worstAccent)
+    }
+
+    /**
+     * Naming the surface clears the target at every elevation the dialog's callers use.
+     *
+     * The counterpart to the test above. Every one of the ten accents passes at all four elevations, so the fix
+     * needs no per-accent exception — and the margins are thin enough to be worth stating: the floor is **3.0011**
+     * at 3 dp, which clears the bar by about one thousandth. That is not a comfortable pass, and it is the reason
+     * this test asserts a floor rather than only a boolean. An accent added to the palette that sits any lower
+     * would fail here, which is the notification worth having before it ships.
+     */
+    @Test
+    fun `naming the painted surface clears the target at every dialog elevation`() {
+        var floor = Double.MAX_VALUE
+        var checked = 0
+
+        for (dp in contentDialogElevations) {
+            for (accent in shippedAccents) {
+                val tint = hex(accent)
+                val drawn = tint.withAlphaFraction(ChromeGeometry.tonalTintAlpha(dp)).compositedOver(ColorValue.WHITE)
+                val ring = ContrastAnalysis.legibleChrome(tint, drawn, ChromeGeometry.FOCUS_RING_RATIO)
+                val measured = ContrastAnalysis.ratio(ring, drawn)
+                assertTrue(
+                    "accent %s at %.0f dp measures %.6f:1 on %s".format(tint.toHex(), dp, measured, drawn.toHex()),
+                    measured >= ChromeGeometry.FOCUS_RING_RATIO - 1e-6,
+                )
+                floor = minOf(floor, measured)
+                checked++
+            }
+        }
+
+        assertEquals("ten accents at four elevations", 40, checked)
+        assertEquals("the tightest pass in the set is 3.0011:1, at 3 dp", 3.0011, floor, 0.0001)
+    }
+
+    /**
+     * In dark mode the two solvers return the *same ring*, so this correction is a light-mode fix.
+     *
+     * Asserted because the honest scope of a fix is part of the fix. Each lifted primary already clears 3:1
+     * against both the dark page and the tinted dark surface, so [ContrastAnalysis.legibleChrome] returns its
+     * input unchanged in both cases and the mis-solve costs nothing — identical colour, identical ratio, floor
+     * 3.74:1 at the deepest elevation either way. Without this test the sibling tests above would read as though
+     * the defect spanned both themes.
+     *
+     * The stronger reason to pin it: it means dark mode is passing by *margin*, not by construction. If a future
+     * accent or a deeper elevation eroded that margin, the solver would start moving the colour and the two
+     * paths would diverge — and this test would fail, which is exactly when someone should look.
+     */
+    @Test
+    fun `the dialog mis-solve is invisible in dark mode because the solver moves nothing`() {
+        val darkPage = hex(0x070A12)
+        val darkSurface = hex(0x0E131F)
+        var floor = Double.MAX_VALUE
+        var identical = 0
+
+        for (dp in contentDialogElevations) {
+            for (liftedAccent in liftedAccents) {
+                val lift = hex(liftedAccent)
+                val drawn = lift.withAlphaFraction(ChromeGeometry.tonalTintAlpha(dp)).compositedOver(darkSurface)
+                val misSolved = ContrastAnalysis.legibleChrome(lift, darkPage, ChromeGeometry.FOCUS_RING_RATIO)
+                val solved = ContrastAnalysis.legibleChrome(lift, drawn, ChromeGeometry.FOCUS_RING_RATIO)
+                if (misSolved == solved) identical++
+                floor = minOf(floor, ContrastAnalysis.ratio(solved, drawn))
+            }
+        }
+
+        assertEquals("ten lifted accents at four elevations, all unmoved by either backdrop", 40, identical)
+        assertEquals("dark floors at 3.74:1 at 6 dp, well clear of the bar", 3.7446, floor, 0.0001)
+    }
+
+    /**
+     * Every [com.norfold.app.ui.components.NorfoldContentDialog] caller paints `surface`, which is what licenses
+     * the provider.
+     *
+     * A source-level assertion, and the only kind available for this claim: the unanimity is a property of
+     * seventeen call sites in three files, not of any arithmetic. The dialog announces a colour it does not
+     * paint, which is defensible **only** while every caller paints that one colour. The day a caller fills
+     * something else — a media viewer, a coloured confirmation — the announcement becomes a lie for that caller's
+     * chrome, and it would be a silent one: the ring would still render, just measured against a colour that is
+     * not on screen. That is the same class of defect this whole section exists to close, so it is pinned rather
+     * than trusted.
+     *
+     * Sixteen sites name the token. The seventeenth (`NotesHomeScreen`'s note-actions sheet) omits `color` and
+     * inherits `Surface`'s default, which resolves to the same token — so the check accepts an omission and
+     * rejects any *other* named colour. [com.norfold.app.ui.components.NorfoldFullscreenDialog] is deliberately
+     * excluded from this rule and from the provider, because one of its two callers fills `Color.Black`.
+     */
+    @Test
+    fun `every content dialog caller paints the colour the dialog announces`() {
+        val offenders = mutableListOf<String>()
+        var callers = 0
+
+        for ((path, source) in callerSources()) {
+            var index = source.indexOf("NorfoldContentDialog(")
+            while (index >= 0) {
+                callers++
+                // The caller's own Surface is the first one after the dialog opens. A generous window, because
+                // several of these pass the dialog a multi-line argument list before the trailing lambda.
+                val window = source.substring(index, minOf(source.length, index + 900))
+                val surface = window.indexOf("Surface(")
+                if (surface < 0) {
+                    offenders += "$path: no Surface within 900 chars of a NorfoldContentDialog"
+                } else {
+                    val head = window.substring(surface, minOf(window.length, surface + 400))
+                    val named = Regex("""color\s*=\s*([A-Za-z0-9_.]+)""").find(head)?.groupValues?.get(1)
+                    // An omitted `color` is fine: Surface's default is colorScheme.surface, loaded as
+                    // `ColorScheme.getSurface-0d7_KjU` in every overload's bytecode.
+                    if (named != null && named != "MaterialTheme.colorScheme.surface") {
+                        offenders += "$path: paints $named"
+                    }
+                }
+                index = source.indexOf("NorfoldContentDialog(", index + 1)
+            }
+        }
+
+        assertEquals("the seventeen call sites the provider's documentation counts", 17, callers)
+        assertEquals(
+            "NorfoldContentDialog provides LocalChromeContainer as colorScheme.surface, so a caller painting " +
+                "anything else has chrome measured against a colour it never draws",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    /** The three files holding every [com.norfold.app.ui.components.NorfoldContentDialog] call site. */
+    private fun callerSources(): List<Pair<String, String>> =
+        listOf(
+            "ui/screens/ChatHomeScreen.kt",
+            "ui/screens/NotesHomeScreen.kt",
+            "ui/screens/WorkspaceScreens.kt",
+            "ui/tasks/TasksBoardScreen.kt",
+        ).map { leaf ->
+            val relative = "src/main/java/com/norfold/app/$leaf"
+            val candidates = listOf(File(relative), File("apps/android/$relative"))
+            leaf to (candidates.firstOrNull(File::isFile) ?: error("$relative not found")).readText()
+        }
+
+    /**
+     * Every container host in `NorfoldPopup.kt` provides the local, and the count is asserted.
+     *
+     * The two tests above measure what happens when a host provides nothing. This one keeps that from happening
+     * again, and it is a *count* rather than a per-name check because the failure mode is an omission: a new
+     * dialog, sheet or popup host added to this file with no provider is exactly the defect, and no assertion
+     * about the existing five would notice it. Five providers, five hosts — `NorfoldPopupCard`,
+     * `NorfoldDropdownMenu`, `NorfoldDialog`, `NorfoldBottomSheet`, `NorfoldContentDialog`.
+     *
+     * [com.norfold.app.ui.components.NorfoldFullscreenDialog] is the sixth host and deliberately has none, which
+     * is why the count is 5 and not 6. If someone adds a provider there, this test fails and they have to justify
+     * it against the `Color.Black` caller — the right conversation to force.
+     *
+     * A count is admittedly a blunt instrument: it cannot tell a provider moved from a provider deleted. What it
+     * can do is refuse to stay green while the number changes, which is the property that was missing when four
+     * hosts announced a container and the fifth silently did not.
+     */
+    @Test
+    fun `every popup host that owns a container announces it`() {
+        val source = popupSource()
+        val providers = Regex("""CompositionLocalProvider\(LocalChromeContainer provides """)
+            .findAll(source).count()
+        val hosts = Regex("""^fun Norfold(PopupCard|DropdownMenu|Dialog|BottomSheet|ContentDialog|FullscreenDialog)\(""", RegexOption.MULTILINE)
+            .findAll(source).map { it.groupValues[1] }.toList()
+
+        assertEquals(
+            "the six hosts in NorfoldPopup.kt",
+            listOf("PopupCard", "DropdownMenu", "Dialog", "BottomSheet", "ContentDialog", "FullscreenDialog"),
+            hosts,
+        )
+        assertEquals(
+            "five of the six hosts must provide LocalChromeContainer — a host that owns a container and does " +
+                "not announce it has its chrome solved against the page, and loses the elevation tint gate too",
+            5,
+            providers,
+        )
+        assertTrue(
+            "NorfoldFullscreenDialog is the one host with no provider, because one of its two callers fills " +
+                "Color.Black — if it gained one, that decision needs stating rather than inheriting",
+            source.substringAfter("fun NorfoldFullscreenDialog(").let { !it.contains("LocalChromeContainer") },
+        )
+    }
+
+    /** The popup/dialog/sheet host file, for the provider invariant that is not reachable from the arithmetic. */
+    private fun popupSource(): String {
+        val relative = "src/main/java/com/norfold/app/ui/components/NorfoldPopup.kt"
+        val candidates = listOf(File(relative), File("apps/android/$relative"))
+        return (candidates.firstOrNull(File::isFile) ?: error("NorfoldPopup.kt not found")).readText()
+    }
+
+    /**
      * The ten accents as `NorfoldTheme` actually hands them to a dark-mode focus ring.
      *
      * `darkScheme` sets `primary = accent.mix(White, 0.35f)`, so the colour the substrate solves from on a dark

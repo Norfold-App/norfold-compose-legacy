@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
@@ -148,6 +149,7 @@ import com.norfold.app.ui.screens.highlightColor
 import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
+import com.norfold.app.domain.style.ColorValue
 import com.norfold.app.ui.editor.style.resolvedTextStyle
 import com.norfold.app.ui.editor.style.WrapperStyleSource
 import com.norfold.app.ui.editor.style.collapsedBlockSpacing
@@ -164,6 +166,7 @@ import com.norfold.app.ui.components.DiagramNodeInput
 import com.norfold.app.ui.components.DiagramEdgeInput
 import com.norfold.app.ui.components.FlowDirection
 import com.norfold.app.ui.components.MermaidDiagramCodec
+import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.domain.style.resolvedShapeFill
 import com.norfold.app.domain.style.resolvedShapeStroke
 import com.norfold.app.ui.editor.style.backgroundPaint
@@ -172,6 +175,7 @@ import com.norfold.app.editor.diagram.DiagramEditDocumentJson
 import com.norfold.app.editor.diagram.DiagramNodePosition
 import java.io.ByteArrayInputStream
 import kotlin.math.roundToInt
+import com.norfold.app.ui.asColor
 import com.norfold.app.ui.rememberChromeFocus
 
 /**
@@ -782,10 +786,7 @@ private fun FlowMathBlock(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (context.editing && !context.selectionMode) {
-                Row(Modifier.fillMaxWidth()) {
-                    FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
-                    FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
-                }
+                FlowRenderableTabs(mode = mode, onSelect = { mode = it })
             }
             if (mode == FlowRenderableMode.Source && context.editing) {
                 FlowEditableLine(
@@ -860,13 +861,7 @@ private fun FlowHtmlBlock(
             Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .62f)),
-            ) {
-                FlowRenderableTab("Source", mode == FlowRenderableMode.Source, { mode = FlowRenderableMode.Source }, Modifier.weight(1f))
-                FlowRenderableTab("Preview", mode == FlowRenderableMode.Preview, { mode = FlowRenderableMode.Preview }, Modifier.weight(1f))
-            }
+            FlowRenderableTabs(mode = mode, onSelect = { mode = it })
             Box(
                 Modifier.fillMaxWidth()
                     .heightIn(min = 180.dp, max = FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
@@ -1005,26 +1000,13 @@ private fun FlowMermaidBlock(
         },
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)),
-        ) {
-            FlowRenderableTab(
-                label = "Source",
-                selected = effectiveMode == FlowRenderableMode.Source,
-                onClick = { mode = FlowRenderableMode.Source },
-                modifier = Modifier.weight(1f),
-            )
-            FlowRenderableTab(
-                label = "Preview",
-                selected = effectiveMode == FlowRenderableMode.Preview,
-                enabled = model != null,
-                onClick = { mode = FlowRenderableMode.Preview },
-                modifier = Modifier.weight(1f),
-            )
-        }
+        FlowRenderableTabs(
+            mode = effectiveMode,
+            onSelect = { mode = it },
+            // Unsupported Mermaid has no model to render, so Preview would show a blank pane presented as a
+            // renderer success. The tab states that it is unavailable rather than the pane implying failure.
+            previewEnabled = model != null,
+        )
         Box(
             Modifier
                 .fillMaxWidth()
@@ -1073,17 +1055,44 @@ private fun FlowMermaidBlock(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(defaultColor, "#00897B", "#1565C0", "#EF6C00").distinct().forEach { color ->
-                        Box(
-                            Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
-                                .background(Color(android.graphics.Color.parseColor(color)))
-                                .clickable {
-                                    val next = model.copy(nodes = model.nodes.map { if (it.id == selected.id) it.copy(color = color) else it })
-                                    val encoded = MermaidDiagramCodec.encode(next, defaultColor)
-                                    callbacks.onEdit(FlowTextEdit(block.id, null, block.code, encoded, encoded.length))
-                                }
-                                .semantics { contentDescription = "Set node color $color" },
+                // Each colour paired with what it *is*, and the name travelling with the colour rather than
+                // sitting in a parallel list: `distinctBy` drops entries, so on a theme whose `primary` is
+                // already one of the three fixed hues, names indexed alongside would shift and every swatch
+                // after the collision would announce the wrong one. Diagram Builder's node card, which offers
+                // this same choice from a sheet, records the same reasoning.
+                val nodePalette = listOf(
+                    defaultColor to "Theme primary",
+                    "#00897B" to "Teal",
+                    "#1565C0" to "Blue",
+                    "#EF6C00" to "Orange",
+                ).distinctBy { (hex, _) -> hex.uppercase() }
+                Text("Node color", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    // `selectableGroup`, so a reader hears one exclusive choice rather than four independent
+                    // toggles that happen to sit in a row.
+                    Modifier.selectableGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    nodePalette.forEach { (hex, name) ->
+                        NorfoldColorSwatch(
+                            // The domain parse, not `android.graphics.Color.parseColor`: that one throws on a
+                            // malformed string, and this one returns null and is locale-independent. Nothing
+                            // reaching it here is malformed — all four hexes are formed in this file — so this
+                            // is the right parse rather than a crash being fixed.
+                            color = ColorValue.parseHex(hex)?.asColor() ?: MaterialTheme.colorScheme.primary,
+                            // The three things this row did not do before: state which colour is chosen, say
+                            // what any of them are, and draw an edge so a swatch matching the surface behind it
+                            // is still a swatch.
+                            selected = selected.color.equals(hex, ignoreCase = true),
+                            label = name,
+                            onClick = {
+                                val next = model.copy(nodes = model.nodes.map { if (it.id == selected.id) it.copy(color = hex) else it })
+                                val encoded = MermaidDiagramCodec.encode(next, defaultColor)
+                                callbacks.onEdit(FlowTextEdit(block.id, null, block.code, encoded, encoded.length))
+                            },
+                            // Diagram Builder draws 36 dp for this same palette. The row keeps the height it
+                            // had either way: the swatch reserves 48 dp of layout whatever it draws inside it.
+                            size = 36f,
                         )
                     }
                 }
@@ -1134,20 +1143,87 @@ private fun FlowMermaidBlock(
     }
 }
 
+/**
+ * The Source/Preview switch, as one control rather than as three assemblies of two tabs.
+ *
+ * Three blocks offer this same choice — an equation, an HTML embed and a diagram — and each built the bar
+ * itself. Two of the three clipped an 8 dp track and filled it with `surfaceVariant` at 62%; the equation's
+ * bar was a bare `Row` with no track at all, so its unselected tab was a label on the page rather than the
+ * unselected half of a switch. That is the difference between "Preview is available" and "Preview is a word
+ * printed here", and it was invisible as a diff because the missing background was 40 lines from the other two.
+ *
+ * ## Focus
+ *
+ * Hoisting the bar is also what makes the ring measurable. A tab's ring is drawn either on the tab's own
+ * `surface` fill when selected or on the track when not, and the track is a *translucent* colour — the one
+ * case [com.norfold.app.ui.NorfoldChrome.focusRing] cannot measure directly. The bar owns the track, so it is
+ * the only place that can hand the tab the colour it is actually drawn on; a tab reading
+ * `MaterialTheme.colorScheme` for itself would have to guess at what its parent painted, and the equation's
+ * bar proves the parents did not agree.
+ */
+@Composable
+private fun FlowRenderableTabs(
+    mode: FlowRenderableMode,
+    onSelect: (FlowRenderableMode) -> Unit,
+    modifier: Modifier = Modifier,
+    previewEnabled: Boolean = true,
+) {
+    val track = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(track),
+    ) {
+        FlowRenderableTab(
+            label = "Source",
+            selected = mode == FlowRenderableMode.Source,
+            track = track,
+            onClick = { onSelect(FlowRenderableMode.Source) },
+            modifier = Modifier.weight(1f),
+        )
+        FlowRenderableTab(
+            label = "Preview",
+            selected = mode == FlowRenderableMode.Preview,
+            track = track,
+            enabled = previewEnabled,
+            onClick = { onSelect(FlowRenderableMode.Preview) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 @Composable
 private fun FlowRenderableTab(
     label: String,
     selected: Boolean,
+    track: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
+    val focus = rememberChromeFocus()
     Box(
         modifier
             .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (selected) MaterialTheme.colorScheme.surface else Color.Transparent)
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(
+                interactionSource = focus.source,
+                // `LocalIndication.current` rather than `ripple()`, matching every other ringed control in
+                // this file: nothing here provides a `LocalIndication`, and the overload without an
+                // `interactionSource` resolves indication from that composition local. Naming the ripple
+                // would change these six tabs' press feedback as a side effect of adding a focus ring.
+                indication = androidx.compose.foundation.LocalIndication.current,
+                enabled = enabled,
+                onClick = onClick,
+            )
+            // 8 dp is the tab's own radius, not one of the substrate's three tiers, so the ring is derived
+            // from what this control actually draws. The backdrop is the pixel the ring lands on: the tab's
+            // opaque `surface` fill when selected, and the bar's translucent track when not — the substrate
+            // composites that onto the page before it measures, which is the whole reason the track has to
+            // arrive as a parameter rather than be assumed.
+            .then(focus.ringOnShape(8f, if (selected) MaterialTheme.colorScheme.surface else track))
             .semantics {
                 role = Role.Button
                 stateDescription = if (selected) "$label selected" else "$label not selected"

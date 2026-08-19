@@ -1452,6 +1452,26 @@ private fun FlowCommandChip(
     FlowDockButton(item.label, icon, { onCommand(item) }, modifier, item.enabled, showLabel, selected = item.active || item.mixed)
 }
 
+/**
+ * One button in the floating editor dock.
+ *
+ * ## Focus
+ *
+ * Ten call sites plus every [FlowCommandChip], which makes this the largest single focus win in the editor:
+ * the whole dock — insert, the formatting chips, move, duplicate, delete, more — reaches the user through
+ * this one composable. Its 14 dp radius is already the substrate's `Corner.Media` exactly, so the ring is
+ * derived from the tier rather than from a repeated literal.
+ *
+ * The ring is measured against the *dock's* fill, not the page, and this is the case the surface's own KDoc
+ * warns about from the other direction: the dock floats over arbitrary document content, so no ratio against
+ * the page could be claimed honestly — but a *button inside* the dock is not over the document at all. It is
+ * drawn on the dock's opaque `surface`, or on `secondaryContainer` when selected, and those are colours the
+ * measurement can use. Passing the page here would grade the ring against a pixel it is never drawn on, which
+ * is exactly the defect [com.norfold.app.ui.ChromeFocus.ringOnCircle] documents.
+ *
+ * Inward, because the buttons are packed 2 dp apart inside a capsule that clips them: an outward ring would
+ * be drawn where the clip deletes it or on top of the neighbour.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FlowDockButton(
@@ -1468,6 +1488,9 @@ private fun FlowDockButton(
         label.equals("Delete", ignoreCase = true) -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.onSurface
     }
+    val fill =
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
+    val focus = rememberChromeFocus()
     TooltipBox(
         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
         tooltip = { PlainTooltip { Text(label) } },
@@ -1476,9 +1499,19 @@ private fun FlowDockButton(
         Column(
             modifier
                 .heightIn(min = 54.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(ChromeGeometry.Corner.Media.radiusDp.dp))
                 .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                .clickable(enabled = enabled, onClick = onClick)
+                .clickable(
+                    interactionSource = focus.source,
+                    // `LocalIndication.current`, not `ripple()`, for the reason the block row above states:
+                    // this file provides no `LocalIndication`, and the `clickable` overload this replaces
+                    // resolved its indication from that local. Naming the ripple here instead would change
+                    // the press feedback of every dock button as a side effect of adding a focus ring.
+                    indication = androidx.compose.foundation.LocalIndication.current,
+                    enabled = enabled,
+                    onClick = onClick,
+                )
+                .then(focus.ring(ChromeGeometry.Corner.Media, backdrop = fill))
                 .padding(horizontal = 2.dp, vertical = if (showLabel) 4.dp else 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -1554,12 +1587,36 @@ private fun FlowSlashMenu(
         HorizontalDivider()
         LazyColumn(Modifier.heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT)) {
             itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
+                val rowFocus = rememberChromeFocus()
+                // Highlight and focus are two signals here, and on this list they routinely disagree: the
+                // highlight tracks the rail's own keyboard cursor (`rail.focusedIndex`) or the slash
+                // session's `selectedIndex`, which move with typing, while Compose focus moves with Tab.
+                // So the ring cannot borrow the highlight's `secondaryContainer` tint — it has to be its
+                // own mark, measured against whichever of the two fills this row is actually painted with.
+                val rowFill = if (index == highlighted) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    // `surfaceContainerLow`, because that is what `ElevatedCard` fills itself with:
+                    // `ElevatedCardTokens.ContainerColor` is `SurfaceContainerLow`, and `Card` passes only
+                    // `shadowElevation` to its `Surface` — never `tonalElevation` — so the container colour
+                    // reaches the pixel unmodified. An unhighlighted row paints nothing of its own, so the
+                    // card's fill is what the ring is drawn on.
+                    MaterialTheme.colorScheme.surfaceContainerLow
+                }
                 Column(
                     Modifier
                         .fillMaxWidth()
                         .semantics { selected = index == highlighted }
                         .background(if (index == highlighted) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, RoundedCornerShape(10.dp))
-                        .clickable(enabled = row.enabled, onClick = { onPick(row.id) })
+                        .clickable(
+                            interactionSource = rowFocus.source,
+                            indication = androidx.compose.foundation.LocalIndication.current,
+                            enabled = row.enabled,
+                            onClick = { onPick(row.id) },
+                        )
+                        // 10 dp, matching the radius the `background` above draws — the row has no `clip`,
+                        // and an inward ring does not need one, because the card already clips the list.
+                        .then(rowFocus.ringOnShape(10f, rowFill))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     Text(
@@ -1765,6 +1822,20 @@ private fun FlowEditorStyleSurface(
     }
 }
 
+/**
+ * The Insert / Turn-into catalogue, as a flat list of picks.
+ *
+ * ## Focus
+ *
+ * These rows had no clip, no fill and no ring — nothing at all to see when focus arrived, on a list that can
+ * run to dozens of entries. They get a ring at the substrate's `Corner.Media`, which also gives them the
+ * rounded press target the list always implied.
+ *
+ * The ring is measured against `surfaceContainerLow`, and that one colour covers both of this list's two
+ * hosts rather than being a guess at either: `SheetBottomTokens.DockedContainerColor` and
+ * `ElevatedCardTokens.ContainerColor` both resolve to `SurfaceContainerLow`, so the phone's
+ * `ModalBottomSheet` and the tablet's `ElevatedCard` paint the same pixel under these rows.
+ */
 @Composable
 private fun FlowPaletteList(
     heading: String,
@@ -1773,6 +1844,7 @@ private fun FlowPaletteList(
     compact: Boolean,
     onPick: (FlowCommandItem) -> Unit,
 ) {
+    val hostFill = MaterialTheme.colorScheme.surfaceContainerLow
     Column(Modifier.padding(bottom = 24.dp)) {
         Text(
             heading,
@@ -1786,10 +1858,17 @@ private fun FlowPaletteList(
             if (compact) Modifier.heightIn(max = FLOW_COMPACT_LIST_MAX_HEIGHT) else Modifier,
         ) {
             items(ordered, key = { it.id }) { item ->
+                val rowFocus = rememberChromeFocus()
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .clickable(onClick = { onPick(item) })
+                        .clip(RoundedCornerShape(ChromeGeometry.Corner.Media.radiusDp.dp))
+                        .clickable(
+                            interactionSource = rowFocus.source,
+                            indication = androidx.compose.foundation.LocalIndication.current,
+                            onClick = { onPick(item) },
+                        )
+                        .then(rowFocus.ring(ChromeGeometry.Corner.Media, backdrop = hostFill))
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

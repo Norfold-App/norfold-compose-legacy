@@ -186,6 +186,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
+import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.NorfoldContentDialog
 import androidx.compose.ui.unit.IntOffset
@@ -3938,6 +3939,32 @@ private fun ReportMessageDialog(
     }
 }
 
+/**
+ * One action in the message long-press menu.
+ *
+ * Routed through [ChoiceRow] rather than carrying its own chain, because it is that population exactly: a
+ * full-width band inside a container, one `onClick` over the whole width, interior padding, ten instances. It
+ * had no `clip` at all, so a ring drawn on it would have had no radius to be concentric with — taking the
+ * shared row supplies the clip and the ring together, and at the tier the rest of the app's rows use.
+ *
+ * The 20 dp horizontal padding is kept as content padding rather than moved to the card: it is wider than the
+ * card's own inset, and moving it would shift all ten labels.
+ *
+ * **This row is why [NorfoldContentDialog] now provides `LocalChromeContainer`.** These ten sit on a `Surface`
+ * at 4 dp of tonal elevation, which on this app is a wash of the user's accent, and the dialog hosting them
+ * announced no container — so the ring was solved against the page *behind* the dialog and drawn on the tinted
+ * card. At 4 dp that put **2 of the 10 shipped accents under WCAG 1.4.11's 3:1, floor 2.8816:1 (Sunset)**.
+ * Passing an explicit backdrop here would have fixed these ten rows and left the dialog's other callers wrong,
+ * so the fix is at the dialog. Nothing about that is visible at this call site, which is the point: the row
+ * states its geometry and the host states its colour.
+ *
+ * **[destructive] does not change the ring.** The two destructive actions — reporting and unsending — tint
+ * their icon and label with `error`, and the temptation is to tint the ring to match. That would be a mistake
+ * of category: the label says what the action costs, and the ring says only where focus is. A user tabbing
+ * through ten rows needs the *same* mark in all ten places, or the mark stops meaning "you are here" and
+ * starts meaning something they have to interpret. `error` is also the one token whose contrast against this
+ * card is not solved by the substrate, so a ring built from it would be the only unmeasured ring in the app.
+ */
 @Composable
 private fun MessageActionRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -3946,9 +3973,9 @@ private fun MessageActionRow(
     onClick: () -> Unit,
 ) {
     val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    ChoiceRow(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Icon(icon, label, tint = tint, modifier = Modifier.size(20.dp))
@@ -4069,47 +4096,70 @@ private fun ChatAttachmentMosaic(
     Column(Modifier.width(286.dp).clip(RoundedCornerShape(16.dp)), verticalArrangement = Arrangement.spacedBy(gap)) {
         // Row layout: 1→full, 2→side-by-side, 3→one big + two stacked, 4→2×2.
         when (visible.size) {
-            1 -> MosaicTile(visible[0], Modifier.fillMaxWidth().height(200.dp), 0, 0, onOpenAttachment, onResolveAttachment)
+            1 -> MosaicTile(visible[0], Modifier.fillMaxWidth().height(200.dp), 0, onOpenAttachment, onResolveAttachment)
             2 -> Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                MosaicTile(visible[0], Modifier.weight(1f).height(160.dp), 0, 0, onOpenAttachment, onResolveAttachment)
-                MosaicTile(visible[1], Modifier.weight(1f).height(160.dp), 0, 0, onOpenAttachment, onResolveAttachment)
+                MosaicTile(visible[0], Modifier.weight(1f).height(160.dp), 0, onOpenAttachment, onResolveAttachment)
+                MosaicTile(visible[1], Modifier.weight(1f).height(160.dp), 0, onOpenAttachment, onResolveAttachment)
             }
             3 -> Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                MosaicTile(visible[0], Modifier.weight(1.5f).height(200.dp), 0, 0, onOpenAttachment, onResolveAttachment)
+                MosaicTile(visible[0], Modifier.weight(1.5f).height(200.dp), 0, onOpenAttachment, onResolveAttachment)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(gap)) {
-                    MosaicTile(visible[1], Modifier.fillMaxWidth().height(98.5.dp), 0, 0, onOpenAttachment, onResolveAttachment)
-                    MosaicTile(visible[2], Modifier.fillMaxWidth().height(98.5.dp), 0, 0, onOpenAttachment, onResolveAttachment)
+                    MosaicTile(visible[1], Modifier.fillMaxWidth().height(98.5.dp), 0, onOpenAttachment, onResolveAttachment)
+                    MosaicTile(visible[2], Modifier.fillMaxWidth().height(98.5.dp), 0, onOpenAttachment, onResolveAttachment)
                 }
             }
             else -> {
                 Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                    MosaicTile(visible[0], Modifier.weight(1f).height(120.dp), 0, 0, onOpenAttachment, onResolveAttachment)
-                    MosaicTile(visible[1], Modifier.weight(1f).height(120.dp), 0, 0, onOpenAttachment, onResolveAttachment)
+                    MosaicTile(visible[0], Modifier.weight(1f).height(120.dp), 0, onOpenAttachment, onResolveAttachment)
+                    MosaicTile(visible[1], Modifier.weight(1f).height(120.dp), 0, onOpenAttachment, onResolveAttachment)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                    MosaicTile(visible[2], Modifier.weight(1f).height(120.dp), 0, 0, onOpenAttachment, onResolveAttachment)
-                    MosaicTile(visible[3], Modifier.weight(1f).height(120.dp), overflow, 0, onOpenAttachment, onResolveAttachment)
+                    MosaicTile(visible[2], Modifier.weight(1f).height(120.dp), 0, onOpenAttachment, onResolveAttachment)
+                    MosaicTile(visible[3], Modifier.weight(1f).height(120.dp), overflow, onOpenAttachment, onResolveAttachment)
                 }
             }
         }
     }
 }
 
+/**
+ * One thumbnail in the mosaic.
+ *
+ * ## Focus
+ *
+ * The photograph fills the tile edge to edge, so the ring is drawn on arbitrary imagery. Measured against the
+ * tile's declared fill anyway — `Color.Black` for a video frame, `surfaceVariant` for a still — for the reason
+ * [ChatOnlineVideoCard] states: a thumbnail cannot be graded, and the fill is what the tile is declared to be.
+ * A video tile is the honest case of the two, since a dark frame under a ring solved against black stays
+ * legible; a light photograph on the `surfaceVariant` tile is where the claim is weakest, and only a device
+ * pass over real attachments can settle it.
+ *
+ * @param overflow how many attachments this batch hides beyond the four shown, drawn as a "+N" scrim. Only
+ *   the last tile ever passes a non-zero value.
+ */
 @Composable
 private fun MosaicTile(
     chat: ChatMessageItem,
     modifier: Modifier,
     overflow: Int,
-    @Suppress("UNUSED_PARAMETER") unused: Int,
     onOpenAttachment: (ChatMessageItem) -> Unit,
     onResolveAttachment: suspend (ChatMessageItem) -> String?,
 ) {
     val source by produceState<String?>(initialValue = null, chat.attachmentUri) { value = onResolveAttachment(chat) }
     val isVideo = chat.attachmentMimeType?.startsWith("video/") == true
+    val fill = if (isVideo) Color.Black else MaterialTheme.colorScheme.surfaceVariant
+    val focus = rememberChromeFocus()
     Box(
         modifier.clip(RoundedCornerShape(4.dp))
-            .background(if (isVideo) Color.Black else MaterialTheme.colorScheme.surfaceVariant)
-            .clickable { onOpenAttachment(chat) },
+            .background(fill)
+            .clickable(
+                interactionSource = focus.source,
+                indication = androidx.compose.material3.ripple(),
+                // The tile is a picture with no visible label, so what activation *does* was never stated.
+                onClickLabel = if (isVideo) "Play attached video" else "Open attached image",
+                role = androidx.compose.ui.semantics.Role.Button,
+            ) { onOpenAttachment(chat) }
+            .then(focus.ringOnShape(4f, fill)),
         contentAlignment = Alignment.Center,
     ) {
         AsyncImage(
