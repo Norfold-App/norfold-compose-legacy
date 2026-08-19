@@ -50,6 +50,7 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +84,7 @@ import com.norfold.app.ui.components.GlobalSearchBar
 import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.pressScale
 import com.norfold.app.ui.chromeFocusRing
+import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.domain.style.ChromeGeometry
 
 enum class LibraryKind { Notes, Documents }
@@ -271,28 +273,65 @@ private fun HomeTabs(state: DocsUiState, viewModel: DocsViewModel, kind: Library
 
 @Composable
 private fun ActiveNotebookFilter(name: String, count: Int, itemLabel: String, onClear: () -> Unit) {
+    ActiveFilterBanner("Folder", name, "$count $itemLabel", "Clear notebook filter", onClear)
+}
+
+/**
+ * The "you are filtering by X, tap to stop" banner, written once.
+ *
+ * Notebook and tag filters were two copies of this row differing only in their caption, value and the
+ * accessibility name of the clear button. They are one control, so the focus ring, the touch target and
+ * the click label are decided here rather than twice.
+ *
+ * @param caption the small accent label above the value — "Folder", "Tag filter".
+ * @param value what is being filtered by.
+ * @param count the trailing count, already formatted, because only the caller knows the noun.
+ * @param clearLabel what the clear button is called to a screen reader and to TalkBack's actions menu.
+ */
+@Composable
+private fun ActiveFilterBanner(
+    caption: String,
+    value: String,
+    count: String,
+    clearLabel: String,
+    onClear: () -> Unit,
+) {
+    // A 10% accent wash over the page. The ring is measured on this rather than on `background`, because
+    // this is the pixel it is drawn on; the substrate composites the alpha before grading it.
+    val bannerFill = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+            .background(bannerFill)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Folder", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Text(name, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(caption, color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text(value, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("$count $itemLabel", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Text(count, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        val clearFocus = rememberChromeFocus()
         Icon(
             Icons.Outlined.Close,
-            contentDescription = "Clear notebook filter",
+            contentDescription = clearLabel,
             tint = MaterialTheme.colorScheme.primary,
+            // The glyph stays 28 dp, which was under the 48 dp minimum. The ring sits outside
+            // `minimumInteractiveComponentSize` so it measures the expanded box rather than the glyph, and
+            // `size` comes last so it cannot fight the expansion.
             modifier = Modifier
-                .size(28.dp)
                 .clip(CircleShape)
-                .clickable(onClick = onClear)
+                .clickable(
+                    interactionSource = clearFocus.source,
+                    indication = androidx.compose.material3.ripple(),
+                    onClickLabel = clearLabel,
+                    onClick = onClear,
+                )
+                .then(clearFocus.ringOnCircle(48f, bannerFill))
+                .minimumInteractiveComponentSize()
+                .size(28.dp)
                 .padding(5.dp),
         )
     }
@@ -300,18 +339,7 @@ private fun ActiveNotebookFilter(name: String, count: Int, itemLabel: String, on
 
 @Composable
 private fun ActiveTagFilter(name: String, count: Int, onClear: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("Tag filter", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Text("#$name", fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Text("$count notes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        Icon(Icons.Outlined.Close, "Clear tag filter", Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onClear).padding(5.dp), tint = MaterialTheme.colorScheme.primary)
-    }
+    ActiveFilterBanner("Tag filter", "#$name", "$count notes", "Clear tag filter", onClear)
 }
 
 @Composable

@@ -77,6 +77,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.runtime.Composable
@@ -328,10 +329,32 @@ private fun UnifiedSidebarHeader(
                     )
                 }
                 if (query.isNotEmpty()) {
+                    val clearFocus = rememberChromeFocus()
                     Icon(
                         Icons.Outlined.Close,
                         "Clear search",
-                        Modifier.size(18.dp).clip(CircleShape).clickable { onQueryChange("") },
+                        // The glyph stays 18 dp; `minimumInteractiveComponentSize` grows the *layout* box to
+                        // 48 dp without moving it. Two things depend on that: an 18 dp circle leaves only
+                        // 10 dp inside the ring's inset, too cramped to read as a ring, and the visual box
+                        // was the only thing under 48 dp — `clickable` already gets touch expansion from the
+                        // system, but the system does not enlarge the box a ring is drawn in.
+                        //
+                        // Order matters and is not cosmetic. The ring sits *outside*
+                        // `minimumInteractiveComponentSize` so its draw scope measures the expanded 48 dp
+                        // box; inside, it would measure the 18 dp glyph and draw a ring far too small. And
+                        // `size` comes last, per the modifier's own contract, so it cannot fight the
+                        // expansion.
+                        Modifier
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = clearFocus.source,
+                                indication = ripple(),
+                                onClickLabel = "Clear search",
+                                onClick = { onQueryChange("") },
+                            )
+                            .then(clearFocus.ringOnCircle(48f, MaterialTheme.colorScheme.surface))
+                            .minimumInteractiveComponentSize()
+                            .size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
@@ -1252,10 +1275,25 @@ private fun DocTableOfContents(documentKey: String, document: BlockDocument, loc
                     )
                 }
                 if (query.isNotEmpty()) {
+                    val clearFilterFocus = rememberChromeFocus()
                     Icon(
                         Icons.Outlined.Close,
                         "Clear filter",
-                        Modifier.size(16.dp).clip(CircleShape).clickable { query = "" },
+                        // Same treatment as the search field's clear button above, and for the same reason:
+                        // 16 dp leaves 8 dp inside the ring inset, which does not read as a ring. The ring
+                        // sits outside `minimumInteractiveComponentSize` so it measures the expanded box,
+                        // and `size` comes last so it does not fight the expansion.
+                        Modifier
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = clearFilterFocus.source,
+                                indication = ripple(),
+                                onClickLabel = "Clear filter",
+                                onClick = { query = "" },
+                            )
+                            .then(clearFilterFocus.ringOnCircle(48f, MaterialTheme.colorScheme.surface))
+                            .minimumInteractiveComponentSize()
+                            .size(16.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
