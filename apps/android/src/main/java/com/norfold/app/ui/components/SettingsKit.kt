@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -45,7 +44,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.rememberChromeFocus
 
@@ -351,56 +349,30 @@ fun OptionPickerDialog(
 /**
  * A colored dot for the accent-picker row.
  *
- * ## Focus, on a target that is nothing but a colour
+ * ## Why this is a thin wrapper and not an implementation
  *
- * Every other ringed component in the app has chrome the ring can be measured against. This one is a 30 dp
- * disc of arbitrary user-chosen colour, which breaks two of the substrate's defaults at once.
+ * It was an implementation — the first of what turned out to be **ten** hand-rolled colour swatches in the
+ * app, and the one whose focus problem was solved first. That reasoning now lives in [NorfoldColorSwatch],
+ * because it is not specific to Settings: a ring drawn on a swatch must be measured against the swatch's fill
+ * rather than the page, and its inset must clear the 2.5 dp border this control draws when selected. Both are
+ * the shared component's job now.
  *
- * **The ring cannot be measured against the page.** It is drawn on the swatch, so the swatch's own fill is
- * the adjacent colour WCAG 1.4.11 asks about — and the default ring colour is `primary`, the currently
- * selected accent, which is the exact fill of the currently selected swatch. Measured against the page and
- * drawn on the swatch, the ring on the selected dot would sit at 1.00:1 against what it is actually drawn
- * on: invisible, on the one swatch a keyboard user is most likely to reach first. `ringOnCircle` measures
- * against the fill instead, so the ring resolves light on a dark accent and dark on a light one.
+ * Collapsing it fixed two things this version got wrong, both measured:
  *
- * **The ring cannot use the default inset**, because this component states selection with a 2.5 dp border at
- * its own boundary — heavier than the substrate's 1 dp edge, which is what the default inset is derived to
- * clear. At 3 dp the ring's outer edge would land half a dp inside that border and the two would merge into
- * one thick stroke, saying "selected" where it should say "focused". [ChromeGeometry.focusRingInsetOver]
- * clears the real boundary and then leaves the gap.
+ * **It drew no resting edge, so two of the ten accents are nearly invisible.** WCAG 1.4.11 asks 3:1 of a
+ * control's boundary, and a bare disc has no boundary but its fill. Gold (`#E08A12`) measures **2.69:1** on
+ * the white settings card, and Graphite (`#33374A`) measures **1.58:1** on the dark surface — the accent a
+ * dark-theme user is most likely to want is the one that disappears. The shared component's unconditional
+ * [NorfoldChrome.restingEdge] is solved against the fill, so it resolves light on Graphite and dark on Gold.
  *
- * The radius comes from the size rather than from a [Corner] tier for the ordinary reason that a circle's
- * radius is half its own size, and no fixed tier is right for both a 30 dp swatch and a 46 dp avatar.
+ * **None of the six dots had a name.** The row rendered six unlabelled circles: a screen reader announced six
+ * identical buttons, so the accent picker was operable without sight only by trial and error. [BrandPalette]
+ * has carried a `displayName` since it was written; the caller passes it.
+ *
+ * The dot keeps its own 30 dp diameter, which is [SwatchSize] exactly — the two numbers agreed before they
+ * were shared, which is part of why this was the right component to generalise from.
  */
 @Composable
-fun AccentDot(color: Color, selected: Boolean, onClick: () -> Unit) {
-    val focus = rememberChromeFocus()
-    Box(
-        Modifier
-            .size(AccentDotSize.dp)
-            .clip(CircleShape)
-            .background(color)
-            .then(
-                if (selected) Modifier.border(SelectedSwatchBorder.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
-                else Modifier,
-            )
-            .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
-            .then(
-                focus.ringOnCircle(
-                    sizeDp = AccentDotSize,
-                    surface = color,
-                    boundaryWidthDp = if (selected) SelectedSwatchBorder else ChromeGeometry.RESTING_EDGE_WIDTH,
-                ),
-            ),
-    )
+fun AccentDot(color: Color, selected: Boolean, label: String, onClick: () -> Unit) {
+    NorfoldColorSwatch(color = color, selected = selected, label = label, onClick = onClick)
 }
-
-/** The swatch diameter, named because the focus ring's radius is derived from it. */
-private const val AccentDotSize = 30f
-
-/**
- * The weight this component draws at its own boundary when selected.
- *
- * Named for the same reason: the focus ring's inset has to clear it, so the two numbers cannot drift apart.
- */
-private const val SelectedSwatchBorder = 2.5f

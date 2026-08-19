@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -32,8 +34,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import com.norfold.app.ui.components.NorfoldBottomSheet
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.ripple
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -55,6 +61,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.NorfoldChrome
+import com.norfold.app.ui.asColorValue
+import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ChartBuilderModel
 import com.norfold.app.domain.ChartDataRow
@@ -81,16 +91,23 @@ fun ChartBuilderSheet(
     val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
     val themeDefaultColor = colorScheme.primary.toRgbHex()
+    /**
+     * The theme colours a chart may be drawn in, each paired with what it *is*.
+     *
+     * The name travels with the colour rather than in a parallel list, because `distinctBy` drops entries —
+     * on a theme where `secondary` equals `primary`, a list of names indexed alongside would silently shift
+     * and every swatch after the collision would announce the wrong one.
+     */
     val themeChartColors = remember(colorScheme) {
         listOf(
-            colorScheme.primary,
-            colorScheme.secondary,
-            colorScheme.tertiary,
-            colorScheme.error,
-            colorScheme.primaryContainer,
-            colorScheme.secondaryContainer,
-            colorScheme.tertiaryContainer,
-        ).distinctBy(Color::toArgb)
+            NamedColor(colorScheme.primary, "Primary"),
+            NamedColor(colorScheme.secondary, "Secondary"),
+            NamedColor(colorScheme.tertiary, "Tertiary"),
+            NamedColor(colorScheme.error, "Error"),
+            NamedColor(colorScheme.primaryContainer, "Primary container"),
+            NamedColor(colorScheme.secondaryContainer, "Secondary container"),
+            NamedColor(colorScheme.tertiaryContainer, "Tertiary container"),
+        ).distinctBy { it.color.toArgb() }
     }
     val initial = remember(initialSpec) { ChartSpecCodec.decode(initialSpec) }
     var type by remember(initialSpec) { mutableStateOf(initial.type) }
@@ -165,10 +182,16 @@ fun ChartBuilderSheet(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Legend", Modifier.weight(1f)); Switch(legend, { legend = it })
             }
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                themeChartColors.forEach { candidateColor ->
-                    val candidate = candidateColor.toRgbHex()
-                    Spacer(Modifier.size(34.dp).clip(CircleShape).background(candidateColor).clickable { color = candidate }.then(if (color == candidate) Modifier.padding(4.dp).background(MaterialTheme.colorScheme.surface, CircleShape) else Modifier))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                themeChartColors.forEach { candidate ->
+                    val hex = candidate.color.toRgbHex()
+                    NorfoldColorSwatch(
+                        color = candidate.color,
+                        selected = color == hex,
+                        label = candidate.name,
+                        onClick = { color = hex },
+                        size = 34f,
+                    )
                 }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -206,39 +229,79 @@ fun ChartBuilderSheet(
     }
 }
 
+/**
+ * The per-row colour override: a disc showing the row's current colour, which opens a menu.
+ *
+ * **Not a [NorfoldColorSwatch]**, despite looking like one. A swatch is one option among several and
+ * announces itself as a radio button; this is a single button that opens a menu, so it takes the ring and the
+ * boundary from the same reasoning but keeps button semantics and a label describing the *action*.
+ *
+ * The fallback fill is the chart accent at 35% alpha, which is why the boundary is solved rather than picked:
+ * [NorfoldChrome.restingEdge] composites the translucent fill onto the page before measuring it, so the edge
+ * is graded against the pixel actually painted rather than against a colour that is never drawn.
+ */
 @Composable
 private fun RowColorSwatch(
     rowColor: String,
-    palette: List<Color>,
+    palette: List<NamedColor>,
     fallback: Color,
     onChange: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     val current = runCatching { Color(android.graphics.Color.parseColor(rowColor)) }.getOrNull()
+    val fill = current ?: fallback.copy(alpha = .35f)
+    val focus = rememberChromeFocus()
     Box {
-        Spacer(
+        Box(
+            // The ring sits outside `minimumInteractiveComponentSize` so it measures the expanded 48 dp box
+            // rather than the 30 dp disc, and `size` comes last so it cannot fight that expansion.
             Modifier
-                .size(30.dp)
+                .then(focus.ringOnCircle(RowSwatchSize, fill))
+                .minimumInteractiveComponentSize()
+                .size(RowSwatchSize.dp)
                 .clip(CircleShape)
-                .background(current ?: fallback.copy(alpha = .35f))
-                .clickable { open = true },
+                .background(fill)
+                .border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(fill) }, CircleShape)
+                .clickable(
+                    interactionSource = focus.source,
+                    indication = ripple(),
+                    // Names the colour as well as the action: the disc is the only thing stating which colour
+                    // this row draws in, so a listener who cannot see it would otherwise have no way to know.
+                    onClickLabel = "Change row color",
+                    onClick = { open = true },
+                )
+                .semantics {
+                    contentDescription = if (current == null) {
+                        "Row color: chart default"
+                    } else {
+                        "Row color: ${current.asColorValue().accessibleLabel()}"
+                    }
+                },
         )
         NorfoldDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
                 text = { Text("Default") },
-                leadingIcon = { Spacer(Modifier.size(22.dp).clip(CircleShape).background(fallback.copy(alpha = .35f))) },
+                leadingIcon = { NorfoldColorDot(fallback.copy(alpha = .35f)) },
                 onClick = { onChange(""); open = false },
             )
             palette.forEach { candidate ->
                 DropdownMenuItem(
-                    text = { Text(candidate.toRgbHex()) },
-                    leadingIcon = { Spacer(Modifier.size(22.dp).clip(CircleShape).background(candidate)) },
-                    onClick = { onChange(candidate.toRgbHex()); open = false },
+                    // The name, not the hex. `#FF6750A4` is accurate and tells a listener nothing, and the
+                    // dot beside it is decorative — this text is the only thing naming the option.
+                    text = { Text(candidate.name) },
+                    leadingIcon = { NorfoldColorDot(candidate.color) },
+                    onClick = { onChange(candidate.color.toRgbHex()); open = false },
                 )
             }
         }
     }
 }
+
+/** A colour paired with what it is, so a swatch showing it can be described rather than spelled in hex. */
+private data class NamedColor(val color: Color, val name: String)
+
+/** The row-override trigger's diameter, named because the focus ring's radius derives from it. */
+private const val RowSwatchSize = 30f
 
 @Composable
 private fun VisualChartComposer(

@@ -34,6 +34,8 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -86,6 +88,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -102,6 +105,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -869,9 +875,12 @@ private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
             val accentProfiles = listOf(ThemeProfile.Norfold) + ThemeProfile.entries.filter { it != ThemeProfile.Norfold }
             SettingsGroup {
                 Column {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         accentProfiles.take(6).forEach { profile ->
-                            AccentDot(profile.palette().accent, profile == state.settings.themeProfile) { viewModel.setThemeProfile(profile) }
+                            val palette = profile.palette()
+                            // The palette's own name. `BrandPalette` has carried one since it was written, and
+                            // without it the row announced six identical unlabelled buttons.
+                            AccentDot(palette.accent, profile == state.settings.themeProfile, palette.displayName) { viewModel.setThemeProfile(profile) }
                         }
                         Spacer(Modifier.weight(1f))
                         Text(
@@ -2650,22 +2659,63 @@ private fun formatDiagnosticsBytes(bytes: Long): String = when {
     else -> "${bytes / (1024 * 1024)} MB"
 }
 
+/**
+ * The full ten-palette grid, shown when the accent row's "More" is expanded.
+ *
+ * ## Not a [com.norfold.app.ui.components.NorfoldColorSwatch], and why
+ *
+ * Every other colour picker in the app collapsed into that component. This one cannot: a tile is a rounded
+ * square painted with a *three-stop gradient*, not a disc of one colour, and it is showing a whole palette
+ * rather than a single value. The swatch's contract — one [Color], a circle, a resting edge solved against
+ * that colour — has nothing to say about a gradient.
+ *
+ * So it borrows the reasoning instead of the code. The ring is drawn on the tile, so it is measured against
+ * the tile's own paint rather than the settings card behind it; `c2` is the middle stop and the closest single
+ * colour to what the ring actually sits on. The inset clears the 3 dp border the tile draws when selected, so
+ * the ring reads as focus rather than thickening the selection.
+ *
+ * The tick already stated selection visually. It now also states it to a reader: `Role.RadioButton` inside a
+ * `selectableGroup`, where before this grid had no semantics at all — ten identically-unlabelled tiles.
+ */
 @Composable
 private fun PaletteGrid(selected: ThemeProfile, onSelect: (ThemeProfile) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().selectableGroup()) {
         ThemeProfile.entries.toList().chunked(4).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { profile ->
                     val p = profile.palette()
                     val isSel = profile == selected
+                    val focus = rememberChromeFocus()
                     Box(
                         Modifier.weight(1f).aspectRatio(1f).clip(RoundedCornerShape(14.dp))
                             .background(Brush.linearGradient(listOf(p.c1, p.c2, p.c3)))
                             .border(if (isSel) 3.dp else 0.dp, if (isSel) MaterialTheme.colorScheme.onSurface else Color.Transparent, RoundedCornerShape(14.dp))
-                            .clickable { onSelect(profile) },
+                            .then(
+                                focus.ringOnShape(
+                                    containerRadiusDp = 14f,
+                                    // The middle gradient stop: the ring is drawn on the tile, so the tile's
+                                    // paint is what the 3:1 is measured against, not the card behind it.
+                                    surface = p.c2,
+                                    // Only the selected tile draws a boundary — 3 dp, heavier than the
+                                    // substrate's edge, so the inset has to clear it or the ring merges into
+                                    // the selection border. An unselected tile draws nothing, and
+                                    // `focusRingInsetOver` floors at the default inset for that case.
+                                    boundaryWidthDp = if (isSel) SelectedTileBorder else 0f,
+                                ),
+                            )
+                            .selectable(
+                                selected = isSel,
+                                role = Role.RadioButton,
+                                interactionSource = focus.source,
+                                indication = ripple(),
+                                onClick = { onSelect(profile) },
+                            )
+                            .semantics { contentDescription = p.displayName },
                         contentAlignment = Alignment.Center,
                     ) {
                         if (isSel) Box(Modifier.size(24.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.28f)), contentAlignment = Alignment.Center) {
+                            // Selection is already in the semantics via `selectable`; describing the tick too
+                            // would have the reader announce it twice.
                             Icon(Icons.Outlined.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
                         }
                     }
@@ -2675,6 +2725,9 @@ private fun PaletteGrid(selected: ThemeProfile, onSelect: (ThemeProfile) -> Unit
         }
     }
 }
+
+/** The weight a tile draws at its own boundary when selected, named because the ring's inset must clear it. */
+private const val SelectedTileBorder = 3f
 
 @Composable
 private fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {

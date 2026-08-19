@@ -2,7 +2,6 @@ package com.norfold.app.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -626,6 +625,9 @@ internal object MermaidDiagramCodec {
         .replace("&amp;", "&")
 }
 
+/** A diagram colour paired with what it is, so a swatch showing it can be named rather than numbered. */
+private data class NamedDiagramColor(val color: Color, val name: String)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiagramBuilderSheet(
@@ -635,16 +637,23 @@ fun DiagramBuilderSheet(
 ) {
     val colors = MaterialTheme.colorScheme
     val defaultColor = colors.primary.toDiagramHex()
+    /**
+     * The colours a box may be filled with, each paired with what it *is*.
+     *
+     * The name travels with the colour rather than in a parallel list, because `distinctBy` drops entries: on
+     * a theme where `secondary` equals `primary`, names indexed alongside would shift and every swatch after
+     * the collision would announce the wrong one.
+     */
     val palette = remember(colors) {
         listOf(
-            colors.primary,
-            colors.secondary,
-            colors.tertiary,
-            colors.primaryContainer,
-            colors.secondaryContainer,
-            colors.tertiaryContainer,
-            colors.errorContainer,
-        ).distinctBy(Color::toArgb)
+            NamedDiagramColor(colors.primary, "Primary"),
+            NamedDiagramColor(colors.secondary, "Secondary"),
+            NamedDiagramColor(colors.tertiary, "Tertiary"),
+            NamedDiagramColor(colors.primaryContainer, "Primary container"),
+            NamedDiagramColor(colors.secondaryContainer, "Secondary container"),
+            NamedDiagramColor(colors.tertiaryContainer, "Tertiary container"),
+            NamedDiagramColor(colors.errorContainer, "Error container"),
+        ).distinctBy { it.color.toArgb() }
     }
     val seeded = remember(initialSource) {
         MermaidDiagramCodec.decodeOrDefault(initialSource, defaultColor)
@@ -854,7 +863,7 @@ private fun DiagramPreview(source: String) {
 @Composable
 private fun FlowchartForm(
     model: DiagramBuilderModel,
-    palette: List<Color>,
+    palette: List<NamedDiagramColor>,
     onChange: (DiagramBuilderModel) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -874,7 +883,7 @@ private fun FlowchartForm(
             TextButton(
                 onClick = {
                     val id = MermaidDiagramCodec.nextId(model.nodes.map { it.id }, "Node")
-                    val color = palette[model.nodes.size % palette.size].toDiagramHex()
+                    val color = palette[model.nodes.size % palette.size].color.toDiagramHex()
                     onChange(model.copy(nodes = model.nodes + DiagramNodeInput(id, "New box", color)))
                 },
             ) { Text("+ Box") }
@@ -944,7 +953,7 @@ private fun FlowchartNodeCard(
     index: Int,
     node: DiagramNodeInput,
     canDelete: Boolean,
-    palette: List<Color>,
+    palette: List<NamedDiagramColor>,
     onUpdate: (DiagramNodeInput) -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -990,28 +999,21 @@ private fun FlowchartNodeCard(
                 Text(node.color, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                // `selectableGroup`, so the exclusivity of these seven is announced rather than inferred.
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                palette.forEachIndexed { colorIndex, candidate ->
-                    val hex = candidate.toDiagramHex()
-                    val selected = node.color.equals(hex, ignoreCase = true)
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(candidate)
-                            .clickable { onUpdate(node.copy(color = hex)) }
-                            .semantics {
-                                contentDescription = "Box ${index + 1} color ${colorIndex + 1}${if (selected) ", selected" else ""}"
-                            }
-                            .then(
-                                if (selected) {
-                                    Modifier.padding(5.dp).background(MaterialTheme.colorScheme.surface, CircleShape)
-                                } else {
-                                    Modifier
-                                },
-                            ),
+                palette.forEach { candidate ->
+                    val hex = candidate.color.toDiagramHex()
+                    NorfoldColorSwatch(
+                        color = candidate.color,
+                        selected = node.color.equals(hex, ignoreCase = true),
+                        // Names the colour, not its position. "color 3" describes where the swatch sits in a
+                        // row the listener cannot see; the selected state comes from `Role.RadioButton`, so
+                        // it is no longer appended here either.
+                        label = "Box ${index + 1} ${candidate.name}",
+                        onClick = { onUpdate(node.copy(color = hex)) },
+                        size = 36f,
                     )
                 }
             }

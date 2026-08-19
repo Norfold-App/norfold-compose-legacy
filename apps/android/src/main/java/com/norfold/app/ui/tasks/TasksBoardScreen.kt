@@ -49,6 +49,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -63,7 +64,6 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
@@ -197,6 +197,7 @@ import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.feedback.NorfoldHaptic
 import com.norfold.app.ui.feedback.performNorfoldHaptic
 import com.norfold.app.ui.components.NorfoldAnchoredPopupAt
+import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.components.NorfoldDropdownMenu
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -3257,15 +3258,24 @@ private fun TaskFilesSection(files: List<WorkspaceFileItem>, onAttach: () -> Uni
     }
 }
 
+/**
+ * A colour a user can assign to a task, with the name it is announced by.
+ *
+ * The name was already here as a trailing comment on each entry. Promoting it to data is what lets the
+ * swatch be described to a screen reader: `NorfoldColorSwatch` needs a label, and there is no automatic one —
+ * "#FFF59E0B" is accurate and tells a listener nothing.
+ */
+private data class TaskAccent(val argb: Long, val name: String)
+
 /** Tasteful accent palette a user can assign per task; drives calendar/board/matrix tinting. */
 private val TaskAccentPalette = listOf(
-    0xFF7E5BEFL, // purple
-    0xFF3B82F6L, // blue
-    0xFF06B6D4L, // cyan
-    0xFF10B981L, // green
-    0xFFF59E0BL, // amber
-    0xFFEF4444L, // red
-    0xFFEC4899L, // pink
+    TaskAccent(0xFF7E5BEFL, "Purple"),
+    TaskAccent(0xFF3B82F6L, "Blue"),
+    TaskAccent(0xFF06B6D4L, "Cyan"),
+    TaskAccent(0xFF10B981L, "Green"),
+    TaskAccent(0xFFF59E0BL, "Amber"),
+    TaskAccent(0xFFEF4444L, "Red"),
+    TaskAccent(0xFFEC4899L, "Pink"),
 )
 
 /** A task's chosen color, or [fallback] (usually a theme/priority accent) when none is set. */
@@ -3276,43 +3286,28 @@ private fun TaskItem.resolveAccent(fallback: Color): Color =
 private fun TaskColorPalette(task: TaskItem, viewModel: DocsViewModel) {
     Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(14.dp),
+            // `selectableGroup`, so the row announces that these are mutually exclusive rather than seven
+            // independent toggles. The swatches state their own selection via `Role.RadioButton`.
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(14.dp).selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Color", fontWeight = FontWeight.Bold)
-            ColorSwatch(
+            NorfoldColorSwatch(
                 color = MaterialTheme.colorScheme.primary,
                 selected = task.colorArgb == null,
+                label = "Theme color",
                 onClick = { viewModel.setTaskColor(task, null) },
             )
-            TaskAccentPalette.forEach { argb ->
-                ColorSwatch(
-                    color = Color(argb.toInt()),
-                    selected = task.colorArgb == argb,
-                    onClick = { viewModel.setTaskColor(task, argb) },
+            TaskAccentPalette.forEach { entry ->
+                NorfoldColorSwatch(
+                    color = Color(entry.argb.toInt()),
+                    selected = task.colorArgb == entry.argb,
+                    label = entry.name,
+                    onClick = { viewModel.setTaskColor(task, entry.argb) },
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun ColorSwatch(color: Color, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(26.dp)
-            .clip(CircleShape)
-            .background(color)
-            .border(
-                width = if (selected) 3.dp else 1.dp,
-                color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
-                shape = CircleShape,
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (selected) Icon(Icons.Filled.Check, "Selected color", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
     }
 }
 

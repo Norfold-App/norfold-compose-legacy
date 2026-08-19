@@ -2,32 +2,46 @@ package com.norfold.app.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.EditorChromeColors
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 
 @Composable
@@ -152,6 +166,172 @@ fun NorfoldStatusPill(label: String, color: Color) {
         maxLines = 1,
     )
 }
+
+/**
+ * One colour a user can choose, from a row of them.
+ *
+ * ## Why this exists as a component
+ *
+ * The app shipped **ten** independent versions of this control: the accent picker in Settings, the task accent
+ * palette, the chart-builder theme row, a chart row's colour override, the diagram box palette, the colour
+ * studio's swatch grid and its gradient stops, the colour-vision preview, the image-markup pen colours, and
+ * the chart studio's palette. They agreed on nothing. Diameters ran 22, 26, 30, 32, 34, 36 and 44 dp. Four
+ * drew a border, six drew none. Three had a focus ring, seven had none. Selection was stated by a 3 dp border,
+ * a 2.5 dp border, an inset ring of surface colour, a tick, or — on the gradient stops — by growing the swatch
+ * from 36 to 44 dp. Two of the ten were not controls at all: the colour-vision preview passed an empty click
+ * lambda to an interactive swatch, and the chart row's menu put the target on the text beside the dot. Those
+ * two are [NorfoldColorDot]. Ringing the rest separately would have made an eleventh variant, so they collapse
+ * here.
+ *
+ * ## Three measured defects this fixes, not one
+ *
+ * **A swatch with no border can be invisible.** WCAG 1.4.11 asks 3:1 of a control's own boundary, and a bare
+ * disc of colour has no boundary but the colour itself. The chart and diagram rows offer
+ * `primaryContainer` — `accent.mix(White, 0.88f)` — which measures **1.12:1 to 1.23:1** against the white
+ * surface it sits on, across all ten shipped accents. The image-markup row's first pen is pure white on
+ * `surface`: **1.00:1**, a swatch that is not there. So the resting edge is not optional here and is drawn
+ * unconditionally, from [NorfoldChrome.restingEdge] rather than from `outlineVariant`, which is itself only
+ * 1.07:1 on the light page.
+ *
+ * **A tick tinted `onPrimary` is a tick tinted for the wrong colour.** The task palette drew its selected
+ * check in `onPrimary`, which resolves against the *theme accent*, not against the swatch. On the seven
+ * fixed palette entries that is white ink, and white measures **2.43:1 on cyan, 2.54:1 on green and 2.15:1
+ * on amber** — three of seven below 3:1. [EditorChromeColors.badgeInk] picks the ink from the swatch's own
+ * fill, which is 8.65:1, 8.28:1 and 9.78:1 on those three.
+ *
+ * **A swatch under 24 dp is an undersized target.** WCAG 2.5.8 (AA) asks 24×24, and the palette shipped a
+ * 22 dp entry. Every swatch here reserves 48 dp of *layout* — Material's figure, and the stricter one — while
+ * keeping its drawn diameter, so a dense row stays dense.
+ *
+ * ## Focus, on a target that is nothing but a colour
+ *
+ * Two of the substrate's defaults break here, which is why [AccentDot] — the first of the ten to be ringed —
+ * could not just take `Modifier.chromeFocusRing()`. The ring is drawn *on* the swatch, so [color] — not the
+ * page — is the adjacent colour the 3:1 is measured against; the default ring colour is `primary`, which on
+ * the accent picker's selected swatch is the fill exactly, giving a 1.00:1 ring on the one swatch a keyboard
+ * user reaches first. And the inset has to clear whatever this swatch draws at its own boundary, which is
+ * [SelectedSwatchBorder] when selected and the substrate's 1 dp edge otherwise — a ring that merges with the
+ * selection border says "selected" where it must say "focused".
+ *
+ * @param selected whether this is the chosen colour. Announced as a selection state rather than drawn only,
+ *   so the row is comprehensible without sight; put the row in a `selectableGroup()` and its exclusivity is
+ *   announced too.
+ * @param label what this colour *is*, for a screen reader. There is no automatic answer: a hex string is
+ *   accurate and useless, so the caller names it ("Theme primary", "Amber", "Gradient stop 2").
+ * @param size the drawn diameter. Defaults to [SwatchSize]; a caller with an established visual rhythm may
+ *   pass its own, and the ring's radius follows it.
+ */
+@Composable
+fun NorfoldColorSwatch(
+    color: Color,
+    selected: Boolean,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    size: Float = SwatchSize,
+) {
+    val focus = rememberChromeFocus()
+    // The boundary this swatch actually draws, which is what the ring's inset has to clear. Read once so the
+    // border below and the inset here cannot disagree.
+    val boundary = if (selected) SelectedSwatchBorder else ChromeGeometry.RESTING_EDGE_WIDTH
+    Box(
+        modifier
+            // Order is load-bearing. The ring sits *outside* `minimumInteractiveComponentSize` so its draw
+            // scope measures the 48 dp box rather than a 22 dp glyph; `size` comes last, per that modifier's
+            // own contract, so it cannot fight the expansion.
+            .then(focus.ringOnCircle(size, color, boundaryWidthDp = boundary))
+            .minimumInteractiveComponentSize()
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(color)
+            .border(
+                boundary.dp,
+                // Selection is stated in the theme's own ink so it reads as a decision the app made. The
+                // resting edge is *solved* against this swatch's fill instead, because the fill is arbitrary:
+                // no fixed token is visible on both white and near-black.
+                if (selected) MaterialTheme.colorScheme.onSurface else with(NorfoldChrome) { restingEdge(color) },
+                CircleShape,
+            )
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                role = Role.RadioButton,
+                interactionSource = focus.source,
+                indication = ripple(),
+                onClick = onClick,
+            )
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) {
+            Icon(
+                Icons.Filled.Check,
+                // The selection is already in the semantics via `selectable`; a description here would have
+                // the reader announce it twice.
+                contentDescription = null,
+                tint = EditorChromeColors.badgeInk(color),
+                modifier = Modifier.size((size * SwatchTickRatio).dp),
+            )
+        }
+    }
+}
+
+/** The default drawn diameter, named because the focus ring's radius and the tick's size derive from it. */
+const val SwatchSize = 30f
+
+/**
+ * A colour shown, not offered.
+ *
+ * The non-interactive sibling of [NorfoldColorSwatch], and the distinction is the whole point: this takes no
+ * `onClick`, so it draws no focus ring, claims no role and occupies no focus stop. Two sites in the app showed
+ * a colour the user cannot pick — the colour-vision preview, which simulates what the current colour looks
+ * like to a dichromat, and the chart row's colour menu, where the *text* beside the dot is the target. Both
+ * had reached for the interactive swatch, which put a keyboard stop on something that does nothing when
+ * activated. One of them had an empty click lambda to prove it.
+ *
+ * It still draws a boundary, for [NorfoldColorSwatch]'s first reason: a bare disc of colour has no edge but
+ * the colour, and the palettes these two show include `*Container` tokens measuring about 1.15:1 against the
+ * surface beneath them. Without the edge, those entries are a gap in the row rather than a colour.
+ *
+ * @param label what this colour is, for a screen reader, when this dot is the *only* thing that says so.
+ *   Defaults to null — decorative, which is correct whenever adjacent text already names the colour.
+ */
+@Composable
+fun NorfoldColorDot(
+    color: Color,
+    modifier: Modifier = Modifier,
+    size: Float = ColorDotSize,
+    label: String? = null,
+) {
+    Spacer(
+        modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(color)
+            .border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(color) }, CircleShape)
+            .then(if (label == null) Modifier else Modifier.semantics { contentDescription = label }),
+    )
+}
+
+/** The default dot diameter: the size a colour reads at beside a line of text. */
+const val ColorDotSize = 22f
+
+/**
+ * The weight a swatch draws at its own boundary when selected.
+ *
+ * Named because the focus ring's inset has to clear it: the two numbers cannot drift apart without the ring
+ * merging into the selection border. Matches [AccentDot], which set this weight before the component existed.
+ */
+private const val SelectedSwatchBorder = 2.5f
+
+/**
+ * The tick's size as a fraction of the swatch.
+ *
+ * A fraction rather than a fixed dp because this component is sized by its caller — 16 dp of tick reads
+ * correctly inside 26 dp and swamps 22 dp.
+ */
+private const val SwatchTickRatio = 0.55f
 
 /**
  * The one empty-state pattern (reference: chat's empty state): icon in a tinted rounded

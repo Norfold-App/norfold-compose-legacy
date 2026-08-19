@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -143,6 +144,7 @@ import com.norfold.app.editor.style.ColorStudioEngine
 import com.norfold.app.editor.style.ColorStudioHost
 import com.norfold.app.editor.style.ColorStudioInteractionController
 import com.norfold.app.editor.style.EditorStyleUiState
+import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import java.util.UUID
@@ -1036,6 +1038,42 @@ private enum class ImageCreativeFilter(val label: String, val kind: ImageFilterK
     }
 }
 
+/**
+ * The markup pen palette: a curated seven, named.
+ *
+ * The colours were an anonymous inline `listOf(...)` inside the control row, which is how seven pens shipped
+ * with no accessible name between them — a reader announced seven identical buttons and the pen row was
+ * operable without sight only by trial and error. Hoisting it makes the name part of the data rather than
+ * something the row has to invent.
+ *
+ * Named rather than derived. [ColorValue.accessibleLabel] is the right answer for a colour nobody chose — a
+ * value pulled from a document, a recents list or a harmony calculation — and it is what the colour studio
+ * announces. These seven were chosen, so they have names: "Ink" is what `#202124` is *for* here, and
+ * `accessibleLabel` would call it "grey #202124", which is accurate and says nothing about it being the
+ * default drawing colour.
+ */
+private val MarkupPens = listOf(
+    MarkupPen("White", ColorValue(255, 255, 255)),
+    MarkupPen("Ink", ColorValue(32, 33, 36)),
+    MarkupPen("Red", ColorValue(244, 67, 54)),
+    MarkupPen("Amber", ColorValue(255, 193, 7)),
+    MarkupPen("Green", ColorValue(76, 175, 80)),
+    MarkupPen("Blue", ColorValue(33, 150, 243)),
+    MarkupPen("Purple", ColorValue(156, 39, 176)),
+)
+
+private data class MarkupPen(val name: String, val color: ColorValue)
+
+/**
+ * The pen swatch's diameter: the size this row was built at, kept so the markup rail's rhythm is unchanged.
+ *
+ * Smaller than the colour studio's 44 dp because seven pens share a rail with the brush widths and the tool
+ * buttons. It is under the 48 dp Material asks of a target, which is why the pens go through
+ * [NorfoldColorSwatch] — it reserves 48 dp of *layout* around whatever diameter it draws, so the row stays as
+ * dense as it looks while the target stops being undersized.
+ */
+private const val PenSwatchSize = 32f
+
 @Composable
 private fun ImageStudioMarkupControls(
     document: ImageEditDocument,
@@ -1059,40 +1097,21 @@ private fun ImageStudioMarkupControls(
     // entry. The chosen values are persisted on every resulting stroke, so each annotation retains
     // its own appearance after reopen.
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
+        // `selectableGroup`, so the pens announce as one exclusive choice. Before the collapse this row had no
+        // semantics at all: seven unnamed circles, and no statement of which pen was active.
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp).selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        listOf(
-            ColorValue(255, 255, 255), ColorValue(32, 33, 36), ColorValue(244, 67, 54),
-            ColorValue(255, 193, 7), ColorValue(76, 175, 80), ColorValue(33, 150, 243), ColorValue(156, 39, 176),
-        ).forEach { color ->
-            val swatchSelected = color == selectedColor
-            val swatchFill = Color(
-                red = color.red / 255f,
-                green = color.green / 255f,
-                blue = color.blue / 255f,
-                alpha = color.alpha / 255f,
-            )
-            val swatchFocus = rememberChromeFocus()
-            Surface(
-                onClick = { onColorChange(color) },
+        MarkupPens.forEach { pen ->
+            NorfoldColorSwatch(
+                color = Color(pen.color.toArgb()),
+                selected = pen.color == selectedColor,
+                label = pen.name,
+                onClick = { onColorChange(pen.color) },
                 enabled = !disabled,
-                shape = RoundedCornerShape(50),
-                color = swatchFill,
-                border = androidx.compose.foundation.BorderStroke(
-                    if (swatchSelected) 3.dp else 1.dp,
-                    if (swatchSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                ),
-                interactionSource = swatchFocus.source,
-                // `RoundedCornerShape(50)` is 50 *percent* on a fixed 32 dp square, so this is a circle and
-                // its radius is known — `ringOnCircle` rather than `ringOnPill`, which is for a pill whose
-                // height only the layout knows. Measured on the swatch's own colour, and clearing the
-                // selection border so the ring does not thicken the thing that means "selected".
-                modifier = Modifier.size(32.dp).then(
-                    swatchFocus.ringOnCircle(32f, swatchFill, boundaryWidthDp = if (swatchSelected) 3f else ChromeGeometry.RESTING_EDGE_WIDTH),
-                ),
-            ) {}
+                size = PenSwatchSize,
+            )
         }
     }
     ImageMarkupBrushRail(strokeWidth, disabled, onStrokeWidthChange)

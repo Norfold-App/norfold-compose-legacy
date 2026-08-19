@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -61,8 +61,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.text.input.ImeAction
@@ -90,10 +88,11 @@ import com.norfold.app.editor.style.ColorStudioEngine
 import com.norfold.app.editor.style.ColorStudioHost
 import com.norfold.app.editor.style.ColorStudioInteractionController
 import com.norfold.app.editor.style.EditorStyleUiState
+import com.norfold.app.ui.components.NorfoldColorDot
+import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import com.norfold.app.ui.rememberChromeFocus
-import com.norfold.app.domain.style.ChromeGeometry
 
 private enum class ChartStudioSection(val label: String) {
     DATA("Data"), TYPE("Type"), SERIES("Series"), AXES("Axes"), LABELS("Labels"), LEGEND("Legend"), STYLE("Style")
@@ -558,7 +557,9 @@ private fun SeriesSection(
             singleLine = true,
         )
         OutlinedButton(onClick = { onEditColor(series) }, enabled = !readOnly) {
-            Box(Modifier.size(18.dp).background(Color(series.color.toArgb()), CircleShape))
+            // Decorative: the button's own text is the target and the label. It still gets a boundary, because
+            // a pale series colour against the button's surface has nothing else marking where the dot is.
+            NorfoldColorDot(Color(series.color.toArgb()), size = SeriesDotSize)
             Text("Edit color", Modifier.padding(start = 8.dp))
         }
         if (columns.isNotEmpty()) {
@@ -767,29 +768,48 @@ private fun StyleSection(
     OutlinedButton(onClick = { onChange(document.copy(style = ChartStyle())) }, enabled = !readOnly) { Text("Reset style") }
 }
 
+/**
+ * The chart's palette row.
+ *
+ * Was the tenth hand-rolled colour swatch in the app and is now a caller of [NorfoldColorSwatch]. Three things
+ * changed in the collapse besides the ring, which this version already had:
+ *
+ * - **The label names the colour instead of spelling it.** It read `"Choose #FF6750A4"`, which is accurate and
+ *   tells a listener nothing. `accessibleLabel()` is the domain's own answer — hue family plus hex, "purple
+ *   #6750A4" — and it is what every other palette in the app now announces.
+ * - **Selection is a state, not a border.** It was drawn only, as a 3 dp edge; a reader had no way to report
+ *   which of the palette entries was the lead colour. `Role.RadioButton` in a `selectableGroup` states it.
+ * - **The resting edge is unconditional.** An unselected entry drew no boundary at all, so a pale palette
+ *   colour on the sheet's surface had nothing marking where the swatch was.
+ *
+ * It keeps its 48 dp diameter, which is larger than [SwatchSize] because this row is the chart's primary
+ * colour control rather than an accent beside other content.
+ */
 @Composable
 private fun ColorSwatches(selected: ColorValue?, readOnly: Boolean, onChoose: (ColorValue) -> Unit) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        // `selectableGroup`, so the palette announces as one exclusive choice rather than eight buttons.
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         ChartStyle.defaultPalette().forEach { color ->
-            val swatchFill = Color(color.toArgb())
-            val focus = rememberChromeFocus()
-            Surface(
+            NorfoldColorSwatch(
+                color = Color(color.toArgb()),
+                selected = selected == color,
+                label = color.accessibleLabel(),
                 onClick = { onChoose(color) },
                 enabled = !readOnly,
-                shape = CircleShape,
-                border = if (selected == color) androidx.compose.foundation.BorderStroke(3.dp, MaterialTheme.colorScheme.onSurface) else null,
-                interactionSource = focus.source,
-                // Measured on the swatch's own fill, and clearing the 3 dp selection border: a ring measured
-                // against the page and drawn on an arbitrary palette colour is the 1.00:1 case the substrate
-                // documents, and one that merges with the selection border says "selected", not "focused".
-                modifier = Modifier.size(48.dp)
-                    .then(focus.ringOnCircle(48f, swatchFill, boundaryWidthDp = if (selected == color) 3f else ChromeGeometry.RESTING_EDGE_WIDTH))
-                    .semantics { contentDescription = "Choose ${color.toHex()}" },
-                color = swatchFill,
-            ) {}
+                size = PaletteSwatchSize,
+            )
         }
     }
 }
+
+/** The palette swatch's diameter: this row is the chart's primary colour control, so it is drawn large. */
+private const val PaletteSwatchSize = 48f
+
+/** The series colour dot's diameter: it sits inside a button beside a line of text, so it reads at 18 dp. */
+private const val SeriesDotSize = 18f
 
 @Composable
 private fun Toggle(label: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {

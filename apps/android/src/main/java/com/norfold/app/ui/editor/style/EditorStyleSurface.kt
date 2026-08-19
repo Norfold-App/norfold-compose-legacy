@@ -4,14 +4,13 @@ package com.norfold.app.ui.editor.style
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -22,7 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -77,6 +75,8 @@ import com.norfold.app.editor.style.FontBrowserState
 import com.norfold.app.editor.style.FontBrowserTab
 import com.norfold.app.editor.style.FontRowState
 import com.norfold.app.editor.style.FontBrowserSection
+import com.norfold.app.ui.components.NorfoldColorDot
+import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 
 /** Actions are host-funnelled; this shared surface never mutates a document directly. */
@@ -260,7 +260,11 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
                 ColorVisionDeficiency.entries.forEach { deficiency ->
                     val simulated = deficiency.simulate(studio.color())
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Swatch(simulated, selected = false) {}
+                        // A colour shown, not offered: this is what the current colour looks like to a
+                        // dichromat, and there is nothing to activate. It had been the interactive swatch with
+                        // an empty click lambda, which put a keyboard stop and a radio-button role on a
+                        // preview. The text beside it names the simulated colour, so the dot is decorative.
+                        NorfoldColorDot(Color(simulated.toArgb()), size = StudioSwatchSize)
                         Column {
                             Text(deficiency.label, fontWeight = FontWeight.SemiBold)
                             Text(simulated.accessibleLabel(), style = MaterialTheme.typography.bodySmall)
@@ -278,7 +282,15 @@ private fun ColorStudioPanel(state: EditorStyleUiState, actions: EditorStyleSurf
                 Text("Document variables", style = MaterialTheme.typography.titleSmall)
                 state.colorTokens.forEach { token ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Swatch(token.color, selected = !studio.isMixed && token.color == studio.color()) { actions.chooseColor(token.color) }
+                        NorfoldColorSwatch(
+                            color = Color(token.color.toArgb()),
+                            selected = !studio.isMixed && token.color == studio.color(),
+                            // The variable's name, which is what this colour *is* on this surface — the hex is
+                            // an implementation detail of a token called "Heading" or "Brand accent".
+                            label = token.name,
+                            onClick = { actions.chooseColor(token.color) },
+                            size = StudioSwatchSize,
+                        )
                         Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                             Text(token.name, fontWeight = FontWeight.SemiBold)
                             Text(token.description, style = MaterialTheme.typography.labelSmall)
@@ -367,16 +379,26 @@ private fun GradientEditor(studio: ColorStudioState, actions: EditorStyleSurface
             }
         }
         Text("${ramp.kind.name.lowercase().replaceFirstChar(Char::titlecase)} · ${ramp.stops.size} stops")
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ramp.sortedStops.forEach { stop ->
+        Row(
+            // `selectableGroup`, so the stops announce as one exclusive choice. Which one is active was
+            // previously drawn *only* — by size — and size is not a thing a reader can report.
+            Modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ramp.sortedStops.forEachIndexed { index, stop ->
                 val selected = studio.activeStopId == stop.id
-                Box(
-                    Modifier
-                        .size(if (selected) 44.dp else 36.dp)
-                        .clip(CircleShape)
-                        .background(Color(stop.color.toArgb()))
-                        .clickable { actions.selectGradientStop(stop.id) }
-                        .semantics { contentDescription = "Gradient stop ${stop.color.accessibleLabel()}" },
+                NorfoldColorSwatch(
+                    color = Color(stop.color.toArgb()),
+                    selected = selected,
+                    // Its place in the ramp *is* its identity here: a gradient may hold two stops of the same
+                    // colour, and "stop 2" is how the sliders below refer to the one being edited. The colour
+                    // follows, because a listener choosing between stops needs both.
+                    label = "Stop ${index + 1}, ${stop.color.accessibleLabel()}",
+                    onClick = { actions.selectGradientStop(stop.id) },
+                    // The active stop grows, which is this surface's existing idiom and worth keeping — it is
+                    // legible at a glance across a scrolling row in a way a 2.5 dp edge is not. The ring's
+                    // radius is derived from whatever is passed here, so it follows the growth exactly.
+                    size = if (selected) StudioSwatchSize else GradientStopSize,
                 )
             }
         }
@@ -419,25 +441,38 @@ private fun GradientEditor(studio: ColorStudioState, actions: EditorStyleSurface
 
 @Composable
 private fun Swatches(colors: List<ColorValue>, onChoose: (ColorValue) -> Unit, selected: ColorValue? = null) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    FlowRow(
+        // `selectableGroup`, so a reader announces that these are one exclusive choice rather than a heap of
+        // independent toggles. Each swatch states its own selection through `Role.RadioButton`.
+        modifier = Modifier.selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         colors.forEach { color ->
-            Swatch(color, selected == color) { onChoose(color) }
+            NorfoldColorSwatch(
+                color = Color(color.toArgb()),
+                selected = selected == color,
+                // `accessibleLabel()` is the domain's own answer for a colour nobody named: hue family plus
+                // hex, "green #3D7C45". These come from a document, a recent-colours list or a harmony
+                // calculation, so there is no semantic role to use instead.
+                label = color.accessibleLabel(),
+                onClick = { onChoose(color) },
+                size = StudioSwatchSize,
+            )
         }
     }
 }
 
-@Composable
-private fun Swatch(color: ColorValue, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(Color(color.toArgb()))
-            .then(if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier)
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = color.accessibleLabel() + if (selected) ", selected" else "" },
-    )
-}
+/**
+ * The colour studio's swatch diameter.
+ *
+ * Larger than [SwatchSize] because this surface is a colour picker rather than a row of accents beside other
+ * controls — the swatch *is* the content here, and the grid was built at 44 dp.
+ */
+private const val StudioSwatchSize = 44f
+
+/** A gradient stop's resting diameter; the active one grows to [StudioSwatchSize]. */
+private const val GradientStopSize = 36f
 
 @Composable
 private fun SpectrumPicker(
