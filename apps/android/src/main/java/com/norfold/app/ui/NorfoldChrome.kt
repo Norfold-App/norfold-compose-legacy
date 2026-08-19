@@ -2,15 +2,24 @@ package com.norfold.app.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.style.ChromeGeometry
@@ -105,6 +114,10 @@ object NorfoldChrome {
      * A focus ring outside the shape it decorates, concentric with it, reserving its own space whether or
      * not [focused].
      *
+     * For chrome that floats — a dock, a dialog, an inspector — and therefore owns empty space on every
+     * side. Chrome packed flush against its siblings or clipped by its parent cannot use this; it wants
+     * [innerFocusRing], which spends no layout space at all.
+     *
      * Two decisions worth stating, because both are the difference between a ring and an artefact:
      *
      * The ring sits **outside** the shape with [ChromeGeometry.FOCUS_RING_GAP] between them. Drawn flush, a
@@ -136,6 +149,207 @@ object NorfoldChrome {
             shape = outer,
         ).padding(inset)
     }
+
+    /**
+     * A focus ring drawn *inside* the bounds of the chrome it marks, taking no layout space at all.
+     *
+     * **This is the one the app actually needs**, and the reason it did not exist is worth recording: the
+     * substrate shipped [focusRing] — outward, space-reserving, correct for a floating panel — and it found
+     * zero consumers, because a floating panel is not what Norfold's focusable population is made of. Of the
+     * 138 non-editor interactive sites, 126 reach the user through four shared composables, and all four are
+     * shapes with no outside to draw on: a settings row is a flush band inside a card that clips it, a
+     * sidebar destination and a nav bar destination are flush-packed siblings, and a bare content card sits
+     * in a grid whose spacing belongs to the grid. An outward ring on any of them is drawn where the clip
+     * deletes it or on top of the neighbour.
+     *
+     * **What it costs in layout: nothing.** [focusRing] must reserve its inset unconditionally or focus
+     * would reflow the page; this one is drawn in space the chrome already occupies, so it adds no padding,
+     * changes no measurement, and cannot move a sibling. That is what lets it go on a row inside a clipped
+     * group without the group having to know.
+     *
+     * **Why it is not simply a thinner border.** The gap is the whole signal. Three of the four populations
+     * already draw something at their own boundary — a group border, a selection pill, a selection tint — so
+     * a ring flush against that boundary reads as the boundary thickening. Inset by
+     * [ChromeGeometry.FOCUS_RING_INSET] with [ChromeGeometry.focusRingRadius], the ring's arc centre lands
+     * on the container's own, which makes the two curves concentric and the gap identical on the straights
+     * and through the corners. A ring that pinches at one corner reads as a rendering fault, not as focus.
+     *
+     * @param corner the radius of the shape being marked, not of the ring — the ring's own radius is
+     *   derived, because it has to be for the curves to stay concentric.
+     */
+    @Composable
+    fun Modifier.innerFocusRing(
+        focused: Boolean,
+        corner: Corner,
+        accent: Color = MaterialTheme.colorScheme.primary,
+        backdrop: Color = MaterialTheme.colorScheme.background,
+    ): Modifier = innerFocusRing(focused, corner.radiusDp, accent, backdrop)
+
+    /**
+     * The same inward ring for chrome whose radius is not one of the three [Corner] tiers.
+     *
+     * **Circles are why this overload exists.** A circle's radius is half its own size, so the accent
+     * swatch (30 dp → 15 dp) and the workspace avatar (46 dp → 23 dp) need different radii, and a
+     * `Corner.Circle` tier would be wrong at every size but one. The caller passes `size / 2` and the
+     * concentricity rule does the rest.
+     *
+     * **[inset] is why it takes an inset at all.** [ChromeGeometry.FOCUS_RING_INSET] is derived from the
+     * substrate's one edge weight, so it is correct for chrome that draws a substrate edge. A component
+     * drawing something heavier at its own boundary — the accent swatch's 2.5 dp selection border — needs
+     * [ChromeGeometry.focusRingInsetOver] instead, or the ring's outer edge lands half a dp inside the
+     * border and the two merge into one heavier stroke. On the swatch that merge would be worse than
+     * cosmetic: the border *is* the selection signal, so a ring that thickens it says "selected" instead of
+     * "focused".
+     *
+     * @param containerRadiusDp the radius of the shape being marked. For a circle, half its size.
+     * @param backdrop what the ring is measured against — **the surface the ring is drawn on**, which for a
+     *   colour swatch is the swatch's own fill and not the page. See [ChromeFocus.ringOnCircle].
+     */
+    @Composable
+    fun Modifier.innerFocusRing(
+        focused: Boolean,
+        containerRadiusDp: Float,
+        accent: Color = MaterialTheme.colorScheme.primary,
+        backdrop: Color = MaterialTheme.colorScheme.background,
+        inset: Float = ChromeGeometry.FOCUS_RING_INSET,
+    ): Modifier {
+        // Read before the early return so the measured colour is resolved on every composition rather
+        // than only on the focused ones — a @Composable call inside a branch is a conditional call.
+        val ringColor = focusRing(accent, backdrop)
+        if (!focused) return this
+        return drawWithContent {
+            drawContent()
+            val insetPx = inset.dp.toPx()
+            val stroke = ChromeGeometry.FOCUS_RING_WIDTH.dp.toPx()
+            // The stroke straddles the path, so the path itself sits half a stroke further in than the
+            // gap: inset is the distance to the ring's *outer* edge, which is what the eye measures.
+            val offset = insetPx + stroke / 2f
+            // Concentric with the container: radius shrinks by exactly what the ring moved inward.
+            val radius = (containerRadiusDp - inset).coerceAtLeast(0f).dp.toPx()
+            drawRoundRect(
+                color = ringColor,
+                topLeft = Offset(offset, offset),
+                size = Size(
+                    (size.width - offset * 2f).coerceAtLeast(0f),
+                    (size.height - offset * 2f).coerceAtLeast(0f),
+                ),
+                cornerRadius = CornerRadius(radius),
+                style = Stroke(width = stroke),
+            )
+        }
+    }
+}
+
+/**
+ * A hoisted interaction source and the focus ring that reads it, as one value.
+ *
+ * **Why this exists rather than three lines at each call site.** A focus ring needs a
+ * [MutableInteractionSource] that the `clickable` and the ring agree on. Written out, that is a `remember`,
+ * a `collectIsFocusedAsState`, and a modifier — and getting any of the three subtly wrong produces chrome
+ * that compiles, runs, and silently shows nothing when focused, which is indistinguishable from not having
+ * done the work. The tree already demonstrates the failure: `collectIsFocusedAsState` appears nowhere in
+ * `ui/`, so every one of the 138 non-editor interactive sites currently draws no focus affordance at all,
+ * while the 559 Material buttons beside them get one from the library.
+ *
+ * Bundling the two means a caller cannot hold one without the other, and cannot pass the ring a source that
+ * is not the one the click is wired to:
+ *
+ * ```
+ * val focus = rememberChromeFocus()
+ * Row(
+ *     Modifier
+ *         .clip(shape)
+ *         .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
+ *         .then(focus.ring(Corner.Card)),
+ * )
+ * ```
+ *
+ * The ring goes **after** the `clickable` in the chain so it draws over the ripple rather than under it, and
+ * inside the `clip` so a clipped parent cannot delete it.
+ */
+class ChromeFocus internal constructor(
+    val source: MutableInteractionSource,
+    private val focused: Boolean,
+) {
+    /** True while this chrome holds focus, for a caller that wants to change something other than the ring. */
+    val isFocused: Boolean get() = focused
+
+    /**
+     * The inward ring for chrome with the given [corner] radius.
+     *
+     * Inward is the default because it is what the app's chrome can actually use: a ring that takes no
+     * layout space works on a row inside a clipped group and on a nav item packed flush against its
+     * neighbour, which is nearly all of the population. Floating chrome that owns space on every side
+     * should use `NorfoldChrome.focusRing` directly instead.
+     */
+    @Composable
+    fun ring(corner: Corner, backdrop: Color = MaterialTheme.colorScheme.background): Modifier =
+        with(NorfoldChrome) { Modifier.innerFocusRing(focused, corner, backdrop = backdrop) }
+
+    /**
+     * The inward ring for chrome whose radius is not one of the three [Corner] tiers.
+     *
+     * The tiers describe chrome the substrate shapes. A few components predate it and carry their own
+     * radius — the segmented control's 7 dp option is the clearest case — and for those the honest move is
+     * to derive the ring from the radius the component actually draws rather than to round it to a tier. A
+     * ring built on a *larger* radius than its container bulges past the container's own curve at every
+     * corner, which reads as a rendering fault; one built on a smaller radius cuts the corner short.
+     *
+     * @param containerRadiusDp the radius the container's own shape uses.
+     * @param surface the colour the ring is drawn on, which is what it must be measured against.
+     */
+    @Composable
+    fun ringOnShape(containerRadiusDp: Float, surface: Color): Modifier = with(NorfoldChrome) {
+        Modifier.innerFocusRing(focused, containerRadiusDp, backdrop = surface)
+    }
+
+    /**
+     * The inward ring for chrome that is **filled with a colour of its own**, measured against that fill.
+     *
+     * **This exists because of a defect the default would have shipped.** [ring] measures the ring against
+     * the page, which is right for chrome that sits on the page. A colour swatch does not: the ring is drawn
+     * on top of the swatch's own fill. And the accent-picker swatch is the worst possible case of that — the
+     * default ring colour is `primary`, the *currently selected accent*, and the selected swatch is filled
+     * with exactly that colour. A ring measured against the page and drawn on the swatch would land at
+     * 1.00:1 against what it is actually drawn on: perfectly invisible, on precisely the one swatch the user
+     * is most likely to tab to first.
+     *
+     * Passing [surface] as the backdrop is not a workaround for that; it is the correct measurement. WCAG
+     * 1.4.11 asks for 3:1 against *adjacent colours*, and the adjacent colour here is the fill.
+     * [NorfoldChrome.focusRing] then solves for a lightness that clears the target against it, so a ring on
+     * a dark swatch comes back light and a ring on a light swatch comes back dark.
+     *
+     * @param sizeDp the diameter, for a circle; the ring's radius is derived as half of it.
+     * @param surface the colour the ring is drawn on top of.
+     * @param boundaryWidthDp what this chrome already draws at its own edge, so the ring can clear it. The
+     *   swatch's selection border is 2.5 dp, which the substrate's default inset would not clear.
+     */
+    @Composable
+    fun ringOnCircle(
+        sizeDp: Float,
+        surface: Color,
+        boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+    ): Modifier = with(NorfoldChrome) {
+        Modifier.innerFocusRing(
+            focused = focused,
+            containerRadiusDp = sizeDp / 2f,
+            backdrop = surface,
+            inset = ChromeGeometry.focusRingInsetOver(boundaryWidthDp),
+        )
+    }
+}
+
+/**
+ * A [ChromeFocus] for one piece of interactive chrome.
+ *
+ * The source is remembered, so it survives recomposition and stays the same object the `clickable` is
+ * holding — a fresh source each composition would emit focus to something nothing is watching.
+ */
+@Composable
+fun rememberChromeFocus(): ChromeFocus {
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    return ChromeFocus(source, focused)
 }
 
 /**

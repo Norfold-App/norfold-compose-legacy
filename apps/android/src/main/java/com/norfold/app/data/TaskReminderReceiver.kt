@@ -30,7 +30,7 @@ class TaskReminderReceiver : BroadcastReceiver() {
         val action = intent.action
         // ACTION_TIME_CHANGED is the constant whose string value is "android.intent.action.TIME_SET",
         // which is what the manifest filter spells. They read as a mismatch and are the same
-        // broadcast; TaskReminderActionsTest asserts it so nobody "fixes" it into a real bug.
+        // broadcast; TaskReminderManifestTest asserts it so nobody "fixes" it into a real bug.
         val recognized = action == ActionDeliver ||
             action == Intent.ACTION_BOOT_COMPLETED ||
             action == Intent.ACTION_MY_PACKAGE_REPLACED ||

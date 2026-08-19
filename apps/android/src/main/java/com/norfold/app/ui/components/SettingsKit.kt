@@ -28,6 +28,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +43,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.domain.style.ChromeGeometry.Corner
+import com.norfold.app.ui.rememberChromeFocus
 
 /**
  * Shared iOS-style "grouped rows" design system used across every Settings screen,
@@ -109,6 +113,18 @@ fun RowDivider(inset: Boolean = true) {
 /**
  * A single settings row: leading rounded icon tile, title + optional subtitle,
  * and a trailing slot ([trailing]). Whole row is clickable when [onClick] is set.
+ *
+ * ## Focus
+ *
+ * This one composable is how 83 call sites reach the user, which is why the focus ring belongs here and not
+ * at any of them. The ring is drawn *inward* ([ChromeFocus.ring]) for a structural reason specific to this
+ * row: [SettingsGroup] clips its children to a 20 dp shape, so a ring drawn outside the row's bounds would
+ * be clipped away entirely on the first and last row of every group and drawn on top of the divider
+ * everywhere else. An inward ring also takes no layout space, so adding it moves nothing — a group of rows
+ * measures identically focused and unfocused.
+ *
+ * A row with no [onClick] gets no ring, because it is not a target: `clickable` is what makes an element
+ * focusable, so a static row never receives focus and a ring on it would be a permanent outline.
  */
 @Composable
 fun SettingsRow(
@@ -121,9 +137,18 @@ fun SettingsRow(
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
+    val focus = rememberChromeFocus()
     val base = modifier
         .fillMaxWidth()
-        .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+        .then(
+            if (onClick != null) {
+                Modifier
+                    .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
+                    .then(focus.ring(Corner.Card))
+            } else {
+                Modifier
+            },
+        )
     Row(
         base.padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -206,7 +231,19 @@ fun EditFieldDialog(
     )
 }
 
-/** Radio-list picker so multi-option value rows show choices instead of blind-cycling. */
+/**
+ * Radio-list picker so multi-option value rows show choices instead of blind-cycling.
+ *
+ * ## Focus
+ *
+ * Six call sites, and the population where a missing ring is most disorienting: a scrolling list of up to
+ * dozens of options inside a dialog, where the whole row is the target but only the [RadioButton] gets a
+ * ring from Material. Without a ring on the row, a keyboard user tabbing the list sees the indicator jump
+ * between radio buttons while the thing that actually activates is the 300 dp band beside it.
+ *
+ * Inward, like every other row in this file, because the list is inside a dialog that clips its content and
+ * the rows are packed flush with no spacing between them.
+ */
 @Composable
 fun OptionPickerDialog(
     title: String,
@@ -221,8 +258,17 @@ fun OptionPickerDialog(
         text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                 options.forEach { opt ->
+                    val focus = rememberChromeFocus()
                     Row(
-                        Modifier.fillMaxWidth().clickable { onPick(opt); onDismiss() }.padding(vertical = 12.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
+                            .clickable(
+                                interactionSource = focus.source,
+                                indication = ripple(),
+                            ) { onPick(opt); onDismiss() }
+                            .then(focus.ring(Corner.Media))
+                            .padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -236,18 +282,59 @@ fun OptionPickerDialog(
     )
 }
 
-/** A colored dot for the accent-picker row. */
+/**
+ * A colored dot for the accent-picker row.
+ *
+ * ## Focus, on a target that is nothing but a colour
+ *
+ * Every other ringed component in the app has chrome the ring can be measured against. This one is a 30 dp
+ * disc of arbitrary user-chosen colour, which breaks two of the substrate's defaults at once.
+ *
+ * **The ring cannot be measured against the page.** It is drawn on the swatch, so the swatch's own fill is
+ * the adjacent colour WCAG 1.4.11 asks about — and the default ring colour is `primary`, the currently
+ * selected accent, which is the exact fill of the currently selected swatch. Measured against the page and
+ * drawn on the swatch, the ring on the selected dot would sit at 1.00:1 against what it is actually drawn
+ * on: invisible, on the one swatch a keyboard user is most likely to reach first. `ringOnCircle` measures
+ * against the fill instead, so the ring resolves light on a dark accent and dark on a light one.
+ *
+ * **The ring cannot use the default inset**, because this component states selection with a 2.5 dp border at
+ * its own boundary — heavier than the substrate's 1 dp edge, which is what the default inset is derived to
+ * clear. At 3 dp the ring's outer edge would land half a dp inside that border and the two would merge into
+ * one thick stroke, saying "selected" where it should say "focused". [ChromeGeometry.focusRingInsetOver]
+ * clears the real boundary and then leaves the gap.
+ *
+ * The radius comes from the size rather than from a [Corner] tier for the ordinary reason that a circle's
+ * radius is half its own size, and no fixed tier is right for both a 30 dp swatch and a 46 dp avatar.
+ */
 @Composable
 fun AccentDot(color: Color, selected: Boolean, onClick: () -> Unit) {
+    val focus = rememberChromeFocus()
     Box(
         Modifier
-            .size(30.dp)
+            .size(AccentDotSize.dp)
             .clip(CircleShape)
             .background(color)
             .then(
-                if (selected) Modifier.border(2.5.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                if (selected) Modifier.border(SelectedSwatchBorder.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
                 else Modifier,
             )
-            .clickable(onClick = onClick),
+            .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
+            .then(
+                focus.ringOnCircle(
+                    sizeDp = AccentDotSize,
+                    surface = color,
+                    boundaryWidthDp = if (selected) SelectedSwatchBorder else ChromeGeometry.RESTING_EDGE_WIDTH,
+                ),
+            ),
     )
 }
+
+/** The swatch diameter, named because the focus ring's radius is derived from it. */
+private const val AccentDotSize = 30f
+
+/**
+ * The weight this component draws at its own boundary when selected.
+ *
+ * Named for the same reason: the focus ring's inset has to clear it, so the two numbers cannot drift apart.
+ */
+private const val SelectedSwatchBorder = 2.5f

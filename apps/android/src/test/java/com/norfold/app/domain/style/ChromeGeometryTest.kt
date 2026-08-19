@@ -143,6 +143,200 @@ class ChromeGeometryTest {
         assertTrue("a ring drawn flush reads as a thicker border, not as focus", ChromeGeometry.FOCUS_RING_GAP > 0f)
     }
 
+    /**
+     * **The inward ring's curves are concentric with the container's, at every corner tier.**
+     *
+     * This is the one piece of the focus work whose failure is purely visual and therefore invisible to
+     * every other test: get the radius wrong and the ring runs parallel down the straight edges and then
+     * pinches or bulges through the corner, which reads as a rendering fault rather than as focus. A device
+     * pass would catch it only if someone happened to be looking at a corner.
+     *
+     * Concentric means one thing arithmetically: a ring inset by `i` on all four sides has its corner-arc
+     * centre at `i + r`, so the centres coincide only when `r = R - i`. Asserted as that identity rather
+     * than as a magic number, so a future change to either constant has to keep the relationship.
+     */
+    @Test
+    fun `the inward focus ring is concentric with the shape it marks`() {
+        val inset = ChromeGeometry.FOCUS_RING_INSET
+        for (corner in ChromeGeometry.Corner.entries) {
+            val ringRadius = ChromeGeometry.focusRingRadius(corner)
+            assertEquals(
+                "$corner ring must share the container's arc centre, or the gap changes through the corner",
+                corner.radiusDp.toDouble(),
+                (inset + ringRadius).toDouble(),
+                1e-6,
+            )
+        }
+    }
+
+    /**
+     * A container whose radius is smaller than the inset gets a square ring, not a negative one.
+     *
+     * The substrate's own three tiers are all comfortably larger, so this guards the general case: the
+     * helper takes a radius and callers outside the enum's three values are plausible.
+     */
+    @Test
+    fun `a radius tighter than the inset yields a square ring rather than a negative one`() {
+        // Constructed from the constant so this stays a statement about the relationship, not about 3f.
+        val tighter = ChromeGeometry.Corner.entries.minOf { it.radiusDp }
+        assertTrue("the tightest tier is expected to exceed the inset", tighter > ChromeGeometry.FOCUS_RING_INSET)
+        for (corner in ChromeGeometry.Corner.entries) {
+            assertTrue("$corner ring radius must never be negative", ChromeGeometry.focusRingRadius(corner) >= 0f)
+        }
+    }
+
+    /**
+     * The inward ring stays clear of the content, and of the boundary it must not be mistaken for.
+     *
+     * Two separate failures bounded from either side. Too small an inset and the ring reads as the chrome's
+     * own border thickening — the exact confusion [ChromeGeometry.FOCUS_RING_GAP] exists to prevent on
+     * outlined chrome, and the reason the gap cannot be zero. Too large and it crosses into the row's text:
+     * a settings row keeps 14 dp of horizontal padding, so the ring's inner edge has to land well short of
+     * that or the first character sits inside the ring.
+     */
+    @Test
+    fun `the inward ring clears the boundary without reaching the content`() {
+        val inset = ChromeGeometry.FOCUS_RING_INSET
+        val stroke = ChromeGeometry.FOCUS_RING_WIDTH
+
+        assertTrue("a ring flush against the edge reads as a thicker border", inset >= ChromeGeometry.RESTING_EDGE_WIDTH)
+
+        // The narrowest padding any of the four shared chrome components keeps is the nav bar item's 6 dp
+        // vertical; the settings row and sidebar item both keep 11-14 dp. The ring's inner edge must clear
+        // the tightest of those.
+        val narrowestPadding = 6f
+        assertTrue(
+            "ring occupies %.1f dp, which reaches into the %.1f dp a nav item keeps clear".format(inset + stroke, narrowestPadding),
+            inset + stroke <= narrowestPadding,
+        )
+    }
+
+    /**
+     * Inward and outward are two different measurements, and the inward one is the smaller.
+     *
+     * The outward ring spends free space beside floating chrome, so it can afford a gap *and* a stroke
+     * outside the bounds. The inward one is spending space the content is already using. If a future edit
+     * collapsed them into one constant, the ring would either stop reading as separate from the border it
+     * decorates or start crowding the text — so the fact that they are deliberately unequal is pinned.
+     */
+    @Test
+    fun `the inward inset is not the outward gap`() {
+        assertTrue("both insets must be positive to read as gaps at all", ChromeGeometry.FOCUS_RING_GAP > 0f && ChromeGeometry.FOCUS_RING_INSET > 0f)
+        assertTrue(
+            "an inward ring cannot spend what an outward ring spends: it is inside the content's space",
+            ChromeGeometry.FOCUS_RING_INSET + ChromeGeometry.FOCUS_RING_WIDTH <
+                ChromeGeometry.FOCUS_RING_GAP + ChromeGeometry.FOCUS_RING_WIDTH * 2,
+        )
+    }
+
+    /**
+     * The inward inset is derived from the boundary it has to clear, not chosen.
+     *
+     * Stated as the identity rather than as `3f`, because the number is only correct while the substrate
+     * draws one edge weight. If [ChromeGeometry.RESTING_EDGE_WIDTH] ever changed and this constant did not,
+     * the ring would start merging with the border it is supposed to be distinguishable from — a failure
+     * that renders as "the border got thicker" and is invisible to every other test.
+     */
+    @Test
+    fun `the inward inset clears one resting edge and then leaves the gap`() {
+        assertEquals(
+            ChromeGeometry.RESTING_EDGE_WIDTH + ChromeGeometry.FOCUS_RING_GAP,
+            ChromeGeometry.FOCUS_RING_INSET,
+            1e-6f,
+        )
+    }
+
+    /**
+     * A container drawing a heavier boundary gets a proportionally deeper inset.
+     *
+     * The accent swatch is the case: it states selection with a 2.5 dp border, so the default 3 dp inset
+     * would put the ring's outer edge half a dp inside it — not a gap at any density, and on this component
+     * the merge would misreport *selection* as well as focus, since the border it merges with is the
+     * selection signal. Bounded below by the default so a lighter boundary cannot pull the ring closer to
+     * the edge than the substrate's own minimum.
+     */
+    @Test
+    fun `a heavier boundary pushes the ring further in, and a lighter one does not pull it out`() {
+        val swatchBorder = 2.5f
+        val overSwatch = ChromeGeometry.focusRingInsetOver(swatchBorder)
+        assertEquals(swatchBorder + ChromeGeometry.FOCUS_RING_GAP, overSwatch, 1e-6f)
+        assertTrue(
+            "the ring must clear the swatch's own border by a visible gap, not by %.1f dp".format(overSwatch - swatchBorder),
+            overSwatch - swatchBorder >= ChromeGeometry.FOCUS_RING_GAP,
+        )
+
+        // A selected object edge is heavier still, and the rule scales rather than being special-cased.
+        assertEquals(
+            ChromeGeometry.SELECTED_EDGE_WIDTH + ChromeGeometry.FOCUS_RING_GAP,
+            ChromeGeometry.focusRingInsetOver(ChromeGeometry.SELECTED_EDGE_WIDTH),
+            1e-6f,
+        )
+
+        // Never tighter than the substrate's own inset, whatever a caller passes.
+        for (hairline in listOf(0f, 0.25f, 0.5f, 1f)) {
+            assertTrue(
+                "a $hairline dp boundary must not pull the ring inside the substrate's minimum inset",
+                ChromeGeometry.focusRingInsetOver(hairline) >= ChromeGeometry.FOCUS_RING_INSET,
+            )
+        }
+    }
+
+    /**
+     * Concentricity holds for a radius that is not one of the three tiers.
+     *
+     * Two real populations need this. A **circle** has a radius of half its own size, so the 30 dp accent
+     * swatch needs 15 dp and the 46 dp avatar 23 dp — no fixed tier is right for both, which is why there is
+     * no `Corner.Circle`. And the segmented control predates the substrate and draws its own 7 dp option
+     * inside a 10 dp shell. In both cases a ring derived from a tier instead of from the radius the
+     * container actually draws would bulge past the curve or cut it short.
+     */
+    @Test
+    fun `the free-radius ring is concentric at every radius the app actually draws`() {
+        val inset = ChromeGeometry.FOCUS_RING_INSET
+        // Circles by diameter, then the segmented option's own radius.
+        val radii = listOf(30f / 2f, 34f / 2f, 46f / 2f, 7f, 10f, 12f, 20f)
+        for (r in radii) {
+            assertEquals(
+                "a ring inside radius $r must share its arc centre",
+                r.toDouble(),
+                (inset + ChromeGeometry.focusRingRadius(r)).toDouble(),
+                1e-6,
+            )
+        }
+    }
+
+    /** The tier overload is the free overload, so the two can never disagree. */
+    @Test
+    fun `the tier and free radius overloads agree`() {
+        for (corner in ChromeGeometry.Corner.entries) {
+            assertEquals(
+                ChromeGeometry.focusRingRadius(corner.radiusDp),
+                ChromeGeometry.focusRingRadius(corner),
+                1e-6f,
+            )
+        }
+    }
+
+    /**
+     * A ring on a swatch still leaves the swatch reading as a colour.
+     *
+     * The accent picker is the tightest genuine ring site in the app: a 30 dp disc whose entire job is to
+     * show a colour, carrying a 2.5 dp selection border and therefore the deeper inset. The ring costs
+     * `2 * (inset + stroke)` of the diameter, so this is the check that the tightest case still has a
+     * majority of its fill left — below roughly half, the swatch reads as a ring with a colour behind it
+     * rather than as a colour sample.
+     */
+    @Test
+    fun `the tightest swatch keeps most of its fill after the ring`() {
+        val diameter = 30f
+        val inset = ChromeGeometry.focusRingInsetOver(2.5f)
+        val interior = diameter - 2f * (inset + ChromeGeometry.FOCUS_RING_WIDTH)
+        assertTrue(
+            "a %.0f dp swatch keeps only %.1f dp of fill inside the ring".format(diameter, interior),
+            interior >= diameter / 2f,
+        )
+    }
+
     // ── The finding that motivated the derived edge ──────────────────────────────────────────────────
 
     /**

@@ -171,6 +171,84 @@ object ChromeGeometry {
     const val FOCUS_RING_GAP = 2f
 
     /**
+     * How far *inside* its own bounds a ring sits when the chrome has no outside to use.
+     *
+     * **Why a second inset exists at all.** [FOCUS_RING_GAP] belongs to a ring drawn around chrome that
+     * floats — a dock, a dialog, an inspector — which owns empty space on every side and can spend
+     * [FOCUS_RING_WIDTH] plus the gap of it. Almost none of the app's focusable population is shaped like
+     * that. A settings row is a flush band inside a card that clips it; a sidebar destination and a nav bar
+     * destination are flush-packed siblings with nothing between them. For all three, a ring drawn outside
+     * the bounds is drawn where the parent's clip deletes it, or on top of the neighbour. That is why the
+     * substrate's outward ring shipped with zero consumers: it was a ring for the one shape the app almost
+     * never has.
+     *
+     * So the ring comes inward instead, and inward is a different measurement from outward for one reason:
+     * an outward ring can afford a gap *and* a stroke because the space is free, while an inward ring is
+     * spending space the content is already using. Three dp is the smallest gap that still reads as a gap
+     * rather than as the chrome's own border thickening — the distinction [FOCUS_RING_GAP] exists to
+     * protect — and it lands well inside the 14 dp of horizontal padding a row already keeps clear, so the
+     * ring never crowds the first character.
+     *
+     * **It is not a free number: it is [RESTING_EDGE_WIDTH] plus [FOCUS_RING_GAP].** The ring has to clear
+     * whatever the container draws at its own boundary and *then* leave the gap, or the two read as one
+     * thicker border. Since the substrate draws boundaries at exactly one weight, that sum is the inset, and
+     * `ChromeGeometryTest` asserts the identity so a change to either input carries here instead of leaving
+     * this constant silently wrong.
+     *
+     * **What makes it correct at the corners.** A ring inset by this much with a radius of
+     * [focusRingRadius] puts its arc centre on exactly the same point as the container's own arc centre, so
+     * the two curves are concentric and the gap is this value everywhere — on the straight edges and
+     * through the corner alike. Get that wrong and the ring pinches at the corners or gets sliced by the
+     * clip, either of which reads as a rendering fault rather than as focus. `ChromeGeometryTest` asserts
+     * the concentricity rather than trusting this paragraph.
+     *
+     * **What it costs in layout: nothing.** This is the other half of why inward is right here. The
+     * outward ring has to reserve its space unconditionally or focus would reflow the page; an inward ring
+     * is drawn in space the chrome already occupies, so it needs no padding, changes no measurement, and
+     * cannot move a sibling.
+     */
+    const val FOCUS_RING_INSET = 3f
+
+    /**
+     * The radius an inward focus ring takes inside a container whose own radius is [corner].
+     *
+     * Subtracting the inset is what makes the two curves concentric: a ring inset by
+     * [FOCUS_RING_INSET] on every side has its arc centre at `inset + radius`, so choosing
+     * `radius = R - inset` puts that centre at `R` — the container's own. Any other radius leaves a ring
+     * that runs parallel to the straight edges and then converges or diverges through the corner.
+     *
+     * Floored at zero so a container with a radius smaller than the inset gets a square ring rather than
+     * a negative one.
+     */
+    fun focusRingRadius(corner: Corner): Float = focusRingRadius(corner.radiusDp)
+
+    /**
+     * The same concentricity rule for a container whose radius is not one of the three tiers.
+     *
+     * The tiers cover chrome the substrate shapes. They cannot cover a **circle**, because a circle's
+     * radius is half its own size — a 30 dp accent swatch needs 15 dp and a 46 dp avatar needs 23 dp, and no
+     * fixed tier is right for both. Rather than invent a `Corner.Circle` that would be a lie at every size
+     * but one, the arithmetic is exposed directly and the circular caller passes `size / 2`.
+     */
+    fun focusRingRadius(containerRadiusDp: Float): Float =
+        (containerRadiusDp - FOCUS_RING_INSET).coerceAtLeast(0f)
+
+    /**
+     * The inset a ring needs inside a container that draws [boundaryWidthDp] at its own edge.
+     *
+     * [FOCUS_RING_INSET] answers this for the substrate's one edge weight. A few components draw something
+     * heavier — a selected accent swatch carries a 2.5 dp border, a selected object edge carries
+     * [SELECTED_EDGE_WIDTH] — and inside those the default inset would put the ring's outer edge half a dp
+     * from the border's inner edge. Half a dp is not a gap at any density; it is the two strokes merging
+     * into one heavier ring, which is the exact confusion [FOCUS_RING_GAP] exists to prevent, and it would
+     * land on the component where the confusion costs most: one whose boundary *is* its selection signal.
+     *
+     * So the rule generalises rather than special-cases: clear the boundary, then leave the gap.
+     */
+    fun focusRingInsetOver(boundaryWidthDp: Float): Float =
+        (boundaryWidthDp + FOCUS_RING_GAP).coerceAtLeast(FOCUS_RING_INSET)
+
+    /**
      * Interior padding for a piece of chrome at each corner tier.
      *
      * Padding tracks the radius rather than being chosen beside it: content set closer to a corner than

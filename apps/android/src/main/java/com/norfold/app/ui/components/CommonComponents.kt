@@ -35,6 +35,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +70,8 @@ import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.ui.LocalControlLabelMode
+import com.norfold.app.domain.style.ChromeGeometry.Corner
+import com.norfold.app.ui.rememberChromeFocus
 
 @Composable
 fun ComposeLoadingScreen(palette: BrandPalette = ThemeProfile.Norfold.palette(), reduceMotion: Boolean = false) {
@@ -129,6 +132,23 @@ fun NavBarItem(label: String, icon: ImageVector, selected: Boolean, modifier: Mo
 fun NavBarItem(label: String, icon: SemanticActionId, selected: Boolean, modifier: Modifier = Modifier, badgeCount: Int = 0, onClick: () -> Unit) =
     NavBarItem(label, selected, modifier, badgeCount, onClick) { tint -> SemanticAppIcon(icon, null, tint = tint) }
 
+/**
+ * One bottom-navigation destination.
+ *
+ * ## Focus
+ *
+ * Eight call sites, and the most consequential eight in the app: this is the primary navigation, so a
+ * keyboard or switch-access user who cannot see where they are in it cannot move around Norfold at all.
+ *
+ * The ring is inward because these items are laid out with `Modifier.weight(1f)` and no spacing — an
+ * outward ring would be drawn on top of the adjacent destination, which is worse than none, since the user
+ * would be told the wrong item is focused. Inward also spends no layout space, and space is scarce here:
+ * with [ControlLabelMode.IconsAndText] the item already carries an icon, a badge and a label inside 68 dp.
+ *
+ * Focus is deliberately not selection. The selected destination is already stated by an accent tint and, in
+ * [ControlLabelMode.Adaptive], by being the only item showing its label. A focused-but-unselected
+ * destination is the normal case while tabbing, so the two signals have to be separable.
+ */
 @Composable
 private fun NavBarItem(
     label: String,
@@ -143,10 +163,12 @@ private fun NavBarItem(
         ControlLabelMode.IconsAndText -> true
         ControlLabelMode.Adaptive -> selected
     }
+    val focus = rememberChromeFocus()
     Column(
         modifier
             .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
+            .then(focus.ring(Corner.Media))
             .semantics { contentDescription = label }
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

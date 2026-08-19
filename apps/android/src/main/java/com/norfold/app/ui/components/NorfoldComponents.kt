@@ -17,6 +17,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.norfold.app.ui.rememberChromeFocus
 
 @Composable
 fun NorfoldPageHeader(
@@ -48,10 +50,22 @@ fun NorfoldPageHeader(
     }
 }
 
+/**
+ * The plain content card: a bordered, unelevated surface.
+ *
+ * **Not a focus site, and the reason is worth recording** — the census counted this as a population of 6
+ * interactive sites needing a focus ring. It is not: the composable took an `onClick` and every one of its
+ * six call sites omitted it, so the clickable branch was unreachable and the card has only ever been a
+ * static container. Ringing it would have added a focus affordance to a code path no user can reach, and
+ * kept a parameter alive that invites a seventh caller to make it interactive without the semantics —
+ * `Modifier.clickable` with no `role`, no `onClickLabel` — that a real target needs. Removed instead. A
+ * future caller that genuinely needs a clickable card should use [SettingsRow] or add the parameter back
+ * together with its semantics and its ring.
+ */
 @Composable
-fun NorfoldCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
+fun NorfoldCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Surface(
-        modifier = if (onClick == null) modifier else modifier.clickable(onClick = onClick),
+        modifier = modifier,
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -74,15 +88,39 @@ fun NorfoldMetric(label: String, value: String, icon: ImageVector, tint: Color, 
     }
 }
 
+/**
+ * A segmented mode strip: one option active, the rest transparent.
+ *
+ * ## Focus, and the accent-on-accent trap
+ *
+ * The active option is filled with `primary`, and the substrate's default ring colour *is* `primary`. A ring
+ * measured against the page and drawn on the active segment would sit at 1.00:1 against the surface it is
+ * drawn on — invisible on exactly the segment the user is most likely to tab to, since it is the one already
+ * selected. So each option measures its ring against its own fill: `onPrimary` territory on the active one,
+ * the strip's `surfaceVariant` on the others.
+ *
+ * The ring is inward because the options are packed 3 dp apart inside a strip that clips them; an outward
+ * ring would be drawn on the neighbouring segment or clipped by the strip's own 10 dp shape.
+ *
+ * Focus is not selection here either: the active segment is already stated by fill, text colour and weight.
+ * A user tabbing across the strip is focused on inactive segments most of the time, so the ring has to be
+ * legible on a transparent segment as well as on the filled one.
+ */
 @Composable
 fun NorfoldSegmentedControl(options: List<String>, selected: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
     Surface(modifier, shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
         Row(Modifier.padding(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             options.forEach { option ->
                 val active = option == selected
+                val focus = rememberChromeFocus()
+                // What the ring is drawn on, not what the strip sits on: the active segment's own accent
+                // fill would otherwise measure 1.00:1 against an accent-coloured ring.
+                val ringBackdrop = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
                 Surface(
-                    Modifier.clickable { onSelect(option) },
-                    shape = RoundedCornerShape(7.dp),
+                    Modifier
+                        .clickable(interactionSource = focus.source, indication = ripple()) { onSelect(option) }
+                        .then(focus.ringOnShape(SegmentRadius, ringBackdrop)),
+                    shape = RoundedCornerShape(SegmentRadius.dp),
                     color = if (active) MaterialTheme.colorScheme.primary else Color.Transparent,
                 ) {
                     Text(option, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
@@ -91,6 +129,16 @@ fun NorfoldSegmentedControl(options: List<String>, selected: String, onSelect: (
         }
     }
 }
+
+/**
+ * The option's own corner radius, named because the focus ring's radius is derived from it.
+ *
+ * Not a [com.norfold.app.domain.style.ChromeGeometry.Corner] tier: this strip predates the substrate and
+ * 7 dp inside a 10 dp shell is a proportion the tiers do not have. Naming it keeps the shape and the ring
+ * reading the same number, which is the property that matters — a ring derived from a different radius than
+ * the shape it marks bulges or pinches at every corner.
+ */
+private const val SegmentRadius = 7f
 
 
 @Composable

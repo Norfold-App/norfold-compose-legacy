@@ -76,6 +76,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
 import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -124,6 +125,8 @@ import com.norfold.app.ui.components.WorkspaceIconBadge
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import com.norfold.app.ui.components.SemanticAppIcon
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.domain.style.ChromeGeometry.Corner
+import com.norfold.app.ui.rememberChromeFocus
 
 @Composable
 fun SectionSidebarOverlay(state: DocsUiState, viewModel: DocsViewModel) {
@@ -1468,6 +1471,23 @@ private fun SideNavItem(label: String, icon: ImageVector, selected: Boolean, onC
 private fun SideNavItem(label: String, icon: SemanticActionId, selected: Boolean, onClick: () -> Unit) =
     SideNavItem(label, selected, onClick) { tint -> SemanticAppIcon(icon, null, Modifier.size(22.dp), tint) }
 
+/**
+ * One sidebar destination.
+ *
+ * ## Selection and focus are two different signals, drawn differently on purpose
+ *
+ * This row already says a great deal about selection — an animated 12%-tint pill behind it, a 4 dp accent
+ * bar at its left edge, a heavier label, an accent tint on both icon and text. None of that is focus.
+ * Selection means "this is where you are"; focus means "this is what Enter will activate", and on a sidebar
+ * they are routinely different rows: a keyboard user tabbing down the nav is focused on rows they have not
+ * selected. Reusing any part of the selection vocabulary for focus would make the two indistinguishable and
+ * would light the pill on a destination the user has not opened.
+ *
+ * So focus is a ring, and it is drawn *inward*: these rows are packed flush with 2-4 dp between them, so a
+ * ring outside the bounds would overlap the neighbour above and below. Inward also costs no layout space,
+ * which matters here because the selection pill is `matchParentSize` — a ring that resized the row would
+ * resize the pill with it.
+ */
 @Composable
 private fun SideNavItem(
     label: String,
@@ -1485,6 +1505,7 @@ private fun SideNavItem(
         animationSpec = tween(250, easing = FastOutSlowInEasing),
         label = "indicator",
     )
+    val focus = rememberChromeFocus()
 
     Box(Modifier.fillMaxWidth()) {
         // Animated selection pill background
@@ -1513,7 +1534,8 @@ private fun SideNavItem(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
-                .clickable(onClick = onClick)
+                .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
+                .then(focus.ring(Corner.Media))
                 .padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
