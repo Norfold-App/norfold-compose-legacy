@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -123,6 +124,7 @@ import com.norfold.app.domain.Note
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.components.WorkspaceIconBadge
 import com.norfold.app.ui.components.NorfoldBottomSheet
+import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.SemanticAppIcon
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.domain.style.ChromeGeometry.Corner
@@ -255,11 +257,7 @@ private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 state.workspaces.forEach { ws ->
                     val selected = ws.id == state.settings.activeWorkspaceId
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { viewModel.switchWorkspace(ws.id) }.padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
+                    ChoiceRow(onClick = { viewModel.switchWorkspace(ws.id) }) {
                         WorkspaceIconBadge(
                             icon = ws.icon,
                             iconKind = ws.iconKind,
@@ -277,11 +275,7 @@ private fun WorkspaceSwitcher(state: DocsUiState, viewModel: DocsViewModel) {
                         if (selected) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                     }
                 }
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { creating = true }.padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                ChoiceRow(onClick = { creating = true }) {
                     Box(Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
                         Icon(Icons.Outlined.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                     }
@@ -659,11 +653,7 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
             SideNavItem("Settings", SemanticActionId.AppSettings, state.destination == Destination.Settings) { viewModel.go(Destination.Settings) }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { viewModel.go(Destination.Settings) }.padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        ChoiceRow(onClick = { viewModel.go(Destination.Settings) }, contentPadding = PaddingValues(10.dp)) {
             Box(Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
                 Text(publicName.take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
             }

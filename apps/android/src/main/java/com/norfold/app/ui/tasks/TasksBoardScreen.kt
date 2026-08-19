@@ -107,6 +107,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
@@ -1382,12 +1383,9 @@ private fun MultiPropertyPickerDialog(
                     LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 430.dp)) {
                         items(available, key = { it.name }) { type ->
                             val checked = type in selected
-                            Row(
-                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable {
-                                    selected = if (checked) selected - type else selected + type
-                                }.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ChoiceRow(
+                                onClick = { selected = if (checked) selected - type else selected + type },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Checkbox(checked = checked, onCheckedChange = { next -> selected = if (next) selected + type else selected - type })
                                 Icon(type.icon(), null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2494,9 +2492,10 @@ private fun TaskRailPanel(
             Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Sort tasks", fontWeight = FontWeight.Black, fontSize = 18.sp)
                 TaskWorkspaceSort.entries.forEach { mode ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onSortChange(mode) }.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    ChoiceRow(
+                        onClick = { onSortChange(mode) },
+                        contentPadding = PaddingValues(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.Start,
                     ) {
                         RadioButton(selected = mode == sort, onClick = { onSortChange(mode) })
                         Text(mode.label, fontWeight = if (mode == sort) FontWeight.Bold else FontWeight.Normal)
@@ -3869,9 +3868,9 @@ private fun TaskPropertyPicker(onDismiss: () -> Unit, onPick: (TaskPropertyType)
                 OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Outlined.Search, null) }, placeholder = { Text("Search property types") }, colors = taskTextFieldColors())
                 LazyColumn(modifier = Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(types) { type ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onPick(type) }.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                        ChoiceRow(
+                            onClick = { onPick(type) },
+                            contentPadding = PaddingValues(10.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             Icon(type.icon(), null, tint = MaterialTheme.colorScheme.primary)

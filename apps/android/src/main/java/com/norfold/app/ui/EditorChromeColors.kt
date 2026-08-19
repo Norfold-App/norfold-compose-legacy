@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ContrastAnalysis
+import com.norfold.app.domain.style.ContrastConfidence
 import com.norfold.app.domain.style.ColorValue
 
 /**
@@ -50,6 +51,47 @@ object EditorChromeColors {
         backdrop: Color,
         target: Double = ContrastAnalysis.UI_COMPONENT,
     ): Color = ContrastAnalysis.legibleChrome(base.asColorValue(), backdrop.asColorValue(), target).asColor()
+
+    /**
+     * [surface] as it actually appears once painted on [page] — the colour chrome drawn on it must be
+     * measured against.
+     *
+     * **This exists because a translucent backdrop is not a colour any of the arithmetic can use.**
+     * [ContrastAnalysis.ratio] reads only the three colour channels, by design: WCAG's formula is defined on
+     * rendered sRGB, and a colour carrying an alpha has not been rendered yet. [ContrastAnalysis.analyze]
+     * is honest about that and reports [ContrastConfidence.INDETERMINATE]; so is
+     * [ContrastAnalysis.suggestAccessible], which returns `null` outright. But
+     * [ContrastAnalysis.legibleChrome] has to return *a* colour, so it falls through to
+     * [ContrastAnalysis.inkFor] — and that path is where a translucent backdrop does real damage.
+     *
+     * **Two things go wrong, and the quieter one is worse.** Passed `surface.copy(alpha = 0.16f)`,
+     * `legibleChrome` cannot search for a legible lightness, so it stops preserving the user's hue and
+     * returns flat black or flat white instead. That is the opposite of what the function is for: its whole
+     * argument is that only lightness moves, "which is what keeps the user's accent recognisably *theirs*".
+     * Across the ten shipped accents on the six workspace-object tiles over both pages, **all 120 cases lost
+     * the accent** and became black or white. Compositing first restores a hue-preserving accent in all 120.
+     *
+     * The second failure is the measurable one. A workspace object tile fills itself with the object's own
+     * colour at 16% alpha, so on the dark page it composites to near-black: the chat colour `#7E57FF` over
+     * `#070A12` is `#1A1638`. `inkFor` looking at the *uncomposited* `#7E57FF` picks black, and that black
+     * ring lands at **1.22:1** on the tile it is actually drawn on. Across the six object colours on the dark
+     * page the drawn ratios are 1.26, 1.34, 1.38, 1.30, 1.22 and 17.86 — the one that passes does so by
+     * accident, because `#6F36FF` is dark enough that `inkFor` happened to choose white. **60 of the 120
+     * accent-by-tile cases fail 1.4.11's 3:1 as drawn.** Every one of the 120 clears 3:1 once the backdrop is
+     * composited, because the search runs against the surface that exists.
+     *
+     * 42 of the app's 88 interactive `Surface`s paint a translucent or transparent fill, so this is the common
+     * case here rather than an edge one.
+     *
+     * **What this can and cannot claim.** One composite is exact when [surface] sits directly on [page].
+     * Where a translucent surface sits on *another* translucent surface — a 0.74 alpha card inside a 0.48
+     * alpha container — the true colour needs the whole stack, and this returns the single-hop
+     * approximation. That is an approximation of the right quantity rather than a measurement of the wrong
+     * one: it moves the figure to within a few percent of the drawn pixel instead of leaving it describing a
+     * colour that was never painted. A caller that knows its real stack should pass the resolved backdrop.
+     */
+    fun opaque(surface: Color, page: Color): Color =
+        surface.asColorValue().compositedOver(page.asColorValue()).asColor()
 
     /**
      * The backdrop a piece of page chrome is measured against, given the page's resolved paint.

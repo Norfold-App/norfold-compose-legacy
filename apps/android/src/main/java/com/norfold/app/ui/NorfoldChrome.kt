@@ -2,12 +2,14 @@ package com.norfold.app.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
@@ -20,6 +22,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.style.ChromeGeometry
@@ -68,13 +71,19 @@ object NorfoldChrome {
      * light page and 1.41:1 on the dark one, and `outlineVariant` measures 1.07:1 and 1.24:1. A non-text
      * boundary needs roughly 1.5:1 to be visible at all, so both tokens draw an edge that states a boundary
      * the user cannot see.
+     *
+     * [backdrop] is composited onto the page first, for the reason [focusRing] states at length: a
+     * translucent backdrop is not a colour the measurement can use, and an edge solved against one is solved
+     * against a pixel that is never painted. This matters more here than it looks, because #62 will route
+     * the tree's 39 invisible `outlineVariant` borders through this function and a majority of those sites
+     * sit on translucent cards.
      */
     @Composable
     @ReadOnlyComposable
     fun restingEdge(backdrop: Color = MaterialTheme.colorScheme.background): Color =
         EditorChromeColors.legible(
             MaterialTheme.colorScheme.outline,
-            backdrop,
+            EditorChromeColors.opaque(backdrop, MaterialTheme.colorScheme.background),
             ChromeGeometry.RESTING_EDGE_RATIO,
         )
 
@@ -87,13 +96,25 @@ object NorfoldChrome {
      *
      * The ordinary case adjusts nothing, because a user accent that already contrasts with the page is
      * returned exactly as chosen.
+     *
+     * **[backdrop] is composited onto the page before it is measured.** A translucent backdrop is a colour
+     * the arithmetic cannot use at all: [EditorChromeColors.legible] can neither measure it nor search
+     * against it, so it abandons the accent and returns flat black or white chosen from a colour that is
+     * never painted. 42 of the app's 88 interactive `Surface`s paint a translucent or transparent fill, and on
+     * the worst of them — a workspace object tile at 16% alpha over the dark page — that ink draws at
+     * **1.22:1**, with 60 of the 120 accent-by-tile cases failing 3:1. [EditorChromeColors.opaque] states the
+     * arithmetic and the measured cases; `ChromeGeometryTest` pins them.
      */
     @Composable
     @ReadOnlyComposable
     fun focusRing(
         accent: Color = MaterialTheme.colorScheme.primary,
         backdrop: Color = MaterialTheme.colorScheme.background,
-    ): Color = EditorChromeColors.legible(accent, backdrop, ChromeGeometry.FOCUS_RING_RATIO)
+    ): Color = EditorChromeColors.legible(
+        accent,
+        EditorChromeColors.opaque(backdrop, MaterialTheme.colorScheme.background),
+        ChromeGeometry.FOCUS_RING_RATIO,
+    )
 
     /**
      * A resting edge on this modifier, at the substrate's one weight and measured colour.
@@ -248,8 +269,9 @@ object NorfoldChrome {
  * a `collectIsFocusedAsState`, and a modifier — and getting any of the three subtly wrong produces chrome
  * that compiles, runs, and silently shows nothing when focused, which is indistinguishable from not having
  * done the work. The tree already demonstrates the failure: `collectIsFocusedAsState` appears nowhere in
- * `ui/`, so every one of the 138 non-editor interactive sites currently draws no focus affordance at all,
- * while the 559 Material buttons beside them get one from the library.
+ * `ui/`, so before this substrate no interactive site in the app drew a focus affordance that a keyboard or
+ * switch-access user could actually see — only the ripple's 1.22:1 state layer, which the measurement below
+ * shows does not reach the bar.
  *
  * Bundling the two means a caller cannot hold one without the other, and cannot pass the ring a source that
  * is not the one the click is wired to:
@@ -266,6 +288,15 @@ object NorfoldChrome {
  *
  * The ring goes **after** the `clickable` in the chain so it draws over the ripple rather than under it, and
  * inside the `clip` so a clipped parent cannot delete it.
+ *
+ * **What the ripple already does, and why it is not enough.** A rippled target is not blind to focus:
+ * `StateLayer` in `material-ripple` handles `FocusInteraction.Focus`, and Material3 1.4.0's
+ * `RippleDefaults.RippleAlpha` carries `focusedAlpha = 0.10f`, so focus already tints the surface. Measured on
+ * this app's six surfaces that tint lands between 1.22:1 and 1.32:1 — under half of WCAG 1.4.11's 3:1, and
+ * below even the substrate's quieter resting-edge target. Material3 also ships no focus-outline primitive of
+ * its own, so the 559 Material buttons in the tree are in the same position as the hand-rolled chrome beside
+ * them. `ChromeGeometryTest` pins that measurement, because "the ripple already handles focus" is the most
+ * plausible reason a future change would remove this.
  */
 class ChromeFocus internal constructor(
     val source: MutableInteractionSource,
@@ -351,6 +382,83 @@ fun rememberChromeFocus(): ChromeFocus {
     val focused by source.collectIsFocusedAsState()
     return ChromeFocus(source, focused)
 }
+
+/**
+ * Make this chrome clickable **and** focus-visible in one call, for chrome that owns its own radius.
+ *
+ * ## Why a modifier and not another component
+ *
+ * The largest interactive population in the app is not a row or a card: it is 50 sites that put
+ * `.clickable { … }` on a `Surface`'s own modifier, spread across eleven files and **twelve** distinct shapes —
+ * 6, 8, 10, 12, 14, 16, 18, 20 dp, a circle, `MaterialTheme.shapes.medium`, a local constant, and one with no
+ * shape at all. They are a workspace tile, a stat card, a quick chip, a search result, a shape swatch, an
+ * onboarding choice, a board column header. No single component could absorb that without a parameter for
+ * every difference, which is the overgrown chrome component the substrate/semantics split exists to prevent.
+ *
+ * What they *do* share is the mistake: `.clickable` with nothing that shows focus. So the shared thing is the
+ * wiring, not the container — and the honest shape for shared wiring is a modifier the existing `Surface` can
+ * take, leaving its shape, colour, border and elevation exactly where its author put them.
+ *
+ * ## Why it takes the radius rather than reading it
+ *
+ * A `Modifier` cannot see the `Surface` it is passed to, so it cannot discover that the shape is 18 dp; the
+ * caller has to say. That is a real cost — a caller can pass a radius that does not match its shape, and the
+ * ring will then bulge or pinch through the corners. It is accepted because the alternative is worse: the
+ * ring must be concentric with the *actual* shape, and every way of guessing it is wrong more often than a
+ * caller copying the number beside it. Pass the same value the `shape` argument uses, and for a circle pass
+ * half the size.
+ *
+ * ```
+ * Surface(
+ *     Modifier.focusableChrome(radiusDp = 18f, onClick = onClick),
+ *     shape = RoundedCornerShape(18.dp),
+ * ) { … }
+ * ```
+ *
+ * @param radiusDp the radius the chrome's own shape draws. For a circle, half its size.
+ * @param surface what the ring is measured against — **the colour the ring is drawn on**. Chrome filled with
+ *   an accent must pass that fill, or an accent-coloured ring lands at 1.00:1 against it. See
+ *   [ChromeFocus.ringOnCircle] for the case that made this necessary.
+ * @param enabled false leaves the chrome inert and unfocusable, matching `clickable`'s own contract.
+ */
+@Composable
+fun Modifier.focusableChrome(
+    radiusDp: Float,
+    onClick: () -> Unit,
+    surface: Color = MaterialTheme.colorScheme.background,
+    enabled: Boolean = true,
+    onClickLabel: String? = null,
+    role: Role? = null,
+): Modifier {
+    val focus = rememberChromeFocus()
+    val ring = focus.ringOnShape(radiusDp, surface)
+    return this
+        .clickable(
+            interactionSource = focus.source,
+            indication = ripple(),
+            enabled = enabled,
+            onClickLabel = onClickLabel,
+            role = role,
+            onClick = onClick,
+        )
+        .then(ring)
+}
+
+/**
+ * The same wiring for chrome shaped by one of the substrate's three [Corner] tiers.
+ *
+ * Preferred where it applies, because a tier cannot disagree with the shape the way a loose `Float` can: the
+ * caller passes the tier to both `NorfoldChrome.shape(corner)` and here, so there is one number.
+ */
+@Composable
+fun Modifier.focusableChrome(
+    corner: Corner,
+    onClick: () -> Unit,
+    surface: Color = MaterialTheme.colorScheme.background,
+    enabled: Boolean = true,
+    onClickLabel: String? = null,
+    role: Role? = null,
+): Modifier = focusableChrome(corner.radiusDp, onClick, surface, enabled, onClickLabel, role)
 
 /**
  * A piece of floating interaction chrome: the substrate's single surface.

@@ -3,6 +3,7 @@ package com.norfold.app.domain.style
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 /**
  * The interaction-chrome substrate's geometry, pinned.
@@ -141,6 +142,60 @@ class ChromeGeometryTest {
         )
         assertTrue("a focus ring needs weight the edge it decorates does not", ChromeGeometry.FOCUS_RING_WIDTH > ChromeGeometry.RESTING_EDGE_WIDTH)
         assertTrue("a ring drawn flush reads as a thicker border, not as focus", ChromeGeometry.FOCUS_RING_GAP > 0f)
+    }
+
+    /**
+     * **Material's own focused state layer does not reach 3:1 on any Norfold surface, so the ring is not
+     * redundant with it.**
+     *
+     * This is the measurement that justifies drawing a ring at all, and it corrects a weaker claim: it is not
+     * true that a `Modifier.clickable` with a ripple shows *nothing* on focus. `StateLayer` in
+     * `material-ripple` handles `FocusInteraction.Focus`, and `RippleDefaults.RippleAlpha` in Material3 1.4.0
+     * carries `focusedAlpha = 0.10f`. So every rippled target already draws `onSurface` at 10% over its own
+     * surface when focused.
+     *
+     * The problem is that 10% of the ink over the surface lands between 1.22:1 and 1.32:1 on the six surfaces
+     * this app actually uses — under half of WCAG 1.4.11's 3:1, and below even the substrate's quieter resting
+     * target. Reaching 3:1 by alpha alone would need roughly 0.46 on the light page, 4.6x the Material
+     * default, which is no longer a state layer but a scrim over the content.
+     *
+     * Material3 1.4.0 also ships no focus-outline primitive of its own — there is no `focusRing` or focus
+     * indicator API in the artifact, and `Button` draws focus only through this same state layer. So the 559
+     * Material buttons in the tree are in exactly the same position as the hand-rolled chrome: a focus state
+     * that composites, and does not contrast.
+     *
+     * Asserted per surface rather than described, because "the ripple already handles focus" is the most
+     * plausible reason a future change would delete the ring.
+     */
+    @Test
+    fun `the ripple focused state layer falls short of the ring's target on every app surface`() {
+        // RippleDefaults.RippleAlpha.focusedAlpha, Material3 1.4.0.
+        val focusedAlpha = 0.10f
+
+        val cases = listOf(
+            // ink (onSurface) to the surfaces it is drawn over, light then dark.
+            0x171725 to listOf(0xFFFFFF, 0xF7F8FC, 0xF1F2F7),
+            0xF6F7FB to listOf(0x0E131F, 0x070A12, 0x151B28),
+        )
+        for ((ink, surfaces) in cases) {
+            for (surface in surfaces) {
+                val backdrop = hex(surface)
+                val layer = hex(ink).withAlphaFraction(focusedAlpha).compositedOver(backdrop)
+                val measured = ContrastAnalysis.ratio(layer, backdrop)
+                assertTrue(
+                    "the focused ripple layer on %06X measures %.2f:1, which would already satisfy the ring's %.1f:1 target and make the ring redundant"
+                        .format(surface, measured, ChromeGeometry.FOCUS_RING_RATIO),
+                    measured < ChromeGeometry.FOCUS_RING_RATIO,
+                )
+                // Below the substrate's *quieter* target too, which is the sharper statement: the state
+                // layer is not merely short of the ring's bar, it is short of the resting edge's.
+                assertTrue(
+                    "the focused ripple layer on %06X measures %.2f:1, at or above the resting edge target"
+                        .format(surface, measured),
+                    measured < ChromeGeometry.RESTING_EDGE_RATIO,
+                )
+            }
+        }
     }
 
     /**
@@ -419,6 +474,159 @@ class ChromeGeometryTest {
                 )
             }
         }
+    }
+
+    /**
+     * The ten shipped brand accents, mirrored from `BrandPalettes` — one of them is whatever the user's
+     * theme currently resolves `colorScheme.primary` to, so a focus ring has to work for all ten.
+     *
+     * Hard-coded rather than read from `BrandPalettes`, for the reason the outline tokens above are: that map
+     * is built out of `androidx.compose.ui.graphics.Color`, and this source set has no Compose harness. The
+     * cost is that a palette edit does not automatically reach this test; the benefit is that the test runs
+     * at all. Same trade the rest of this file already makes.
+     */
+    private val shippedAccents = listOf(
+        0x3D7C45, 0x9D50BB, 0xF75C7A, 0x2E7BE4, 0x1F9E7E,
+        0xE23A2E, 0xB06AB3, 0x3E8EA0, 0xE08A12, 0x33374A,
+    )
+
+    /**
+     * The six colours a workspace object can carry, from the `upsertWorkspaceObject` call sites in
+     * `NotesRepository` — note, file, task, goal, chat, calendar. Not user-editable, so this is the whole set.
+     */
+    private val objectColors = listOf(0x9D6CFF, 0x4AADFF, 0x56CC98, 0x20B26B, 0x7E57FF, 0x6F36FF)
+
+    /** The two page backgrounds, from `NorfoldTheme`. */
+    private val pages = listOf(0xF7F8FC, 0x070A12)
+
+    /**
+     * The two alphas the object tiles actually paint at: the grid tile fills at 0.16 and the graph node at
+     * 0.18 (`WorkspaceHubScreens.kt:608` and `:694`).
+     */
+    private val tileAlphas = listOf(0.16f, 0.18f)
+
+    /** Every accent-on-tile combination the two screens can produce: 10 x 6 x 2 pages x 2 alphas. */
+    private fun tileCases(): List<Triple<ColorValue, ColorValue, ColorValue>> = buildList {
+        for (page in pages) {
+            for (obj in objectColors) {
+                for (alpha in tileAlphas) {
+                    val translucent = hex(obj).withAlphaFraction(alpha)
+                    val drawn = translucent.compositedOver(hex(page))
+                    for (accent in shippedAccents) add(Triple(hex(accent), translucent, drawn))
+                }
+            }
+        }
+    }
+
+    /**
+     * A translucent backdrop does not merely mis-measure the chrome solver — it switches the solver off.
+     *
+     * This is the failure [com.norfold.app.ui.EditorChromeColors.opaque] exists to prevent, and it is worth
+     * pinning both halves of, because the quieter half is the worse one.
+     *
+     * [ContrastAnalysis.suggestAccessible] returns `null` for a translucent background, correctly: WCAG is
+     * defined on rendered sRGB and a colour carrying an alpha has not been rendered. But
+     * [ContrastAnalysis.legibleChrome] must return *a* colour, so it falls through to
+     * [ContrastAnalysis.inkFor] — which means the lightness search never runs and the user's accent is
+     * replaced by flat black or flat white. That defeats the property `legibleChrome` was written for: only
+     * lightness is supposed to move, so the accent stays recognisably the user's. Handed a translucent
+     * backdrop it stops being an accent-preserving function at all, in **every** case, on every palette.
+     *
+     * Then the ink it picks is chosen against a colour that is never painted, so half of these land on a tile
+     * they cannot be seen on. Both assertions are exhaustive rather than sampled: the population is finite
+     * (ten shipped accents, six object colours, two pages, two alphas) and small enough to state completely.
+     */
+    @Test
+    fun `a translucent backdrop makes the chrome solver discard the accent and mis-pick the ink`() {
+        val cases = tileCases()
+        assertEquals("the case set should cover 10 accents x 6 colours x 2 pages x 2 alphas", 240, cases.size)
+
+        var invisible = 0
+        for ((accent, translucent, drawn) in cases) {
+            val ink = ContrastAnalysis.legibleChrome(accent, translucent, ChromeGeometry.FOCUS_RING_RATIO)
+            assertTrue(
+                "accent %s on a translucent backdrop returned %s, which is neither black nor white — the fall-through to inkFor is no longer what happens".format(
+                    accent.toHex(), ink.toHex(),
+                ),
+                ink == ColorValue.BLACK || ink == ColorValue.WHITE,
+            )
+            if (ContrastAnalysis.ratio(ink, drawn) < ChromeGeometry.FOCUS_RING_RATIO) invisible++
+        }
+        assertEquals("half the cases should be invisible as drawn", 120, invisible)
+    }
+
+    /**
+     * Compositing the backdrop first fixes both halves at once, on every case.
+     *
+     * The ratio clears [ChromeGeometry.FOCUS_RING_RATIO] because the search now runs against a colour that is
+     * actually on screen, and the hue survives because [ContrastAnalysis.suggestAccessible] moves lightness
+     * only. The hue tolerance is one degree: HSL round-trips through 8-bit channels, and the largest drift
+     * measured across all 240 cases is 0.67 degrees.
+     *
+     * The ratio tolerance is one hundredth, for the reason the resting-edge test states — the lightness
+     * search steps in hundredths, so it clears the target rather than landing on it. Several of these clear
+     * it by almost nothing (the Graphite accent on a dark tile lands at exactly 3.00:1), which is the search
+     * working as designed: the smallest change that satisfies the requirement.
+     */
+    @Test
+    fun `compositing the backdrop first restores a legible accent on every object tile`() {
+        for ((accent, _, drawn) in tileCases()) {
+            val ink = ContrastAnalysis.legibleChrome(accent, drawn, ChromeGeometry.FOCUS_RING_RATIO)
+            val measured = ContrastAnalysis.ratio(ink, drawn)
+            assertTrue(
+                "accent %s on drawn tile %s measures %.2f:1, below the %.2f:1 target".format(
+                    accent.toHex(), drawn.toHex(), measured, ChromeGeometry.FOCUS_RING_RATIO,
+                ),
+                measured >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
+            )
+
+            val before = accent.toHsl()
+            val after = ink.toHsl()
+            if (!before.achromatic && !after.achromatic) {
+                val drift = abs(after.hue - before.hue).let { minOf(it, 360f - it) }
+                assertTrue(
+                    "accent %s became %s — hue moved %.2f degrees, so this is no longer the user's colour".format(
+                        accent.toHex(), ink.toHex(), drift,
+                    ),
+                    drift <= 1f,
+                )
+            }
+        }
+    }
+
+    /**
+     * The single worst case, named, because a summary statistic is easy to satisfy by accident.
+     *
+     * The chat object colour on the dark page is the deepest tile the app paints: `#7E57FF` at 16% over
+     * `#070A12` composites to `#1A1638`. Measured against the *uncomposited* `#7E57FF`, `inkFor` picks black
+     * — and black on `#1A1638` is 1.22:1, a focus ring that does not exist for the user who most needs it.
+     * This is the number quoted in [com.norfold.app.ui.NorfoldChrome.focusRing]'s documentation, so it is
+     * asserted rather than left as a claim.
+     */
+    @Test
+    fun `the worst object tile is the one the documentation names`() {
+        val tile = hex(0x7E57FF).withAlphaFraction(0.16f)
+        val drawn = tile.compositedOver(hex(0x070A12))
+        assertEquals("the composite the two screens actually paint", "#1A1638", drawn.toHex())
+
+        val uncomposited = ContrastAnalysis.legibleChrome(hex(0x3D7C45), tile, ChromeGeometry.FOCUS_RING_RATIO)
+        assertEquals(ColorValue.BLACK, uncomposited)
+        assertEquals(
+            "the ink the old path drew, as it landed on the tile",
+            1.22,
+            ContrastAnalysis.ratio(uncomposited, drawn),
+            0.005,
+        )
+
+        val composited = ContrastAnalysis.legibleChrome(hex(0x3D7C45), drawn, ChromeGeometry.FOCUS_RING_RATIO)
+        assertTrue(
+            "the composited ring should keep the accent rather than fall back to ink",
+            composited != ColorValue.BLACK && composited != ColorValue.WHITE,
+        )
+        assertTrue(
+            "composited ring measures %.2f:1".format(ContrastAnalysis.ratio(composited, drawn)),
+            ContrastAnalysis.ratio(composited, drawn) >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
+        )
     }
 
     private fun hex(rgb: Int) = ColorValue.of((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF)

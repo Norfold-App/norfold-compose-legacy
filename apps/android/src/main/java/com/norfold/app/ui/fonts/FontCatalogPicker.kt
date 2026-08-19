@@ -2,12 +2,9 @@ package com.norfold.app.ui.fonts
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -26,12 +23,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import com.norfold.app.ui.components.NorfoldPopupSectionLabel
 
@@ -146,10 +142,9 @@ private fun FontCatalogRow(
     onSelect: (String) -> Unit,
     onHide: (() -> Unit)?,
 ) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { onSelect(family) }
-            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    ChoiceRow(
+        onClick = { onSelect(family) },
+        contentPadding = PaddingValues(start = 12.dp, top = 8.dp, bottom = 8.dp),
     ) {
         Column(Modifier.weight(1f)) {
             Text(

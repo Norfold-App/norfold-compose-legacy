@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -171,6 +173,70 @@ fun SettingsRow(
         }
         trailing?.invoke()
     }
+}
+
+/**
+ * A full-width row inside a list, sheet or dialog whose whole width is one target: clipped, clickable, and
+ * focus-ringed.
+ *
+ * ## Why this is a component rather than a modifier chain
+ *
+ * The chain `fillMaxWidth().clip(RoundedCornerShape(r)).clickable { … }.padding(p)` appears at seven sites
+ * across three files — workspace switching, new-workspace, the sidebar account row, font picking, sort mode,
+ * property multi-select and property-type picking — with `r` drifting between 10 and 12 dp for no reason a user
+ * could name. Seven copies is also seven places a focus ring has to be remembered, and the evidence that it
+ * would not be is that none of them had one.
+ *
+ * Taking the row means the radius is stated once, the ring is derived from that radius rather than guessed, and
+ * the next one of these gets both without its author having to know the substrate exists.
+ *
+ * **What the seven have in common is not "pick one of these".** Three commit a selection, one navigates, one
+ * toggles a checkbox, one creates. What they share is exactly the geometry the ring depends on: full width, a
+ * clip, one `onClick` covering the whole band, interior padding. That is deliberately all this composable
+ * knows — a `selected` parameter would be wrong for the three that select nothing, and a `trailing` slot would
+ * be wrong for the rows that put their control first. Each caller states its own meaning in [content].
+ *
+ * Inward ring, for the reason every row in this file uses one: these rows sit inside dialogs, sheets and cards
+ * that clip their content and stack the rows flush, so a ring outside the bounds is either deleted by the clip
+ * or drawn on the neighbour.
+ *
+ * **Not for a short row.** The default tier is 14 dp, so a row under 28 dp tall would have its radius clamped
+ * to half its height by [RoundedCornerShape] — it would render as a pill, and the ring, whose radius is
+ * derived from 14 rather than from the clamped value, would stop being concentric with it. Every one of the
+ * seven is at least 42 dp tall because each carries a 26 dp badge, a 34 dp avatar, two lines of text, or a
+ * Material control at its 48 dp minimum. The four *disclosure* headers found in the same sweep
+ * (`TasksBoardScreen` 3295 and 3425, `SidebarScreen` 226 and 1098) are ~24 dp of icon and one text line, and
+ * two of them draw no clip at all, so they are a separate population and not callers of this.
+ *
+ * @param corner the row's own radius. [Corner.Media] rather than either of the two radii found, because 10 and
+ *   12 dp were the same intention written twice; collapsing near-duplicates onto one tier is what the
+ *   substrate is for. It does move these corners by 2-4 dp, which is a visible change on a clipped row and is
+ *   the point rather than a side effect.
+ * @param contentPadding interior padding, which varies legitimately: a radio row needs less than an
+ *   icon-and-two-lines row.
+ */
+@Composable
+fun ChoiceRow(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    corner: Corner = Corner.Media,
+    contentPadding: PaddingValues = PaddingValues(8.dp),
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.spacedBy(10.dp),
+    verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val focus = rememberChromeFocus()
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(corner.radiusDp.dp))
+            .clickable(interactionSource = focus.source, indication = ripple(), onClick = onClick)
+            .then(focus.ring(corner))
+            .padding(contentPadding),
+        verticalAlignment = verticalAlignment,
+        horizontalArrangement = horizontalArrangement,
+        content = content,
+    )
 }
 
 /** Trailing chevron with an optional value label to its left ("Medium", "30 minutes"). */
