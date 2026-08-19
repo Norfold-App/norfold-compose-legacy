@@ -146,6 +146,7 @@ import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.style.EditorStyleCommandIds
 import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.NorfoldChromeSurface
+import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.collapsedBlockSpacing
 import com.norfold.app.ui.editor.style.resolvedBlockMetrics
@@ -944,6 +945,31 @@ private fun FlowBlockRow(
     // here and threading `context.selectionMode` into every interactive child below is what makes "tap a block
     // in selection mode" mean the same thing everywhere in the row, not just in the text field.
     val rowSelectable = state.selectionMode
+    /**
+     * The row's own fill, hoisted so the background and the focus ring cannot disagree about it.
+     *
+     * The ring is measured against the pixel it is drawn on, and this row has three fills. Reading the
+     * `when` twice would let the two copies drift; reading it once means a future state added here is
+     * automatically the colour the ring is graded on.
+     */
+    val rowFill = when {
+        // The source keeps a visible placeholder tint so its origin stays legible during the drag.
+        dragging -> MaterialTheme.colorScheme.surfaceVariant
+        // `selectedIds` also contains the ordinary caret owner. Tinting that whole row made
+        // transparent controls and captions look like one overlapping surface after a tap.
+        // Structural selection is the only state that needs a full-row selection treatment.
+        rowSelectable && selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+        else -> Color.Transparent
+    }
+    /**
+     * What the row's focus ring is measured on.
+     *
+     * A transparent row shows the editor canvas through itself, so `background` is the honest backdrop for
+     * the resting case rather than the `Color.Transparent` the fill literally holds — grading a ring against
+     * a fully transparent colour measures nothing.
+     */
+    val rowRingSurface = if (rowFill == Color.Transparent) MaterialTheme.colorScheme.background else rowFill
+    val rowFocus = rememberChromeFocus()
     val reorderModifier = if (rowSelectable && selected && state.relationshipReview.connectMode == null) {
         Modifier.pointerInput(
             block.id,
@@ -1006,18 +1032,16 @@ private fun FlowBlockRow(
             }
             .zIndex(if (dragging) 2f else 0f)
             .clip(RoundedCornerShape(16.dp))
-            .background(
-                when {
-                    // The source keeps a visible placeholder tint so its origin stays legible during the drag.
-                    dragging -> MaterialTheme.colorScheme.surfaceVariant
-                    // `selectedIds` also contains the ordinary caret owner. Tinting that whole row made
-                    // transparent controls and captions look like one overlapping surface after a tap.
-                    // Structural selection is the only state that needs a full-row selection treatment.
-                    rowSelectable && selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-                    else -> Color.Transparent
-                },
-            )
+            .background(rowFill)
+            // 16 dp, matching the clip above. Suppressed while dragging: the lifted clone is translucent,
+            // rotated and scaled, so a ring on it would trace a shape that is not where the row will land.
+            .then(if (dragging) Modifier else rowFocus.ringOnShape(16f, rowRingSurface))
             .combinedClickable(
+                interactionSource = rowFocus.source,
+                // This file provides no `LocalIndication`, and the overload without an `interactionSource`
+                // resolves indication from that composition local. Passing it explicitly keeps the press
+                // feedback byte-identical to what this row showed before the ring was added.
+                indication = androidx.compose.foundation.LocalIndication.current,
                 onClick = {
                     if (state.selectionMode) presenter.act { toggleSelection(block.id) }
                     else {

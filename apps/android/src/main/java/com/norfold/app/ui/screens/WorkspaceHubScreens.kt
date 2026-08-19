@@ -75,6 +75,9 @@ import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.chromeFocusRing
+import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.focusablePill
 import com.norfold.app.ui.components.GlobalSearchBar
 import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.pressScale
@@ -141,7 +144,11 @@ fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: 
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(state.notes.take(8)) { note ->
                             Surface(
-                                Modifier.width(154.dp).height(126.dp).clickable { viewModel.select(note) },
+                                Modifier.width(154.dp).height(126.dp).focusableChrome(
+                                    radiusDp = 18f,
+                                    surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                                    onClick = { viewModel.select(note) },
+                                ),
                                 shape = RoundedCornerShape(18.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
                             ) {
@@ -227,7 +234,11 @@ private fun PlanningProgressCard(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier.widthIn(min = 248.dp).clickable(onClick = onClick),
+        modifier = modifier.widthIn(min = 248.dp).focusableChrome(
+            radiusDp = 12f,
+            surface = MaterialTheme.colorScheme.surface,
+            onClick = onClick,
+        ),
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -263,7 +274,15 @@ private fun StatCard(label: String, value: String, icon: SemanticActionId, modif
 
 @Composable
 private fun StatCard(label: String, value: String, modifier: Modifier, onClick: () -> Unit, iconContent: @Composable () -> Unit) {
-    Surface(modifier.clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)) {
+    Surface(
+        modifier.focusableChrome(
+            radiusDp = 18f,
+            surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+            onClick = onClick,
+        ),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+    ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             iconContent()
             Text(value, fontWeight = FontWeight.Black, fontSize = 20.sp)
@@ -285,7 +304,14 @@ private fun QuickCaptureRow(viewModel: DocsViewModel) {
 
 @Composable
 private fun QuickChip(label: String, icon: ImageVector, onClick: () -> Unit) {
-    Surface(Modifier.clickable(onClick = onClick), shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)) {
+    Surface(
+        Modifier.focusablePill(
+            surface = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+            onClick = onClick,
+        ),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+    ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
             Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
@@ -295,7 +321,14 @@ private fun QuickChip(label: String, icon: ImageVector, onClick: () -> Unit) {
 
 @Composable
 private fun QuickChip(label: String, icon: SemanticActionId, onClick: () -> Unit) {
-    Surface(Modifier.clickable(onClick = onClick), shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)) {
+    Surface(
+        Modifier.focusablePill(
+            surface = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+            onClick = onClick,
+        ),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+    ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             SemanticAppIcon(icon, null, Modifier.size(16.dp), MaterialTheme.colorScheme.primary)
             Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
@@ -318,7 +351,13 @@ private fun HubSection(title: String, subtitle: String, content: @Composable () 
 private fun CompactHubRow(title: String, detail: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     Surface(
-        modifier.fillMaxWidth().pressScale(interaction).clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), onClick = onClick),
+        modifier
+            .fillMaxWidth()
+            .pressScale(interaction)
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), onClick = onClick)
+            // The source stays hoisted so the ring and the press scale watch the same object: a ring with
+            // its own source would light up on focus the scale never sees.
+            .chromeFocusRing(interaction, radiusDp = 16f, surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f)),
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
     ) {
@@ -501,10 +540,13 @@ fun DatabaseScreen(state: DocsUiState, viewModel: DocsViewModel) {
 
 @Composable
 private fun DatabaseChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    // Measured against its own fill, not the page: the selected chip is filled with `primary`, which is also
+    // the ring's colour, so a page-measured ring would be 1.00:1 on the one chip already worth reaching.
+    val fill = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.54f)
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.focusablePill(surface = fill, onClick = onClick),
         shape = CircleShape,
-        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.54f),
+        color = fill,
     ) {
         Text(
             label,
@@ -553,7 +595,15 @@ private fun DatabaseTableHeader() {
 @Composable
 private fun DatabaseTableRow(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
     val relations = state.workspaceObjectLinks.count { it.fromObjectId == obj.id || it.toObjectId == obj.id }
-    Surface(Modifier.fillMaxWidth().clickable { viewModel.openWorkspaceObject(obj) }, shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f)) {
+    Surface(
+        Modifier.fillMaxWidth().focusableChrome(
+            radiusDp = 14f,
+            surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f),
+            onClick = { viewModel.openWorkspaceObject(obj) },
+        ),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f),
+    ) {
         Row(Modifier.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(0.23f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(iconForObject(obj.objectType), null, tint = Color(obj.color), modifier = Modifier.size(16.dp))
@@ -571,7 +621,15 @@ private fun DatabaseTableRow(obj: WorkspaceObject, state: DocsUiState, viewModel
 
 @Composable
 private fun DatabaseObjectRow(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel) {
-    Surface(Modifier.fillMaxWidth().clickable { viewModel.openWorkspaceObject(obj) }, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f)) {
+    Surface(
+        Modifier.fillMaxWidth().focusableChrome(
+            radiusDp = 16f,
+            surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
+            onClick = { viewModel.openWorkspaceObject(obj) },
+        ),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
+    ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(Color(obj.color).copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
                 Icon(iconForObject(obj.objectType), null, tint = Color(obj.color), modifier = Modifier.size(20.dp))
@@ -605,7 +663,19 @@ private fun DatabaseBoardColumn(title: String, objects: List<WorkspaceObject>, s
 
 @Composable
 private fun DatabaseObjectCard(obj: WorkspaceObject, state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier = Modifier) {
-    Surface(modifier.clickable { viewModel.openWorkspaceObject(obj) }, shape = RoundedCornerShape(18.dp), color = Color(obj.color).copy(alpha = 0.16f)) {
+    // The tile fills itself with the object's own colour at 16%, so the ring is drawn on that translucent
+    // fill rather than on the page. `focusableChrome` composites it onto the page before measuring, which is
+    // what keeps the accent instead of falling back to flat black — this is the worst-measured site in the
+    // app, at 1.22:1 before the composite. See EditorChromeColors.opaque.
+    Surface(
+        modifier.focusableChrome(
+            radiusDp = 18f,
+            surface = Color(obj.color).copy(alpha = 0.16f),
+            onClick = { viewModel.openWorkspaceObject(obj) },
+        ),
+        shape = RoundedCornerShape(18.dp),
+        color = Color(obj.color).copy(alpha = 0.16f),
+    ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(iconForObject(obj.objectType), null, tint = Color(obj.color), modifier = Modifier.size(18.dp))
@@ -691,7 +761,14 @@ fun GraphScreen(state: DocsUiState, viewModel: DocsViewModel) {
         Text("Objects ${state.workspaceObjects.size} · Links ${state.workspaceObjectLinks.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(state.workspaceObjects.take(16)) { obj ->
-                Surface(Modifier.clickable { viewModel.openWorkspaceObject(obj) }, shape = CircleShape, color = Color(obj.color).copy(alpha = 0.18f)) {
+                Surface(
+                    Modifier.focusablePill(
+                        surface = Color(obj.color).copy(alpha = 0.18f),
+                        onClick = { viewModel.openWorkspaceObject(obj) },
+                    ),
+                    shape = CircleShape,
+                    color = Color(obj.color).copy(alpha = 0.18f),
+                ) {
                     Text(obj.title, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                 }
             }

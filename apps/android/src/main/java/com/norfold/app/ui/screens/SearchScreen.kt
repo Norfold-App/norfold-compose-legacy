@@ -47,6 +47,7 @@ import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.SearchField
 import com.norfold.app.ui.components.pressScale
+import com.norfold.app.ui.chromeFocusRing
 
 internal data class SearchResult(
     val stableKey: String,
@@ -210,6 +211,7 @@ internal fun SearchResultRow(
     onActivated: () -> Unit = {},
 ) {
     val interaction = remember { MutableInteractionSource() }
+    val fill = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
     Surface(
         modifier
             .fillMaxWidth()
@@ -217,9 +219,12 @@ internal fun SearchResultRow(
             .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple()) {
                 result.action()
                 onActivated()
-            },
+            }
+            // Same hoisted source the press scale reads, so the ring and the scale answer to one
+            // interaction stream rather than two.
+            .chromeFocusRing(interaction, radiusDp = 18f, surface = fill),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+        color = fill,
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(result.icon, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)

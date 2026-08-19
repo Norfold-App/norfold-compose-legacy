@@ -82,6 +82,8 @@ import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.components.GlobalSearchBar
 import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.pressScale
+import com.norfold.app.ui.chromeFocusRing
+import com.norfold.app.domain.style.ChromeGeometry
 
 enum class LibraryKind { Notes, Documents }
 
@@ -214,12 +216,17 @@ private fun FilteredNotesEmpty(label: String, onClear: () -> Unit, onCreate: () 
 private fun WorkspaceHomeHeader(state: DocsUiState, onEdit: () -> Unit) {
     val settings = state.settings
     val headerInteraction = remember { MutableInteractionSource() }
+    val headerFill = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
     Box(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
             .pressScale(headerInteraction)
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+            .background(headerFill)
+            // The source was already hoisted for the press scale, so the ring joins the same stream. 22 dp
+            // is the clip's radius; the fill is a 10% accent wash, which the substrate composites before
+            // measuring rather than grading the unpainted accent.
+            .chromeFocusRing(headerInteraction, radiusDp = 22f, surface = headerFill)
             .clickable(interactionSource = headerInteraction, indication = null, onClick = onEdit),
     ) {
         if (!settings.workspaceBackgroundUri.isNullOrBlank()) {
@@ -372,7 +379,19 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, availableTags
                 .border(
                     width = if (selected) 1.5.dp else 0.dp,
                     color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    shape = RoundedCornerShape(20.dp),
+                    // 14 dp, matching the card's own shape. It read 20 dp, which drew the selection
+                    // border on a curve the card does not have: the stroke bowed away from the corners
+                    // and clipped flat against the edges.
+                    shape = RoundedCornerShape(14.dp),
+                )
+                // Selection is a 1.5 dp border, so the ring is inset past it — otherwise focusing an
+                // already-selected note just thickens the border that says "selected". Measured on
+                // `surface`, the pale end of the card's own gradient, which is where the ring lands.
+                .chromeFocusRing(
+                    cardInteraction,
+                    radiusDp = 14f,
+                    surface = MaterialTheme.colorScheme.surface,
+                    boundaryWidthDp = if (selected) 1.5f else ChromeGeometry.RESTING_EDGE_WIDTH,
                 )
                 .combinedClickable(
                     interactionSource = cardInteraction,

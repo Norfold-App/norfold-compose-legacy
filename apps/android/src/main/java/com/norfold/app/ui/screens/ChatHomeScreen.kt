@@ -96,6 +96,8 @@ import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.NorfoldPopupRow
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import com.norfold.app.ui.rememberChromeFocus
+import androidx.compose.material3.AlertDialogDefaults
 
 /**
  * The Chat tab landing surface: an inbox-first conversation list (WhatsApp/Telegram base with
@@ -511,12 +513,16 @@ fun ChatHomeScreen(state: DocsUiState, viewModel: DocsViewModel) {
                 .padding(end = 18.dp, bottom = 104.dp)
                 .zIndex(5f),
         ) {
+            val fabFocus = rememberChromeFocus()
             Surface(
                 onClick = { createMenuOpen = true },
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
                 shadowElevation = 12.dp,
-                modifier = Modifier.size(56.dp),
+                interactionSource = fabFocus.source,
+                // Measured on `primary`, the fill the ring is drawn on. A ring measured against the page
+                // here would be an accent ring on an accent fill.
+                modifier = Modifier.size(56.dp).then(fabFocus.ringOnCircle(56f, MaterialTheme.colorScheme.primary)),
             ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(Icons.Outlined.Add, "New conversation", tint = MaterialTheme.colorScheme.onPrimary)
@@ -592,12 +598,15 @@ private fun ContactRequestsHome(
                     }
                     val preview = request.preview?.get("body")?.jsonPrimitive?.contentOrNull
                         .orEmpty()
+                    val requestFocus = rememberChromeFocus()
                     Surface(
                         onClick = { onOpen(request) },
                         shape = RoundedCornerShape(22.dp),
                         color = MaterialTheme.colorScheme.surface,
                         tonalElevation = 2.dp,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                        interactionSource = requestFocus.source,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)
+                            .then(requestFocus.ringOnShape(22f, MaterialTheme.colorScheme.surface)),
                     ) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                             Row(
@@ -925,11 +934,14 @@ private fun StarredMessagesSheet(
                             val conversation = message.channelId?.let { id ->
                                 channels.firstOrNull { it.id == id }?.name
                             } ?: "General"
+                            val starFocus = rememberChromeFocus()
                             Surface(
                                 onClick = { onOpen(message) },
                                 shape = RoundedCornerShape(18.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                interactionSource = starFocus.source,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    .then(starFocus.ringOnShape(18f, MaterialTheme.colorScheme.surfaceVariant)),
                             ) {
                                 Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1027,11 +1039,17 @@ internal fun ConversationRow(
             }
         },
     ) {
+      val rowFocus = rememberChromeFocus()
       Row(
         Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
+            // A flush inbox row: no clip, so radius 0, and the ring is measured on `background` because
+            // that is the fill the row paints under itself.
+            .then(rowFocus.ringOnShape(0f, MaterialTheme.colorScheme.background))
             .combinedClickable(
+                interactionSource = rowFocus.source,
+                indication = androidx.compose.material3.ripple(),
                 onClick = onOpen,
                 // General has no pin/delete; its long-press is a no-op instead of a dead menu.
                 onLongClick = { if (row.channel != null) menuOpen = true },
@@ -1151,10 +1169,19 @@ private fun ConversationAvatar(row: ConversationRowData) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PersonRow(display: String, presence: String? = null, onClick: () -> Unit) {
+    val focus = rememberChromeFocus()
     Row(
         Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = null)
+            // Flush inbox row like [ConversationRow], sharing its geometry: no clip, so radius 0, and the
+            // ring is measured on the inbox's own `background`.
+            .then(focus.ringOnShape(0f, MaterialTheme.colorScheme.background))
+            .combinedClickable(
+                interactionSource = focus.source,
+                indication = androidx.compose.material3.ripple(),
+                onClick = onClick,
+                onLongClick = null,
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1234,12 +1261,14 @@ private fun NewConversationOption(
     detail: String,
     onClick: () -> Unit,
 ) {
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-        modifier = Modifier.fillMaxWidth(),
+        interactionSource = focus.source,
+        modifier = Modifier.fillMaxWidth().then(focus.ringOnShape(14f, MaterialTheme.colorScheme.surface)),
     ) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1289,11 +1318,20 @@ private fun NewDirectMessageDialog(
                 }
                 // A dialog, not a lazy list: the roster at this stage is small by definition.
                 filtered.take(12).forEach { (username, display) ->
+                    val pickFocus = rememberChromeFocus()
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .combinedClickable(onClick = { onPick(username, display) }, onLongClick = null)
+                            // Inside a dialog, so the ring is measured on the dialog's container rather than
+                            // on the page the dialog covers.
+                            .then(pickFocus.ringOnShape(12f, AlertDialogDefaults.containerColor))
+                            .combinedClickable(
+                                interactionSource = pickFocus.source,
+                                indication = androidx.compose.material3.ripple(),
+                                onClick = { onPick(username, display) },
+                                onLongClick = null,
+                            )
                             .padding(horizontal = 8.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1380,12 +1418,23 @@ internal fun NewGroupDialog(
                 filtered.take(24).forEach { contact ->
                     val isSelected = contact.contactId in selected
                     val display = contact.displayName.ifBlank { contact.handle ?: "Contact" }
+                    val contactFocus = rememberChromeFocus()
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent)
+                            // A selected row is filled, an unselected one is transparent over the dialog, so
+                            // the ring follows whichever colour is actually under it.
+                            .then(
+                                contactFocus.ringOnShape(
+                                    12f,
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer else AlertDialogDefaults.containerColor,
+                                ),
+                            )
                             .combinedClickable(
+                                interactionSource = contactFocus.source,
+                                indication = androidx.compose.material3.ripple(),
                                 onClick = {
                                     if (isSelected) {
                                         selected.remove(contact.contactId)

@@ -87,6 +87,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.roundToInt
+import com.norfold.app.ui.rememberChromeFocus
 
 @Composable
 fun GoalsScreen(state: DocsUiState, viewModel: DocsViewModel) {
@@ -464,12 +465,19 @@ private fun WeekAllDayBand(
                 var column = 0
                 lane.sortedBy { it.start }.forEach { capsule ->
                     if (capsule.start > column) Spacer(Modifier.weight((capsule.start - column).toFloat()))
+                    val capsuleFill = capsule.event.color.copy(alpha = 0.2f)
+                    val capsuleFocus = rememberChromeFocus()
                     Surface(
                         onClick = { onEventClick(capsule.event) },
-                        modifier = Modifier.weight((capsule.end - capsule.start + 1).toFloat()).fillMaxHeight().padding(horizontal = 1.dp),
+                        // The capsule is 22 dp tall, which leaves the inward ring 12 dp of interior — tight,
+                        // but this is the only focus stop an event has, and `Surface(onClick =)` already
+                        // supplies the 48 dp touch target the visual height does not.
+                        modifier = Modifier.weight((capsule.end - capsule.start + 1).toFloat()).fillMaxHeight().padding(horizontal = 1.dp)
+                            .then(capsuleFocus.ringOnShape(6f, capsuleFill)),
                         shape = RoundedCornerShape(6.dp),
-                        color = capsule.event.color.copy(alpha = 0.2f),
+                        color = capsuleFill,
                         border = BorderStroke(1.dp, capsule.event.color.copy(alpha = 0.4f)),
+                        interactionSource = capsuleFocus.source,
                     ) {
                         Text(
                             capsule.event.title,
@@ -499,12 +507,17 @@ private data class WeekCapsule(val event: PlanningEvent, val start: Int, val end
 
 @Composable
 private fun WeekEventChip(event: PlanningEvent, onEventClick: (PlanningEvent) -> Unit) {
+    val fill = event.color.copy(alpha = 0.16f)
+    val focus = rememberChromeFocus()
     Surface(
         onClick = { onEventClick(event) },
-        modifier = Modifier.fillMaxWidth(),
+        // 16% alpha over the page is the exact case the substrate's `opaque` step exists for: the ring is
+        // measured against what the fill actually composites to, not against the unpainted colour.
+        modifier = Modifier.fillMaxWidth().then(focus.ringOnShape(6f, fill)),
         shape = RoundedCornerShape(6.dp),
-        color = event.color.copy(alpha = 0.16f),
+        color = fill,
         border = BorderStroke(1.dp, event.color.copy(alpha = 0.36f)),
+        interactionSource = focus.source,
     ) {
         Column(Modifier.padding(horizontal = 4.dp, vertical = 3.dp)) {
             Text(event.title, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

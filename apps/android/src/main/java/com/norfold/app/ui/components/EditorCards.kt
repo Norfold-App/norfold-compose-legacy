@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.norfold.app.ui.rememberChromeFocus
 
 /**
  * In-editor anchored card engine. Cards render as an overlay INSIDE the editor layout
@@ -254,10 +255,12 @@ fun EditorCardChoiceGrid(
         choices.chunked(columns).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { choice ->
+                    val tileFocus = rememberChromeFocus()
                     Surface(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).then(tileFocus.ringOnShape(10f, MaterialTheme.colorScheme.surfaceContainerHigh)),
                         shape = RoundedCornerShape(10.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        interactionSource = tileFocus.source,
                         onClick = { onPick(choice.id) },
                     ) {
                         Column(
@@ -305,18 +308,24 @@ fun EditorCardSegmentRow(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // The strip's own fill, hoisted because an unselected segment is transparent: what shows behind its
+    // ring is this track, so this is what the ring has to be measured against.
+    val track = MaterialTheme.colorScheme.surfaceContainerHigh
     Surface(
         modifier = modifier.padding(4.dp),
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = track,
     ) {
         Row(Modifier.padding(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             segments.forEach { segment ->
                 val isSelected = segment.id == selectedId
+                val segmentFocus = rememberChromeFocus()
                 Surface(
-                    modifier = Modifier.weight(1f).height(34.dp),
+                    modifier = Modifier.weight(1f).height(34.dp)
+                        .then(segmentFocus.ringOnShape(8f, if (isSelected) MaterialTheme.colorScheme.secondaryContainer else track)),
                     shape = RoundedCornerShape(8.dp),
                     color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                    interactionSource = segmentFocus.source,
                     onClick = { onSelect(segment.id) },
                 ) {
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
@@ -368,11 +377,13 @@ fun EditorCardStepperRow(
 
 @Composable
 private fun StepperButton(glyph: String, onClick: () -> Unit) {
+    val focus = rememberChromeFocus()
     Surface(
-        modifier = Modifier.size(30.dp),
+        modifier = Modifier.size(30.dp).then(focus.ringOnCircle(30f, MaterialTheme.colorScheme.surfaceContainerHigh)),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        interactionSource = focus.source,
         onClick = onClick,
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {

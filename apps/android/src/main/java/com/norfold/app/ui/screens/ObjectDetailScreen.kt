@@ -62,6 +62,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.focusableChrome
 
 @Composable
 fun ObjectDetailScreen(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier = Modifier) {
@@ -297,10 +299,19 @@ private fun ObjectSection(title: String, subtitle: String, icon: ImageVector, co
 
 @Composable
 private fun ObjectMiniRow(title: String, detail: String, icon: ImageVector, color: Long, onClick: (() -> Unit)?) {
+    val fill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f)
     Surface(
-        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        // The row is a card only sometimes: with no `onClick` it is a static summary, which must not
+        // become a focus stop. The ring travels with the click, not with the shape.
+        Modifier.fillMaxWidth().then(
+            if (onClick != null) {
+                Modifier.focusableChrome(corner = ChromeGeometry.Corner.Card, surface = fill, onClick = onClick)
+            } else {
+                Modifier
+            },
+        ),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
+        color = fill,
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(Modifier.size(28.dp).background(Color(color).copy(alpha = 0.18f), CircleShape), contentAlignment = Alignment.Center) {

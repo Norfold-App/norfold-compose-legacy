@@ -142,6 +142,7 @@ import com.norfold.app.ui.editor.history.rememberHistoryUiController
 import com.norfold.app.ui.editor.recovery.RecoveryEntryButton
 import com.norfold.app.ui.editor.recovery.RecoveryHostLayer
 import com.norfold.app.ui.editor.recovery.rememberRecoveryUiController
+import com.norfold.app.ui.focusableChrome
 
 @Composable
 fun SpreadsheetHostScreen(
@@ -1293,10 +1294,11 @@ private fun SheetTabs(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         sheets.forEach { (id, name, hidden) ->
+            val fill = if (id == active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
             Surface(
                 shape = RoundedCornerShape(8.dp),
-                color = if (id == active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.clickable { onActivate(id) }.height(48.dp),
+                color = fill,
+                modifier = Modifier.focusableChrome(radiusDp = 8f, surface = fill) { onActivate(id) }.height(48.dp),
             ) { Box(Modifier.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) { Text(if (hidden) "$name (hidden)" else name) } }
         }
         TextButton(onClick = onAdd, modifier = Modifier.size(48.dp)) { Text("+") }

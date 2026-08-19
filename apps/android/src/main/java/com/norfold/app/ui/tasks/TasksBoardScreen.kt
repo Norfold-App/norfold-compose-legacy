@@ -189,8 +189,11 @@ import com.norfold.app.domain.TaskDateRangeCodec
 import com.norfold.app.domain.WorkspaceComment
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.WorkspaceFileItem
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.feedback.NorfoldHaptic
 import com.norfold.app.ui.feedback.performNorfoldHaptic
 import com.norfold.app.ui.components.NorfoldAnchoredPopupAt
@@ -714,7 +717,9 @@ private fun TaskHeader(
                     color = bg,
                     contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.clickable { onViewChange(view) },
+                    // `bg`, not the page: the selected tab animates to `primary`, which is the ring's own
+                    // colour, so a page-measured ring would vanish on the selected tab.
+                    modifier = Modifier.focusableChrome(radiusDp = 12f, surface = bg) { onViewChange(view) },
                 ) {
                     Text(view.label, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
                 }
@@ -863,7 +868,10 @@ private fun TaskPointerKanbanBoard(
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.16f),
                     shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.width(280.dp).height(72.dp).clickable { showNewColumnDialog = true },
+                    modifier = Modifier.width(280.dp).height(72.dp).focusableChrome(
+                        radiusDp = 12f,
+                        surface = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.16f),
+                    ) { showNewColumnDialog = true },
                 ) {
                     Row(
                         Modifier.padding(horizontal = 18.dp),
@@ -1046,7 +1054,7 @@ private fun TaskKanbanColumn(
                 DropSlot(modifier = Modifier.fillMaxWidth(), height = slotHeight)
             }
             Surface(
-                modifier = Modifier.fillMaxWidth().clickable { onAddTask() },
+                modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f) { onAddTask() },
                 shape = RoundedCornerShape(10.dp),
                 color = Color.Transparent,
                 border = BorderStroke(1.dp, columnColor.copy(alpha = 0.55f)),
@@ -1230,9 +1238,14 @@ private fun TaskDatabaseTable(
                         visibleColumns.forEach { column ->
                             TaskTableHeaderCell(column, compact)
                         }
+                        val newPropertyFocus = rememberChromeFocus()
                         Surface(
-                            modifier = Modifier.width(newPropertyWidth).height(48.dp).border(0.5.dp, border),
+                            // Radius 0: this `Surface` passes no `shape`, so it draws `RectangleShape` and a
+                            // square header cell takes a square ring. Measured on `surface`, its own fill.
+                            modifier = Modifier.width(newPropertyWidth).height(48.dp).border(0.5.dp, border)
+                                .then(newPropertyFocus.ringOnShape(0f, MaterialTheme.colorScheme.surface)),
                             color = MaterialTheme.colorScheme.surface,
+                            interactionSource = newPropertyFocus.source,
                             onClick = { showPropertyPicker = true },
                         ) {
                             Row(
@@ -1302,9 +1315,14 @@ private fun TaskDatabaseTable(
                     }
                 }
                 item {
+                    val newTaskFocus = rememberChromeFocus()
                     Surface(
-                        modifier = Modifier.width(tableWidth).height(48.dp).border(1.dp, border),
+                        // No `shape` here either, so radius 0 — and the 1 dp table border is the boundary the
+                        // ring has to clear, which is exactly the substrate's default edge weight.
+                        modifier = Modifier.width(tableWidth).height(48.dp).border(1.dp, border)
+                            .then(newTaskFocus.ringOnShape(0f, MaterialTheme.colorScheme.surface)),
                         color = MaterialTheme.colorScheme.surface,
+                        interactionSource = newTaskFocus.source,
                         onClick = onNewTask,
                     ) {
                         Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1504,6 +1522,10 @@ private fun TaskTableDataCell(
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
                                 shape = RoundedCornerShape(6.dp),
+                                // No ring: this is one of three in-cell triggers for `onAlternateSelect`, all
+                                // ~20 dp tall inside a cell that is itself the focus stop. A 6 dp radius has no
+                                // room for an inward ring — same unsolved short-chrome case as the disclosure
+                                // headers. The cell keeps the ring; these keep the tap.
                                 modifier = Modifier.clickable { onAlternateSelect(bounds) },
                             ) { Text("#$label", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSecondaryContainer) }
                         }
@@ -1664,7 +1686,10 @@ private fun CompactGroupedTaskTable(
                                             Surface(
                                                 color = MaterialTheme.colorScheme.surface,
                                                 shape = RoundedCornerShape(10.dp),
-                                                modifier = Modifier.fillMaxWidth().clickable { onPropertyClick(task, property) },
+                                                modifier = Modifier.fillMaxWidth().focusableChrome(
+                                                    radiusDp = 10f,
+                                                    surface = MaterialTheme.colorScheme.surface,
+                                                ) { onPropertyClick(task, property) },
                                             ) {
                                                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                                     Icon(property.type.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
@@ -1681,7 +1706,9 @@ private fun CompactGroupedTaskTable(
                             }
                         }
                         Surface(
-                            modifier = Modifier.fillMaxWidth().clickable { onNewTask(column) },
+                            // No `surface`: the fill is `Color.Transparent`, which composites to exactly the
+                            // page, so the default backdrop is already the right measurement basis.
+                            modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f) { onNewTask(column) },
                             shape = RoundedCornerShape(10.dp),
                             color = Color.Transparent,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -1727,10 +1754,16 @@ private fun FocusedTaskPropertyDialog(
             when (property.type) {
                 TaskPropertyType.Status -> {
                     columns.forEach { column ->
+                        // Hoisted so shape, fill and ring read one value: the chosen option fills with
+                        // `primaryContainer`, and the ring must be measured on whichever fill is live.
+                        val fill = if (column.id == task.taskColumnId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = if (column.id == task.taskColumnId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f),
-                            modifier = Modifier.fillMaxWidth().clickable { viewModel.moveTaskToColumn(task, column); onDismiss() },
+                            color = fill,
+                            modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = fill) {
+                                viewModel.moveTaskToColumn(task, column)
+                                onDismiss()
+                            },
                         ) {
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Box(Modifier.size(10.dp).clip(CircleShape).background(column.resolvedColor()))
@@ -1747,10 +1780,11 @@ private fun FocusedTaskPropertyDialog(
                 TaskPropertyType.LastModified -> ReadOnlyPropertyValue(shortTime(task.updatedAt))
                 TaskPropertyType.DueDate, TaskPropertyType.Date -> DatePropertyEditor(task, property, value?.valueJson.orEmpty(), viewModel)
                 TaskPropertyType.Priority -> TaskPriority.entries.forEach { priority ->
+                    val fill = if (priority == task.priority) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .36f)
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = if (priority == task.priority) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .36f),
-                        modifier = Modifier.fillMaxWidth().clickable {
+                        color = fill,
+                        modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = fill) {
                             viewModel.setTaskPropertyValue(task, property, priority.name)
                             onDismiss()
                         },
@@ -1765,10 +1799,11 @@ private fun FocusedTaskPropertyDialog(
                     val options = listOf(task.assignee, "@owner", "").distinct()
                     options.forEach { assignee ->
                         val label = assignee.ifBlank { "Unassigned" }
+                        val fill = if (assignee == task.assignee) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .36f)
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = if (assignee == task.assignee) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .36f),
-                            modifier = Modifier.fillMaxWidth().clickable {
+                            color = fill,
+                            modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = fill) {
                                 viewModel.setTaskPropertyValue(task, property, assignee)
                                 onDismiss()
                             },
@@ -1872,11 +1907,12 @@ private fun TaskLabelsPropertyEditor(
     available.take(12).forEach { name ->
         val tag = boardTags.firstOrNull { it.name.equals(name, ignoreCase = true) }
         val checked = selected.any { it.equals(name, ignoreCase = true) }
+        val fill = if (checked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
         Surface(
-            modifier = Modifier.fillMaxWidth().clickable {
+            modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = fill) {
                 persist(if (checked) selected.filterNot { it.equals(name, ignoreCase = true) } else selected + name)
             },
-            color = if (checked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            color = fill,
             shape = RoundedCornerShape(10.dp),
         ) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1997,7 +2033,10 @@ private fun MatrixQuadrant(
                     Surface(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().clickable { onTaskClick(task) },
+                        modifier = Modifier.fillMaxWidth().focusableChrome(
+                            radiusDp = 12f,
+                            surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        ) { onTaskClick(task) },
                     ) {
                         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Box(Modifier.size(8.dp).clip(CircleShape).background(task.resolveAccent(MaterialTheme.colorScheme.primary)))
@@ -2088,7 +2127,10 @@ private fun TaskListView(
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().clickable { onTaskClick(task) },
+                modifier = Modifier.fillMaxWidth().focusableChrome(
+                    corner = ChromeGeometry.Corner.Card,
+                    surface = MaterialTheme.colorScheme.surface,
+                ) { onTaskClick(task) },
             ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -2141,7 +2183,7 @@ private fun TaskFeedView(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         tasks.sortedByDescending { it.updatedAt }.forEach { task ->
             TaskSwipeRow(task = task, startAction = swipeStartAction, endAction = swipeEndAction, onAction = onSwipeAction) {
-                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().clickable { onTaskClick(task) }) {
+                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().focusableChrome(corner = ChromeGeometry.Corner.Card, surface = MaterialTheme.colorScheme.surface) { onTaskClick(task) }) {
                     Column(Modifier.padding(14.dp)) {
                         Text(task.title, fontWeight = FontWeight.Bold)
                         val progress = task.propertyProgress(properties, checklistItems)
@@ -2358,7 +2400,7 @@ private fun TaskGalleryView(
                         onAction = onSwipeAction,
                         modifier = Modifier.weight(1f),
                     ) {
-                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().height(142.dp).clickable { onTaskClick(task) }) {
+                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().height(142.dp).focusableChrome(corner = ChromeGeometry.Corner.Card, surface = MaterialTheme.colorScheme.surface) { onTaskClick(task) }) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
                             Text(task.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             task.progressFromChecklist(checklistItems)?.let { progress ->
@@ -2524,11 +2566,12 @@ private fun TaskRailPanel(
             Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Boards", fontWeight = FontWeight.Black, fontSize = 18.sp)
                 boards.forEach { board ->
+                    val fill = if (board.id == selectedBoardId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
                     Surface(
-                        color = if (board.id == selectedBoardId) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                        color = fill,
                         shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier.fillMaxWidth().clickable { onSelectBoard(board.id) },
+                        modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f, surface = fill) { onSelectBoard(board.id) },
                     ) {
                         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -2580,7 +2623,11 @@ private fun TaskRailRow(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).focusableChrome(
+            corner = ChromeGeometry.Corner.Card,
+            surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            onClick = onClick,
+        ),
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
@@ -3505,7 +3552,7 @@ private fun TaskNotesSection(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().clickable { viewModel.openTaskDocument(task) },
+                modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f) { viewModel.openTaskDocument(task) },
             ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(displayed.ifBlank { "Add notes" }, modifier = Modifier.weight(1f), color = if (displayed.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, maxLines = 4, overflow = TextOverflow.Ellipsis)

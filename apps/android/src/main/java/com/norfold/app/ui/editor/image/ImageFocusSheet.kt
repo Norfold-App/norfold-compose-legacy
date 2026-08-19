@@ -146,6 +146,8 @@ import com.norfold.app.editor.style.EditorStyleUiState
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import java.util.UUID
+import com.norfold.app.ui.rememberChromeFocus
+import com.norfold.app.domain.style.ChromeGeometry
 
 private enum class ImageFocusSection(val label: String) { CROP("Crop"), ADJUST("Adjust"), EFFECTS("Filters"), MARKUP("Markup") }
 
@@ -165,12 +167,15 @@ private fun ImagePrimaryTab(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val fill = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        color = fill,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier,
+        interactionSource = focus.source,
+        modifier = modifier.then(focus.ringOnShape(12f, fill)),
     ) {
         Row(
             Modifier.heightIn(min = 48.dp).padding(horizontal = 3.dp),
@@ -220,12 +225,18 @@ private fun ImageFocusCropCard(
                         ImageCropMode.RATIO_1_1 -> "Square\n1:1"
                         else -> mode.name.lowercase().replace('_', ':')
                     }
+                    val modeSelected = document.crop.mode == mode
+                    val modeFill = if (modeSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                    val modeFocus = rememberChromeFocus()
                     Surface(
                         onClick = { edit { it.copy(crop = ImageCropGeometry.applyMode(it.crop, it.sourceMetadata, mode)) } },
                         enabled = !disabled,
-                        color = if (document.crop.mode == mode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (document.crop.mode == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier.weight(1f).height(72.dp),
+                        color = modeFill,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (modeSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                        interactionSource = modeFocus.source,
+                        // Radius 0: this `Surface` passes no `shape`, so it draws `RectangleShape`. A ring
+                        // with a rounded radius on square chrome would leave four visible gaps at the corners.
+                        modifier = Modifier.weight(1f).height(72.dp).then(modeFocus.ringOnShape(0f, modeFill)),
                     ) {
                         Box(contentAlignment = Alignment.Center) { Text(label, style = MaterialTheme.typography.labelMedium) }
                     }
@@ -657,11 +668,19 @@ private enum class ImageAdjustmentKey(val label: String) {
 
 @Composable
 private fun ImageStudioModeButton(mode: ImageStudioMode, selected: Boolean, onClick: () -> Unit) {
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onClick,
         color = if (selected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
         contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
         shape = RoundedCornerShape(18.dp),
+        interactionSource = focus.source,
+        // The selected button is filled with `primary` — the ring's own default colour — so measuring it
+        // against the page would put an accent ring on an accent fill at 1.00:1. An unselected button is
+        // transparent over the rail's `surfaceContainer`, which is what it actually shows.
+        modifier = Modifier.then(
+            focus.ringOnShape(18f, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainer),
+        ),
     ) {
         Row(
             Modifier.heightIn(min = 44.dp).padding(horizontal = 14.dp, vertical = 8.dp),
@@ -854,14 +873,21 @@ private fun ImageTransformAction(
     onClick: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
+    val fill = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val focus = rememberChromeFocus()
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        color = fill,
         contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
             .size(52.dp)
+            // `combinedClickable`, not `Surface(onClick =)`, so the ring watches the source the gesture
+            // reports on. Measured on whichever fill the selected state paints.
+            .then(focus.ringOnShape(16f, fill))
             .combinedClickable(
                 enabled = !disabled,
+                interactionSource = focus.source,
+                indication = androidx.compose.material3.ripple(),
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     onClick()
@@ -1037,21 +1063,31 @@ private fun ImageStudioMarkupControls(
             ColorValue(255, 255, 255), ColorValue(32, 33, 36), ColorValue(244, 67, 54),
             ColorValue(255, 193, 7), ColorValue(76, 175, 80), ColorValue(33, 150, 243), ColorValue(156, 39, 176),
         ).forEach { color ->
+            val swatchSelected = color == selectedColor
+            val swatchFill = Color(
+                red = color.red / 255f,
+                green = color.green / 255f,
+                blue = color.blue / 255f,
+                alpha = color.alpha / 255f,
+            )
+            val swatchFocus = rememberChromeFocus()
             Surface(
                 onClick = { onColorChange(color) },
                 enabled = !disabled,
                 shape = RoundedCornerShape(50),
-                color = Color(
-                    red = color.red / 255f,
-                    green = color.green / 255f,
-                    blue = color.blue / 255f,
-                    alpha = color.alpha / 255f,
-                ),
+                color = swatchFill,
                 border = androidx.compose.foundation.BorderStroke(
-                    if (color == selectedColor) 3.dp else 1.dp,
-                    if (color == selectedColor) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                    if (swatchSelected) 3.dp else 1.dp,
+                    if (swatchSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                 ),
-                modifier = Modifier.size(32.dp),
+                interactionSource = swatchFocus.source,
+                // `RoundedCornerShape(50)` is 50 *percent* on a fixed 32 dp square, so this is a circle and
+                // its radius is known — `ringOnCircle` rather than `ringOnPill`, which is for a pill whose
+                // height only the layout knows. Measured on the swatch's own colour, and clearing the
+                // selection border so the ring does not thicken the thing that means "selected".
+                modifier = Modifier.size(32.dp).then(
+                    swatchFocus.ringOnCircle(32f, swatchFill, boundaryWidthDp = if (swatchSelected) 3f else ChromeGeometry.RESTING_EDGE_WIDTH),
+                ),
             ) {}
         }
     }
@@ -1219,11 +1255,14 @@ private fun ImageStickerPicker(
                         modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
                     ) {
                         items(stickers, key = { it.id }) { sticker ->
+                            val stickerFocus = rememberChromeFocus()
                             Surface(
                                 onClick = { onPick(sticker) },
                                 shape = RoundedCornerShape(18.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.size(72.dp),
+                                interactionSource = stickerFocus.source,
+                                modifier = Modifier.size(72.dp)
+                                    .then(stickerFocus.ringOnShape(18f, MaterialTheme.colorScheme.surfaceVariant)),
                             ) {
                                 AsyncImage(
                                     model = sticker.assetUri,
@@ -1340,16 +1379,24 @@ private fun ImageVisualChoice(
     onClick: () -> Unit,
     preview: (@Composable BoxScope.() -> Unit)? = null,
 ) {
+    val fill = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onClick,
         enabled = enabled,
         shape = RoundedCornerShape(16.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        color = fill,
         border = androidx.compose.foundation.BorderStroke(
             if (selected) 2.dp else 1.dp,
             if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
         ),
-        modifier = Modifier.size(width = 88.dp, height = 76.dp),
+        interactionSource = focus.source,
+        // The selected state carries a 2 dp border, which the substrate's default 3 dp inset does not clear
+        // — the ring would land half a dp from it and the two strokes would merge into one heavier edge,
+        // saying "selected" where it should say "focused".
+        modifier = Modifier.size(width = 88.dp, height = 76.dp).then(
+            focus.ringOnShape(16f, fill, boundaryWidthDp = if (selected) 2f else ChromeGeometry.RESTING_EDGE_WIDTH),
+        ),
     ) {
         Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Box(

@@ -45,6 +45,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.norfold.app.ui.rememberChromeFocus
 
 enum class NorfoldPopupPlacement { Auto, Below, Above }
 
@@ -189,16 +190,22 @@ fun NorfoldPopupRow(
 ) {
     val tokens = LocalNorfoldPopupTokens.current
     val color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+    val fill = if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .55f) else MaterialTheme.colorScheme.surface
+    val focus = rememberChromeFocus()
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 48.dp)
+            // The radius is a popup token, not one of the substrate's tiers, so the ring reads the same
+            // token the shape does. A popup that retunes `rowRadius` retunes both together.
+            .then(focus.ringOnShape(tokens.rowRadius.value, fill))
             .semantics {
                 role = Role.Button
                 this.selected = selected
             },
         shape = RoundedCornerShape(tokens.rowRadius),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .55f) else MaterialTheme.colorScheme.surface,
+        color = fill,
+        interactionSource = focus.source,
         onClick = onClick,
     ) {
         Row(

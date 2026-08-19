@@ -46,6 +46,8 @@ import com.norfold.app.ui.components.NorfoldBottomSheet
 import com.norfold.app.ui.components.NorfoldPopupSectionLabel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.focusableChrome
 
 @Composable
 fun ShapeCatalogSheet(
@@ -163,10 +165,16 @@ private fun ShapeCatalogRow(
     tint: androidx.compose.ui.graphics.Color,
     onClick: () -> Unit,
 ) {
+    val fill = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable(enabled = !downloading, onClick = onClick),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).focusableChrome(
+            corner = ChromeGeometry.Corner.Media,
+            surface = fill,
+            enabled = !downloading,
+            onClick = onClick,
+        ),
         shape = RoundedCornerShape(14.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        color = fill,
         border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -204,10 +212,15 @@ private fun ShapeCatalogRow(
 @Composable
 private fun PrimitiveShapeRow(kind: ShapeKind, selected: Boolean, onClick: () -> Unit) {
     val label = kind.name.replace("RoundedRectangle", "Rounded rectangle").replace("SpeechBubble", "Speech bubble")
+    val fill = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).focusableChrome(
+            corner = ChromeGeometry.Corner.Media,
+            surface = fill,
+            onClick = onClick,
+        ),
         shape = RoundedCornerShape(14.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        color = fill,
         border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

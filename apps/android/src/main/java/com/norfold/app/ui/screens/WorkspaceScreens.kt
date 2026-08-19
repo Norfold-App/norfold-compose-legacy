@@ -203,6 +203,8 @@ import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ConflictSideSummary
 import com.norfold.app.domain.Destination
 import com.norfold.app.ui.ChatAudioState
+import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.ChatUploadItem
 import com.norfold.app.ui.ChatUploadStatus
 import com.norfold.app.ui.ChatAttachmentPreviewState
@@ -437,17 +439,22 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             onSearch = { chatSearchOpen = !chatSearchOpen; if (!chatSearchOpen) chatQuery = "" },
         )
         if (serviceCapabilities.isConserving || serviceCapabilities.isDegraded) {
+            val bannerColor = if (serviceCapabilities.isDegraded) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.tertiaryContainer
+            }
             Surface(
-                color = if (serviceCapabilities.isDegraded) {
-                    MaterialTheme.colorScheme.errorContainer
-                } else {
-                    MaterialTheme.colorScheme.tertiaryContainer
-                },
+                color = bannerColor,
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .clickable { viewModel.refreshChatServiceCapabilities() },
+                    .focusableChrome(
+                        radiusDp = 18f,
+                        surface = bannerColor,
+                        onClick = { viewModel.refreshChatServiceCapabilities() },
+                    ),
             ) {
                 Row(
                     Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
@@ -482,7 +489,11 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .clickable { securityDetailsOpen = true },
+                    .focusableChrome(
+                        radiusDp = 18f,
+                        surface = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        onClick = { securityDetailsOpen = true },
+                    ),
             ) {
                 Row(
                     Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
@@ -524,7 +535,11 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .clickable { archiveDetailsOpen = true },
+                    .focusableChrome(
+                        radiusDp = 18f,
+                        surface = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        onClick = { archiveDetailsOpen = true },
+                    ),
             ) {
                 Row(
                     Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
@@ -836,7 +851,10 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
                 tonalElevation = 2.dp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clip(RoundedCornerShape(12.dp))
-                    .clickable {
+                    .focusableChrome(
+                        radiusDp = 12f,
+                        surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
+                    ) {
                         val idx = messageGroups.indexOfFirst { g -> g.any { it.id == target.id } }
                         if (idx >= 0) {
                             viewModel.flashChatMessage(target.id)
@@ -965,13 +983,17 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.8f),
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 6.dp),
         ) {
+            val jumpFocus = rememberChromeFocus()
             Surface(
                 onClick = { chatScope.launch { listState.animateScrollToItem(messageGroups.lastIndex) } },
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surface,
                 shadowElevation = 6.dp,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.size(40.dp),
+                interactionSource = jumpFocus.source,
+                // A 40 dp circle, so radius 20 — measured on its own `surface`, which is what the ring is
+                // drawn on as the button floats over the message list.
+                modifier = Modifier.size(40.dp).then(jumpFocus.ringOnCircle(40f, MaterialTheme.colorScheme.surface)),
             ) {
                 Icon(
                     Icons.Outlined.KeyboardArrowDown,
@@ -1547,7 +1569,10 @@ private fun ChatGifPicker(
                 ) {
                     gridItems(state.results, key = { it.slug }) { gif ->
                         Surface(
-                            modifier = Modifier.fillMaxWidth().height(112.dp).clickable { onPick(gif) },
+                            modifier = Modifier.fillMaxWidth().height(112.dp).focusableChrome(
+                                radiusDp = 12f,
+                                surface = MaterialTheme.colorScheme.surfaceVariant,
+                            ) { onPick(gif) },
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                         ) {
@@ -1663,11 +1688,15 @@ private fun ChatStickerPicker(onDismiss: () -> Unit, onPick: (Sticker) -> Unit) 
                 modifier = Modifier.fillMaxWidth().weight(1f),
             ) {
                 gridItems(stickers, key = { it.id }) { sticker ->
+                    val stickerFocus = rememberChromeFocus()
                     Surface(
                         onClick = { onPick(sticker) },
                         shape = RoundedCornerShape(18.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.size(76.dp),
+                        interactionSource = stickerFocus.source,
+                        // The sticker image is padded 10 dp inside the tile, so the ring at 3 dp sits in the
+                        // tile's own `surfaceVariant` gutter rather than over the artwork.
+                        modifier = Modifier.size(76.dp).then(stickerFocus.ringOnShape(18f, MaterialTheme.colorScheme.surfaceVariant)),
                     ) {
                         AsyncImage(sticker.assetUri, sticker.label, Modifier.padding(10.dp).fillMaxSize())
                     }
@@ -2535,11 +2564,16 @@ private fun DetailActionChip(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val fill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        // 60% alpha over whatever page hosts the chip, so the substrate's `opaque` step decides what the
+        // ring is measured against rather than the unpainted colour.
+        modifier = modifier.then(focus.ringOnShape(16f, fill)),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        color = fill,
+        interactionSource = focus.source,
     ) {
         Column(
             Modifier.padding(vertical = 12.dp),
@@ -2971,12 +3005,17 @@ private fun noteReferenceMarker(id: Long, title: String): String =
 /** Tappable card rendering a shared note reference inside a chat bubble; opens the note on tap. */
 @Composable
 private fun ChatNoteCard(ref: NoteReference, tint: Color, onOpen: () -> Unit) {
+    val fill = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onOpen,
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+        color = fill,
         border = androidx.compose.foundation.BorderStroke(1.dp, tint.copy(alpha = 0.18f)),
-        modifier = Modifier.padding(top = 6.dp).widthIn(max = 260.dp),
+        interactionSource = focus.source,
+        // The card sits inside a chat bubble, so the ring is measured on the card's own translucent fill —
+        // what it composites to over that bubble — not on the page.
+        modifier = Modifier.padding(top = 6.dp).widthIn(max = 260.dp).then(focus.ringOnShape(14f, fill)),
     ) {
         Row(
             Modifier.padding(10.dp),
@@ -3196,6 +3235,12 @@ private fun ChatBubble(
                             bottomEnd = if (!mine || !lastOfGroup) 24.dp else tailBottom,
                         ),
                     )
+                    // No focus ring, deliberately. Two reasons, both structural rather than stylistic: the
+                    // bubble's shape is four independent corner radii (a tail corner squares off to point at
+                    // its author), so there is no single radius a concentric ring could hold; and its `onClick`
+                    // is a no-op — the only real action is the long-press, which a keyboard or switch user
+                    // cannot reach at all. Ringing it would advertise a focusable control that does nothing.
+                    // Reaching the message actions without touch is a product gap, not a ring to draw here.
                     .combinedClickable(
                         onClick = {},
                         onLongClick = {
@@ -3355,17 +3400,26 @@ private fun ChatBubble(
                 ) {
                     visible.forEach { (emoji, count) ->
                         val reactedByMe = emoji in myReactions
+                        val pillFill = if (reactedByMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                        val reactionFocus = rememberChromeFocus()
                         Surface(
                             shape = RoundedCornerShape(99.dp),
-                            color = if (reactedByMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                            color = pillFill,
                             border = androidx.compose.foundation.BorderStroke(
                                 1.dp,
                                 if (reactedByMe) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant,
                             ),
-                            modifier = Modifier.combinedClickable(
-                                onClick = { onTapReaction(chat, emoji) },
-                                onLongClick = { onLongPressReactions(chat) },
-                            ),
+                            // A pill, so the radius is resolved in the draw scope from the pill's own height
+                            // rather than guessed here — `99.dp` is "fully round", not a measurement. The fill
+                            // flips with whether I reacted, so the ring is measured on whichever one is painted.
+                            modifier = Modifier
+                                .then(reactionFocus.ringOnPill(pillFill))
+                                .combinedClickable(
+                                    interactionSource = reactionFocus.source,
+                                    indication = androidx.compose.material3.ripple(),
+                                    onClick = { onTapReaction(chat, emoji) },
+                                    onLongClick = { onLongPressReactions(chat) },
+                                ),
                         ) {
                             Text(
                                 "$emoji $count",
@@ -3376,11 +3430,21 @@ private fun ChatBubble(
                         }
                     }
                     if (overflow > 0) {
+                        val overflowFocus = rememberChromeFocus()
                         Surface(
                             shape = RoundedCornerShape(99.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                            modifier = Modifier.combinedClickable(onClick = { onLongPressReactions(chat) }, onLongClick = { onLongPressReactions(chat) }),
+                            // Tap and long-press both open the full reaction list, so this is one action with
+                            // two ways in — it still needs a ring, on its own `surfaceVariant` fill.
+                            modifier = Modifier
+                                .then(overflowFocus.ringOnPill(MaterialTheme.colorScheme.surfaceVariant))
+                                .combinedClickable(
+                                    interactionSource = overflowFocus.source,
+                                    indication = androidx.compose.material3.ripple(),
+                                    onClick = { onLongPressReactions(chat) },
+                                    onLongClick = { onLongPressReactions(chat) },
+                                ),
                         ) {
                             Text("+$overflow", Modifier.padding(horizontal = 7.dp, vertical = 3.dp), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -3457,6 +3521,8 @@ private fun ChatLinkPreviewCard(url: String, tint: Color) {
     }
     val host = remember(url) { runCatching { java.net.URI(url).host?.removePrefix("www.") }.getOrNull().orEmpty() }
     if (metadata.title.isBlank() && metadata.description.isBlank()) return
+    val fill = tint.copy(alpha = 0.08f)
+    val focus = rememberChromeFocus()
     Surface(
         onClick = {
             runCatching {
@@ -3464,8 +3530,11 @@ private fun ChatLinkPreviewCard(url: String, tint: Color) {
             }
         },
         shape = RoundedCornerShape(14.dp),
-        color = tint.copy(alpha = 0.08f),
-        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        color = fill,
+        interactionSource = focus.source,
+        // 8% of the bubble tint is nearly transparent, so measuring the ring against the unpainted colour
+        // would grade a pair that is never on screen — the substrate composites it first.
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp).then(focus.ringOnShape(14f, fill)),
     ) {
         Row(Modifier.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             val favicon = metadata.faviconPath?.let { java.io.File(it) }?.takeIf { it.isFile }
@@ -3495,12 +3564,17 @@ private fun ChatLinkPreviewCard(url: String, tint: Color) {
 
 @Composable
 private fun ChatOnlineVideoCard(videoId: String, onPlay: () -> Unit) {
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onPlay,
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth(),
+        interactionSource = focus.source,
+        // The thumbnail fills the card edge to edge, so the ring lands on the image rather than on
+        // `surface`. Measured on `surface` anyway: a thumbnail is arbitrary photography and cannot be
+        // graded, and `surface` is what the card is declared to be.
+        modifier = Modifier.fillMaxWidth().then(focus.ringOnShape(22f, MaterialTheme.colorScheme.surface)),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f), contentAlignment = Alignment.Center) {
             AsyncImage(
@@ -3727,10 +3801,13 @@ private fun MessageActionsSheet(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     listOf("👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "💯", "😍", "🤔").forEach { emoji ->
+                        val emojiFocus = rememberChromeFocus()
                         Surface(
                             onClick = { onReact(emoji); onDismiss() },
                             shape = RoundedCornerShape(10.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
+                            interactionSource = emojiFocus.source,
+                            modifier = Modifier.then(emojiFocus.ringOnShape(10f, MaterialTheme.colorScheme.surfaceVariant)),
                         ) { Text(emoji, Modifier.padding(horizontal = 8.dp, vertical = 6.dp), fontSize = 20.sp) }
                     }
                 }
@@ -3791,11 +3868,18 @@ private fun ReportMessageDialog(
                     fontSize = 13.sp,
                 )
                 ChatBackend.AbuseReportCategory.entries.forEach { option ->
+                    val optionFill = if (category == option) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surfaceVariant
+                    val optionFocus = rememberChromeFocus()
                     Surface(
                         onClick = { category = option },
                         shape = RoundedCornerShape(14.dp),
-                        color = if (category == option) MaterialTheme.colorScheme.primaryContainer
-                        else MaterialTheme.colorScheme.surfaceVariant,
+                        color = optionFill,
+                        interactionSource = optionFocus.source,
+                        // These are radio options, so focus and selection are two different signals on the
+                        // same control: the fill says which is chosen, the ring says which is focused, and
+                        // the ring is measured on whichever fill is under it.
+                        modifier = Modifier.then(optionFocus.ringOnShape(14f, optionFill)),
                     ) {
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
@@ -4120,7 +4204,10 @@ private fun ChatAttachmentCard(
             shape = RoundedCornerShape(20.dp),
             color = if (visualMedia) frameColor else bg,
             border = if (visualMedia) androidx.compose.foundation.BorderStroke(1.dp, frameBorder) else null,
-            modifier = Modifier.clickable { onOpenAttachment(chat) },
+            modifier = Modifier.focusableChrome(
+                radiusDp = 20f,
+                surface = if (visualMedia) frameColor else bg,
+            ) { onOpenAttachment(chat) },
         ) {
             Column(Modifier.widthIn(min = 148.dp, max = 286.dp).padding(if (visualMedia) 3.dp else 0.dp)) {
                 if ((isImage || isVideo) && source != null) {

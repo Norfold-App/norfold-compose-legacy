@@ -109,6 +109,7 @@ import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.ui.graphics.luminance
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import com.norfold.app.ui.focusableChrome
 
 private const val OnboardingPreferences = "norfold_onboarding_draft"
 
@@ -473,8 +474,14 @@ private fun WelcomeStep(
 private fun SignInStep(email: String, onEmail: (String) -> Unit, password: String, onPassword: (String) -> Unit, signUp: Boolean, onMode: (Boolean) -> Unit, busy: Boolean, onGoogle: () -> Unit, onEmailAction: (String, String, Boolean) -> Unit, onForgotPassword: () -> Unit, onOffline: () -> Unit) {
     Text("Let's get you in", fontSize = 30.sp, fontWeight = FontWeight.Black)
     Text("Sign in to access your workspace or create a new account.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).padding(3.dp)) {
-        listOf(false to "Sign in", true to "Sign up").forEach { (mode, label) -> Surface(Modifier.weight(1f).clickable(enabled = !busy) { onMode(mode) }, color = if (signUp == mode) MaterialTheme.colorScheme.surface else Color.Transparent, shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(10.dp), textAlign = TextAlign.Center, color = if (signUp == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) } }
+    // The segmented track, not the page: an unselected segment is transparent, so what shows behind its
+    // ring is this `surfaceVariant` track. Measuring against the page would grade the wrong pair.
+    val authTabTrack = MaterialTheme.colorScheme.surfaceVariant
+    Row(Modifier.fillMaxWidth().background(authTabTrack, RoundedCornerShape(10.dp)).padding(3.dp)) {
+        listOf(false to "Sign in", true to "Sign up").forEach { (mode, label) ->
+            val selected = signUp == mode
+            Surface(Modifier.weight(1f).focusableChrome(radiusDp = 8f, surface = if (selected) MaterialTheme.colorScheme.surface else authTabTrack, enabled = !busy) { onMode(mode) }, color = if (selected) MaterialTheme.colorScheme.surface else Color.Transparent, shape = RoundedCornerShape(8.dp)) { Text(label, Modifier.padding(10.dp), textAlign = TextAlign.Center, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
     }
     OutlinedButton(onClick = onGoogle, modifier = Modifier.fillMaxWidth().height(52.dp), enabled = !busy) {
         GoogleGMark(size = 18.dp)
@@ -674,10 +681,11 @@ private fun BackupSetupStep(
         Text("Backup schedule", Modifier.fillMaxWidth(), fontWeight = FontWeight.Bold)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("Daily", "Weekly", "Monthly").forEach { option ->
+                val fill = if (frequency == option) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
                 Surface(
-                    modifier = Modifier.weight(1f).clickable { onFrequency(option) },
+                    modifier = Modifier.weight(1f).focusableChrome(radiusDp = 10f, surface = fill) { onFrequency(option) },
                     shape = RoundedCornerShape(10.dp),
-                    color = if (frequency == option) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                    color = fill,
                     border = BorderStroke(1.dp, if (frequency == option) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
                 ) { Text(option, Modifier.padding(vertical = 11.dp), textAlign = TextAlign.Center, fontWeight = if (frequency == option) FontWeight.Bold else FontWeight.Normal) }
             }
@@ -809,10 +817,11 @@ private fun OnboardingPreferenceGroup(title: String, content: @Composable () -> 
 private fun <T> PreferenceChoices(label: String, values: List<T>, selected: T, onSelect: (T) -> Unit, name: (T) -> String) {
     Text(label, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
     values.forEach { value ->
+        val fill = if (value == selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f) else MaterialTheme.colorScheme.surface
         Surface(
-            Modifier.fillMaxWidth().clickable { onSelect(value) },
+            Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = fill) { onSelect(value) },
             shape = RoundedCornerShape(10.dp),
-            color = if (value == selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f) else MaterialTheme.colorScheme.surface,
+            color = fill,
             border = BorderStroke(1.dp, if (value == selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
         ) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -860,7 +869,7 @@ private fun CompletionStep(workspace: String) {
 }
 @Composable private fun StepIcon(icon: ImageVector) { Surface(Modifier.size(72.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) { Icon(icon, null, Modifier.padding(20.dp), tint = MaterialTheme.colorScheme.primary) } }
 @Composable private fun FeatureCard(icon: ImageVector, title: String, detail: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Column { Text(title, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp) } } } }
-@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) { Surface(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(18.dp).background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)); Column(Modifier.padding(start = 14.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } } } }
+@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) { Surface(Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f, onClick = onClick), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(18.dp).background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)); Column(Modifier.padding(start = 14.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } } } }
 @Composable private fun ToggleCard(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit) { Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }; Switch(checked, onChecked) } } }
 
 @Composable

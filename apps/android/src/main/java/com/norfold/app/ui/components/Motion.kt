@@ -35,6 +35,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.branding.NorfoldPopEasing
+import com.norfold.app.ui.chromeFocusRing
 
 /**
  * Shared motion language for the app so navigation and interaction feel intentional, not cheap.
@@ -113,12 +114,16 @@ fun GlobalSearchBar(
     onNavigationClick: (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
+    val fill = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .pressScale(interaction),
+            .pressScale(interaction)
+            // The source was already hoisted for the press scale and already handed to `Surface`, so the
+            // ring only has to join the stream the other two are on.
+            .chromeFocusRing(interaction, radiusDp = 16f, surface = fill),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+        color = fill,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.30f)),
         onClick = onOpen,
         interactionSource = interaction,

@@ -259,6 +259,48 @@ object NorfoldChrome {
             )
         }
     }
+
+    /**
+     * The inward ring for a **pill** — chrome whose radius is half its own measured height.
+     *
+     * **Why a pill cannot use the [Float] overload.** A `CircleShape` on something wider than it is tall is
+     * not a circle; [RoundedCornerShape] clamps the radius to half the smaller dimension, so the shape's real
+     * radius is half the height. That height is decided by the content and its padding — a chip is "however
+     * tall 13 sp plus 8 dp of padding comes out" — and nothing at the call site knows it. Passing a guess
+     * produces exactly the artefact the concentricity rule exists to prevent: too large and the ring bulges
+     * past the pill's own curve, too small and it cuts the corner short.
+     *
+     * The draw scope *does* know the height, so this resolves the radius there instead of asking the caller
+     * for a number the caller cannot have. Four sites need it — the two `QuickChip` overloads, the database
+     * chip and the object pill — and every future pill gets it without having to work this out again.
+     *
+     * The radius is derived from the ring's own box rather than the container's: the stroke is already inset,
+     * so half of the *inset* height is what keeps it concentric with the pill's outer curve.
+     */
+    @Composable
+    fun Modifier.innerFocusRingPill(
+        focused: Boolean,
+        accent: Color = MaterialTheme.colorScheme.primary,
+        backdrop: Color = MaterialTheme.colorScheme.background,
+        inset: Float = ChromeGeometry.FOCUS_RING_INSET,
+    ): Modifier {
+        val ringColor = focusRing(accent, backdrop)
+        if (!focused) return this
+        return drawWithContent {
+            drawContent()
+            val stroke = ChromeGeometry.FOCUS_RING_WIDTH.dp.toPx()
+            val offset = inset.dp.toPx() + stroke / 2f
+            val w = (size.width - offset * 2f).coerceAtLeast(0f)
+            val h = (size.height - offset * 2f).coerceAtLeast(0f)
+            drawRoundRect(
+                color = ringColor,
+                topLeft = Offset(offset, offset),
+                size = Size(w, h),
+                cornerRadius = CornerRadius(minOf(w, h) / 2f),
+                style = Stroke(width = stroke),
+            )
+        }
+    }
 }
 
 /**
@@ -328,10 +370,26 @@ class ChromeFocus internal constructor(
      *
      * @param containerRadiusDp the radius the container's own shape uses.
      * @param surface the colour the ring is drawn on, which is what it must be measured against.
+     * @param boundaryWidthDp what this chrome already draws at its own edge, so the ring can clear it. The
+     *   default is the substrate's one edge weight, which is right for chrome that draws a substrate edge.
+     *   Rounded chrome with a heavier selected border needs its own value for the reason
+     *   [ringOnCircle] documents: at the default inset a ring inside a 2 dp border lands half a dp from it,
+     *   and the two strokes merge into one heavier edge that says "selected" rather than "focused". This is
+     *   the same parameter [ringOnCircle] takes — a rounded rectangle needs it for the same reason a circle
+     *   does, and only the radius differs.
      */
     @Composable
-    fun ringOnShape(containerRadiusDp: Float, surface: Color): Modifier = with(NorfoldChrome) {
-        Modifier.innerFocusRing(focused, containerRadiusDp, backdrop = surface)
+    fun ringOnShape(
+        containerRadiusDp: Float,
+        surface: Color,
+        boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+    ): Modifier = with(NorfoldChrome) {
+        Modifier.innerFocusRing(
+            focused = focused,
+            containerRadiusDp = containerRadiusDp,
+            backdrop = surface,
+            inset = ChromeGeometry.focusRingInsetOver(boundaryWidthDp),
+        )
     }
 
     /**
@@ -368,6 +426,21 @@ class ChromeFocus internal constructor(
             inset = ChromeGeometry.focusRingInsetOver(boundaryWidthDp),
         )
     }
+
+    /**
+     * The inward ring for a pill, whose radius is half a height only the layout knows.
+     *
+     * See [NorfoldChrome.innerFocusRingPill]. Use this for anything shaped `CircleShape` that is wider than
+     * it is tall — a chip, a tag, a filter pill — and [ringOnCircle] for something genuinely circular, where
+     * the size is fixed and known at the call site.
+     *
+     * @param surface the colour the ring is drawn on. A selected chip filled with `primary` must pass that
+     *   fill, for the reason [ringOnCircle] documents at length: an accent ring on an accent fill is 1.00:1.
+     */
+    @Composable
+    fun ringOnPill(surface: Color): Modifier = with(NorfoldChrome) {
+        Modifier.innerFocusRingPill(focused, backdrop = surface)
+    }
 }
 
 /**
@@ -375,13 +448,62 @@ class ChromeFocus internal constructor(
  *
  * The source is remembered, so it survives recomposition and stays the same object the `clickable` is
  * holding — a fresh source each composition would emit focus to something nothing is watching.
+ *
+ * @param source the source to observe, for chrome that already has one. Two populations do: the four sites
+ *   that drive [com.norfold.app.ui.components.pressScale] from a source they hold, and the 38 that pass one
+ *   to `Surface(onClick = …)`. Both need the ring to watch the *same* object the interaction is emitted on;
+ *   a second source would observe focus that nothing reports. Omit it and one is remembered here.
  */
 @Composable
-fun rememberChromeFocus(): ChromeFocus {
-    val source = remember { MutableInteractionSource() }
-    val focused by source.collectIsFocusedAsState()
-    return ChromeFocus(source, focused)
+fun rememberChromeFocus(source: MutableInteractionSource? = null): ChromeFocus {
+    val resolved = source ?: remember { MutableInteractionSource() }
+    val focused by resolved.collectIsFocusedAsState()
+    return ChromeFocus(resolved, focused)
 }
+
+/**
+ * The inward focus ring for chrome whose click is wired somewhere else.
+ *
+ * ## Why this exists beside [focusableChrome]
+ *
+ * [focusableChrome] owns the `clickable`, which is what lets it guarantee that the ring and the click share
+ * one interaction source. Two populations cannot give it that ownership:
+ *
+ * - **The 38 `Surface(onClick = …)` sites.** `Surface`'s own click parameter is not the same thing as
+ *   `Modifier.clickable`: it supplies `minimumInteractiveComponentSize`, which the modifier does not, so
+ *   moving these to `focusableChrome` would silently shrink 38 targets below 48 dp to buy them a ring. That
+ *   is a straight trade of one accessibility failure for another. They keep `onClick` and take the ring
+ *   alone.
+ * - **The four `pressScale` sites.** The scale animation reads presses off a source the caller already holds
+ *   and hands to its `clickable`. A ring with its own source would leave the two watching different objects.
+ *
+ * So this takes the source rather than making one, and draws only the ring. The caller stays responsible for
+ * the click, which it already was.
+ *
+ * @param source the interaction source the click is already reported on.
+ * @param radiusDp the radius the chrome's own shape draws. For a circle, half its size.
+ * @param surface what the ring is measured against — the colour it is drawn on.
+ * @param boundaryWidthDp what this chrome already draws at its own edge, so the ring can clear it. See
+ *   [ChromeFocus.ringOnShape]: chrome whose *selected* state is a heavier border needs its own value, or
+ *   focusing an already-selected item just thickens the stroke that means "selected".
+ */
+@Composable
+fun Modifier.chromeFocusRing(
+    source: MutableInteractionSource,
+    radiusDp: Float,
+    surface: Color = MaterialTheme.colorScheme.background,
+    boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+): Modifier = this.then(rememberChromeFocus(source).ringOnShape(radiusDp, surface, boundaryWidthDp))
+
+/**
+ * The same ring for chrome shaped by one of the substrate's three [Corner] tiers.
+ */
+@Composable
+fun Modifier.chromeFocusRing(
+    source: MutableInteractionSource,
+    corner: Corner,
+    surface: Color = MaterialTheme.colorScheme.background,
+): Modifier = chromeFocusRing(source, corner.radiusDp, surface)
 
 /**
  * Make this chrome clickable **and** focus-visible in one call, for chrome that owns its own radius.
@@ -410,7 +532,7 @@ fun rememberChromeFocus(): ChromeFocus {
  *
  * ```
  * Surface(
- *     Modifier.focusableChrome(radiusDp = 18f, onClick = onClick),
+ *     Modifier.focusableChrome(radiusDp = 18f, surface = fill) { onClick() },
  *     shape = RoundedCornerShape(18.dp),
  * ) { … }
  * ```
@@ -420,15 +542,17 @@ fun rememberChromeFocus(): ChromeFocus {
  *   an accent must pass that fill, or an accent-coloured ring lands at 1.00:1 against it. See
  *   [ChromeFocus.ringOnCircle] for the case that made this necessary.
  * @param enabled false leaves the chrome inert and unfocusable, matching `clickable`'s own contract.
+ * @param onClick last, like `Modifier.clickable`'s own, so a site whose action is a block of statements can
+ *   write it as a trailing lambda instead of a named argument holding a multi-line body.
  */
 @Composable
 fun Modifier.focusableChrome(
     radiusDp: Float,
-    onClick: () -> Unit,
     surface: Color = MaterialTheme.colorScheme.background,
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
+    onClick: () -> Unit,
 ): Modifier {
     val focus = rememberChromeFocus()
     val ring = focus.ringOnShape(radiusDp, surface)
@@ -453,12 +577,44 @@ fun Modifier.focusableChrome(
 @Composable
 fun Modifier.focusableChrome(
     corner: Corner,
-    onClick: () -> Unit,
     surface: Color = MaterialTheme.colorScheme.background,
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
-): Modifier = focusableChrome(corner.radiusDp, onClick, surface, enabled, onClickLabel, role)
+    onClick: () -> Unit,
+): Modifier = focusableChrome(corner.radiusDp, surface, enabled, onClickLabel, role, onClick)
+
+/**
+ * The same wiring for a **pill** — chrome shaped `CircleShape` but wider than it is tall.
+ *
+ * Separate from the [Float] overload rather than a `radiusDp` a caller could supply, because the radius of a
+ * pill is half a height the call site does not know: it falls out of the content and its padding at layout
+ * time. See [NorfoldChrome.innerFocusRingPill].
+ *
+ * @param surface the colour the ring is drawn on. A chip that fills itself with `primary` when selected must
+ *   pass that fill, or the ring is 1.00:1 against it on exactly the chip the user reaches first.
+ */
+@Composable
+fun Modifier.focusablePill(
+    surface: Color = MaterialTheme.colorScheme.background,
+    enabled: Boolean = true,
+    onClickLabel: String? = null,
+    role: Role? = null,
+    onClick: () -> Unit,
+): Modifier {
+    val focus = rememberChromeFocus()
+    val ring = focus.ringOnPill(surface)
+    return this
+        .clickable(
+            interactionSource = focus.source,
+            indication = ripple(),
+            enabled = enabled,
+            onClickLabel = onClickLabel,
+            role = role,
+            onClick = onClick,
+        )
+        .then(ring)
+}
 
 /**
  * A piece of floating interaction chrome: the substrate's single surface.

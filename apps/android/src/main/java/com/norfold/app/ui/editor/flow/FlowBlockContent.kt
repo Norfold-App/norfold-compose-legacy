@@ -172,6 +172,7 @@ import com.norfold.app.editor.diagram.DiagramEditDocumentJson
 import com.norfold.app.editor.diagram.DiagramNodePosition
 import java.io.ByteArrayInputStream
 import kotlin.math.roundToInt
+import com.norfold.app.ui.rememberChromeFocus
 
 /**
  * A text edit the surface observed, addressed the way the engines address it.
@@ -544,13 +545,18 @@ fun FlowBlockContent(
                             },
                     )
                     if (context.objectActive && loaded.isEditable) {
+                        val editImageFocus = rememberChromeFocus()
                         Surface(
                             onClick = { callbacks.onOpenImage(block.id) },
-                            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
+                            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
+                                // Floating over the image, but the ring goes inward like the rest: measured on
+                                // the button's own `surface`, since that is what it is drawn on, not the photo.
+                                .then(editImageFocus.ringOnShape(12f, MaterialTheme.colorScheme.surface)),
                             color = MaterialTheme.colorScheme.surface,
                             contentColor = MaterialTheme.colorScheme.onSurface,
                             shape = RoundedCornerShape(12.dp),
                             shadowElevation = 5.dp,
+                            interactionSource = editImageFocus.source,
                         ) {
                             Icon(Icons.Filled.Image, "Edit image", Modifier.padding(12.dp).size(20.dp))
                         }

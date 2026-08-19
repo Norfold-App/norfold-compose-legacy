@@ -176,6 +176,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.rememberChromeFocus
 
 private enum class SettingsSection(val title: String, val subtitle: String, val icon: ImageVector) {
     Profile("Profile", "Username, public name and device", Icons.Outlined.Person),
@@ -1383,10 +1385,16 @@ private fun EditorIconFamilyPickerDialog(
         title = { Text("Editor icon family") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val useAppFill = if (selected == EditorIconFamily.UseApp) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                val useAppFocus = rememberChromeFocus()
                 Surface(
                     onClick = { onSelect(EditorIconFamily.UseApp) },
                     shape = RoundedCornerShape(12.dp),
-                    color = if (selected == EditorIconFamily.UseApp) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                    color = useAppFill,
+                    interactionSource = useAppFocus.source,
+                    // The fill flips with selection, so the ring is measured against whichever one is
+                    // actually painted rather than against the dialog behind it.
+                    modifier = Modifier.then(useAppFocus.ringOnShape(12f, useAppFill)),
                 ) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         SemanticFamilyIcon(appFamily, SemanticActionId.Bold, null, Modifier.size(24.dp))
@@ -1397,7 +1405,14 @@ private fun EditorIconFamilyPickerDialog(
                         if (selected == EditorIconFamily.UseApp) Icon(Icons.Outlined.Check, "Selected")
                     }
                 }
-                Surface(onClick = { showSpecific = true }, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                val presetFocus = rememberChromeFocus()
+                Surface(
+                    onClick = { showSpecific = true },
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    interactionSource = presetFocus.source,
+                    modifier = Modifier.then(presetFocus.ringOnShape(12f, MaterialTheme.colorScheme.surfaceVariant)),
+                ) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Palette, null)
                         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
@@ -2364,10 +2379,13 @@ private fun DeviceSettingsProfilesCard(
     } else {
         profiles.take(6).forEach { profile ->
             val selectedProfile = profile.deviceId == selectedDeviceId
+            val fill = if (selectedProfile) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
             Surface(
-                modifier = Modifier.fillMaxWidth().clickable { selectedDeviceId = profile.deviceId },
+                // `shapes.medium` is 10 dp in the Norfold theme; the ring's radius has to be stated as a
+                // number, so it is stated here rather than derived from the shape at runtime.
+                modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = fill) { selectedDeviceId = profile.deviceId },
                 shape = MaterialTheme.shapes.medium,
-                color = if (selectedProfile) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                color = fill,
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),

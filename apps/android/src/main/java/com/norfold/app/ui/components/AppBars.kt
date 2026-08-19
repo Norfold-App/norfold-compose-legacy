@@ -48,6 +48,7 @@ import com.norfold.app.ui.LocalControlLabelMode
 import com.norfold.app.ui.screens.totalChatUnread
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.norfold.app.ui.rememberChromeFocus
 
 @Composable
 fun MobileBottomBar(state: DocsUiState, viewModel: DocsViewModel, modifier: Modifier = Modifier) {
@@ -112,12 +113,17 @@ fun MobileBottomBar(state: DocsUiState, viewModel: DocsViewModel, modifier: Modi
             modifier = Modifier.align(Alignment.TopCenter).offset(y = (-4).dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            val fabFocus = rememberChromeFocus()
             Surface(
-                modifier = Modifier.size(62.dp),
+                // The ring is measured on `primary`, the fill it is drawn on — not on the page. And the
+                // 5 dp background border has to be cleared, or the ring lands inside the halo that
+                // separates the FAB from the bar instead of inside the FAB.
+                modifier = Modifier.size(62.dp).then(fabFocus.ringOnCircle(62f, MaterialTheme.colorScheme.primary, boundaryWidthDp = 5f)),
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
                 border = BorderStroke(5.dp, MaterialTheme.colorScheme.background),
                 shadowElevation = 16.dp,
+                interactionSource = fabFocus.source,
                 onClick = {
                     when {
                         // In the chat context the FAB is a "new conversation" affordance; land on

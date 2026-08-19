@@ -92,6 +92,8 @@ import com.norfold.app.editor.style.ColorStudioInteractionController
 import com.norfold.app.editor.style.EditorStyleUiState
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
+import com.norfold.app.ui.rememberChromeFocus
+import com.norfold.app.domain.style.ChromeGeometry
 
 private enum class ChartStudioSection(val label: String) {
     DATA("Data"), TYPE("Type"), SERIES("Series"), AXES("Axes"), LABELS("Labels"), LEGEND("Legend"), STYLE("Style")
@@ -106,16 +108,20 @@ private fun RowScope.ChartTypeButton(
     readOnly: Boolean,
     onClick: () -> Unit,
 ) {
+    val selected = selectedType == type
+    val fill = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+    val focus = rememberChromeFocus()
     Surface(
         onClick = onClick,
         enabled = !readOnly,
         shape = RoundedCornerShape(10.dp),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            if (selectedType == type) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
         ),
-        color = if (selectedType == type) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-        modifier = Modifier.weight(1f).height(68.dp),
+        color = fill,
+        interactionSource = focus.source,
+        modifier = Modifier.weight(1f).height(68.dp).then(focus.ringOnShape(10f, fill)),
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(icon, null, Modifier.size(24.dp))
@@ -126,7 +132,16 @@ private fun RowScope.ChartTypeButton(
 
 @Composable
 private fun ChartSettingRow(icon: ImageVector, title: String, detail: String, onClick: () -> Unit) {
-    Surface(onClick = onClick, color = Color.Transparent, modifier = Modifier.fillMaxWidth()) {
+    val focus = rememberChromeFocus()
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        interactionSource = focus.source,
+        // Radius 0 because this `Surface` passes no `shape` and so draws `RectangleShape` — the ring is
+        // square because the chrome is. Measured on the card's `surface`, which is what a transparent row
+        // inside that card actually shows.
+        modifier = Modifier.fillMaxWidth().then(focus.ringOnShape(0f, MaterialTheme.colorScheme.surface)),
+    ) {
         Row(Modifier.padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
@@ -756,13 +771,21 @@ private fun StyleSection(
 private fun ColorSwatches(selected: ColorValue?, readOnly: Boolean, onChoose: (ColorValue) -> Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ChartStyle.defaultPalette().forEach { color ->
+            val swatchFill = Color(color.toArgb())
+            val focus = rememberChromeFocus()
             Surface(
                 onClick = { onChoose(color) },
                 enabled = !readOnly,
                 shape = CircleShape,
                 border = if (selected == color) androidx.compose.foundation.BorderStroke(3.dp, MaterialTheme.colorScheme.onSurface) else null,
-                modifier = Modifier.size(48.dp).semantics { contentDescription = "Choose ${color.toHex()}" },
-                color = Color(color.toArgb()),
+                interactionSource = focus.source,
+                // Measured on the swatch's own fill, and clearing the 3 dp selection border: a ring measured
+                // against the page and drawn on an arbitrary palette colour is the 1.00:1 case the substrate
+                // documents, and one that merges with the selection border says "selected", not "focused".
+                modifier = Modifier.size(48.dp)
+                    .then(focus.ringOnCircle(48f, swatchFill, boundaryWidthDp = if (selected == color) 3f else ChromeGeometry.RESTING_EDGE_WIDTH))
+                    .semantics { contentDescription = "Choose ${color.toHex()}" },
+                color = swatchFill,
             ) {}
         }
     }

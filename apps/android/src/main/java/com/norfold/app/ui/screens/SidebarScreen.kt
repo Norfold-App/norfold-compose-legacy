@@ -129,6 +129,8 @@ import com.norfold.app.ui.components.SemanticAppIcon
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.rememberChromeFocus
+import com.norfold.app.ui.focusableChrome
+import androidx.compose.ui.semantics.Role
 
 @Composable
 fun SectionSidebarOverlay(state: DocsUiState, viewModel: DocsViewModel) {
@@ -434,10 +436,14 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         iconChoices.forEach { choice ->
+                            val choiceFill = if (folderIcon == choice) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                            val choiceFocus = rememberChromeFocus()
                             Surface(
                                 onClick = { folderIcon = choice },
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (folderIcon == choice) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                color = choiceFill,
+                                interactionSource = choiceFocus.source,
+                                modifier = Modifier.then(choiceFocus.ringOnShape(12f, choiceFill)),
                             ) {
                                 SemanticAppIcon(
                                     choice,
@@ -471,48 +477,9 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
         UnifiedSidebarHeader(state, viewModel, sidebarQuery, { sidebarQuery = it })
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(
-                onClick = viewModel::createNote,
-                modifier = Modifier.weight(1f).height(40.dp),
-                shape = RoundedCornerShape(9.dp),
-                color = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.primary,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Note", maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            Surface(
-                onClick = viewModel::createDocument,
-                modifier = Modifier.weight(1f).height(40.dp),
-                shape = RoundedCornerShape(9.dp),
-                color = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.primary,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
-                    Spacer(Modifier.width(3.dp))
-                    Text("Doc", maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            Surface(
-                onClick = viewModel::createTaskAndOpen,
-                modifier = Modifier.weight(1f).height(40.dp),
-                shape = RoundedCornerShape(9.dp),
-                color = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.primary,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
-                    Spacer(Modifier.width(3.dp))
-                    Text("Task", maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
+            SidebarQuickCreate("Note", Modifier.weight(1f), onClick = viewModel::createNote)
+            SidebarQuickCreate("Doc", Modifier.weight(1f), onClick = viewModel::createDocument)
+            SidebarQuickCreate("Task", Modifier.weight(1f), onClick = viewModel::createTaskAndOpen)
         }
 
         if (sidebarQuery.isNotBlank()) {
@@ -662,6 +629,35 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
                 Text("@${state.settings.syncUserName.ifBlank { "owner" }}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Icon(Icons.Outlined.UnfoldMore, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * One of the sidebar's three quick-create buttons. Note, Doc and Task were three byte-identical
+ * copies of this chrome differing only in label and callback, so the focus ring is written once
+ * here rather than three times at the call sites.
+ */
+@Composable
+private fun SidebarQuickCreate(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val focus = rememberChromeFocus()
+    Surface(
+        modifier = modifier.height(40.dp).then(focus.ringOnShape(9f, MaterialTheme.colorScheme.surface)),
+        shape = RoundedCornerShape(9.dp),
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.primary,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        interactionSource = focus.source,
+        onClick = onClick,
+    ) {
+        Row(
+            Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.Add, null, Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(label, maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -952,7 +948,13 @@ private fun DocSidebarContent(
                 DocSidebarTab.entries.forEach { tab ->
                     val selected = selectedTab == tab
                     Surface(
-                        modifier = Modifier.weight(1f).clickable { selectedTab = tab },
+                        modifier = Modifier.weight(1f).focusableChrome(
+                            radiusDp = 10f,
+                            // The unselected tab is transparent, so its ring lands on the sidebar's own
+                            // surface — not on the app background the default would assume.
+                            surface = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                            role = Role.Tab,
+                        ) { selectedTab = tab },
                         shape = RoundedCornerShape(10.dp),
                         color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                         contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1084,10 +1086,11 @@ private fun DocumentHistoryPanel(histories: List<WorkspaceObjectHistory>, active
 @Composable
 private fun DocumentHistoryRow(entry: WorkspaceObjectHistory, onRestore: () -> Unit) {
     var expanded by remember(entry.id) { mutableStateOf(false) }
+    val fill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f)
     Surface(
-        Modifier.fillMaxWidth().clickable { expanded = !expanded },
+        Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f, surface = fill) { expanded = !expanded },
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
+        color = fill,
     ) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1104,7 +1107,13 @@ private fun DocumentHistoryRow(entry: WorkspaceObjectHistory, onRestore: () -> U
                 if (entry.afterValue.isNotBlank()) Text("After · ${historyValuePreview(entry.afterValue)}", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
                 if (entry.blockId != null) {
                     Surface(
-                        modifier = Modifier.clickable(onClick = onRestore),
+                        // Nested inside the expandable row, but a distinct destructive-ish action rather than
+                        // a sub-region of it, so it takes its own stop. Measured on `primaryContainer`.
+                        modifier = Modifier.focusableChrome(
+                            radiusDp = 8f,
+                            surface = MaterialTheme.colorScheme.primaryContainer,
+                            onClick = onRestore,
+                        ),
                         shape = RoundedCornerShape(8.dp),
                         color = MaterialTheme.colorScheme.primaryContainer,
                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1281,12 +1290,18 @@ private fun DocTableOfContents(documentKey: String, document: BlockDocument, loc
                         .zIndex(if (isDragged) 1f else 0f)
                         .graphicsLayer { translationY = if (isDragged) dragOffsetY else 0f },
                 ) {
+                    val tocFocus = rememberChromeFocus()
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (isDragged) MaterialTheme.colorScheme.surface else Color.Transparent)
+                            // Transparent unless dragged, so the ring is measured on the sidebar panel's own
+                            // `surface` — the colour the row actually shows through to.
+                            .then(tocFocus.ringOnShape(8f, MaterialTheme.colorScheme.surface))
                             .combinedClickable(
+                                interactionSource = tocFocus.source,
+                                indication = androidx.compose.material3.ripple(),
                                 onClick = {
                                     viewModel.scrollToBlock(id)
                                     viewModel.closeSidebar()
