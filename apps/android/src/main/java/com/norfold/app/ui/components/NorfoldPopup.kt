@@ -396,9 +396,14 @@ fun NorfoldDialog(
  * documented as 3 of 10 until `ChromeGeometryTest` ran against `ColorValue`'s arithmetic instead of a
  * hand-computed model.
  *
- * That colour is [BottomSheetDefaults.containerColor], which resolves `SheetBottomTokens.DockedContainerColor`
+ * That colour is [BottomSheetDefaults.ContainerColor], which resolves `SheetBottomTokens.DockedContainerColor`
  * — `surfaceContainerLow`. Passed to `containerColor` as well as to the local so the painted colour and the
  * measured one are one expression.
+ *
+ * The capital `C` is Material's, not a typo: [BottomSheetDefaults] declares `ContainerColor` while
+ * [AlertDialogDefaults] two composables up declares `containerColor`. Both compile to `getContainerColor` on
+ * the JVM, so the two spellings are indistinguishable in bytecode and only Kotlin source resolution tells
+ * them apart — which is how the lower-case spelling reached a commit here and broke the build.
  *
  * **The figures above were measured against Material's baseline `#F7F2FA`, and the theme has since derived its
  * own ramp — which is why this local is a resolution and not a tolerance.** `surfaceContainerLow` is now
@@ -416,7 +421,7 @@ fun NorfoldBottomSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val style = LocalPopupStyle.current
-    val container = BottomSheetDefaults.containerColor
+    val container = BottomSheetDefaults.ContainerColor
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         modifier = modifier,
