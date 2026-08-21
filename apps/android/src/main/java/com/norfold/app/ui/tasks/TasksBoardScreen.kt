@@ -49,6 +49,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -107,6 +108,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ripple
 import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -155,6 +157,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -2802,19 +2805,11 @@ private fun TaskPropertyDefinitionDialog(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         items(TaskPropertyPickerTypes) { option ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { type = option }
-                                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                RadioButton(selected = type == option, onClick = { type = option })
-                                Icon(option.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                Text(option.defaultPropertyName(), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+                            PropertyTypeOption(
+                                label = option.defaultPropertyName(),
+                                icon = option.icon(),
+                                selected = type == option,
+                            ) { type = option }
                         }
                     }
                     if (type != property.type) {
@@ -2841,6 +2836,68 @@ private fun TaskPropertyDefinitionDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * One property type in the retype picker: a radio indicator, an icon and a name, as a single node.
+ *
+ * The row was `clickable` and the [RadioButton] carried its own `onClick`, so one choice existed twice and its
+ * semantics split in two — the row named the type without stating whether it was chosen, the indicator stated it
+ * without naming it. Compose does not fold the second into the first: its merge walk stops descending at any
+ * child that itself merges, and every Material selection control does.
+ * [com.norfold.app.ui.components.SettingsToggleRow] carries the mechanism and Material's null-handler gate.
+ * `selectable` gives one node with the name, `Role.RadioButton` and the selection; the indicator keeps drawing
+ * from [selected] and stops being a target.
+ *
+ * **No `selectableGroup` on the [LazyColumn], deliberately — here it would be wrong rather than merely absent.**
+ * The pattern in [com.norfold.app.ui.components.OptionPickerDialog] puts it on a `verticalScroll` column, which
+ * composes every option, so "3 of 12" is true. A lazy list does not: `CollectionInfo_android`'s
+ * `setCollectionItemInfo` counts an item's position over the parent's *composed* children, and a `LazyColumn`
+ * composes only what is visible plus a small buffer. Sixteen types in a 240 dp box means a screen reader would
+ * announce a position out of five or six and renumber it on every scroll. The lazy list already publishes its own
+ * `CollectionInfo` with the real `totalItemsCount` and a `-1` column count that marks it lazy, and the platform
+ * delegate returns early on that marker rather than recomputing — so the honest announcement is the one the list
+ * already makes, and adding the group modifier would replace a correct total with a wrong index.
+ *
+ * `heightIn(min = 48.dp)` is load-bearing. Material attaches `minimumInteractiveComponentSize` inside the same
+ * `ifnull` branch as the indicator's own `selectable`, so nulling the handler removes the touch floor along with
+ * the interaction. What is left is `requiredSize(IconSize)` at 20 dp *inside* `padding(RadioButtonPadding)` at
+ * 2 dp — a 24 dp indicator, which with this row's 8 dp of vertical padding measures 40 dp. Eight dp short.
+ *
+ * The ring uses [com.norfold.app.ui.ChromeFocus.ringOnShape] at the row's own 10 dp rather than a [Corner] tier,
+ * because 10 dp is not one: a ring built on a larger radius bulges past the container's curve. It is measured
+ * against `surface`, matching this file's other `ringOnShape` sites — the dialog's own container is
+ * `AlertDialogDefaults.containerColor`, which resolves to `surface` in both schemes.
+ */
+@Composable
+private fun PropertyTypeOption(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    val focus = rememberChromeFocus()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .selectable(
+                selected = selected,
+                interactionSource = focus.source,
+                indication = ripple(),
+                role = Role.RadioButton,
+                onClick = onSelect,
+            )
+            .then(focus.ringOnShape(10f, MaterialTheme.colorScheme.surface))
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 @Composable

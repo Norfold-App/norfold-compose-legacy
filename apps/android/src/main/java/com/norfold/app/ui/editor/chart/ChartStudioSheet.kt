@@ -61,6 +61,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.text.input.ImeAction
@@ -93,6 +94,7 @@ import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import com.norfold.app.ui.rememberChromeFocus
+import com.norfold.app.ui.toggleableChrome
 
 private enum class ChartStudioSection(val label: String) {
     DATA("Data"), TYPE("Type"), SERIES("Series"), AXES("Axes"), LABELS("Labels"), LEGEND("Legend"), STYLE("Style")
@@ -811,11 +813,40 @@ private const val PaletteSwatchSize = 48f
 /** The series colour dot's diameter: it sits inside a button beside a line of text, so it reads at 18 dp. */
 private const val SeriesDotSize = 18f
 
+/**
+ * One label and one switch, as a single accessibility node.
+ *
+ * Ten settings go through this row — every axis, gridline, label and legend toggle in the sheet — and each one
+ * announced as two nodes: the label with no state, then an unnamed switch. [toggleableChrome] moves the
+ * interaction to the row and the switch's handler goes `null`; see its documentation for why Compose does not
+ * fold the second node into the first.
+ *
+ * **This row also had no touch target.** It was a bare `Row` with no height floor, holding a `Switch` that is
+ * 32 dp tall and carried Material's 48 dp minimum only around itself — so the label, which is most of the row's
+ * width, was never a target at all and the switch was the only 48 dp in it. `toggleableChrome` states the floor
+ * for the whole row, which makes this a fix rather than a refactor.
+ *
+ * Radius 0 because the row draws no shape of its own, and measured against `background`: this sheet's root
+ * `Surface` is `colorScheme.background` and it provides no `LocalChromeContainer`, so that is the pixel the
+ * ring is actually drawn on.
+ */
 @Composable
 private fun Toggle(label: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleableChrome(
+                checked = checked,
+                radiusDp = 0f,
+                role = Role.Switch,
+                surface = MaterialTheme.colorScheme.background,
+                enabled = enabled,
+                onValueChange = onChange,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(label, Modifier.weight(1f))
-        Switch(checked, onChange, enabled = enabled)
+        Switch(checked, null, enabled = enabled)
     }
 }
 

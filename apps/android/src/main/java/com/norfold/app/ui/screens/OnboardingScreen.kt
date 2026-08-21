@@ -107,9 +107,11 @@ import com.norfold.app.ui.components.popIn
 import com.norfold.app.ui.components.GoogleGMark
 import com.norfold.app.ui.components.NorfoldDialog
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.Role
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.toggleableChrome
 
 private const val OnboardingPreferences = "norfold_onboarding_draft"
 
@@ -870,7 +872,35 @@ private fun CompletionStep(workspace: String) {
 @Composable private fun StepIcon(icon: ImageVector) { Surface(Modifier.size(72.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) { Icon(icon, null, Modifier.padding(20.dp), tint = MaterialTheme.colorScheme.primary) } }
 @Composable private fun FeatureCard(icon: ImageVector, title: String, detail: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Column { Text(title, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp) } } } }
 @Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) { Surface(Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f, onClick = onClick), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(18.dp).background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)); Column(Modifier.padding(start = 14.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } } } }
-@Composable private fun ToggleCard(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit) { Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }; Switch(checked, onChecked) } } }
+/**
+ * One onboarding preference, as a single accessibility node.
+ *
+ * Written out rather than left on one line like its neighbours because the one-liner had the defect
+ * [toggleableChrome] exists to stop: the card carried no interaction at all, so the `Switch` was the only
+ * focusable thing in it and the label sat on a node of its own. A screen reader read the title, then read an
+ * unnamed switch — the two halves of one control, announced as two — and a keyboard reached a 32 dp target
+ * instead of the card. Seven callers had it.
+ *
+ * The `Switch`'s own handler is `null`, which is what makes the card the single node; see [toggleableChrome]
+ * for why that is the caller's job and what it costs.
+ */
+@Composable private fun ToggleCard(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
+    Surface(
+        Modifier
+            .fillMaxWidth()
+            .toggleableChrome(checked = checked, radiusDp = 12f, role = Role.Switch, onValueChange = onChecked),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            }
+            Switch(checked, onCheckedChange = null)
+        }
+    }
+}
 
 @Composable
 private fun OnboardingPrimaryButton(label: String, loading: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {

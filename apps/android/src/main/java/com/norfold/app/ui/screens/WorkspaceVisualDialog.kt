@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,8 +33,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +56,9 @@ import com.norfold.app.branding.BuiltInCovers
 import com.norfold.app.domain.WorkspaceIconKind
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.domain.style.ChromeGeometry.Corner
+import com.norfold.app.ui.components.RowSwitch
+import com.norfold.app.ui.rememberChromeFocus
 
 enum class WorkspaceVisualTab { Identity, CoverPermissions }
 
@@ -382,13 +387,49 @@ private fun EmojiPickerGrid(selected: String, onPick: (String) -> Unit) {
     }
 }
 
+/**
+ * One workspace permission: a label and a switch, activated anywhere along the row.
+ *
+ * The row is `toggleable` rather than `clickable`, and the [RowSwitch] is decorative. Before, both were live,
+ * which made each permission two accessibility nodes — the row named it without stating it, the switch stated it
+ * without naming it — because Compose's semantics merge stops at any descendant that merges, and every Material
+ * selection control does. Three of these stack here, so a screen reader met three unnamed switches. The same
+ * split, and the same fix, as [SettingsToggleRow], whose documentation carries the detail.
+ *
+ * It is not routed through that composable: these sit in a scrolling dialog column rather than a clipped
+ * [com.norfold.app.ui.components.SettingsGroup], are 13 sp rather than 15 sp, and put the label's icon inline
+ * rather than in a 34 dp tile. Only the semantics are shared.
+ *
+ * The ring is inward at [Corner.Media] and measured against the dialog's own container, which
+ * [com.norfold.app.ui.components.NorfoldDialog] announces — so nothing here names a colour, and the row stays
+ * correct if the dialog's container token changes.
+ *
+ * `heightIn(min = 48.dp)` replaces the floor Material was attaching to the switch, which its null handler
+ * removes along with the interaction. It is load-bearing here: this row has no padding of its own.
+ */
 @Composable
 private fun PermissionRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+    val focus = rememberChromeFocus()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
+            .toggleable(
+                value = checked,
+                interactionSource = focus.source,
+                indication = ripple(),
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .then(focus.ring(Corner.Media)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Outlined.Workspaces, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
-        Switch(checked, onChange)
+        RowSwitch(checked, null)
     }
 }

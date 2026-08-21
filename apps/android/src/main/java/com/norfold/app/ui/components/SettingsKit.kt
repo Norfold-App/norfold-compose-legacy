@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -183,8 +187,107 @@ fun SettingsRow(
                 Modifier
             },
         )
+    SettingsRowBody(base, title, subtitle, icon, iconTint, titleColor, trailing)
+}
+
+/**
+ * A settings row whose whole width toggles one boolean, and which is **one** accessibility node rather than two.
+ *
+ * ## The defect this exists to fix
+ *
+ * The pattern it replaces is `SettingsRow(title, trailing = { RowSwitch(checked, onChange) })`. That renders a
+ * label and a working switch, and it looks correct. What it produces in the semantics tree is two nodes for one
+ * setting:
+ *
+ * - the row, which carries the **title** and no state, and — at thirteen of the fourteen sites — no action either
+ * - the `Switch`, which carries the **state and the action** and no name
+ *
+ * `clickable` does declare `shouldMergeDescendantSemantics = true`, so it is easy to assume the switch is folded
+ * into the row. It is not: Compose's merge walk stops descending at any child that itself merges, and every
+ * Material selection control is such a child — `Switch` applies `Modifier.toggleable`, which merges. So the two
+ * nodes survive as two, and a screen reader reaches a named thing that reports no state followed by a stateful
+ * thing that reports no name. That is WCAG 4.1.2 (Name, Role, Value) at Level A, one level stricter than the
+ * 2.4.7 focus work this file's rings are for.
+ *
+ * It is not merely untidy. `SettingsScreen`'s workspace-permissions group stacks six of these, so a reader
+ * hears six unnamed switches in a row and has to count to know which permission it is about to change.
+ *
+ * ## Why the row takes the action rather than the switch keeping it
+ *
+ * Because the label lives on the row. Naming the switch instead would mean repeating the title inside a
+ * `contentDescription` at every call site — the same string written twice, free to drift, and still leaving two
+ * focus stops for one setting. Moving the action outward gives one stop that has all three of what 4.1.2 asks:
+ * the title as its name, `Role.Switch` as its role, and the toggle state as its value. `Modifier.toggleable`
+ * supplies role and value from `checked`, so nothing here is hand-written.
+ *
+ * The `Switch` then receives `null` for its handler, which is not a cosmetic disable. Material gates its
+ * *entire* interaction modifier on that parameter being non-null — verified in `SwitchKt`, where the null branch
+ * substitutes a bare `Modifier` — so the control stops being a semantics node, stops being focusable, and stops
+ * consuming the tap. It keeps drawing, and it keeps animating from `checked`.
+ *
+ * **One consequence of that gate has to be paid back here.** The branch Material skips also carries
+ * `minimumInteractiveComponentSize`, the 48 dp floor the switch was providing on the row's behalf. With the
+ * handler gone, that floor goes with it, so this row states `heightIn(min = 48.dp)` itself. Today the drawn
+ * switch is 32 dp tall inside 24 dp of vertical padding, so the row already measures 56 dp and the constraint
+ * changes no pixel; it is here so that the target survives a future change to either number.
+ *
+ * The focus ring is inward at [Corner.Card], for the same structural reason [SettingsRow] gives: [SettingsGroup]
+ * clips its children, so an outward ring would be cut away on the first and last row of every group.
+ */
+@Composable
+fun SettingsToggleRow(
+    title: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    icon: ImageVector? = null,
+    iconTint: Color = MaterialTheme.colorScheme.primary,
+    titleColor: Color = MaterialTheme.colorScheme.onSurface,
+    enabled: Boolean = true,
+) {
+    val focus = rememberChromeFocus()
+    SettingsRowBody(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = checked,
+                interactionSource = focus.source,
+                indication = ripple(),
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .then(focus.ring(Corner.Card)),
+        title,
+        subtitle,
+        icon,
+        iconTint,
+        titleColor,
+    ) { RowSwitch(checked, null, enabled) }
+}
+
+/**
+ * The row's visuals, with no opinion about how it is activated.
+ *
+ * Extracted so [SettingsRow] and [SettingsToggleRow] cannot drift: they differ in exactly one thing — whether
+ * the row is `clickable` or `toggleable` — and everything a user sees is shared. [modifier] arrives with the
+ * interaction and the ring already applied, and the interior padding is added here so a ring is drawn on the
+ * row's full bounds rather than inside its text inset.
+ */
+@Composable
+private fun SettingsRowBody(
+    modifier: Modifier,
+    title: String,
+    subtitle: String?,
+    icon: ImageVector?,
+    iconTint: Color,
+    titleColor: Color,
+    trailing: @Composable (() -> Unit)?,
+) {
     Row(
-        base.padding(horizontal = 14.dp, vertical = 12.dp),
+        modifier.padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -312,12 +415,24 @@ fun RowValue(text: String, accent: Boolean = false) {
     )
 }
 
-/** Trailing switch styled to the mockup's purple accent track. */
+/**
+ * Trailing switch styled to the mockup's purple accent track.
+ *
+ * @param onChange the handler, **nullable on purpose**. Passing `null` is how [SettingsToggleRow] makes this
+ *   switch decorative: Material gates the switch's entire `toggleable` modifier on this parameter being
+ *   non-null, so a null handler removes it from the semantics tree and from the focus order, leaving the row it
+ *   sits in as the single node that carries the setting's name, role and state. It still draws, and still
+ *   animates from [checked]. A caller that owns the tap itself should pass `null`; a bare switch with no row
+ *   around it must pass a handler, or it will render as an inert graphic.
+ * @param enabled forwarded so a disabled row and its switch cannot disagree about whether the setting is
+ *   available.
+ */
 @Composable
-fun RowSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
+fun RowSwitch(checked: Boolean, onChange: ((Boolean) -> Unit)?, enabled: Boolean = true) {
     Switch(
         checked = checked,
         onCheckedChange = onChange,
+        enabled = enabled,
         colors = SwitchDefaults.colors(
             checkedThumbColor = Color.White,
             checkedTrackColor = MaterialTheme.colorScheme.primary,
@@ -360,6 +475,22 @@ fun EditFieldDialog(
  *
  * Inward, like every other row in this file, because the list is inside a dialog that clips its content and
  * the rows are packed flush with no spacing between them.
+ *
+ * ## One node per option, and a group around them
+ *
+ * The row is `selectable`, not `clickable`, and the [RadioButton] is passed a null `onClick`. Before, both were
+ * live, and because Compose's semantics merge stops at any descendant that merges — which every Material
+ * selection control is — each option was **two** nodes: a row carrying the option's text and no selection
+ * state, then a radio button carrying the state and no text. A reader moving through a font list heard the name
+ * and the selection as two separate stops, neither complete.
+ *
+ * `selectable` gives one node with all three: the option's text as its name, `Role.RadioButton`, and the
+ * selection as its state. `selectableGroup` on the column then makes the list announce itself as one exclusive
+ * choice with a position — "2 of 9" — rather than as N independent controls that happen to be stacked.
+ *
+ * The radio button keeps drawing from `selected`; only its interaction is gone. That also removes the 48 dp
+ * floor Material was attaching to it, so the row states `heightIn(min = 48.dp)` itself. The 12 dp of vertical
+ * padding around a 20 dp indicator already exceeds it, so nothing moves today.
  */
 @Composable
 fun OptionPickerDialog(
@@ -373,23 +504,31 @@ fun OptionPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, fontWeight = FontWeight.Bold) },
         text = {
-            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+            Column(
+                Modifier
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState())
+                    .selectableGroup(),
+            ) {
                 options.forEach { opt ->
                     val focus = rememberChromeFocus()
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                             .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
-                            .clickable(
+                            .selectable(
+                                selected = opt == selected,
                                 interactionSource = focus.source,
                                 indication = ripple(),
+                                role = Role.RadioButton,
                             ) { onPick(opt); onDismiss() }
                             .then(focus.ring(Corner.Media))
                             .padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        RadioButton(selected = opt == selected, onClick = { onPick(opt); onDismiss() })
+                        RadioButton(selected = opt == selected, onClick = null)
                         Text(opt, fontSize = 15.sp)
                     }
                 }

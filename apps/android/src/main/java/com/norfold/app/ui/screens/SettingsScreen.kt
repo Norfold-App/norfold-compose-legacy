@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -85,7 +86,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ripple
@@ -167,6 +167,7 @@ import com.norfold.app.ui.components.RowSwitch
 import com.norfold.app.ui.components.RowValue
 import com.norfold.app.ui.components.SettingsGroup
 import com.norfold.app.ui.components.SettingsRow
+import com.norfold.app.ui.components.SettingsToggleRow
 import com.norfold.app.ui.components.SettingsSectionLabel
 import com.norfold.app.ui.components.SemanticEditorIcon
 import com.norfold.app.ui.components.SemanticFamilyIcon
@@ -183,6 +184,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import com.norfold.app.ui.focusableChrome
+import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.rememberChromeFocus
 
 private enum class SettingsSection(val title: String, val subtitle: String, val icon: ImageVector) {
@@ -948,7 +950,7 @@ private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
                 onClick = { viewModel.previewScales(fontScale = 1f, uiScale = 1f) },
             )
             RowDivider(inset = false)
-            SettingsRow("Reduce motion", subtitle = "Minimize navigation and content animations", trailing = { RowSwitch(s.reduceMotion) { viewModel.setPrivacyOption(reduceMotion = it) } })
+            SettingsToggleRow("Reduce motion", subtitle = "Minimize navigation and content animations", checked = s.reduceMotion, onChange = { viewModel.setPrivacyOption(reduceMotion = it) })
         }
     }
 }
@@ -1218,16 +1220,16 @@ private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
             RowDivider(inset = false)
             SliderRow("Tab size", (s.tabSize - 2) / 6f) { v -> viewModel.patchSettings { it.copy(tabSize = (2 + (v * 6)).toInt().coerceIn(2, 8)) } }
             RowDivider(inset = false)
-            SettingsRow("Show line numbers", trailing = { RowSwitch(s.showLineNumbers) { v -> viewModel.patchSettings { it.copy(showLineNumbers = v) } } })
+            SettingsToggleRow("Show line numbers", checked = s.showLineNumbers, onChange = { v -> viewModel.patchSettings { it.copy(showLineNumbers = v) } })
             RowDivider(inset = false)
-            SettingsRow("Auto pair brackets", trailing = { RowSwitch(s.autoPairBrackets) { v -> viewModel.patchSettings { it.copy(autoPairBrackets = v) } } })
+            SettingsToggleRow("Auto pair brackets", checked = s.autoPairBrackets, onChange = { v -> viewModel.patchSettings { it.copy(autoPairBrackets = v) } })
         }
         SettingsGroup(header = "Markdown") {
             SettingsRow("Inline rendering", subtitle = "Markdown, math, diagrams and embeds render in place", trailing = { RowValue("Always on", accent = true) })
             RowDivider(inset = false)
             SettingsRow("Syntax highlight", trailing = { RowValue(if (s.syntaxColorful) "Colorful" else "Minimal", accent = true) }, onClick = { viewModel.patchSettings { it.copy(syntaxColorful = !it.syntaxColorful) } })
             RowDivider(inset = false)
-            SettingsRow("Auto convert on paste", trailing = { RowSwitch(s.autoConvertOnPaste) { v -> viewModel.patchSettings { it.copy(autoConvertOnPaste = v) } } })
+            SettingsToggleRow("Auto convert on paste", checked = s.autoConvertOnPaste, onChange = { v -> viewModel.patchSettings { it.copy(autoConvertOnPaste = v) } })
         }
         SettingsGroup(header = "Doc interactions") {
             GestureRow("Long press", state.settings.noteLongPressAction) { viewModel.setNoteGestureActions(longPress = it) }
@@ -1787,12 +1789,12 @@ private fun SecuritySettings(state: DocsUiState, viewModel: DocsViewModel) {
             RowDivider()
             SettingsRow(if (s.vaultLockEnabled) "Change vault password" else "Create vault password", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { showPasswordField = !showPasswordField })
             RowDivider()
-            SettingsRow(
+            SettingsToggleRow(
                 "Biometric unlock",
                 subtitle = if (s.vaultLockEnabled) "Use an enrolled fingerprint or face after Vault setup" else "Set up Vault first",
                 icon = Icons.Outlined.PhoneAndroid,
-                trailing = { RowSwitch(s.requireBiometricOnOpen, ::updateBiometric) },
-                onClick = { updateBiometric(!s.requireBiometricOnOpen) },
+                checked = s.requireBiometricOnOpen,
+                onChange = ::updateBiometric,
             )
             RowDivider()
             SettingsRow("Auto lock", subtitle = autoLockLabel(s.autoLockMinutes), icon = Icons.Outlined.Lock, trailing = { RowChevron() }, onClick = { showAutoLockPicker = true })
@@ -1809,9 +1811,9 @@ private fun SecuritySettings(state: DocsUiState, viewModel: DocsViewModel) {
             }
         }
         SettingsGroup(header = "Security") {
-            SettingsRow("Protect screenshots & recents", subtitle = "Block screen captures and hide the app preview", trailing = { RowSwitch(s.blockScreenshots) { viewModel.setPrivacyOption(blockScreenshots = it) } })
+            SettingsToggleRow("Protect screenshots & recents", subtitle = "Block screen captures and hide the app preview", checked = s.blockScreenshots, onChange = { viewModel.setPrivacyOption(blockScreenshots = it) })
             RowDivider(inset = false)
-            SettingsRow("App lock on exit", trailing = { RowSwitch(s.appLockOnExit) { v -> viewModel.patchSettings { it.copy(appLockOnExit = v) } } })
+            SettingsToggleRow("App lock on exit", checked = s.appLockOnExit, onChange = { v -> viewModel.patchSettings { it.copy(appLockOnExit = v) } })
             RowDivider(inset = false)
             SettingsRow("Encryption", subtitle = "Local vault and sync payloads use device-backed protection", icon = Icons.Outlined.Settings, trailing = { RowValue("Local") })
         }
@@ -2128,7 +2130,7 @@ private fun SyncEngineSettings(state: DocsUiState, viewModel: DocsViewModel, onS
             }
         }
         SettingsGroup(header = "Sync behavior") {
-            SettingsRow("Sync when leaving the app", subtitle = "Runs only after sync is unlocked in this session", trailing = { RowSwitch(s.autoSync) { v -> viewModel.patchSettings { it.copy(autoSync = v) } } })
+            SettingsToggleRow("Sync when leaving the app", subtitle = "Runs only after sync is unlocked in this session", checked = s.autoSync, onChange = { v -> viewModel.patchSettings { it.copy(autoSync = v) } })
             RowDivider(inset = false)
             SettingsRow("Background scheduling", subtitle = "Not enabled in this pre-beta build", trailing = { RowValue("Off") })
         }
@@ -2278,18 +2280,18 @@ private fun PermissionsSettings(state: DocsUiState, viewModel: DocsViewModel) {
             SettingsGroup {
                 SettingsRow("Workspace owner", subtitle = "Only owner can change", icon = Icons.Outlined.Person, trailing = { RowValue("You") })
                 RowDivider()
-                SettingsRow("Rename workspace", subtitle = "Members", icon = Icons.Outlined.Workspaces, trailing = { RowSwitch(ws.permRename) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permRename = v) } } })
+                SettingsToggleRow("Rename workspace", subtitle = "Members", icon = Icons.Outlined.Workspaces, checked = ws.permRename, onChange = { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permRename = v) } })
                 RowDivider()
-                SettingsRow("Change icon & background", subtitle = "Members", icon = Icons.Outlined.Palette, trailing = { RowSwitch(ws.permChangeIcon) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permChangeIcon = v) } } })
+                SettingsToggleRow("Change icon & background", subtitle = "Members", icon = Icons.Outlined.Palette, checked = ws.permChangeIcon, onChange = { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permChangeIcon = v) } })
                 RowDivider()
-                SettingsRow("Invite members", subtitle = "Members", icon = Icons.Outlined.Person, trailing = { RowSwitch(ws.permInviteMembers) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permInviteMembers = v) } } })
+                SettingsToggleRow("Invite members", subtitle = "Members", icon = Icons.Outlined.Person, checked = ws.permInviteMembers, onChange = { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permInviteMembers = v) } })
                 RowDivider()
-                SettingsRow("Delete docs", subtitle = "Members", icon = Icons.Outlined.Difference, trailing = { RowSwitch(ws.permDeleteNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permDeleteNotes = v) } } })
+                SettingsToggleRow("Delete docs", subtitle = "Members", icon = Icons.Outlined.Difference, checked = ws.permDeleteNotes, onChange = { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permDeleteNotes = v) } })
                 RowDivider()
-                SettingsRow("Edit docs", subtitle = "Members", icon = Icons.Outlined.Code, trailing = { RowSwitch(ws.permEditNotes) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permEditNotes = v) } } })
+                SettingsToggleRow("Edit docs", subtitle = "Members", icon = Icons.Outlined.Code, checked = ws.permEditNotes, onChange = { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permEditNotes = v) } })
                 RowDivider()
                 RowDivider()
-                SettingsRow("Manage tasks", subtitle = "Members", icon = Icons.Outlined.Check, trailing = { RowSwitch(ws.permManageTasks) { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permManageTasks = v) } } })
+                SettingsToggleRow("Manage tasks", subtitle = "Members", icon = Icons.Outlined.Check, checked = ws.permManageTasks, onChange = { v -> viewModel.patchActiveWorkspacePermissions { it.copy(permManageTasks = v) } })
             }
             ElevatedButton(
                 onClick = {
@@ -2419,17 +2421,8 @@ private fun DeviceSettingsProfilesCard(
     if (selected != null) {
         Text("Include", fontWeight = FontWeight.Bold)
         SettingsProfileCategory.entries.forEach { category ->
-            Row(
-                Modifier.fillMaxWidth().clickable {
-                    categories = if (category in categories) categories - category else categories + category
-                },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Checkbox(
-                    checked = category in categories,
-                    onCheckedChange = { checked -> categories = if (checked) categories + category else categories - category },
-                )
-                Text(category.name)
+            CategoryIncludeRow(category.name, category in categories) { checked ->
+                categories = if (checked) categories + category else categories - category
             }
         }
         Text("Changes on this device", fontWeight = FontWeight.Bold)
@@ -2729,11 +2722,86 @@ private fun PaletteGrid(selected: ThemeProfile, onSelect: (ThemeProfile) -> Unit
 /** The weight a tile draws at its own boundary when selected, named because the ring's inset must clear it. */
 private const val SelectedTileBorder = 3f
 
+/**
+ * One category in the device-profile include list: a checkbox and its name, as a single node.
+ *
+ * The row was `clickable` and the [Checkbox] carried its own handler, so the same action existed twice and the
+ * semantics split in two — the row named the category without stating whether it was included, the checkbox
+ * stated it without naming it. `toggleable` with [Role.Checkbox] gives one node with the name, the role and the
+ * state; the indicator keeps drawing from [checked] and stops being a target. [SettingsToggleRow] carries the
+ * detail of why Compose does not merge the two by itself, and why the 48 dp floor has to be restated once the
+ * handler is `null`.
+ *
+ * `Role.Checkbox`, not `Role.Switch`: these are an independent multi-select, not a set of switches, and unlike
+ * the radio list in [com.norfold.app.ui.components.OptionPickerDialog] there is deliberately no
+ * `selectableGroup` — any combination of categories is valid, so announcing them as one exclusive choice with a
+ * position would be wrong.
+ *
+ * The ring is inward at [Corner.Media] against the card colour [SettingsCard] provides, so nothing here names a
+ * colour.
+ */
+@Composable
+private fun CategoryIncludeRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val focus = rememberChromeFocus()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
+            .toggleable(
+                value = checked,
+                interactionSource = focus.source,
+                indication = ripple(),
+                role = Role.Checkbox,
+                onValueChange = onChange,
+            )
+            .then(focus.ring(Corner.Media)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null)
+        Text(label)
+    }
+}
+
+/**
+ * A label-and-switch line inside a [SettingsCard], which is one accessibility node rather than two.
+ *
+ * The three diagnostics switches this serves had the same split every `SettingsRow(trailing = { RowSwitch(…) })`
+ * had: a `Text` carrying the label and a `Switch` carrying the state, with nothing joining them, so a reader
+ * heard "Enable local logging" and then an unnamed switch. The row is `toggleable` now, the switch is
+ * decorative, and the label is the node's name — see [SettingsToggleRow], which does the same for the grouped
+ * rows and documents why Material's null-handler gate is what makes it work.
+ *
+ * This is not routed through [SettingsToggleRow] because it is not that row: no icon tile, no subtitle, 13 sp
+ * rather than 15 sp, and it sits in a padded card rather than a clipped group. Only the semantics are shared,
+ * and those come from `toggleable` rather than from a common composable.
+ *
+ * `heightIn(min = 48.dp)` replaces the floor Material was attaching to the switch, which its null handler
+ * removes along with the interaction. Here it is load-bearing rather than defensive: the row is a single line of
+ * 13 sp text with no padding of its own, so the switch's own 48 dp box was the only thing holding the target
+ * open. Without the constraint the line would collapse toward the 32 dp the switch draws.
+ */
 @Composable
 private fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+    val focus = rememberChromeFocus()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
+            .toggleable(
+                value = checked,
+                interactionSource = focus.source,
+                indication = ripple(),
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .then(focus.ring(Corner.Media)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
         Text(label, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, modifier = Modifier.weight(1f))
-        Switch(checked, onChange)
+        RowSwitch(checked, null)
     }
 }
 

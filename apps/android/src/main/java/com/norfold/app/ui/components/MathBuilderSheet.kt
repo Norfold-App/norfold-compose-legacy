@@ -46,6 +46,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.norfold.app.ui.toggleableChrome
 
 enum class MathInsertionKind(val label: String) {
     Block("Block equation"),
@@ -437,8 +439,17 @@ fun MathBuilderSheet(
             }
 
             HorizontalDivider(color = colorScheme.outlineVariant)
+            // Title, explanation and switch are one setting, so they are one node: the row toggles and the
+            // switch's handler is null. See `Modifier.toggleableChrome` for why a live switch under a
+            // clickable row announces as two — a name with no state, then a state with no name.
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .toggleableChrome(
+                        checked = showAdvanced,
+                        radiusDp = 0f,
+                        role = Role.Switch,
+                    ) { showAdvanced = it },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -450,7 +461,7 @@ fun MathBuilderSheet(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                Switch(checked = showAdvanced, onCheckedChange = { showAdvanced = it })
+                Switch(checked = showAdvanced, onCheckedChange = null)
             }
             if (showAdvanced) {
                 OutlinedTextField(

@@ -60,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -111,6 +112,7 @@ import com.norfold.app.ui.components.NorfoldBottomSheet
 import com.norfold.app.ui.editor.guide.GuideEntryButton
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
+import com.norfold.app.ui.toggleableChrome
 import kotlin.math.roundToInt
 
 private enum class ShapeBuilderSection(val label: String) {
@@ -914,11 +916,33 @@ private fun <T : Enum<T>> EnumChips(label: String, values: List<T>, selected: T,
     }
 }
 
+/**
+ * One label and one switch, as a single accessibility node.
+ *
+ * The row used to be a plain `Row` holding a live `Switch`, which is two nodes for one setting: the label was
+ * text with no state and the switch was state with no label, so a reader announced "Stroke" and then, quite
+ * separately, an unnamed switch. [toggleableChrome] moves the interaction to the row and the switch's handler
+ * goes `null`; see its documentation for why Compose does not fold the second node into the first, and for the
+ * touch-target floor that leaves with the handler. Radius 0 because this row draws no shape of its own — the
+ * ring is square because the chrome is — and no `surface`, because [NorfoldBottomSheet] provides the container
+ * this row actually stands on.
+ */
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, disabled: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleableChrome(
+                checked = checked,
+                radiusDp = 0f,
+                role = Role.Switch,
+                enabled = !disabled,
+                onValueChange = onChange,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(label, Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange, enabled = !disabled)
+        Switch(checked = checked, onCheckedChange = null, enabled = !disabled)
     }
 }
 

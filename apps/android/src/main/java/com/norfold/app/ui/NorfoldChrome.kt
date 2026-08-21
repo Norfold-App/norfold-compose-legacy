@@ -5,7 +5,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalAbsoluteTonalElevation
 import androidx.compose.material3.LocalTonalElevationEnabled
@@ -18,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -671,6 +676,7 @@ fun Modifier.focusableChrome(
     val focus = rememberChromeFocus()
     val ring = focus.ringOnShape(radiusDp, surface)
     return this
+        .clipToChrome(radiusDp)
         .clickable(
             interactionSource = focus.source,
             indication = ripple(),
@@ -705,6 +711,10 @@ fun Modifier.focusableChrome(
  * pill is half a height the call site does not know: it falls out of the content and its padding at layout
  * time. See [NorfoldChrome.innerFocusRingPill].
  *
+ * The same reason makes the ripple clip easier here than there — a pill's shape *is* `CircleShape`, which
+ * resolves its own radius at layout time, so this clips to that rather than to a number. See [clipToChrome]
+ * for why the clip has to come from the substrate at all.
+ *
  * @param surface the colour the ring is drawn on. A chip that fills itself with `primary` when selected must
  *   pass that fill, or the ring is 1.00:1 against it on exactly the chip the user reaches first.
  */
@@ -719,6 +729,7 @@ fun Modifier.focusablePill(
     val focus = rememberChromeFocus()
     val ring = focus.ringOnPill(surface)
     return this
+        .clip(CircleShape)
         .clickable(
             interactionSource = focus.source,
             indication = ripple(),
@@ -729,6 +740,183 @@ fun Modifier.focusablePill(
         )
         .then(ring)
 }
+
+/**
+ * Bound the ripple to the shape the chrome actually draws.
+ *
+ * **A ripple does not respect a rounded corner unless something clips it.**
+ * `RippleAnimation.draw` clips its expanding circle with `clipRect(0, 0, width, height)` — a *rectangle*, the
+ * node's own bounds — and nothing else. On chrome with a 12 dp radius that leaves four square corners of ink
+ * outside the surface the user pressed. Material never shows this because `Surface` composes
+ * `modifier → minimumInteractiveComponentSize → surface(…) → clickable`, and `surface()` ends in
+ * `.clip(shape)`, so Material's own ripple is always inside a clip that Material put there.
+ *
+ * The substrate's modifiers arrive in that leading `modifier` — *outside* the clip. So the clip has to come
+ * from here, and it has to come **before** the interaction modifier, because a clip only affects what is
+ * drawn after it in the chain.
+ *
+ * A caller could write `.clip(RoundedCornerShape(12.dp))` before every one of these, and the KDoc used to say
+ * so; the result was that 36 of 37 rounded sites did not. The radius is already a parameter of every one of
+ * these modifiers — the caller has already said what shape it draws — so the clip is derivable and belongs
+ * here, where it cannot be forgotten.
+ *
+ * Radius 0 returns [Modifier] untouched rather than clipping to a rectangle: the ripple's own `clipRect`
+ * already bounds it to exactly that, so the clip would be a no-op node on every square site.
+ *
+ * **What this costs.** A clip discards anything the chrome's content draws outside its bounds, and it also
+ * discards a shadow, since a shadow is drawn outside them. Nothing under this fix is affected — all 36 sites
+ * are non-elevated `Surface`s with no badge, no negative offset and no overflow — but chrome that *needs* to
+ * draw outside itself must not route through these modifiers, and should use [chromeFocusRing] on its own
+ * interaction instead, which adds no clip.
+ */
+private fun Modifier.clipToChrome(radiusDp: Float): Modifier =
+    if (radiusDp <= 0f) this else clip(RoundedCornerShape(radiusDp.dp))
+
+/**
+ * The touch-target floor a row must restate once its control stops being the target.
+ *
+ * Material attaches `minimumInteractiveComponentSize` from *inside* each selection control's interaction
+ * modifier, so it arrives with the handler and leaves with it. Passing `null` to make the control decorative —
+ * which is the whole mechanism behind [com.norfold.app.ui.components.SettingsToggleRow] — therefore removes the
+ * 48 dp floor along with the semantics, and what is left is only what the control draws: a `Switch` is 32 dp
+ * tall, a `Checkbox` and a `RadioButton` are 20 dp of icon inside 2 dp of padding, so 24. A row that relied on
+ * its control to hold the line collapses below 48 dp the moment it is fixed, which is the failure mode this
+ * constant exists to make hard to forget.
+ *
+ * 48 dp is WCAG 2.5.8 Level AA and Android's own `minimumTouchTargetSize` default; it is stated here rather
+ * than read from `LocalMinimumInteractiveComponentSize` because that local is Material's and is being read at
+ * the moment the caller has deliberately stepped outside Material's wiring.
+ */
+const val MIN_TOUCH_TARGET_DP = 48
+
+/**
+ * Make this chrome **toggleable** and focus-visible in one call, as a single accessibility node.
+ *
+ * ## The defect this exists to stop recurring
+ *
+ * A row that wraps a live `Switch` or `Checkbox` is **two accessibility nodes for one action**, and it does not
+ * look like it. `clickable` does declare that it merges its descendants, but the merge walk in
+ * `SemanticsNode` stops descending at any child that *itself* merges — and every Material selection control
+ * does, because each is built on `toggleable`, `triStateToggleable` or `selectable`. So the row carries the
+ * name with no state, the control carries the state with no name, and a screen reader announces the label and
+ * then, separately, an unnamed switch. That is WCAG 4.1.2 at Level A, and it was found at four sites plus five
+ * near-identical private `ToggleRow` helpers in five different files, each of which had independently written
+ * the same broken shape.
+ *
+ * The fix is not a wrapper around `Switch`. It is to move the interaction to the row — `toggleable` here, and
+ * `null` for the control's own handler — so that one node carries the name, the role and the state. What makes
+ * that worth a shared modifier rather than five more copies is the part every copy got wrong: nulling the
+ * handler also removes Material's touch-target floor, so the row must restate it. This applies
+ * [MIN_TOUCH_TARGET_DP] unconditionally, which is the one thing a caller cannot forget to do.
+ *
+ * ## What the caller still owes
+ *
+ * The control must be passed `null`. Nothing here can enforce that — a modifier cannot see the composable it is
+ * applied around — so a caller that leaves a live handler in place gets a row that is *both* nodes and toggles
+ * twice. [com.norfold.app.ui.components.RowSwitch] takes a nullable handler precisely so this is expressible.
+ *
+ * @param checked the state, which this reports as the node's own rather than the control's.
+ * @param radiusDp the radius the row's own shape draws, so the ring stays concentric with it. This also
+ *   clips the ripple to that radius — see [clipToChrome] — so the caller does not, and must not, clip first.
+ * @param role [Role.Switch] for a switch, [Role.Checkbox] for a checkbox. It changes what a screen reader
+ *   calls the node and must match what is drawn.
+ * @param surface what the ring is measured against — the colour it is drawn on. Unspecified resolves to
+ *   [LocalChromeContainer], which is right for a row that paints no fill of its own.
+ * @param onValueChange last, matching `Modifier.toggleable`'s own parameter order.
+ */
+@Composable
+fun Modifier.toggleableChrome(
+    checked: Boolean,
+    radiusDp: Float,
+    role: Role,
+    surface: Color = Color.Unspecified,
+    enabled: Boolean = true,
+    onValueChange: (Boolean) -> Unit,
+): Modifier {
+    val focus = rememberChromeFocus()
+    val ring = focus.ringOnShape(radiusDp, surface)
+    return this
+        .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
+        .clipToChrome(radiusDp)
+        .toggleable(
+            value = checked,
+            interactionSource = focus.source,
+            indication = ripple(),
+            enabled = enabled,
+            role = role,
+            onValueChange = onValueChange,
+        )
+        .then(ring)
+}
+
+/**
+ * The same wiring for chrome shaped by one of the substrate's three [Corner] tiers.
+ */
+@Composable
+fun Modifier.toggleableChrome(
+    checked: Boolean,
+    corner: Corner,
+    role: Role,
+    surface: Color = Color.Unspecified,
+    enabled: Boolean = true,
+    onValueChange: (Boolean) -> Unit,
+): Modifier = toggleableChrome(checked, corner.radiusDp, role, surface, enabled, onValueChange)
+
+/**
+ * Make this chrome **selectable** and focus-visible in one call, as a single accessibility node.
+ *
+ * The same defect and the same fix as [toggleableChrome]; the difference is only that a selection is one of a
+ * set rather than an independent on/off, so this reports `selected` rather than `checked` and takes an
+ * `onClick`. Use it for a row holding a `RadioButton`, and put `selectableGroup()` on the parent **when the
+ * parent composes every option** — a `Column` with `verticalScroll` does, and then the group's announced
+ * position is true.
+ *
+ * **A lazy parent is the exception.** `CollectionInfo_android` derives an item's position from the parent's
+ * *composed* children, and a `LazyColumn` composes only what is visible, so the group modifier would announce
+ * "3 of 6" out of sixteen and renumber on every scroll. A lazy list already publishes its real
+ * `totalItemsCount` with a `-1` column count that marks it lazy, and the platform delegate returns early on
+ * that marker — so on a lazy parent, leave `selectableGroup()` off and let the list's own count stand.
+ *
+ * @param selected the state, reported as this node's own rather than the indicator's.
+ * @param radiusDp the radius the row's own shape draws, which this also clips the ripple to. See
+ *   [clipToChrome]; the caller does not clip first.
+ * @param surface what the ring is drawn on. Unspecified resolves to [LocalChromeContainer].
+ */
+@Composable
+fun Modifier.selectableChrome(
+    selected: Boolean,
+    radiusDp: Float,
+    surface: Color = Color.Unspecified,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+): Modifier {
+    val focus = rememberChromeFocus()
+    val ring = focus.ringOnShape(radiusDp, surface)
+    return this
+        .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
+        .clipToChrome(radiusDp)
+        .selectable(
+            selected = selected,
+            interactionSource = focus.source,
+            indication = ripple(),
+            enabled = enabled,
+            role = Role.RadioButton,
+            onClick = onClick,
+        )
+        .then(ring)
+}
+
+/**
+ * The same wiring for chrome shaped by one of the substrate's three [Corner] tiers.
+ */
+@Composable
+fun Modifier.selectableChrome(
+    selected: Boolean,
+    corner: Corner,
+    surface: Color = Color.Unspecified,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+): Modifier = selectableChrome(selected, corner.radiusDp, surface, enabled, onClick)
 
 /**
  * A piece of floating interaction chrome: the substrate's single surface.

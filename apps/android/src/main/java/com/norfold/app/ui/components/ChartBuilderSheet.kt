@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -38,7 +40,6 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.ripple
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
@@ -179,9 +181,7 @@ fun ChartBuilderSheet(
                 }
             }
             TextButton(onClick = { rows += ChartDataRow(label = "Item ${rows.size + 1}", value = "0") }) { Text("+ Add row") }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Legend", Modifier.weight(1f)); Switch(legend, { legend = it })
-            }
+            LegendToggleRow(legend) { legend = it }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 themeChartColors.forEach { candidate ->
                     val hex = candidate.color.toRgbHex()
@@ -194,11 +194,13 @@ fun ChartBuilderSheet(
                     )
                 }
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
                 ChartPlacement.entries.forEach { option ->
-                    Row(Modifier.weight(1f).clickable { placement = option }, verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(placement == option, { placement = option }); Text(if (option == ChartPlacement.Image) "As image" else "As editable chart")
-                    }
+                    PlacementOption(
+                        label = if (option == ChartPlacement.Image) "As image" else "As editable chart",
+                        selected = placement == option,
+                        modifier = Modifier.weight(1f),
+                    ) { placement = option }
                 }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -226,6 +228,90 @@ fun ChartBuilderSheet(
             }
             Spacer(Modifier.height(20.dp))
         }
+    }
+}
+
+/**
+ * The legend toggle: a label and a switch, activated anywhere along the row.
+ *
+ * Before, the `Text` and the `Switch` were two independent children of a plain `Row` with nothing joining them,
+ * so a screen reader heard "Legend" and then, separately, an unnamed switch — the name on one node, the role and
+ * state on another. `toggleable` on the row makes it one node carrying all three, and the [RowSwitch] becomes
+ * decorative. [com.norfold.app.ui.components.SettingsToggleRow] documents why passing `null` is what makes that
+ * work, and why the 48 dp floor has to be restated here: Material gates the switch's whole interaction modifier
+ * — `minimumInteractiveComponentSize` included — on that handler being non-null.
+ *
+ * The floor is load-bearing rather than defensive. This row has no padding of its own, so the switch's own
+ * touch-target box was the only thing holding it open; without the constraint the line would collapse toward the
+ * 32 dp the switch draws.
+ *
+ * The ring is inward at [Corner.Media] and measured against whatever [com.norfold.app.ui.LocalChromeContainer]
+ * names, which [NorfoldBottomSheet] provides from `BottomSheetDefaults.ContainerColor` — so nothing here states
+ * a colour, and the row stays correct if the sheet's container token changes.
+ */
+@Composable
+private fun LegendToggleRow(checked: Boolean, onChange: (Boolean) -> Unit) {
+    val focus = rememberChromeFocus()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(ChromeGeometry.Corner.Media.radiusDp.dp))
+            .toggleable(
+                value = checked,
+                interactionSource = focus.source,
+                indication = ripple(),
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .then(focus.ring(ChromeGeometry.Corner.Media)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Legend", Modifier.weight(1f))
+        RowSwitch(checked, null)
+    }
+}
+
+/**
+ * One of the two chart-placement choices: a radio indicator and its label, as a single node.
+ *
+ * Both halves used to be live — the enclosing `Row` was `clickable` and the [RadioButton] had its own `onClick`
+ * — which produced two accessibility nodes for one option: a row carrying "As image" with no selection state,
+ * then an indicator carrying the state with no name. Compose does not fold the second into the first, because
+ * its merge walk stops descending at any child that merges and every Material selection control merges.
+ * `selectable` gives one node with the label as its name, `Role.RadioButton` as its role, and the selection as
+ * its state; `selectableGroup` on the parent row then announces the pair as one exclusive choice with a position
+ * rather than as two unrelated controls.
+ *
+ * The indicator keeps drawing from [selected]; only its interaction is gone, which also removes the 48 dp floor
+ * Material was attaching to it — hence `heightIn` here. The label wraps to two lines on a narrow sheet ("As
+ * editable chart" beside a 20 dp indicator in half the sheet's width), so this is a minimum rather than a fixed
+ * height.
+ */
+@Composable
+private fun PlacementOption(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onSelect: () -> Unit,
+) {
+    val focus = rememberChromeFocus()
+    Row(
+        modifier
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(ChromeGeometry.Corner.Media.radiusDp.dp))
+            .selectable(
+                selected = selected,
+                interactionSource = focus.source,
+                indication = ripple(),
+                role = Role.RadioButton,
+                onClick = onSelect,
+            )
+            .then(focus.ring(ChromeGeometry.Corner.Media)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected, null)
+        Text(label)
     }
 }
 

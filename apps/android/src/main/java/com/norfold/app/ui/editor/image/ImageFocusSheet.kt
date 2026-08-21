@@ -98,6 +98,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -149,6 +150,7 @@ import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import java.util.UUID
 import com.norfold.app.ui.rememberChromeFocus
+import com.norfold.app.ui.toggleableChrome
 import com.norfold.app.domain.style.ChromeGeometry
 
 private enum class ImageFocusSection(val label: String) { CROP("Crop"), ADJUST("Adjust"), EFFECTS("Filters"), MARKUP("Markup") }
@@ -1827,10 +1829,37 @@ private fun ImageSlider(
 
 private fun formatImageValue(value: Float): String = "%.3f".format(java.util.Locale.ROOT, value).trimEnd('0').trimEnd('.')
 
+/**
+ * One label and one switch, as a single accessibility node.
+ *
+ * A live `Switch` beside its own label is two nodes for one setting — the label with no state, the switch with
+ * no name. [toggleableChrome] moves the interaction to the row and the switch's handler goes `null`; see its
+ * documentation for the merge-walk mechanism and for the touch floor that leaves with the handler.
+ *
+ * Radius 0 because the row draws no shape of its own. Measured against `surfaceContainer`: every caller renders
+ * inside the tool deck, which is a `Surface` of that colour, and not against this sheet's own `surface` root.
+ *
+ * **All three callers are currently unreachable.** [EffectsSection] and [AccessibilitySection] are only invoked
+ * from a `when` over `ImageFocusSection` that the four-mode rebuild replaced, so nothing composes them today.
+ * Fixed here anyway rather than deleted, because whether those panels come back is a product question and this
+ * is the wiring they need either way.
+ */
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, disabled: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f)); Switch(checked = checked, onCheckedChange = onChange, enabled = !disabled)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleableChrome(
+                checked = checked,
+                radiusDp = 0f,
+                role = Role.Switch,
+                surface = MaterialTheme.colorScheme.surfaceContainer,
+                enabled = !disabled,
+                onValueChange = onChange,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, Modifier.weight(1f)); Switch(checked = checked, onCheckedChange = null, enabled = !disabled)
     }
 }
 

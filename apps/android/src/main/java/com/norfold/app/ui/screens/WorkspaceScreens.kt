@@ -80,6 +80,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -203,6 +204,7 @@ import com.norfold.app.domain.ChatChannelVisibility
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ConflictSideSummary
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.ChatAudioState
 import com.norfold.app.ui.focusableChrome
 import com.norfold.app.ui.rememberChromeFocus
@@ -3913,20 +3915,7 @@ private fun ReportMessageDialog(
                     maxLines = 6,
                     shape = RoundedCornerShape(16.dp),
                 )
-                Row(
-                    Modifier.fillMaxWidth().clickable { alsoBlock = !alsoBlock },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(checked = alsoBlock, onCheckedChange = { alsoBlock = it })
-                    Column(Modifier.weight(1f)) {
-                        Text("Block this account too", fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Stops direct contact. Shared team messages stay visible.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp,
-                        )
-                    }
-                }
+                AlsoBlockRow(alsoBlock) { alsoBlock = it }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                     Button(
@@ -3965,6 +3954,56 @@ private fun ReportMessageDialog(
  * starts meaning something they have to interpret. `error` is also the one token whose contrast against this
  * card is not solved by the substrate, so a ring built from it would be the only unmeasured ring in the app.
  */
+/**
+ * The report dialog's "block this account too" line, as one accessibility node.
+ *
+ * The row was `clickable` and the [Checkbox] carried its own handler, which wrote `alsoBlock` from two places and
+ * produced two semantics nodes for one decision: the row named the option and its explanation without stating
+ * whether it was on, the checkbox stated it without naming it. Compose does not fold the second into the first —
+ * its merge walk stops descending at any child that merges, and every Material selection control does — so a
+ * screen reader met an unnamed checkbox immediately before the Report button. `toggleable` with
+ * `Role.Checkbox` makes it a single node carrying the label, the role and the state, and the indicator becomes
+ * decorative. [com.norfold.app.ui.components.SettingsToggleRow] documents the mechanism and Material's
+ * null-handler gate.
+ *
+ * `heightIn(min = 48.dp)` replaces the touch-target floor that gate removes with the interaction. It is
+ * defensive here rather than load-bearing: two lines of text already measure past 48 dp. It matters because this
+ * decision is consequential and adjacent to a submit button, so the target must not narrow if the subtitle is
+ * ever shortened to one line.
+ *
+ * The ring is inward at [Corner.Media] against the container [NorfoldContentDialog] provides —
+ * the same reason [MessageActionRow] gives for stating no colour of its own.
+ */
+@Composable
+private fun AlsoBlockRow(checked: Boolean, onChange: (Boolean) -> Unit) {
+    val focus = rememberChromeFocus()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
+            .toggleable(
+                value = checked,
+                interactionSource = focus.source,
+                indication = androidx.compose.material3.ripple(),
+                role = androidx.compose.ui.semantics.Role.Checkbox,
+                onValueChange = onChange,
+            )
+            .then(focus.ring(Corner.Media)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null)
+        Column(Modifier.weight(1f)) {
+            Text("Block this account too", fontWeight = FontWeight.SemiBold)
+            Text(
+                "Stops direct contact. Shared team messages stay visible.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
 @Composable
 private fun MessageActionRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
