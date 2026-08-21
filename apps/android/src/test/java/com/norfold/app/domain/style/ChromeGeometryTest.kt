@@ -155,9 +155,9 @@ class ChromeGeometryTest {
      * carries `focusedAlpha = 0.10f`. So every rippled target already draws `onSurface` at 10% over its own
      * surface when focused.
      *
-     * The problem is that 10% of the ink over the surface lands between 1.22:1 and 1.32:1 on the six surfaces
-     * this app actually uses — under half of WCAG 1.4.11's 3:1, and below even the substrate's quieter resting
-     * target. Reaching 3:1 by alpha alone would need roughly 0.46 on the light page, 4.6x the Material
+     * The problem is that 10% of the ink over the surface lands between 1.2239:1 and 1.3558:1 on the fifteen
+     * surfaces this app actually uses — under half of WCAG 1.4.11's 3:1, and below even the substrate's quieter
+     * resting target of 2.2. Reaching 3:1 by alpha alone would need 0.47 on the light page, 4.7x the Material
      * default, which is no longer a state layer but a scrim over the content.
      *
      * Material3 1.4.0 also ships no focus-outline primitive of its own — there is no `focusRing` or focus
@@ -167,6 +167,11 @@ class ChromeGeometryTest {
      *
      * Asserted per surface rather than described, because "the ripple already handles focus" is the most
      * plausible reason a future change would delete the ring.
+     *
+     * The range widened when the container ramp landed: the ceiling was 1.32 over six surfaces, and dark
+     * `surfaceContainerHighest` now reaches 1.3558 because it is the lightest dark surface and so the one where
+     * a light ink washes it least. The gap to 2.2 is what carries the argument, and 0.84 of headroom is not a
+     * margin any ramp edit is going to close — but the bound is asserted so it cannot drift unremarked twice.
      */
     @Test
     fun `the ripple focused state layer falls short of the ring's target on every app surface`() {
@@ -175,9 +180,11 @@ class ChromeGeometryTest {
 
         val cases = listOf(
             // ink (onSurface) to the surfaces it is drawn over, light then dark.
-            0x171725 to listOf(0xFFFFFF, 0xF7F8FC, 0xF1F2F7),
-            0xF6F7FB to listOf(0x0E131F, 0x070A12, 0x151B28),
+            0x171725 to lightSurfaces,
+            0xF6F7FB to darkSurfaces,
         )
+        var loudest = 0.0
+        var measurements = 0
         for ((ink, surfaces) in cases) {
             for (surface in surfaces) {
                 val backdrop = hex(surface)
@@ -195,8 +202,13 @@ class ChromeGeometryTest {
                         .format(surface, measured),
                     measured < ChromeGeometry.RESTING_EDGE_RATIO,
                 )
+                measurements++
+                if (measured > loudest) loudest = measured
             }
         }
+
+        assertEquals("seven light surfaces and eight dark ones", 15, measurements)
+        assertEquals("the loudest the state layer gets, on dark surfaceContainerHighest", 1.3558, loudest, 0.0001)
     }
 
     /**
@@ -396,18 +408,65 @@ class ChromeGeometryTest {
     // ── The finding that motivated the derived edge ──────────────────────────────────────────────────
 
     /**
+     * Every distinct opaque surface value in the light scheme, and in the dark one.
+     *
+     * These exist because two tests below claim to be *exhaustive* over the surfaces chrome can land on, and
+     * that claim used to be a list of three literals per mode — `background`, `surface`, `surfaceVariant`. It
+     * was true when the theme had three surfaces. Deriving the container ramp gave it ten more, so the lists
+     * are stated once here, in full, with each value's tokens named.
+     *
+     * Deduplicated by value rather than by token, because a duplicate would measure the same number twice and
+     * read as coverage. Four tokens collapse: light `surfaceBright` and `surfaceContainerLowest` are both pure
+     * white like `surface`; light `surfaceDim` equals `surfaceContainerHighest`; dark `surfaceDim` equals
+     * `background` and dark `surfaceBright` equals `surfaceContainerHighest`. Fifteen distinct values from
+     * nineteen tokens.
+     *
+     * Two near-collisions are kept as separate entries even though no eye could tell them apart — light
+     * `surfaceContainer` `#F7F8FD` sits one bit of blue from `background` `#F7F8FC` (1.00064:1), and dark
+     * `surfaceContainerLow` `#151B2B` three bits from `surfaceVariant` `#151B28` (1.00348:1). They are
+     * different `Int`s reaching [ContrastAnalysis], which is the level these tests operate at; folding them
+     * together here would hide the day one of them moves.
+     */
+    private val lightSurfaces = listOf(
+        0xFFFFFF, // surface, surfaceContainerLowest, surfaceBright
+        0xFBFCFF, // surfaceContainerLow
+        0xF7F8FD, // surfaceContainer
+        0xF7F8FC, // background
+        0xF4F5FA, // surfaceContainerHigh
+        0xF1F2F7, // surfaceVariant
+        0xF1F2F6, // surfaceContainerHighest, surfaceDim
+    )
+
+    private val darkSurfaces = listOf(
+        0x070A12, // background, surfaceDim
+        0x0B0E17, // surfaceContainerLowest
+        0x0E131F, // surface
+        0x151B28, // surfaceVariant
+        0x151B2B, // surfaceContainerLow
+        0x1B253B, // surfaceContainer
+        0x232E43, // surfaceContainerHigh
+        0x283650, // surfaceContainerHighest, surfaceBright
+    )
+
+    /**
      * **Neither theme outline token can state a boundary, on any surface, in either mode.**
      *
      * This is the measurement the substrate rests on, and it is asserted rather than described because it is
      * the justification for deriving the edge instead of using `outline` directly. On the shipped palette
-     * every one of the twelve token/surface combinations lands below the ~1.5:1 a non-text boundary needs to
-     * be seen at all — so the 39 `BorderStroke(1.dp, outlineVariant)` sites in the tree are drawing an edge
+     * every one of the thirty token/surface combinations lands below the ~1.5:1 a non-text boundary needs to
+     * be seen at all — so the 38 `BorderStroke(1.dp, outlineVariant)` sites in the tree are drawing an edge
      * that exists in the source and not on the screen.
+     *
+     * The worst combination in the whole set is `outline` on dark `background` at 1.4135:1 — a surface that was
+     * already here before the ramp, which is the useful part of measuring all thirty: none of the nine new stops
+     * is more visible than the worst that already existed, the closest being dark `surfaceContainerLowest` at
+     * 1.3769:1. The ceiling is asserted as well as the bound, because "all below 1.5" would still pass if a
+     * future palette edit pushed a token to 1.49 — that is a different palette, not a confirmation of this one.
      */
     @Test
     fun `no theme outline token reaches visibility on any app surface`() {
-        val lightSurfaces = listOf(0xF7F8FC, 0xFFFFFF, 0xF1F2F7)
-        val darkSurfaces = listOf(0x070A12, 0x0E131F, 0x151B28)
+        var combinations = 0
+        var worst = 0.0
 
         for ((outline, surfaces) in listOf(
             listOf(0xE4E6EF, 0xEEF0F5) to lightSurfaces,
@@ -420,9 +479,20 @@ class ChromeGeometryTest {
                         "outline %06X on %06X measures %.2f:1, which would be visible".format(token, surface, measured),
                         measured < 1.5,
                     )
+                    combinations++
+                    if (measured > worst) worst = measured
                 }
             }
         }
+
+        assertEquals("two tokens across seven light and eight dark surfaces", 30, combinations)
+        assertEquals("the most visible any token gets, on dark background", 1.4135, worst, 0.0001)
+        assertEquals(
+            "and no stop the container ramp added beats it",
+            1.3769,
+            ContrastAnalysis.ratio(hex(0x252C3A), hex(0x0B0E17)),
+            0.0001,
+        )
     }
 
     /**
@@ -454,16 +524,29 @@ class ChromeGeometryTest {
      * The derived edge reaches its target on every app surface, in both modes — which is the thing the
      * tokens could not do.
      *
-     * Exhaustive over the six surfaces rather than sampled, because the point of deriving is that the answer
+     * Exhaustive over all fifteen surfaces rather than sampled, because the point of deriving is that the answer
      * holds wherever the chrome lands. The tolerance is one hundredth: [ContrastAnalysis.suggestAccessible]
      * searches lightness in discrete steps, so it clears the target rather than hitting it exactly.
+     *
+     * **The count is asserted because this test's own premise expanded underneath it.** It was written over six
+     * surfaces and said "exhaustive over the six"; the container ramp added nine more distinct values, and a
+     * loop over a list cannot notice that the list stopped being the whole set.
+     *
+     * Solving on the new stops was not a formality. The tightest clearance in all fifteen is dark
+     * `surfaceContainerHighest` at 2.2023:1 — 0.0023 over the target, against margins of 0.02-0.07 everywhere
+     * else — and that stop is one the ramp introduced. It is the hardest surface in the scheme to state a
+     * boundary on, because it is the lightest dark surface and the search has the least headroom left above it.
+     * Pinned so that a future ramp edit lightening it further has to explain where the edge is supposed to go.
      */
     @Test
     fun `the derived resting edge reaches its target on every app surface`() {
         val cases = listOf(
-            0xE4E6EF to listOf(0xF7F8FC, 0xFFFFFF, 0xF1F2F7),
-            0x252C3A to listOf(0x070A12, 0x0E131F, 0x151B28),
+            0xE4E6EF to lightSurfaces,
+            0x252C3A to darkSurfaces,
         )
+        var solved = 0
+        var tightest = Double.MAX_VALUE
+
         for ((outline, surfaces) in cases) {
             for (surface in surfaces) {
                 val backdrop = hex(surface)
@@ -473,8 +556,13 @@ class ChromeGeometryTest {
                     "derived edge on %06X measures %.2f:1, below the %.2f:1 target".format(surface, measured, ChromeGeometry.RESTING_EDGE_RATIO),
                     measured >= ChromeGeometry.RESTING_EDGE_RATIO - 0.01,
                 )
+                solved++
+                if (measured < tightest) tightest = measured
             }
         }
+
+        assertEquals("seven light surfaces and eight dark ones", 15, solved)
+        assertEquals("the tightest clearance, on dark surfaceContainerHighest", 2.2023, tightest, 0.0001)
     }
 
     /**
@@ -899,11 +987,18 @@ class ChromeGeometryTest {
      *    it here, but it is asserted directly because it is what a user would experience, and because the
      *    implication would silently stop holding if the fade ever animated something other than alpha.
      *
-     * Nine of the 50 pairs reach their minimum at alpha 0.116 rather than 0.120. That is not a counterexample —
-     * the ratio there *equals* the settled value to four decimals, because 8-bit channels put both alphas on the
-     * same composited pixel. It is the same quantization that made `sheet nav selected` 4 of 10 rather than 3,
-     * seen from the other side: alpha resolution is coarser than the arithmetic suggests, which flattens the tail
-     * of the sweep into a plateau.
+     * Eight of the 50 pairs reach their minimum *before* alpha 0.120 — seven at 0.116, and dark-surface Graphite
+     * as early as 0.104. That is not a counterexample: the ratio there *equals* the settled value, because 8-bit
+     * channels put both alphas on the same composited pixel. It is the same quantization that made
+     * `sheet nav selected` 4 of 10 rather than 3, seen from the other side — alpha resolution is coarser than the
+     * arithmetic suggests, which flattens the tail of the sweep into a plateau.
+     *
+     * **That count is asserted rather than described, because the last time it was only described it went stale.**
+     * This paragraph used to read "nine of the 50 pairs … at alpha 0.116", and both halves were wrong: nine was
+     * the count against Material's baseline sheet, and one of the nine plateaued from 0.104 all along. Deriving
+     * the container ramp moved `sheet` from `#F7F2FA` to `#FBFCFF`, which took Ocean and Midnight off the plateau
+     * and put Sunset on it; nothing failed, no assertion changed, and the prose quietly became false. A figure
+     * this test can measure is a figure this test should check.
      *
      * Threading the animated alpha through instead would re-solve the ring on every frame of a 200 ms tween, so
      * the ring's own colour would drift while the row settles. This test is why that cost buys nothing.
@@ -919,6 +1014,7 @@ class ChromeGeometryTest {
         )
         val settledAlpha = 0.12f
         var pairs = 0
+        val plateaus = mutableMapOf<String, Int>()
 
         for ((hostName, host) in hosts) {
             for (accent in shippedAccents) {
@@ -927,6 +1023,8 @@ class ChromeGeometryTest {
                 val ring = ContrastAnalysis.legibleChrome(tint, settled, ChromeGeometry.FOCUS_RING_RATIO)
                 val settledRatio = ContrastAnalysis.ratio(ring, settled)
                 var previous = Double.MAX_VALUE
+                var lowest = Double.MAX_VALUE
+                var lowestStep = -1
                 pairs++
 
                 for (step in 0..120) {
@@ -947,29 +1045,67 @@ class ChromeGeometryTest {
                         measured >= settledRatio - 1e-9,
                     )
                     previous = measured
+                    if (measured < lowest - 1e-12) {
+                        lowest = measured
+                        lowestStep = step
+                    }
                 }
+
+                // Where the plateau starts, for the pairs that have one. Recorded rather than asserted per-pair:
+                // the requirement is that no frame falls below the settled pill, which the loop above already
+                // checks. This is the quantization footprint, and it is checked in aggregate below.
+                if (lowestStep != 120) plateaus["$hostName / ${tint.toHexRgb()}"] = lowestStep
             }
         }
 
         assertEquals("every accent in every host the row appears on", 50, pairs)
+        assertEquals(
+            "the pairs whose minimum lands before the settled alpha, and the step it lands on",
+            mapOf(
+                "light page / #9D50BB" to 116,
+                "light page / #2E7BE4" to 116,
+                "light page / #E08A12" to 116,
+                "overlay drawer / #9D50BB" to 116,
+                "overlay drawer / #2E7BE4" to 116,
+                "sheet / #F75C7A" to 116,
+                "dark page / #33374A" to 116,
+                "dark surface / #33374A" to 104,
+            ),
+            plateaus,
+        )
     }
 
     // ── The container correction ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Material's baseline container tokens, which `NorfoldTheme` leaves unset, so these are what a dialog and a
-     * modal sheet actually paint today: `surfaceContainerHigh` and `surfaceContainerLow`. `secondaryContainer` is
-     * the same story and is what a selected [com.norfold.app.ui.components.NorfoldPopupRow] fills with at 55%.
+     * The container colours a dialog and a modal sheet painted **before** `NorfoldTheme` derived its own ramp —
+     * Material's baseline `surfaceContainerHigh` and `surfaceContainerLow`, plus the `secondaryContainer` a
+     * selected [com.norfold.app.ui.components.NorfoldPopupRow] fills with at 55%.
      *
-     * Written as literals rather than read from a theme for the reason [shippedAccents] is: no Compose harness.
-     * The stronger reason here is that these are not Norfold's colours at all — they are the fallbacks a theme
-     * that never set them inherits, and the point of the test is that chrome is measured against *whatever is
-     * really painted*. Pinning them means the day the owner picks real container colours, these figures change
-     * and the test says so, which is the notification worth having.
+     * These are kept, under the name they now carry, because the tests below are about an *arithmetic* claim that
+     * outlives any one palette: chrome must be solved against the pixel it is drawn on. That claim was discovered
+     * on these numbers, and re-deriving the discovery from whatever the theme happens to paint this month would
+     * make the finding un-reviewable — a reader could no longer check the figures in
+     * [com.norfold.app.ui.LocalChromeContainer]'s documentation against anything.
+     *
+     * `secondaryContainer` is still live: the theme derived the five `surfaceContainer*` tokens and left this one
+     * on Material's baseline, so the popup row genuinely paints `#E8DEF8` today. It sits here rather than beside
+     * the shipped values because it is the odd one out, and because pairing it with the historical two is what the
+     * `popup row selected` population needs.
      */
-    private val containerHigh = 0xECE6F0
-    private val containerLow = 0xF7F2FA
+    private val legacyContainerHigh = 0xECE6F0
+    private val legacyContainerLow = 0xF7F2FA
     private val secondaryContainer = 0xE8DEF8
+
+    /**
+     * What a dialog and a modal sheet paint **now**, from `NorfoldTheme`'s derived ramp.
+     *
+     * The pair exists so the shipped palette is measured rather than assumed. Note which side of the page each one
+     * landed on: `High` is darker than the page and `Low` is lighter, which is why deriving the ramp moved the four
+     * populations in *opposite* directions and why no single tolerance could have covered them.
+     */
+    private val containerHigh = 0xF4F5FA
+    private val containerLow = 0xFBFCFF
 
     /** The light page, from `NorfoldTheme` — and the colour the substrate used to measure everything against. */
     private val lightPage = 0xF7F8FC
@@ -980,23 +1116,27 @@ class ChromeGeometryTest {
      * Each case carries what the ring is drawn on, what the substrate used to solve against, and what it solves
      * against now. The last two differ in exactly the way the local fixes: a row cannot know its own host, so
      * before the local every one of these resolved to the page.
+     *
+     * Parameterised by the two container colours because there are now two sets worth measuring — the baseline the
+     * finding was discovered on, and the ramp the theme derived afterwards. Same arithmetic, same hosts, different
+     * paint.
      */
-    private fun containerCases(): List<ContainerCase> = buildList {
+    private fun containerCases(high: Int, low: Int): List<ContainerCase> = buildList {
         for (accent in shippedAccents) {
             val tint = hex(accent)
             val page = hex(lightPage)
 
             // 1. A ChoiceRow inside NorfoldDialog. No fill of its own, so drawn == container.
-            add(ContainerCase("dialog row resting", tint, hex(containerHigh), page, hex(containerHigh)))
+            add(ContainerCase("dialog row resting", tint, hex(high), page, hex(high)))
 
             // 2. A resting SideNavItem inside NorfoldBottomSheet. Also no fill.
-            add(ContainerCase("sheet nav resting", tint, hex(containerLow), page, hex(containerLow)))
+            add(ContainerCase("sheet nav resting", tint, hex(low), page, hex(low)))
 
             // 3. The same destination selected: a 12% accent pill. The row *did* pass its pill as an explicit
             //    backdrop, and it was still wrong, because the substrate composited that translucent pill onto
             //    the page rather than onto the sheet. This is the case that shows the two halves of the fix are
             //    not the same fix.
-            val pillOnSheet = tint.withAlphaFraction(0.12f).compositedOver(hex(containerLow))
+            val pillOnSheet = tint.withAlphaFraction(0.12f).compositedOver(hex(low))
             val pillOnPage = tint.withAlphaFraction(0.12f).compositedOver(page)
             add(ContainerCase("sheet nav selected", tint, pillOnSheet, pillOnPage, pillOnSheet))
 
@@ -1004,6 +1144,11 @@ class ChromeGeometryTest {
             //    plus 3 dp of tonal tint — which on this app is a wash of the user's own accent, because
             //    NorfoldTheme never sets surfaceTint. Two corrections stacked, which is why the popup card
             //    resolves its container through EditorChromeColors.elevated rather than naming a token.
+            //
+            //    This population is identical in both ramps: `secondaryContainer` is still Material's baseline and
+            //    the card underneath is `surface`, so nothing the ramp changed reaches it. Keeping it in both runs
+            //    rather than hoisting it out is deliberate — it is the control that shows the other three moved
+            //    because their container moved, and not because the model changed.
             val card = tint.withAlphaFraction(ChromeGeometry.tonalTintAlpha(3f)).compositedOver(ColorValue.WHITE)
             val fillOnCard = hex(secondaryContainer).withAlphaFraction(0.55f).compositedOver(card)
             val fillOnPage = hex(secondaryContainer).withAlphaFraction(0.55f).compositedOver(page)
@@ -1023,9 +1168,11 @@ class ChromeGeometryTest {
     /**
      * Chrome inside a container is drawn on the container, and solving it against the page fails 1.4.11.
      *
-     * This is the arithmetic behind `LocalChromeContainer`, and both halves are asserted because the good number
-     * alone would not establish that the change was load-bearing. Failures are asserted as **exact counts per
-     * population** rather than as "some fail", so a change that fixes some and breaks others cannot pass:
+     * This is the arithmetic behind `LocalChromeContainer`, measured on the container colours the finding was
+     * discovered on — Material's baseline, which the theme inherited before it derived its own ramp. Both halves
+     * are asserted because the good number alone would not establish that the change was load-bearing. Failures
+     * are asserted as **exact counts per population** rather than as "some fail", so a change that fixes some and
+     * breaks others cannot pass:
      *
      *  - dialog row resting — **3 of 10**, worst Gold 2.6024:1
      *  - sheet nav resting — **2 of 10**, worst Gold 2.8897:1
@@ -1036,6 +1183,16 @@ class ChromeGeometryTest {
      * why they survived review for as long as they did and why the count matters more than the floor. A tolerance
      * loose enough to feel comfortable would erase both findings. The dialog row is the outlier in the other
      * direction — 0.40 short, a plainly invisible ring — and it is also the population with the most call sites.
+     *
+     * ## Why this test still names the baseline after the theme stopped using it
+     *
+     * The claim under test is not "these four hosts fail today" — it is "solving against a colour that is not the
+     * one painted produces rings below 3:1, and the size of the error is not guessable." That is a property of the
+     * arithmetic, and the baseline is the case where it was measured and written up. Re-pointing this test at the
+     * shipped ramp would delete the evidence for the four figures quoted in
+     * [com.norfold.app.ui.LocalChromeContainer], [com.norfold.app.ui.components.NorfoldDialog] and `SideNavItem`,
+     * leaving prose no reader could check. The shipped palette gets its own test below, and the two are worth
+     * having separately because the ramp moved the populations in *both* directions.
      *
      * ## Why `sheet nav selected` is 4 and was documented as 3
      *
@@ -1058,7 +1215,7 @@ class ChromeGeometryTest {
     fun `chrome solved against the page fails inside the four real container hosts`() {
         val failures = mutableMapOf<String, Int>()
         val worst = mutableMapOf<String, Double>()
-        for (case in containerCases()) {
+        for (case in containerCases(legacyContainerHigh, legacyContainerLow)) {
             val ring = ContrastAnalysis.legibleChrome(
                 case.accent, case.wrongBackdrop, ChromeGeometry.FOCUS_RING_RATIO,
             )
@@ -1089,48 +1246,121 @@ class ChromeGeometryTest {
     }
 
     /**
-     * Solving against the real container clears the target in all four hosts, for all ten accents.
+     * The same four hosts on the ramp `NorfoldTheme` actually derives, where the error is smaller and has not gone.
      *
-     * The counterpart to the test above, and the reason the fix is a resolution rather than a per-host tolerance:
-     * no host and no accent needs an exception. The hue is checked too, because a ring that passed by discarding
-     * the user's accent would satisfy 1.4.11 and still be the wrong fix.
+     * This is the test that would be tempting to skip, and it is the one that pins the honest claim. Deriving the
+     * container ramp changed the numbers, and it did **not** change them uniformly: it moved
+     * `surfaceContainerHigh` from `#ECE6F0` to `#F4F5FA`, still darker than the page, and `surfaceContainerLow`
+     * from `#F7F2FA` to `#FBFCFF`, which is *lighter* than the page. So one host got closer to the page and two
+     * crossed to the other side of it:
+     *
+     *  - dialog row resting — **2 of 10** (was 3), worst Gold 2.9279:1
+     *  - sheet nav resting — **0 of 10** (was 2), worst Gold 3.1073:1
+     *  - sheet nav selected — **0 of 10** (was 4), worst Gold 3.1511:1
+     *  - popup row selected — **1 of 10** (unchanged), worst Sunset 2.9536:1
+     *
+     * Two zeroes are asserted as zeroes rather than quietly dropped, because "this population no longer fails"
+     * is a fact about one palette and not a reason to stop measuring it. The sheet passes now for the same reason
+     * it failed before — arithmetic on a specific colour — and a future ramp edit that darkens
+     * `surfaceContainerLow` past the page reintroduces the failure with no other symptom. A test that had been
+     * deleted for passing would not say so.
+     *
+     * The unchanged popup row is the control: its container is `secondaryContainer` over `surface`, neither of
+     * which the ramp touched, so its figure is bit-identical to the baseline run. That identity is what rules out
+     * the alternative explanation — that the model, rather than the paint, is what moved.
+     *
+     * The dialog is the population that still fails, and it is also the largest. It is not a defect left standing:
+     * every one of these hosts provides [com.norfold.app.ui.LocalChromeContainer], so nothing in the shipped tree
+     * solves against the page. What the 2 of 10 measures is the size of the mistake that provider prevents.
+     */
+    @Test
+    fun `the derived container ramp shrinks the page mis-solve without eliminating it`() {
+        val cases = containerCases(containerHigh, containerLow)
+        // Seeded from the populations rather than filled on first failure, so a zero is a population that was
+        // measured and passed — not a key that never appeared. That distinction is the whole point of asserting
+        // the two zeroes: `failures["sheet nav resting"] == 0` says the sheet was checked, and an absent key
+        // would equally describe a case list that silently stopped generating sheet rows.
+        val failures = cases.associate { it.label to 0 }.toMutableMap()
+        val worst = mutableMapOf<String, Double>()
+        for (case in cases) {
+            val ring = ContrastAnalysis.legibleChrome(
+                case.accent, case.wrongBackdrop, ChromeGeometry.FOCUS_RING_RATIO,
+            )
+            val measured = ContrastAnalysis.ratio(ring, case.drawn)
+            if (measured < ChromeGeometry.FOCUS_RING_RATIO) {
+                failures[case.label] = failures.getValue(case.label) + 1
+            }
+            worst[case.label] = minOf(worst[case.label] ?: Double.MAX_VALUE, measured)
+        }
+
+        assertEquals(
+            "the derived ramp moves three populations and leaves the popup row alone",
+            mapOf(
+                "dialog row resting" to 2,
+                "sheet nav resting" to 0,
+                "sheet nav selected" to 0,
+                "popup row selected" to 1,
+            ),
+            failures,
+        )
+        assertEquals("dialog row floor", 2.9279, worst.getValue("dialog row resting"), 0.0001)
+        assertEquals("sheet nav resting floor", 3.1073, worst.getValue("sheet nav resting"), 0.0001)
+        assertEquals("sheet nav selected floor", 3.1511, worst.getValue("sheet nav selected"), 0.0001)
+        assertEquals("popup row selected floor", 2.9536, worst.getValue("popup row selected"), 0.0001)
+    }
+
+    /**
+     * Solving against the real container clears the target in all four hosts, for all ten accents — on both ramps.
+     *
+     * The counterpart to the two tests above, and the reason the fix is a resolution rather than a per-host
+     * tolerance: no host, no accent and no palette needs an exception. Run over the baseline containers *and* the
+     * derived ones, because "measure the painted colour" is only worth asserting if it holds when the paint
+     * changes — that is the entire claim, and one palette cannot demonstrate it. The hue is checked too, because a
+     * ring that passed by discarding the user's accent would satisfy 1.4.11 and still be the wrong fix.
      *
      * **The margins split cleanly, and the split is the interesting part.** On 6 of the 10 accents the solver
-     * returns the accent unchanged, because it already clears 3:1 — those pass by 0.004 (Midnight on the sheet
-     * pill) up to 7.66 (Graphite on a resting sheet row, a near-black on a near-white sheet). On the 4 it does
-     * move — Sunset, Forest, Candy, Gold — it never clears by more than **0.14**, because the lightness search
-     * steps in hundredths and stops at the first value that satisfies the requirement. So the accents the fix
-     * actually acts on all sit within a tenth of the boundary, which is why the tolerance here is one hundredth
-     * and not one tenth: a looser one would stop distinguishing a solved ring from an unsolved one.
+     * returns the accent unchanged, because it already clears 3:1 — those pass by 0.004 (Midnight on the baseline
+     * sheet pill) up to 7.66 (Graphite on a resting sheet row, a near-black on a near-white sheet). On the 4 it
+     * does move — Sunset, Forest, Candy, Gold — it never clears by more than **0.14**, because the lightness
+     * search steps in hundredths and stops at the first value that satisfies the requirement. So the accents the
+     * fix actually acts on all sit within a tenth of the boundary, which is why the tolerance here is one
+     * hundredth and not one tenth: a looser one would stop distinguishing a solved ring from an unsolved one.
      *
-     * The tightest figure in the whole set is Midnight's 3.0039:1 on the sheet's selected pill, and it passes
-     * *unchanged* — the accent is natively 0.004 clear of the bar. It is the reason the sibling test's floors are
-     * quoted to four decimals rather than two.
+     * The tightest figure across both palettes is Midnight's 3.0039:1 on the baseline sheet's selected pill, and
+     * it passes *unchanged* — the accent is natively 0.004 clear of the bar. It is the reason the sibling tests'
+     * floors are quoted to four decimals rather than two. The derived ramp's own tightest is Gold at 3.0083:1 on
+     * the same population, which is no more comfortable.
      */
     @Test
     fun `chrome solved against its real container clears the target in every host`() {
-        for (case in containerCases()) {
-            val ring = ContrastAnalysis.legibleChrome(
-                case.accent, case.rightBackdrop, ChromeGeometry.FOCUS_RING_RATIO,
-            )
-            val measured = ContrastAnalysis.ratio(ring, case.drawn)
-            assertTrue(
-                "%s: accent %s on %s measures %.4f:1".format(
-                    case.label, case.accent.toHex(), case.drawn.toHex(), measured,
-                ),
-                measured >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
-            )
-
-            val before = case.accent.toHsl()
-            val after = ring.toHsl()
-            if (!before.achromatic && !after.achromatic) {
-                val drift = abs(after.hue - before.hue).let { minOf(it, 360f - it) }
-                assertTrue(
-                    "%s: accent %s became %s — hue moved %.2f degrees".format(
-                        case.label, case.accent.toHex(), ring.toHex(), drift,
-                    ),
-                    drift <= 1f,
+        val palettes = listOf(
+            "baseline" to (legacyContainerHigh to legacyContainerLow),
+            "derived" to (containerHigh to containerLow),
+        )
+        for ((palette, containers) in palettes) {
+            for (case in containerCases(containers.first, containers.second)) {
+                val ring = ContrastAnalysis.legibleChrome(
+                    case.accent, case.rightBackdrop, ChromeGeometry.FOCUS_RING_RATIO,
                 )
+                val measured = ContrastAnalysis.ratio(ring, case.drawn)
+                assertTrue(
+                    "%s / %s: accent %s on %s measures %.4f:1".format(
+                        palette, case.label, case.accent.toHex(), case.drawn.toHex(), measured,
+                    ),
+                    measured >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
+                )
+
+                val before = case.accent.toHsl()
+                val after = ring.toHsl()
+                if (!before.achromatic && !after.achromatic) {
+                    val drift = abs(after.hue - before.hue).let { minOf(it, 360f - it) }
+                    assertTrue(
+                        "%s / %s: accent %s became %s — hue moved %.2f degrees".format(
+                            palette, case.label, case.accent.toHex(), ring.toHex(), drift,
+                        ),
+                        drift <= 1f,
+                    )
+                }
             }
         }
     }
@@ -1139,42 +1369,55 @@ class ChromeGeometryTest {
      * `surface` is not a usable stand-in for "some container", which is what the old [ChoiceRow] default assumed.
      *
      * Before the local, `ChoiceRow` defaulted its backdrop to `colorScheme.surface` — a plausible guess, since a
-     * row usually sits on *something* raised. Measured, it is worse than the page default it replaced: solving
-     * against white and drawing on a dialog floors at **2.49:1** where the page floors at **2.60:1**. Both fail
-     * 3 of 10. The lesson pinned here is not that one literal beat another; it is that no literal can be right,
-     * because the row's host is not a property of the row.
+     * row usually sits on *something* raised. Measured, it is worse than the page default it replaced. The lesson
+     * pinned here is not that one literal beat another; it is that no literal can be right, because the row's host
+     * is not a property of the row.
+     *
+     * Asserted on both palettes, and the ordering survives both, which is the part worth having. On the baseline
+     * dialog the two guesses floor at **2.4887** and **2.6024** and each fails 3 of 10; on the derived dialog they
+     * floor at **2.8000** and **2.9279** and each fails 2 of 10. Deriving the ramp narrowed the gap from 0.114 to
+     * 0.128 — it did not close it, and it did not reverse it. A single-palette version of this test would leave a
+     * reader unable to tell whether "surface is the worse guess" was a property of the arithmetic or a coincidence
+     * of one lavender literal.
      */
     @Test
     fun `guessing surface as the container is worse than guessing the page`() {
-        val dialog = hex(containerHigh)
-        var worstFromSurface = Double.MAX_VALUE
-        var worstFromPage = Double.MAX_VALUE
-        var failFromSurface = 0
-        var failFromPage = 0
-
-        for (accent in shippedAccents) {
-            val tint = hex(accent)
-            val fromSurface = ContrastAnalysis.ratio(
-                ContrastAnalysis.legibleChrome(tint, ColorValue.WHITE, ChromeGeometry.FOCUS_RING_RATIO), dialog,
-            )
-            val fromPage = ContrastAnalysis.ratio(
-                ContrastAnalysis.legibleChrome(tint, hex(lightPage), ChromeGeometry.FOCUS_RING_RATIO), dialog,
-            )
-            if (fromSurface < ChromeGeometry.FOCUS_RING_RATIO) failFromSurface++
-            if (fromPage < ChromeGeometry.FOCUS_RING_RATIO) failFromPage++
-            worstFromSurface = minOf(worstFromSurface, fromSurface)
-            worstFromPage = minOf(worstFromPage, fromPage)
-        }
-
-        assertEquals("both guesses fail the same number of accents", 3, failFromSurface)
-        assertEquals("both guesses fail the same number of accents", 3, failFromPage)
-        assertEquals("the surface guess floors at 2.49:1", 2.49, worstFromSurface, 0.01)
-        assertEquals("the page guess floors at 2.60:1", 2.60, worstFromPage, 0.01)
-        assertTrue(
-            "surface must measure worse than the page here, or the ChoiceRow default was not the regression it " +
-                "is documented as",
-            worstFromSurface < worstFromPage,
+        val expectations = listOf(
+            Triple(legacyContainerHigh, 3, 2.4887 to 2.6024),
+            Triple(containerHigh, 2, 2.8000 to 2.9279),
         )
+        for ((container, expectedFailures, floors) in expectations) {
+            val dialog = hex(container)
+            var worstFromSurface = Double.MAX_VALUE
+            var worstFromPage = Double.MAX_VALUE
+            var failFromSurface = 0
+            var failFromPage = 0
+
+            for (accent in shippedAccents) {
+                val tint = hex(accent)
+                val fromSurface = ContrastAnalysis.ratio(
+                    ContrastAnalysis.legibleChrome(tint, ColorValue.WHITE, ChromeGeometry.FOCUS_RING_RATIO), dialog,
+                )
+                val fromPage = ContrastAnalysis.ratio(
+                    ContrastAnalysis.legibleChrome(tint, hex(lightPage), ChromeGeometry.FOCUS_RING_RATIO), dialog,
+                )
+                if (fromSurface < ChromeGeometry.FOCUS_RING_RATIO) failFromSurface++
+                if (fromPage < ChromeGeometry.FOCUS_RING_RATIO) failFromPage++
+                worstFromSurface = minOf(worstFromSurface, fromSurface)
+                worstFromPage = minOf(worstFromPage, fromPage)
+            }
+
+            val on = "on dialog %s".format(dialog.toHex())
+            assertEquals("$on: both guesses fail the same number of accents", expectedFailures, failFromSurface)
+            assertEquals("$on: both guesses fail the same number of accents", expectedFailures, failFromPage)
+            assertEquals("$on: the surface guess floor", floors.first, worstFromSurface, 0.0001)
+            assertEquals("$on: the page guess floor", floors.second, worstFromPage, 0.0001)
+            assertTrue(
+                "$on: surface must measure worse than the page here, or the ChoiceRow default was not the " +
+                    "regression it is documented as",
+                worstFromSurface < worstFromPage,
+            )
+        }
     }
 
     /**
@@ -1534,8 +1777,7 @@ class ChromeGeometryTest {
      * entry points originally defaulted to the literal `MaterialTheme.colorScheme.background` — a perfectly
      * specified colour. So the check passed at every defaulting call site, the declared value won over the
      * container, and the container branch was **never reached by any caller that did not pass a colour
-     * explicitly**, which is all but a handful of the 116 chrome sites in `ui/`.
-     *
+     * explicitly**, which is all but a handful of the 116 chrome sites in `ui/`.     *
      * Nothing about that fails to compile, nothing renders visibly differently in a screenshot, and the four
      * measured populations above would have been unchanged while appearing to be fixed. `Color.Unspecified` is
      * what keeps "nobody named a backdrop" answerable by the host.
@@ -1559,7 +1801,17 @@ class ChromeGeometryTest {
             emptyList<String>(),
             defaults.filter { it != "Color.Unspecified" },
         )
-        assertEquals("the fourteen defaulting parameters, all on the sentinel", 14, defaults.size)
+        // A floor rather than an exact count, and that is a correction. This asserted `== 14` and broke the
+        // moment the focus-ring work added four `surface: Color` entry points — a passing test turning red
+        // because the substrate grew, which is churn and not a signal. What the number is really here to catch
+        // is the regex matching *nothing*: the filter above is vacuously satisfied by an empty list, so without
+        // a lower bound a rename of the `backdrop` parameter would silently retire the check. A floor does that
+        // job. Growth in chrome entry points is expected and needs no assertion to approve it.
+        assertTrue(
+            "only ${defaults.size} defaulting parameters matched — the pattern has stopped finding the chrome " +
+                "entry points, so the assertion above is passing over an empty list",
+            defaults.size >= 14,
+        )
     }
 
     /**

@@ -341,10 +341,12 @@ val LocalPopupStyle = staticCompositionLocalOf { PopupStyle() }
  *
  * **The colour comes from [AlertDialogDefaults.containerColor], not from a literal.** That accessor resolves
  * `DialogTokens.ContainerColor` through the active scheme, so whatever the container is *now* is what the ring
- * is measured against, and it stays correct the day the theme sets the token it currently leaves unset. Today
- * that resolves to Material's baseline `surfaceContainerHigh` — `#ECE6F0` light, `#2B2930` dark — because
- * `NorfoldTheme` sets none of the container tokens. Making that a Norfold colour is a separate, product-level
- * decision; measuring against whatever it is, is not.
+ * is measured against. That indirection has already earned itself: the figures above were measured while
+ * `NorfoldTheme` left the container tokens unset and the dialog stood on Material's baseline `#ECE6F0`. The
+ * theme now derives the whole ramp in Norfold's own hue, the dialog paints `#F4F5FA`, and this line needed no
+ * edit — the population fell from 3 of 10 to 2 of 10 by itself, floor Gold 2.93:1, and all ten still pass
+ * against the real container. A literal here would have silently gone on measuring a colour that is no longer
+ * on screen.
  *
  * It is also passed to `containerColor` rather than left to default, even though the default is this same
  * accessor. One expression paints the container and informs the local, so the two cannot drift apart — not
@@ -395,9 +397,16 @@ fun NorfoldDialog(
  * hand-computed model.
  *
  * That colour is [BottomSheetDefaults.containerColor], which resolves `SheetBottomTokens.DockedContainerColor`
- * — `surfaceContainerLow`, another token `NorfoldTheme` leaves unset, so today it paints Material's baseline
- * `#F7F2FA` light and `#1D1B20` dark. Passed to `containerColor` as well as to the local so the painted colour
- * and the measured one are one expression.
+ * — `surfaceContainerLow`. Passed to `containerColor` as well as to the local so the painted colour and the
+ * measured one are one expression.
+ *
+ * **The figures above were measured against Material's baseline `#F7F2FA`, and the theme has since derived its
+ * own ramp — which is why this local is a resolution and not a tolerance.** `surfaceContainerLow` is now
+ * `#FBFCFF`, *lighter* than the page behind it, so for this one host guessing the page became the pessimistic
+ * guess and both sheet populations now measure 0 of 10 either way. That is an accident of which side of the page
+ * one token landed on, not a repair: `surfaceContainerHigh` moved to `#F4F5FA`, which is darker than the page, so
+ * [NorfoldDialog]'s population still fails 2 of 10. A per-host exemption sized to the old numbers would have
+ * been silently wrong in both directions after one theme edit; reading the painted colour cannot be.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

@@ -1665,10 +1665,11 @@ private fun SideNavItem(label: String, icon: SemanticActionId, selected: Boolean
  * lands on 225 rather than 226 — and on the narrowest population a single bit is the whole finding. Rounded to
  * two decimals Candy reads `3.00`, which is indistinguishable from passing.
  *
- * What remains is not an accessibility question. The ring is now measured against whatever the sheet actually
- * paints, and stays measured against it if that changes — but `surfaceContainerLow` is a token `NorfoldTheme`
- * never sets, so today it paints Material's baseline `#F7F2FA` rather than a colour Norfold chose. *Which*
- * colour a Norfold sheet should be is a product decision, and it is not this row's.
+ * What remains is not an accessibility question, and the theme has since answered it: `surfaceContainerLow` was
+ * Material's baseline `#F7F2FA` when the figures above were measured, and is now a derived `#FBFCFF` in Norfold's
+ * own hue. This row needed no edit for that, which is the point of measuring the painted colour — though it is
+ * worth recording that the new value is *lighter* than the page, so for this host the old page-guess is no longer
+ * the pessimistic one. The dialog rows are the counter-example: their container moved the other way.
  */
 @Composable
 private fun SideNavItem(
