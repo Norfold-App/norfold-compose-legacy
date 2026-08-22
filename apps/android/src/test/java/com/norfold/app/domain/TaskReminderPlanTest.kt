@@ -251,4 +251,155 @@ class TaskReminderPlanTest {
         assertEquals("Renew the domain", reminder.title)
         assertEquals(reminder.anchorAt - 1440 * 60_000L, reminder.triggerAt)
     }
+
+    // ── Quiet hours ──
+    // The window says the small hours are the wrong moment to speak, not that the reminder should
+    // stop existing. So a covered reminder gets a deliverAt at the end of the window while keeping
+    // its own triggerAt, and every scheduling decision reads deliverAt.
+
+    private val night = QuietHours.window(enabled = true, start = "22:00", end = "07:00")!!
+
+    @Test
+    fun aReminderOutsideQuietHoursIsNotHeld() {
+        val moment = at(2026, 8, 21, 14, 30)
+        val reminder = TaskReminderPlan.reminders(listOf(candidate(startAt = moment)), zone, night).single()
+        assertEquals(moment, reminder.deliverAt)
+        assertEquals(reminder.triggerAt, reminder.deliverAt)
+    }
+
+    @Test
+    fun aReminderInsideQuietHoursIsHeldToTheEndOfTheWindow() {
+        val moment = at(2026, 8, 22, 2, 0)
+        val reminder = TaskReminderPlan.reminders(listOf(candidate(startAt = moment)), zone, night).single()
+        // Held, not dropped, and not moved: the trigger it was for is still on the reminder, which is
+        // what lets the notification say "Due Sat 22 Aug at 02:00" when it arrives at seven.
+        assertEquals(moment, reminder.triggerAt)
+        assertEquals(at(2026, 8, 22, 7, 0), reminder.deliverAt)
+    }
+
+    @Test
+    fun noWindowMeansNothingIsEverHeld() {
+        val moment = at(2026, 8, 22, 2, 0)
+        val reminder = TaskReminderPlan.reminders(listOf(candidate(startAt = moment)), zone, null).single()
+        assertEquals(moment, reminder.deliverAt)
+    }
+
+    @Test
+    fun anAllDayReminderIsAnchoredBeforeTheWindowIsConsidered() {
+        // 09:00 is outside 22:00–07:00, so an all-day task is not held even though the value stored
+        // on the row — midnight — is inside it. Applying the window to the stored moment rather than
+        // the anchored one would hold every all-day reminder for no reason.
+        val reminder = TaskReminderPlan.reminders(
+            listOf(candidate(startAt = at(2026, 8, 21), allDay = true)),
+            zone,
+            night,
+        ).single()
+        assertEquals(at(2026, 8, 21, TaskReminderPlan.AllDayAnchorHour, 0), reminder.deliverAt)
+    }
+
+    @Test
+    fun aHeldReminderIsArmedForItsReleaseNotItsTrigger() {
+        // The alarm has to be set for 07:00. Arming 02:00 would wake the device inside the window to
+        // post nothing, and then nothing would be armed for the release — the hold would become a
+        // silent drop.
+        val reminders = TaskReminderPlan.reminders(
+            listOf(candidate(startAt = at(2026, 8, 22, 2, 0))),
+            zone,
+            night,
+        )
+        assertEquals(at(2026, 8, 22, 7, 0), TaskReminderPlan.nextTriggerAfter(reminders, at(2026, 8, 21, 23, 0)))
+    }
+
+    @Test
+    fun aHeldReminderIsNotDueDuringTheWindow() {
+        val reminders = TaskReminderPlan.reminders(
+            listOf(candidate(startAt = at(2026, 8, 22, 2, 0))),
+            zone,
+            night,
+        )
+        // 03:00: its trigger has passed, so a plan that filtered on triggerAt would post it here.
+        val due = TaskReminderPlan.dueBetween(reminders, deliveredThrough = 0L, now = at(2026, 8, 22, 3, 0))
+        assertTrue(due.isEmpty())
+    }
+
+    @Test
+    fun aHeldReminderIsDueWhenTheWindowEnds() {
+        val reminders = TaskReminderPlan.reminders(
+            listOf(candidate(startAt = at(2026, 8, 22, 2, 0))),
+            zone,
+            night,
+        )
+        val due = TaskReminderPlan.dueBetween(
+            reminders,
+            deliveredThrough = at(2026, 8, 22, 6, 59),
+            now = at(2026, 8, 22, 7, 0),
+        )
+        assertEquals(1, due.size)
+    }
+
+    @Test
+    fun aHeldReminderSurvivesAWatermarkThatPassedItsTrigger() {
+        // The failure this whole design exists to prevent. A pass at 03:00 — a task edit, a sync, an
+        // unrelated alarm — advances the watermark past every delivery moment already gone. If the
+        // watermark were built from trigger times it would step past 02:00, and the 07:00 pass would
+        // then find the reminder already covered and post nothing.
+        val reminders = TaskReminderPlan.reminders(
+            listOf(candidate(startAt = at(2026, 8, 22, 2, 0))),
+            zone,
+            night,
+        )
+        val nightWatermark = reminders.asSequence()
+            .map(TaskReminderPlan.Reminder::deliverAt)
+            .filter { it <= at(2026, 8, 22, 3, 0) }
+            .maxOrNull()
+        // Nothing is deliverable yet at 03:00, so the watermark does not move at all.
+        assertNull(nightWatermark)
+        val due = TaskReminderPlan.dueBetween(reminders, deliveredThrough = 0L, now = at(2026, 8, 22, 7, 0))
+        assertEquals(1, due.size)
+    }
+
+    @Test
+    fun aHeldReminderIsNotDiscardedAsStaleWhenItArrives() {
+        // The night is nine hours long and the grace window is two, so measuring staleness from the
+        // trigger would drop every held reminder at the moment it became deliverable.
+        val reminders = TaskReminderPlan.reminders(
+            listOf(candidate(startAt = at(2026, 8, 21, 22, 30))),
+            zone,
+            night,
+        )
+        val release = at(2026, 8, 22, 7, 0)
+        assertEquals(release, reminders.single().deliverAt)
+        assertTrue(release - reminders.single().triggerAt > TaskReminderPlan.DeliveryGraceMillis)
+        assertEquals(1, TaskReminderPlan.dueBetween(reminders, deliveredThrough = release - 1, now = release).size)
+    }
+
+    @Test
+    fun remindersHeldToTheSameReleaseSortByIdAndAllArrive() {
+        // Everything owed across the night lands at the window's end together. They are one batch,
+        // so their order has to be stable rather than dependent on how the rows came back.
+        val reminders = TaskReminderPlan.reminders(
+            listOf(
+                candidate(id = 3L, startAt = at(2026, 8, 21, 23, 0)),
+                candidate(id = 1L, startAt = at(2026, 8, 22, 5, 0)),
+                candidate(id = 2L, startAt = at(2026, 8, 22, 1, 0)),
+            ),
+            zone,
+            night,
+        )
+        val release = at(2026, 8, 22, 7, 0)
+        assertTrue(reminders.all { it.deliverAt == release })
+        assertEquals(listOf(1L, 2L, 3L), reminders.map { it.taskId })
+        assertEquals(3, TaskReminderPlan.dueBetween(reminders, deliveredThrough = release - 1, now = release).size)
+    }
+
+    @Test
+    fun anAlreadyMissedReminderIsStillDiscardedWhenQuietHoursAreOn() {
+        // Holding must not resurrect what the grace window already discarded. A reminder owed at
+        // 14:30 is outside the window, so it is never held, and a device that comes back a day later
+        // still drops it rather than announcing yesterday.
+        val moment = at(2026, 8, 21, 14, 30)
+        val reminders = TaskReminderPlan.reminders(listOf(candidate(startAt = moment)), zone, night)
+        val now = moment + TaskReminderPlan.DeliveryGraceMillis + 1
+        assertTrue(TaskReminderPlan.dueBetween(reminders, deliveredThrough = moment - 1, now = now).isEmpty())
+    }
 }

@@ -359,7 +359,7 @@ fun NorfoldRoot(viewModel: DocsViewModel = viewModel()) {
                         showNotificationPermissionPrompt = false
                     },
                     title = { Text("Stay updated when Norfold is closed") },
-                    text = { Text("Allow notifications for new messages, workspace invitations, task reminders, sync conflicts, and backup failures. Conversation mute and quiet-hours settings still apply.") },
+                    text = { Text("Allow notifications for new messages, workspace invitations, task reminders, sync conflicts, and backup failures. A muted conversation still arrives silently, and quiet hours hold a task reminder until the window ends.") },
                     confirmButton = {
                         Button(onClick = { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("Continue") }
                     },

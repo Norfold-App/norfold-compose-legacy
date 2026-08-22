@@ -3,6 +3,7 @@ package com.norfold.app.ui.screens
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.Backup
+import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
@@ -67,6 +69,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Phone
 import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Workspaces
@@ -143,6 +146,7 @@ import com.norfold.app.domain.SettingsProfileCategory
 import com.norfold.app.domain.NoteGestureAction
 import com.norfold.app.domain.TaskGestureAction
 import com.norfold.app.domain.NoteRenderEngine
+import com.norfold.app.domain.QuietHours
 import com.norfold.app.domain.SemanticActionId
 import com.norfold.app.domain.SyncFolderAction
 import com.norfold.app.domain.SyncFolderRequest
@@ -151,6 +155,7 @@ import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
 import com.norfold.app.cloud.ExternalServiceConfig
 import com.norfold.app.data.BiometricVaultKeyStore
+import com.norfold.app.data.TaskReminderScheduler
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.EmailAuthPhase
@@ -193,6 +198,7 @@ private enum class SettingsSection(val title: String, val subtitle: String, val 
     Workspace("Workspace", "Name, visuals and member defaults", Icons.Outlined.Workspaces),
     Appearance("Appearance", "Theme, palette, density and type", Icons.Outlined.Palette),
     Accessibility("Accessibility", "Labels, readable controls and assistive guidance", Icons.Outlined.AccessibilityNew),
+    Notifications("Notifications", "Reminders, quiet hours and delivery precision", Icons.Outlined.Notifications),
     Editor("Editor & Markdown", "Line width, syntax and writing behavior", Icons.Outlined.Code),
     Security("Security & Vault", "Vault, biometrics and screenshots", Icons.Outlined.Security),
     Sync("Account & Sync", "Norfold Cloud account and sync status", Icons.Outlined.CloudSync),
@@ -211,6 +217,7 @@ private val RootSettingsSections = setOf(
     SettingsSection.Workspace,
     SettingsSection.Appearance,
     SettingsSection.Accessibility,
+    SettingsSection.Notifications,
     SettingsSection.Editor,
     SettingsSection.Security,
     SettingsSection.Sync,
@@ -319,6 +326,7 @@ fun SettingsScreen(
                     )
                     SettingsSection.Appearance -> AppearanceSettings(renderedState, viewModel)
                     SettingsSection.Accessibility -> AccessibilitySettings(renderedState, viewModel)
+                    SettingsSection.Notifications -> NotificationSettings(state, viewModel)
                     SettingsSection.Editor -> EditorSettings(renderedState, viewModel)
                     SettingsSection.Security -> SecuritySettings(state, viewModel)
                     SettingsSection.Sync -> SyncSettings(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive, onCloudGoogleSignIn) { section = it }
@@ -342,7 +350,7 @@ fun SettingsScreen(
 private fun SettingsIndex(onOpen: (SettingsSection) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().widthIn(max = 1040.dp)) {
         val account = listOf(SettingsSection.Profile, SettingsSection.Workspace, SettingsSection.Appearance, SettingsSection.Editor)
-        val privacy = listOf(SettingsSection.Accessibility, SettingsSection.Security)
+        val privacy = listOf(SettingsSection.Accessibility, SettingsSection.Notifications, SettingsSection.Security)
         val twoColumns = maxWidth >= 760.dp
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (twoColumns) {
@@ -1022,6 +1030,155 @@ private fun ControlLabelMode.displayName(): String = when (this) {
     ControlLabelMode.Adaptive -> "Adaptive labels"
     ControlLabelMode.IconsOnly -> "Icons only"
     ControlLabelMode.IconsAndText -> "Icons + text"
+}
+
+/**
+ * The notification settings, which until now had none.
+ *
+ * `notificationPush`, `quietHoursEnabled`, `quietHoursStart` and `quietHoursEnd` have been stored,
+ * migrated and carried through the repository since schema 38, written once by onboarding, and read
+ * by nothing. This screen is the other half of making them real: the scheduler now honours them, and
+ * this is where they can be seen and changed after onboarding is behind you.
+ *
+ * ## Why only two of the three notification flags appear
+ *
+ * `notificationEmail` and `notificationInApp` are also stored, and are also written by onboarding —
+ * but the product has no email sender and no in-app tips surface, so there is nothing for either to
+ * switch off. Showing them as live toggles would recreate exactly the defect this task exists to fix:
+ * a control that appears to change behaviour and does not. They keep their stored values, and the
+ * group's footer says plainly that those channels are not built yet, so the setting the owner did
+ * choose during onboarding is not silently contradicted by a screen that omits it without a word.
+ *
+ * ## Why the reminder toggle is labelled the way onboarding labelled it
+ *
+ * Onboarding calls `notificationPush` "Task reminders", not "push". That is what it actually controls
+ * in this build — the only thing the app posts on its own initiative — so relabelling it here by its
+ * transport would make two screens disagree about one switch.
+ */
+@Composable
+private fun NotificationSettings(state: DocsUiState, viewModel: DocsViewModel) {
+    val settings = state.settings
+    val context = LocalContext.current
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
+    // Read once per composition rather than remembered: the owner can leave for system settings,
+    // grant exact alarms and come back, and a remembered value would still claim the old answer.
+    val exact = TaskReminderScheduler.canDeliverExactly(context)
+    val window = QuietHours.window(settings.quietHoursEnabled, settings.quietHoursStart, settings.quietHoursEnd)
+    val exactAlarmLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        // The system screen reports nothing back, so the capability is re-checked rather than assumed.
+        if (TaskReminderScheduler.canDeliverExactly(context)) {
+            viewModel.showMessage("Reminders will now arrive on the minute")
+        }
+    }
+
+    if (showStartPicker) {
+        OptionPickerDialog(
+            title = "Quiet hours start",
+            options = QuietHours.pickerOptions(),
+            selected = settings.quietHoursStart,
+            onDismiss = { showStartPicker = false },
+        ) { picked -> viewModel.patchSettings { it.copy(quietHoursStart = picked) } }
+    }
+    if (showEndPicker) {
+        OptionPickerDialog(
+            title = "Quiet hours end",
+            options = QuietHours.pickerOptions(),
+            selected = settings.quietHoursEnd,
+            onDismiss = { showEndPicker = false },
+        ) { picked -> viewModel.patchSettings { it.copy(quietHoursEnd = picked) } }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        SettingsGroup(header = "Reminders") {
+            SettingsToggleRow(
+                "Task reminders",
+                checked = settings.notificationPush,
+                onChange = { on -> viewModel.patchSettings { it.copy(notificationPush = on) } },
+                // Names both halves because the switch reaches both: the reminder the scheduler
+                // raises on this device, and the "Task updated" push a shared workspace sends when
+                // someone else changes a task. Saying only the first would leave the second looking
+                // like a control that did not work.
+                subtitle = "Notify me when a task's reminder comes due, or when a shared task changes",
+                icon = Icons.Outlined.Notifications,
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "Delivery precision",
+                subtitle = if (exact) {
+                    "Exact — reminders arrive on the minute"
+                } else {
+                    "Approximate — reminders may arrive a few minutes late. Tap to allow exact alarms."
+                },
+                icon = Icons.Outlined.Schedule,
+                trailing = { RowValue(if (exact) "Exact" else "Approximate", accent = !exact) },
+                // Nothing to open when the capability is already held — and below Android 12 it always
+                // is, because exact alarms needed no permission then, so this row is never actionable
+                // there. The inner check is what makes that reasoning legible to lint rather than
+                // implied by canDeliverExactly's own version branch.
+                onClick = if (exact) {
+                    null
+                } else {
+                    {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            runCatching {
+                                exactAlarmLauncher.launch(
+                                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                        .setData(Uri.fromParts("package", context.packageName, null)),
+                                )
+                            }.onFailure {
+                                viewModel.showMessage("Open Android app settings and allow alarms and reminders")
+                            }
+                        }
+                    }
+                },
+            )
+        }
+        SettingsGroup(header = "Quiet hours") {
+            SettingsToggleRow(
+                "Hold reminders while I sleep",
+                checked = settings.quietHoursEnabled,
+                onChange = { on -> viewModel.patchSettings { it.copy(quietHoursEnabled = on) } },
+                // Two different promises, because the app can only keep one of them for each kind.
+                // A reminder is Norfold's own idea and can be held; a message someone sent has
+                // already arrived, so the most that can be done is to not make a sound about it.
+                subtitle = "A reminder that comes due inside the window arrives when it ends, not the next day. Messages still arrive, silently.",
+                icon = Icons.Outlined.Bedtime,
+            )
+            RowDivider(inset = false)
+            SettingsRow(
+                "From",
+                icon = Icons.Outlined.Bedtime,
+                trailing = { RowChevron(settings.quietHoursStart) },
+                onClick = { showStartPicker = true },
+            )
+            RowDivider()
+            SettingsRow(
+                "Until",
+                // The width is read from the same arithmetic the scheduler uses, so this line cannot
+                // describe a window the scheduler would apply differently.
+                subtitle = QuietHours.describeWidth(window).ifEmpty { null }?.let { "$it quiet" },
+                icon = Icons.Outlined.LightMode,
+                trailing = { RowChevron(settings.quietHoursEnd) },
+                onClick = { showEndPicker = true },
+            )
+        }
+        SettingsGroup(header = "Other channels") {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Email updates and product tips are not built yet.", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Onboarding asked about both, and your answers are kept — but Norfold sends no email and " +
+                        "shows no in-app tips in this build, so there is nothing yet for either choice to change. " +
+                        "They will appear here as switches once they do something.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -2566,6 +2723,9 @@ private fun AppInfoSettings() {
     var showChangelog by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Read verbatim and shown by a plain Text, so the raw resource is authored as plain text
+    // despite its `.md` name — there is no markdown renderer on this path, and a `##` or `**`
+    // written into it appears on screen exactly as typed. Keep it prose and bullets.
     val changelog = remember(context) {
         context.resources.openRawResource(com.norfold.app.R.raw.changelog).bufferedReader().use { it.readText() }
     }

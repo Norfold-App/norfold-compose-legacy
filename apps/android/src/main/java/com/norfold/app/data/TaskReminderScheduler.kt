@@ -7,10 +7,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import com.norfold.app.cloud.NorfoldNotificationChannels
+import com.norfold.app.domain.QuietHours
 import com.norfold.app.domain.TaskReminderPlan
 import java.util.TimeZone
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -65,11 +68,13 @@ object TaskReminderScheduler {
      */
     suspend fun reconcile(context: Context) {
         val applicationContext = context.applicationContext
-        val reminders = plannedReminders(applicationContext)
+        val dao = NorfoldDatabase.get(applicationContext).dao()
+        val settings = ReminderSettings(dao.settings())
+        val reminders = plan(dao.taskReminderRows(), settings)
         val now = System.currentTimeMillis()
         // Reminders that came due while nothing was listening — during a reboot, or before this
         // build existed — are delivered on this pass if they are still inside the grace window.
-        deliver(applicationContext, reminders, now)
+        deliver(applicationContext, reminders, now, settings.pushAllowed)
         armNext(applicationContext, reminders, now)
     }
 
@@ -82,36 +87,65 @@ object TaskReminderScheduler {
     suspend fun deliverDue(context: Context) = reconcile(context)
 
     /**
-     * Keeps the armed alarm in step with the task rows for as long as [scope] lives.
+     * Keeps the armed alarm in step with the task rows and the notification settings for as long as
+     * [scope] lives.
      *
-     * Driven by the table rather than by the ~20 mutation functions that write to it. Hooking each
+     * Driven by the tables rather than by the ~20 mutation functions that write to them. Hooking each
      * call site would mean a reminder silently stops being armed the day someone adds the
      * twenty-first — and would still miss the writes that do not go through the view model at all:
      * a restore, and background sync pulling a task edited on another device. Observing the rows
      * covers every one of those, including the ones that do not exist yet.
      *
-     * [distinctUntilChanged] is what makes this cheap: Room re-emits on any write to `tasks`, so
-     * without it, dragging a card between columns would re-arm the alarm. The projection carries
-     * only the eight reminder-relevant columns, so an unrelated edit emits an equal list and stops
-     * here.
+     * The settings row is observed alongside the tasks because the quiet-hours window changes when a
+     * reminder is deliverable. Widening the window while a reminder sits inside it has to re-arm the
+     * alarm for the new end, and switching quiet hours off has to release a held reminder
+     * immediately; neither is a write to `tasks`, so neither would be seen here otherwise.
+     *
+     * [distinctUntilChanged] is what makes this cheap: Room re-emits on any write to either table, so
+     * without it, dragging a card between columns would re-arm the alarm. The task projection carries
+     * only the eight reminder-relevant columns and the settings row is reduced to the four fields
+     * that matter here, so an unrelated edit to either emits an equal value and stops here.
      */
     fun observe(context: Context, scope: CoroutineScope) {
         val applicationContext = context.applicationContext
         scope.launch {
-            NorfoldDatabase.get(applicationContext).dao()
-                .observeTaskReminderRows()
+            val dao = NorfoldDatabase.get(applicationContext).dao()
+            combine(
+                dao.observeTaskReminderRows(),
+                dao.observeSettings().map(::ReminderSettings).distinctUntilChanged(),
+            ) { rows, settings -> rows to settings }
                 .distinctUntilChanged()
-                .collect { rows ->
+                .collect { (rows, settings) ->
                     // A single failed pass must not tear down the collector: the next task edit
                     // should still get a chance to arm the alarm.
                     runCatching {
-                        val reminders = plan(rows)
+                        val reminders = plan(rows, settings)
                         val now = System.currentTimeMillis()
-                        deliver(applicationContext, reminders, now)
+                        deliver(applicationContext, reminders, now, settings.pushAllowed)
                         armNext(applicationContext, reminders, now)
                     }
                 }
         }
+    }
+
+    /**
+     * The four settings fields reminder delivery depends on, so an unrelated settings write — a
+     * theme, a sort mode, the active workspace — emits an equal value and is collapsed by
+     * [distinctUntilChanged] rather than re-arming the alarm.
+     *
+     * A settings row is wide and written often; without this projection, observing it would undo the
+     * cheapness that the narrow task projection was built for.
+     */
+    private data class ReminderSettings(val quietHours: QuietHours.Window?, val pushAllowed: Boolean) {
+        constructor(settings: AppSettingsEntity?) : this(
+            quietHours = settings?.let { QuietHours.window(it.quietHoursEnabled, it.quietHoursStart, it.quietHoursEnd) },
+            // A missing settings row falls back to on. The row is created on first launch, so its
+            // absence means something is wrong, and the alternative — a broken settings read
+            // silencing reminders the owner did ask for — is the worse failure. Quiet hours resolve
+            // to null in the same case, which is that same choice in the other direction: neither
+            // one lets a bad read invent a reason to stay silent.
+            pushAllowed = settings?.notificationPush ?: true,
+        )
     }
 
     /**
@@ -125,13 +159,11 @@ object TaskReminderScheduler {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) manager.canScheduleExactAlarms() else true
     }
 
-    private suspend fun plannedReminders(context: Context): List<TaskReminderPlan.Reminder> {
-        val dao = NorfoldDatabase.get(context).dao()
-        return plan(dao.taskReminderRows())
-    }
-
     /** Shared by the stored-row read and by [observe], so both paths interpret a row identically. */
-    private fun plan(rows: List<TaskReminderRow>): List<TaskReminderPlan.Reminder> {
+    private fun plan(
+        rows: List<TaskReminderRow>,
+        settings: ReminderSettings,
+    ): List<TaskReminderPlan.Reminder> {
         val candidates = rows.map { row ->
             TaskReminderPlan.Candidate(
                 taskId = row.id,
@@ -144,25 +176,45 @@ object TaskReminderScheduler {
                 done = row.status.equals("Done", ignoreCase = true),
             )
         }
-        return TaskReminderPlan.reminders(candidates, TimeZone.getDefault())
+        return TaskReminderPlan.reminders(candidates, TimeZone.getDefault(), settings.quietHours)
     }
 
-    private fun deliver(context: Context, reminders: List<TaskReminderPlan.Reminder>, now: Long) {
+    /**
+     * Posts what is deliverable now and advances the watermark past it.
+     *
+     * [pushAllowed] gates the posting, not the watermark. Turning push off means "do not interrupt
+     * me", so what the app owes stops being announced; it does not mean the reminders queue up to
+     * arrive all at once when it is switched back on. That is the same reading the delivery grace
+     * window already takes of a device that was off overnight.
+     */
+    private fun deliver(
+        context: Context,
+        reminders: List<TaskReminderPlan.Reminder>,
+        now: Long,
+        pushAllowed: Boolean,
+    ) {
         val prefs = context.getSharedPreferences(Prefs, Context.MODE_PRIVATE)
         // A fresh install has no watermark. Starting it at "now" rather than 0 means the first
         // reconcile does not announce every reminder in the restored corpus at once.
         val deliveredThrough = prefs.getLong(KeyDeliveredThrough, now)
         val due = TaskReminderPlan.dueBetween(reminders, deliveredThrough, now)
-        // The watermark advances past everything whose moment has passed, including reminders that
-        // fell outside the grace window. They were missed; re-asking about them later is worse.
+        // The watermark advances past everything whose delivery moment has passed, including
+        // reminders that fell outside the grace window. They were missed; re-asking about them later
+        // is worse.
+        //
+        // Reading `deliverAt` rather than `triggerAt` is what makes a quiet-hours hold survive. A
+        // reminder owed at 02:00 and held to 07:00 has a `triggerAt` in the past on every pass in
+        // between, so a watermark built from trigger times would step over it during the night and
+        // the 07:00 alarm would find it already covered — the hold would have silently become a
+        // drop, which is the one outcome holding exists to avoid.
         val watermark = reminders.asSequence()
-            .map(TaskReminderPlan.Reminder::triggerAt)
+            .map(TaskReminderPlan.Reminder::deliverAt)
             .filter { it <= now }
             .maxOrNull()
             ?.coerceAtLeast(deliveredThrough)
             ?: deliveredThrough
         prefs.edit().putLong(KeyDeliveredThrough, maxOf(watermark, deliveredThrough)).apply()
-        if (due.isEmpty()) return
+        if (due.isEmpty() || !pushAllowed) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (!TaskReminderNotifier.canPost(context)) return
         NorfoldNotificationChannels.ensure(manager, NorfoldNotificationChannels.Tasks)
