@@ -34,6 +34,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Label
+import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.AreaChart
 import androidx.compose.material.icons.outlined.BarChart
@@ -41,10 +44,7 @@ import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.DonutLarge
 import androidx.compose.material.icons.outlined.InsertChart
 import androidx.compose.material.icons.outlined.Palette
-import androidx.compose.material.icons.outlined.ShowChart
 import androidx.compose.material.icons.outlined.TableChart
-import androidx.compose.material.icons.outlined.Label
-import androidx.compose.material.icons.outlined.List
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -279,7 +279,7 @@ fun ChartStudioSheet(
                         Text("Chart type", style = MaterialTheme.typography.titleMedium)
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ChartTypeButton("Line", Icons.Outlined.ShowChart, ChartType.LINE, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.LINE) } }
+                        ChartTypeButton("Line", Icons.AutoMirrored.Outlined.ShowChart, ChartType.LINE, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.LINE) } }
                         ChartTypeButton("Area", Icons.Outlined.AreaChart, ChartType.AREA, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.AREA) } }
                         ChartTypeButton("Bar", Icons.Outlined.BarChart, ChartType.BAR, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.BAR) } }
                         ChartTypeButton("Column", Icons.Outlined.InsertChart, ChartType.STACKED_BAR, document.type, readOnly) { edit("Change chart type") { it.copy(type = ChartType.STACKED_BAR) } }
@@ -291,9 +291,9 @@ fun ChartStudioSheet(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     ChartSettingRow(Icons.Outlined.Palette, "Appearance", "Colors, line style, gridlines") { sectionOrdinal = ChartStudioSection.STYLE.ordinal }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    ChartSettingRow(Icons.Outlined.List, "Legend", if (document.legend.visible) "Visible" else "Hidden") { sectionOrdinal = ChartStudioSection.LEGEND.ordinal }
+                    ChartSettingRow(Icons.AutoMirrored.Outlined.List, "Legend", if (document.legend.visible) "Visible" else "Hidden") { sectionOrdinal = ChartStudioSection.LEGEND.ordinal }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    ChartSettingRow(Icons.Outlined.Label, "Labels", "Axis titles, data labels") { sectionOrdinal = ChartStudioSection.LABELS.ordinal }
+                    ChartSettingRow(Icons.AutoMirrored.Outlined.Label, "Labels", "Axis titles, data labels") { sectionOrdinal = ChartStudioSection.LABELS.ordinal }
                 }
                 }
             if (colorStudio.engine.isOpen) {

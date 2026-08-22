@@ -88,6 +88,8 @@ import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.automirrored.outlined.Note
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Reply
+import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Done
 import androidx.compose.material.icons.outlined.DoneAll
@@ -227,8 +229,6 @@ import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ContentPaste
-import androidx.compose.material.icons.outlined.Undo
-import androidx.compose.material.icons.outlined.Reply
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Person
@@ -3182,7 +3182,7 @@ private fun ChatBubble(
                     Modifier.fillMaxSize().padding(horizontal = 18.dp),
                     contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart,
                 ) {
-                    Icon(Icons.Outlined.Reply, "Swipe to reply", tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.AutoMirrored.Outlined.Reply, "Swipe to reply", tint = MaterialTheme.colorScheme.primary)
                 }
             }
         },
@@ -3823,7 +3823,7 @@ private fun MessageActionsSheet(
                 }
                 androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
                 // Action rows — compact vertical padding
-                MessageActionRow(Icons.Outlined.Reply, "Reply", onClick = onReply)
+                MessageActionRow(Icons.AutoMirrored.Outlined.Reply, "Reply", onClick = onReply)
                 if (message.body.isNotBlank()) MessageActionRow(Icons.Outlined.ContentCopy, "Copy text", onClick = onCopy)
                 MessageActionRow(Icons.AutoMirrored.Outlined.Send, "Forward", onClick = onForward)
                 MessageActionRow(Icons.Outlined.Checklist, "Select", onClick = onSelect)
@@ -3836,7 +3836,7 @@ private fun MessageActionsSheet(
                 )
                 MessageActionRow(Icons.Outlined.Delete, "Delete for me", onClick = onDeleteForMe)
                 if (canReport) MessageActionRow(Icons.Outlined.Flag, "Report message", destructive = true, onClick = onReport)
-                if (canUnsend) MessageActionRow(Icons.Outlined.Undo, "Unsend for everyone", destructive = true, onClick = onUnsend)
+                if (canUnsend) MessageActionRow(Icons.AutoMirrored.Outlined.Undo, "Unsend for everyone", destructive = true, onClick = onUnsend)
             }
         }
     }

@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Notes
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Bolt
@@ -26,11 +28,9 @@ import androidx.compose.material.icons.filled.Functions
 import androidx.compose.material.icons.filled.Grid3x3
 import androidx.compose.material.icons.filled.HorizontalRule
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Schema
 import androidx.compose.material.icons.filled.Title
 import androidx.compose.material.icons.filled.Transform
-import androidx.compose.material.icons.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.FormatListNumbered
 import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.PostAdd
@@ -258,11 +258,11 @@ private fun railIcon(slot: FlowRailSlot): ImageVector = when (slot) {
 private fun commandIcon(id: String): ImageVector = when (id) {
     FlowIds.INSERT_IMAGE -> Icons.Filled.AddPhotoAlternate
     else -> when (kindOf(id)) {
-        FlowBlockKind.PARAGRAPH -> Icons.Filled.Notes
+        FlowBlockKind.PARAGRAPH -> Icons.AutoMirrored.Filled.Notes
         FlowBlockKind.HEADING_1, FlowBlockKind.HEADING_2, FlowBlockKind.HEADING_3,
         FlowBlockKind.HEADING_4, FlowBlockKind.HEADING_5, FlowBlockKind.HEADING_6,
         -> Icons.Filled.Title
-        FlowBlockKind.BULLET_LIST -> Icons.Outlined.FormatListBulleted
+        FlowBlockKind.BULLET_LIST -> Icons.AutoMirrored.Outlined.FormatListBulleted
         FlowBlockKind.NUMBERED_LIST -> Icons.Outlined.FormatListNumbered
         FlowBlockKind.TODO_LIST -> Icons.Filled.Checklist
         FlowBlockKind.QUOTE -> Icons.Outlined.FormatQuote
