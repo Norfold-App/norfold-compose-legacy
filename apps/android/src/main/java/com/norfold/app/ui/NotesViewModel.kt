@@ -124,6 +124,7 @@ import com.norfold.app.cloud.KlipyGif
 import com.norfold.app.data.ChatDrafts
 import com.norfold.app.data.ChatReadMarkers
 import com.norfold.app.data.ChatConversationPrefs
+import com.norfold.app.data.ConversationNotificationMirror
 import com.norfold.app.cloud.DocumentPresenceState
 import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.cloud.ChatMediaBackend
@@ -1893,6 +1894,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChatConversationMuted(channel: ChatChannel, muted: Boolean) {
         ChatConversationPrefs.setMuted(app, chatConversationPreferenceKey(channel), muted)
+        mirrorChatConversationPref(channel)
     }
 
     fun chatConversationNotificationLevel(channel: ChatChannel): ChatConversationPrefs.NotificationLevel =
@@ -1903,7 +1905,67 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         level: ChatConversationPrefs.NotificationLevel,
     ) {
         ChatConversationPrefs.setNotificationLevel(app, chatConversationPreferenceKey(channel), level)
+        mirrorChatConversationPref(channel)
     }
+
+    /**
+     * Sends this conversation's notification preference to the server, which is the only place it
+     * can actually stop a push being created. See [ConversationNotificationMirror] for why the
+     * device-local store makes this one exception, and why both halves travel together.
+     *
+     * Local write first, then this: the store is the source of truth and must not wait on a network
+     * call to reflect a tap. Both values are re-read from the store rather than passed in, so the
+     * pair is always internally consistent no matter which setter called — the RPC upserts both
+     * columns, and sending only the one that changed would clear the other.
+     *
+     * Only account conversations are mirrored. `conversation_notification_prefs.conversation_id`
+     * references `direct_conversations`, and a workspace channel has no row there, so the RPC would
+     * fail its membership check. Those stay device-local and are honoured at post time, which is
+     * where they have always been honoured.
+     *
+     * Quiet on failure, like every other social call: signed out, offline, or a backend that is not
+     * deployed are all ordinary states here, and none of them should put an error in front of
+     * someone who just muted a chat. The local preference is already saved and the device-side gate
+     * still reads it, so a failed mirror costs the server-side filter for this conversation until
+     * the next successful write — not the preference itself.
+     */
+    private fun mirrorChatConversationPref(channel: ChatChannel) {
+        val conversationId = channel.accountConversationId?.takeIf { it.isNotBlank() } ?: return
+        if (!NorfoldSupabase.isSignedIn()) return
+        val key = chatConversationPreferenceKey(channel)
+        val pref = ConversationNotificationMirror.toServer(
+            level = ChatConversationPrefs.notificationLevel(app, key),
+            muted = ChatConversationPrefs.isMuted(app, key),
+        )
+        conversationPrefMirrorsInFlight += conversationId
+        viewModelScope.launch {
+            runCatching {
+                NorfoldSocial.setConversationNotificationPref(
+                    conversationId = conversationId,
+                    level = pref.level,
+                    mutedUntil = pref.mutedUntil,
+                )
+            }
+            conversationPrefMirrorsInFlight -= conversationId
+        }
+    }
+
+    /**
+     * Conversations whose preference has been changed locally but whose write may not have landed on
+     * the server yet. [pullConversationNotificationPrefs] skips these.
+     *
+     * Without it, one ordinary sequence loses the owner's change: `blockContactRequest` mutes a
+     * conversation and then calls [refreshSocialGraph], and because both the mirror and the pull are
+     * coroutines on the same scope with no ordering between them, the pull can read the row as it was
+     * before the mute was written and copy that stale value straight back over it. The mute would
+     * appear to work and then undo itself, which is indistinguishable from the store not saving.
+     *
+     * A plain set is enough because it is only touched from the main dispatcher — `viewModelScope`
+     * without an explicit dispatcher is `Main.immediate`, so the add happens before the launch and
+     * the remove after the write, both on the same thread. Never cleared on failure, only after the
+     * attempt completes, so a conversation cannot get permanently pinned out of the pull.
+     */
+    private val conversationPrefMirrorsInFlight = mutableSetOf<String>()
 
     fun setChatChannelDefaultLifespan(channel: ChatChannel, seconds: Long?) = viewModelScope.launch {
         runCatching { repository.setChatChannelDefaultLifespan(channel.id, seconds) }
@@ -2302,6 +2364,43 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 // parent. Quiet on failure: the social backend may not be deployed yet.
                 conversations.forEach { convo -> runCatching { materializeAccountConversation(convo) } }
             }
+        pullConversationNotificationPrefs()
+    }
+
+    /**
+     * Brings this device's per-conversation notification preferences into line with the server's,
+     * which is how a mute set on a phone reaches a tablet.
+     *
+     * The server wins on a disagreement, and that is the whole point of pulling: it holds the value
+     * the owner set most recently on some device, while this one may hold a value from before it was
+     * last opened. There is no per-key timestamp to merge on — `updated_at` is a column on the row,
+     * not on either field — so last-writer-wins across the pair is the only rule available, and it
+     * matches what the owner sees, since the RPC always writes both fields together.
+     *
+     * No local row needs to exist. The key for an account conversation is built from the portable
+     * conversation id alone, so a preference lands correctly even for a conversation this device has
+     * not materialized yet, and is there the moment it does.
+     *
+     * Nothing is written for a conversation the server has no row for. Absence means "never set" and
+     * must not be read as "set to the default": that would silently unmute every conversation muted
+     * on this device before the mirror existed, which is the one outcome an install upgrading into
+     * this change must not produce.
+     *
+     * A conversation with a mirror still in flight is skipped, because the row this read returns may
+     * predate that write — see [conversationPrefMirrorsInFlight].
+     */
+    private suspend fun pullConversationNotificationPrefs() {
+        if (!NorfoldSupabase.isSignedIn()) return
+        val rows = runCatching { NorfoldSocial.conversationNotificationPrefs() }.getOrNull() ?: return
+        val now = System.currentTimeMillis()
+        rows.forEach { row ->
+            val conversationId = row.conversationId.takeIf { it.isNotBlank() } ?: return@forEach
+            if (conversationId in conversationPrefMirrorsInFlight) return@forEach
+            val key = ChatConversationPrefs.conversationKey(conversationId, null)
+            val local = ConversationNotificationMirror.toLocal(row.level, row.mutedUntil, now)
+            ChatConversationPrefs.setNotificationLevel(app, key, local.level)
+            ChatConversationPrefs.setMuted(app, key, local.muted)
+        }
     }
 
     fun saveMessageRequestPreferences(
@@ -3025,6 +3124,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                     repository.accountChannelId(request.conversationId)?.let { channelId ->
                         repository.chatChannelById(channelId)?.let { channel ->
                             ChatConversationPrefs.setMuted(app, chatConversationPreferenceKey(channel), true)
+                            // Mirrored even though `enqueue_account_chat_push` already returns early
+                            // for a blocked pair, so this changes nothing about delivery today. It is
+                            // sent to keep the two stores from disagreeing: the mute outlives the
+                            // block, and a device that only ever learned the block would show this
+                            // conversation unmuted the moment the owner unblocked them.
+                            mirrorChatConversationPref(channel)
                         }
                     }
                     emitInfo("Blocked. This request was hidden.")

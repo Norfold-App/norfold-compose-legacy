@@ -48,17 +48,26 @@ import com.norfold.app.domain.QuietHours
  * in Settings, so it suppresses `task*` pushes and leaves chat alone. Switching off task reminders
  * must not silently stop delivering the messages people send you.
  *
- * ## Why per-conversation mute is applied here rather than only on the server
+ * ## Why per-conversation mute is applied here as well as on the server
  *
- * The server already filters account chat by `conversation_notification_prefs`, but that table is
- * written by an API this app has never called — `setConversationNotificationPref` has no call
- * sites. The mute the owner can actually reach is [ChatConversationPrefs], which is device-local by
- * design and so has to be consulted at post time. Until now nothing did, and the permission dialog
- * promised that muting a conversation would apply. This is where that promise is kept.
+ * The server filters account chat by `conversation_notification_prefs`, and since
+ * [com.norfold.app.data.ConversationNotificationMirror] that table is actually written — for an
+ * account conversation the preference now suppresses the push before it is ever enqueued, which is
+ * stronger than anything this class can do. So the check below is no longer the only thing keeping
+ * the promise the permission dialog makes; it is the fallback for the cases the server cannot cover.
+ *
+ * Those cases are not edge cases. A workspace channel has no row in that table at all and is
+ * device-local by design. A preference changed while offline or signed out has not reached the
+ * server yet. And 'mentions' depends on this check entirely: the server says so in the migration —
+ * it cannot read ciphertext to find a mention, so it deliberately still delivers and leaves the
+ * decision here.
  *
  * Mute silences rather than suppresses, for the same reason quiet hours do: a muted conversation is
  * one the owner does not want to be interrupted by, not one whose messages they want deleted before
- * they can see them.
+ * they can see them. The server suppressing instead is not a contradiction — it prevents a
+ * notification rather than discarding a message, because messages arrive over the encrypted relay
+ * and not over FCM. [onMessageReceived] reconciles before consulting any preference for the same
+ * reason: a push is a hint to catch up, and catching up must not depend on being allowed to alert.
  */
 class NorfoldMessagingService : FirebaseMessagingService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

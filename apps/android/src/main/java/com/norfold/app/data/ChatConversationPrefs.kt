@@ -10,8 +10,17 @@ import android.content.Context
  * channel id.
  *
  * SharedPreferences rather than Room, for the same reasons as [ChatReadMarkers]:
- * these are device-local UI preferences, not workspace data — they don't sync,
- * don't back up, and writing one shouldn't touch the database.
+ * these are device-local UI preferences, not workspace data — they don't back up,
+ * and writing one shouldn't touch the database.
+ *
+ * They are not entirely device-local any more, and the exception is narrow enough
+ * to name here: for an *account* conversation, [ConversationNotificationMirror]
+ * copies the pair to the server after every write and reads it back on a social
+ * refresh. Not to make this a synced store, but because the server decides whether
+ * to create a push at all, and it cannot honour a preference it has never seen. A
+ * workspace channel is still purely local — the server has no row for one. This
+ * store stays the source of truth either way: a write lands here first and the
+ * mirror is quiet when it fails.
  */
 object ChatConversationPrefs {
     private const val Preferences = "norfold_chat_conversation_prefs"
