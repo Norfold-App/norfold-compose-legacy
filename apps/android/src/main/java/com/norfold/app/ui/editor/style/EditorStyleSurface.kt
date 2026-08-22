@@ -77,6 +77,7 @@ import com.norfold.app.editor.style.FontRowState
 import com.norfold.app.editor.style.FontBrowserSection
 import com.norfold.app.ui.components.NorfoldColorDot
 import com.norfold.app.ui.components.NorfoldColorSwatch
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 
 /** Actions are host-funnelled; this shared surface never mutates a document directly. */
@@ -624,7 +625,20 @@ private fun FontBrowserPanel(
                         )
                         Text(row.previewText, fontFamily = family, style = MaterialTheme.typography.bodyMedium)
                         row.substitutionLabel?.let {
-                            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            // The worst-measuring text in the audit: this is the line that tells the user the
+                            // font they picked cannot draw their script and something else is standing in for
+                            // it, and on the selected row's `secondaryContainer` the theme's `error` red
+                            // measured 2.7565:1 — below AA and below even the 3:1 a *non-text* element needs.
+                            // Red on lavender is close in luminance in a way red on the page is not, so the
+                            // token is fine where the theme put it and fails only on this baseline fill.
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NorfoldChrome.legibleInk(
+                                    MaterialTheme.colorScheme.error,
+                                    if (row.selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                                ),
+                            )
                         }
                     }
                     TextButton(

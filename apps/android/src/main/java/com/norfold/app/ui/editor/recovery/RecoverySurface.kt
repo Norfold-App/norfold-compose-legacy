@@ -52,6 +52,7 @@ import com.norfold.app.editor.recovery.RecoveryRestoreOutcome
 import com.norfold.app.editor.recovery.RecoveryRestorePrompt
 import com.norfold.app.editor.recovery.RecoveryRow
 import com.norfold.app.editor.recovery.RecoveryStorageReport
+import com.norfold.app.ui.NorfoldChrome
 
 /**
  * Compose invalidation adapter over [RecoveryBrowserRuntime].
@@ -346,9 +347,10 @@ private fun RecoveryRowItem(
 ) {
     // A damaged or too-new point is listed and labelled rather than hidden: a restore point that silently
     // disappears is indistinguishable from one that was never taken, and that is the more alarming belief.
+    val fill = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
     Surface(
         Modifier.fillMaxWidth(),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        color = fill,
         shape = MaterialTheme.shapes.medium,
     ) {
         Row(
@@ -369,7 +371,11 @@ private fun RecoveryRowItem(
                 Text(
                     row.detailLine(),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // This is the line that says a restore point is damaged or too new to use, and it was
+                    // the least readable when the row was selected — 3.9043:1 light, 3.4548:1 dark, against
+                    // 5.0502:1 unselected — because `onSurfaceVariant` is paired with the theme's surfaces
+                    // and `secondaryContainer` is Material's baseline. Same defect as the history row.
+                    color = NorfoldChrome.legibleInk(MaterialTheme.colorScheme.onSurfaceVariant, fill),
                 )
             }
             TextButton(onClick = onSelect, modifier = Modifier.heightIn(min = 48.dp)) { Text("Details") }

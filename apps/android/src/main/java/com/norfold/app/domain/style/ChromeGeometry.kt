@@ -158,6 +158,20 @@ object ChromeGeometry {
      */
     const val FOCUS_RING_RATIO = ContrastAnalysis.UI_COMPONENT
 
+    /**
+     * What *text* on chrome has to measure. The third of the three ratios, and the strictest.
+     *
+     * [RESTING_EDGE_RATIO] and [FOCUS_RING_RATIO] answer 1.4.11, which is about non-text things being
+     * findable. This one answers 1.4.3, which is about words being readable, and 1.4.3 does not negotiate
+     * below [ContrastAnalysis.AA_NORMAL] for anything under 18 pt. Every site that needs it is 11–13 sp, so
+     * the large-text relaxation never applies and there is no second value to pick.
+     *
+     * It is named here rather than read from [ContrastAnalysis] at the call site for the same reason the
+     * other two are: a ratio that appears as a bare `4.5` in a composable is a number the next reader has to
+     * re-derive. See [com.norfold.app.ui.NorfoldChrome.legibleInk] for what fails without it.
+     */
+    const val BODY_TEXT_RATIO = ContrastAnalysis.AA_NORMAL
+
     /** A focus ring sits outside the edge it decorates, so it needs weight the edge does not. */
     const val FOCUS_RING_WIDTH = 2f
 

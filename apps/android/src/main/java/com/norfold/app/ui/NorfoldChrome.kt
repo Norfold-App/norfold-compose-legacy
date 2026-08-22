@@ -172,6 +172,49 @@ object NorfoldChrome {
     )
 
     /**
+     * [ink] raised until it clears AA on [backdrop] — for text, not for chrome.
+     *
+     * The text sibling of [restingEdge] and [focusRing], and it exists because the theme's `on*` tokens are
+     * paired with the surfaces the theme *chose*, and a row that changes its fill on selection changes which
+     * surface its text is on without changing which token names its colour.
+     *
+     * **Six sites shipped that way, and on four of them selecting a row pushes its own secondary text below
+     * AA.** A history entry, a restore point, a device profile and a disabled row in the flow rail each paint
+     * `secondaryContainer` when selected or highlighted and read `onSurfaceVariant` for the line beneath the
+     * title: **3.9043:1 light and 3.4548:1 dark**, against 5.0502 / 5.0502 / 4.6385 / 4.9227 light on the same
+     * four rows unselected. So the row is *less* readable for being the one the user picked. The font list's
+     * substitution warning is worse still — `error` on that fill measures **2.7565:1**, below even the 3:1 a
+     * non-text element would need. The Eisenhower matrix fails from the other direction and **in light mode
+     * only**: two quadrants paint `errorContainer` and `tertiaryContainer` at 50% and their subtitles land at
+     * **4.3494:1** and **4.3053:1**, while the one quadrant filled with a theme-owned `surfaceVariant` passes
+     * at 4.6355:1 — which is the tell. The ink is correctly paired with the surfaces Norfold chose and fails
+     * only on the containers it inherited.
+     *
+     * [ChromeGeometry.BODY_TEXT_RATIO] rather than the chrome ratios, because this is text: 1.4.3 asks 4.5:1
+     * of anything under 18 pt, and every one of the six sites is 11–13 sp. Only lightness moves, so the ink
+     * stays recognisably the token it came from — across the six the hue shifts by at most 2.5° and the
+     * largest lightness move is 19 points, on the red that had furthest to go.
+     *
+     * **Why the caller passes the fill rather than letting it default.** These are conditional fills; the
+     * whole defect is that the painted colour and the named token disagree, so a call that names nothing
+     * resolves to the *container* and measures against a surface the text is not on. Pass the same expression
+     * the `Surface`'s `color` or the `background` gets. [resolvedBackdrop] then applies its three corrections,
+     * which is what makes the 50%-alpha quadrants measurable at all.
+     *
+     * Nothing here is a substitute for choosing a legible pair. Where the theme owns both colours it should
+     * pair them properly; this is for the case where the fill is Material's baseline and re-hueing it is a
+     * product decision rather than a fix.
+     */
+    @Composable
+    @ReadOnlyComposable
+    fun legibleInk(ink: Color, backdrop: Color = Color.Unspecified): Color =
+        EditorChromeColors.legible(
+            ink,
+            resolvedBackdrop(backdrop),
+            ChromeGeometry.BODY_TEXT_RATIO,
+        )
+
+    /**
      * [backdrop] turned into the colour that is actually on screen behind the chrome.
      *
      * Three corrections, applied in the order the renderer applies them:

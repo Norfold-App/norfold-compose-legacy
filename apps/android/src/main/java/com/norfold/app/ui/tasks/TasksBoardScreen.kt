@@ -195,6 +195,7 @@ import com.norfold.app.domain.WorkspaceFileItem
 import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.focusableChrome
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.feedback.NorfoldHaptic
@@ -2031,21 +2032,34 @@ private fun MatrixQuadrant(
     modifier: Modifier = Modifier,
     onTaskClick: (TaskItem) -> Unit,
 ) {
-    Surface(color = container.copy(alpha = 0.5f), shape = RoundedCornerShape(16.dp), modifier = modifier.height(268.dp).animateContentSize()) {
+    val fill = container.copy(alpha = 0.5f)
+    // Three lines of secondary text share this fill — the axis subtitle, the task count and the empty-state
+    // line — so they share one derived ink rather than three identical calls.
+    //
+    // Two of the four quadrants needed it, and **only in light mode**. "Do first" paints `errorContainer` and
+    // "Delegate" `tertiaryContainer`, both Material baseline colours the theme never set, and at 50% alpha
+    // over the light page `onSurfaceVariant` lands on them at 4.3494:1 and 4.3053:1 — while the dark baseline
+    // containers are dark enough that the same ink clears at 5.5662 and 5.4587. "Later" fills itself with the
+    // theme's own `surfaceVariant` and passes in both, 4.6355:1 light — which is the tell: the ink is
+    // correctly paired with the surfaces Norfold chose and not with the two it inherited. Deriving rather than
+    // re-hueing the containers keeps this correct either way, since the containers are a product decision and
+    // this is not.
+    val secondaryInk = NorfoldChrome.legibleInk(MaterialTheme.colorScheme.onSurfaceVariant, fill)
+    Surface(color = fill, shape = RoundedCornerShape(16.dp), modifier = modifier.height(268.dp).animateContentSize()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(title, fontWeight = FontWeight.Black)
-                    Text(subtitle, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, fontSize = 11.sp, color = secondaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text(tasks.size.toString(), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(tasks.size.toString(), fontWeight = FontWeight.Bold, color = secondaryInk)
             }
             Column(
                 modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 if (tasks.isEmpty()) {
-                    Text("Nothing here", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    Text("Nothing here", color = secondaryInk, fontSize = 12.sp)
                 }
                 tasks.forEach { task ->
                     Surface(

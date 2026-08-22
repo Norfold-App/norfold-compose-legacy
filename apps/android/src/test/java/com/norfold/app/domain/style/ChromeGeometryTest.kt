@@ -2083,5 +2083,403 @@ class ChromeGeometryTest {
         return (candidates.firstOrNull(File::isFile) ?: error("NorfoldChrome.kt not found")).readText()
     }
 
+    // ── Text on a fill the theme does not own ────────────────────────────────────────────────────────
+
+    /**
+     * The five Material container tokens `NorfoldTheme` never sets, recovered from the shipped artifact.
+     *
+     * Read out of `material3` 1.4.0's `PaletteTokens` bytecode rather than transcribed from a specification,
+     * because the specification's swatch names and the compiled constants are two different things and only one
+     * of them is painted. Light is the `*90` step of each palette and dark the `*30` step — which is the whole
+     * asymmetry the tests below turn on: the light containers are pale enough to fail against Norfold's own ink
+     * and the dark ones are dark enough to clear it.
+     *
+     * These sit apart from [lightSurfaces] and [darkSurfaces] because those are Norfold's, derived by the theme,
+     * and these are inherited. Task #67 derived the `surfaceContainer*` ramp and stopped there; every value here
+     * is one the theme still leaves on Material's baseline, which is why text drawn on them is measured against
+     * a hue the palette never chose.
+     */
+    private val baselineSecondaryContainerDark = 0x4A4458
+    private val baselineErrorContainer = 0xF9DEDC
+    private val baselineErrorContainerDark = 0x8C1D18
+    private val baselineTertiaryContainer = 0xFFD8E4
+    private val baselineTertiaryContainerDark = 0x633B48
+
+    /** `onSurfaceVariant` and `error`, the two inks these sites name, from `NorfoldTheme`. */
+    private val secondaryInk = 0x6C6D84
+    private val secondaryInkDark = 0x999DB0
+    private val errorInk = 0xEF4D5D
+    private val errorInkDark = 0xFF6471
+
+    /**
+     * One measured line of secondary text: what it is drawn on, and whether that fill is the theme's own.
+     *
+     * [themeOwned] is not decoration. It is the classification the whole finding rests on — every failing case
+     * is a fill Material chose and every passing case is a fill Norfold chose, and asserting that correlation is
+     * what distinguishes "the ink is wrong" from "the ink is right and two containers are foreign".
+     */
+    private data class InkCase(
+        val label: String,
+        val ink: ColorValue,
+        val fill: ColorValue,
+        val themeOwned: Boolean,
+    )
+
+    /**
+     * Every text-on-chrome site [com.norfold.app.ui.NorfoldChrome.legibleInk] was added for, in both modes.
+     *
+     * Four rows change their fill on selection or on the keyboard cursor — a history entry, a restore point, a
+     * device profile and a disabled row in the flow rail — and each is listed twice, once in each state, because
+     * the defect is only legible as a *pair*: the selected state failing while the unselected state passes is
+     * what shows the row became less readable for being the one the user picked. The font list's substitution
+     * warning is the same shape with `error` instead of `onSurfaceVariant`. The Eisenhower matrix is the reverse
+     * case — four quadrants that never change, two of them on baseline containers and two on colours the theme
+     * owns, which makes the fourth quadrant the control.
+     *
+     * The unselected fills are each the *real* host and not `surface` by default, which took tracing to get
+     * right. The history row's unselected fill is `surface`; the device profile's is `surfaceVariant` at 45%
+     * over the **page**, because `DeviceSettingsProfilesCard` sits directly in `BackupImportSettings`'s `Column`
+     * rather than inside a `SettingsGroup`, so no `LocalChromeContainer` is set; the flow rail's is
+     * `surfaceContainerLow`, which is what `ElevatedCard` fills itself with. Composited over `surface` instead,
+     * the device row measures 4.8028:1 rather than 4.6385:1 — both pass, so no verdict moves, but the figure in
+     * the documentation has to be the one the pixel produces.
+     */
+    private fun inkCases(): List<InkCase> = buildList {
+        val lightPageColor = hex(lightPage)
+        val darkPageColor = hex(0x070A12)
+        val lightInk = hex(secondaryInk)
+        val darkInk = hex(secondaryInkDark)
+        val selectedLight = hex(secondaryContainer)
+        val selectedDark = hex(baselineSecondaryContainerDark)
+
+        // The four conditional rows, selected. All four paint the same baseline `secondaryContainer`, so they
+        // measure identically — listed separately anyway because they are four independent call sites and a fix
+        // to one is not a fix to the others.
+        for (row in listOf("history row", "restore point row", "device profile row", "flow rail disabled row")) {
+            add(InkCase("$row selected light", lightInk, selectedLight, themeOwned = false))
+            add(InkCase("$row selected dark", darkInk, selectedDark, themeOwned = false))
+        }
+
+        // The same four rows unselected, each on its own real host.
+        add(InkCase("history row resting light", lightInk, ColorValue.WHITE, themeOwned = true))
+        add(InkCase("history row resting dark", darkInk, hex(0x0E131F), themeOwned = true))
+        add(InkCase("restore point row resting light", lightInk, ColorValue.WHITE, themeOwned = true))
+        add(InkCase("restore point row resting dark", darkInk, hex(0x0E131F), themeOwned = true))
+        add(
+            InkCase(
+                "device profile row resting light",
+                lightInk,
+                hex(0xF1F2F7).withAlphaFraction(0.45f).compositedOver(lightPageColor),
+                themeOwned = true,
+            ),
+        )
+        add(
+            InkCase(
+                "device profile row resting dark",
+                darkInk,
+                hex(0x151B28).withAlphaFraction(0.45f).compositedOver(darkPageColor),
+                themeOwned = true,
+            ),
+        )
+        add(InkCase("flow rail disabled row resting light", lightInk, hex(0xFBFCFF), themeOwned = true))
+        add(InkCase("flow rail disabled row resting dark", darkInk, hex(0x151B2B), themeOwned = true))
+
+        // The font substitution warning: the only site using `error` rather than `onSurfaceVariant`, and the
+        // worst-measuring text in the audit. Its resting state is `Color.Transparent` over whatever the sheet
+        // paints, so only the selected state is a fixed colour and only it is measured here.
+        add(InkCase("font substitution selected light", hex(errorInk), selectedLight, themeOwned = false))
+        add(InkCase("font substitution selected dark", hex(errorInkDark), selectedDark, themeOwned = false))
+
+        // The matrix, all four quadrants in both modes. `primaryContainer` is derived from the user's accent, so
+        // "Schedule" has no fixed colour to pin and is the one quadrant absent from this list.
+        for ((name, light, dark) in listOf(
+            Triple("matrix Do first", baselineErrorContainer, baselineErrorContainerDark),
+            Triple("matrix Delegate", baselineTertiaryContainer, baselineTertiaryContainerDark),
+        )) {
+            val lightFill = hex(light).withAlphaFraction(0.5f).compositedOver(lightPageColor)
+            val darkFill = hex(dark).withAlphaFraction(0.5f).compositedOver(darkPageColor)
+            add(InkCase("$name light", lightInk, lightFill, themeOwned = false))
+            add(InkCase("$name dark", darkInk, darkFill, themeOwned = false))
+        }
+        add(
+            InkCase(
+                "matrix Later light",
+                lightInk,
+                hex(0xF1F2F7).withAlphaFraction(0.5f).compositedOver(lightPageColor),
+                themeOwned = true,
+            ),
+        )
+        add(
+            InkCase(
+                "matrix Later dark",
+                darkInk,
+                hex(0x151B28).withAlphaFraction(0.5f).compositedOver(darkPageColor),
+                themeOwned = true,
+            ),
+        )
+    }
+
+    /**
+     * **The theme's `on*` inks fail AA on exactly the fills the theme does not own, and pass on every one it
+     * does.**
+     *
+     * This is the measured claim behind [com.norfold.app.ui.NorfoldChrome.legibleInk], and the correlation is
+     * the finding — not the failures on their own. Twelve of the twenty-four cases fail, and every single one is
+     * a Material baseline container; all ten theme-owned fills pass. So `onSurfaceVariant` is not a badly chosen
+     * ink. It is correctly paired with the surfaces `NorfoldTheme` picked, and the four rows that fail do so by
+     * *changing their fill to a foreign colour on selection* while their text keeps naming the token that was
+     * right before the change.
+     *
+     * The two inherited fills that nonetheless pass are the dark matrix quadrants, and they are the reason this
+     * finding is not mode-independent. Material's dark containers are the `*30` step of each palette, dark
+     * enough for the light ink to clear; the light ones are `*90` and pale. So an inherited container is not
+     * automatically a failure — which is why the assertion below is `0 theme-owned failures` rather than "all
+     * inherited cases fail", and why the light and dark figures are pinned separately throughout.
+     *
+     * Each figure is asserted individually rather than as a floor, because the spread is the evidence:
+     *
+     *  - the four selected rows — **3.9043:1** light, **3.4548:1** dark, against 5.0502 / 5.0502 / 4.6385 /
+     *    4.9227 light on the same rows resting. The selected state is the *worse* one, in both modes.
+     *  - the font substitution warning — **2.7565:1** light, **3.2375:1** dark. Below AA, and the light figure
+     *    is below even the 3:1 [ChromeGeometry.FOCUS_RING_RATIO] asks of a non-text element.
+     *  - the two baseline matrix quadrants — **4.3494:1** and **4.3053:1**, light **only**. Their dark
+     *    counterparts pass at 5.5662 and 5.4587.
+     *  - the fourth quadrant, `surfaceVariant` at the same 50% — **4.6355:1** light, 6.9090 dark, passing. Same
+     *    ink, same alpha, same page, theme-owned fill. This is the control.
+     *
+     * The 50% alphas are composited through [ColorValue.withAlphaFraction], which quantizes to 128/255 the way
+     * Compose's 8-bit channels do. That is not pedantry: at exact 0.5 the "Later" quadrant computes 4.6385 and
+     * "Delegate"'s dark fill lands one LSB away, and the substrate has already been caught once by a
+     * hand-computed `fg * a + bg * (1 - a)` disagreeing with the drawn pixel on the narrowest population.
+     */
+    @Test
+    fun `theme ink fails AA on every inherited container and passes on every theme-owned fill`() {
+        val measured = mutableMapOf<String, Double>()
+        var inheritedFailures = 0
+        var themeOwnedCases = 0
+        var ownedFailures = 0
+
+        for (case in inkCases()) {
+            val ratio = ContrastAnalysis.ratio(case.ink, case.fill)
+            measured[case.label] = ratio
+            if (case.themeOwned) themeOwnedCases++
+            if (ratio < ChromeGeometry.BODY_TEXT_RATIO) {
+                if (case.themeOwned) ownedFailures++ else inheritedFailures++
+            }
+        }
+
+        assertEquals("every text-on-chrome case the substrate was added for", 24, measured.size)
+        assertEquals(
+            "the ten theme-owned fills, asserted so the zero below is a population that was measured rather " +
+                "than a case list that stopped generating resting states",
+            10,
+            themeOwnedCases,
+        )
+        assertEquals(
+            "a theme-owned fill that fails AA is a different defect from this one — the pairing would be wrong " +
+                "rather than the container foreign, and it would need the palette fixed and not the ink derived",
+            0,
+            ownedFailures,
+        )
+        assertEquals("the twelve inherited-container failures", 12, inheritedFailures)
+
+        fun assertRatio(label: String, expected: Double) =
+            assertEquals(label, expected, measured.getValue(label), 0.0001)
+
+        // The four conditional rows: selected fails in both modes, resting passes in both.
+        for (row in listOf("history row", "restore point row", "device profile row", "flow rail disabled row")) {
+            assertRatio("$row selected light", 3.9043)
+            assertRatio("$row selected dark", 3.4548)
+        }
+        assertRatio("history row resting light", 5.0502)
+        assertRatio("history row resting dark", 6.8965)
+        assertRatio("restore point row resting light", 5.0502)
+        assertRatio("restore point row resting dark", 6.8965)
+        assertRatio("device profile row resting light", 4.6385)
+        assertRatio("device profile row resting dark", 6.9655)
+        assertRatio("flow rail disabled row resting light", 4.9227)
+        assertRatio("flow rail disabled row resting dark", 6.3783)
+
+        assertRatio("font substitution selected light", 2.7565)
+        assertRatio("font substitution selected dark", 3.2375)
+        assertTrue(
+            (
+                "the substitution warning measures %.4f:1 in light mode, which is below the 3:1 a non-text " +
+                    "element needs — the strongest single figure in this finding, and it must stay below it or " +
+                    "the claim in EditorStyleSurface is no longer true"
+                ).format(measured.getValue("font substitution selected light")),
+            measured.getValue("font substitution selected light") < ChromeGeometry.FOCUS_RING_RATIO,
+        )
+
+        assertRatio("matrix Do first light", 4.3494)
+        assertRatio("matrix Do first dark", 5.5662)
+        assertRatio("matrix Delegate light", 4.3053)
+        assertRatio("matrix Delegate dark", 5.4587)
+        assertRatio("matrix Later light", 4.6355)
+        assertRatio("matrix Later dark", 6.9090)
+    }
+
+    /**
+     * The derivation clears AA on all twenty-four, and moves nothing on the twelve that already passed.
+     *
+     * Both halves matter. Clearing the twelve is the fix; leaving the other twelve bit-identical is what makes
+     * the helper safe to route *every* one of these sites through rather than only the failing ones — a caller
+     * cannot know which state it is in, so `legibleInk` has to be a no-op when nothing is wrong.
+     * [ContrastAnalysis.suggestAccessible] returns its input unchanged when the ratio already clears, so this is
+     * an assertion about that contract holding on real paint and not about a coincidence.
+     *
+     * The ink stays recognisably the token it came from, and both bounds are asserted: across the fixed cases
+     * the hue moves at most **2.50°** and the lightness at most **19 points**, on the red that had furthest to
+     * go. Hue is the one worth pinning — only lightness is searched, but reading a hue back out of an 8-bit
+     * result is lossy, so "hue preserved" is a claim about the arithmetic that needs a measured bound rather
+     * than an assertion of zero.
+     *
+     * What this cannot see: that the sites *call* the helper. Six do, one per file, and no unit test can observe
+     * a `@Composable`'s colour argument — the arithmetic is pinned here and the call sites are pinned by the
+     * source scan below.
+     */
+    @Test
+    fun `deriving the ink clears AA everywhere and changes nothing that already passed`() {
+        var fixed = 0
+        var untouched = 0
+        var worstHueShift = 0.0
+        var largestLightnessMove = 0.0
+        var worstAfter = Double.MAX_VALUE
+
+        for (case in inkCases()) {
+            val before = ContrastAnalysis.ratio(case.ink, case.fill)
+            val derived = ContrastAnalysis.legibleChrome(case.ink, case.fill, ChromeGeometry.BODY_TEXT_RATIO)
+            val after = ContrastAnalysis.ratio(derived, case.fill)
+
+            assertTrue(
+                "%s measures %.4f:1 after derivation, still short of AA".format(case.label, after),
+                after >= ChromeGeometry.BODY_TEXT_RATIO,
+            )
+            worstAfter = minOf(worstAfter, after)
+
+            if (before >= ChromeGeometry.BODY_TEXT_RATIO) {
+                untouched++
+                assertEquals(
+                    (
+                        "%s already cleared AA at %.4f:1, so the ink must come back untouched — a caller " +
+                            "cannot know which state its row is in, so the helper has to be free when nothing " +
+                            "is wrong"
+                        ).format(case.label, before),
+                    case.ink,
+                    derived,
+                )
+            } else {
+                fixed++
+                val from = case.ink.toHsl()
+                val to = derived.toHsl()
+                val hueShift = abs(to.hue - from.hue).let { minOf(it, 360f - it) }
+                worstHueShift = maxOf(worstHueShift, hueShift.toDouble())
+                largestLightnessMove = maxOf(largestLightnessMove, abs(to.lightness - from.lightness) * 100.0)
+                assertFalse(
+                    (
+                        "%s failed at %.4f:1 and the derivation returned the same colour — the search found " +
+                            "nothing"
+                        ).format(case.label, before),
+                    derived == case.ink,
+                )
+            }
+        }
+
+        assertEquals("the twelve cases the derivation has to fix", 12, fixed)
+        assertEquals("the twelve it must leave alone", 12, untouched)
+        // A floor on the whole set, so a future palette cannot satisfy AA by a hair on the cases that needed
+        // work. The tightest is the substitution warning's light figure, which had the furthest to travel.
+        assertEquals("the tightest derived figure is the red at 4.5093:1", 4.5093, worstAfter, 0.0001)
+        assertEquals(
+            "only lightness is searched, but reading hue back out of an 8-bit result is lossy — the bound is " +
+                "what makes 'hue preserved' checkable",
+            2.50,
+            worstHueShift,
+            0.01,
+        )
+        assertEquals("the largest lightness move, on the red", 19.0, largestLightnessMove, 0.5)
+    }
+
+    /**
+     * Every one of the six sites passes its own fill rather than letting the backdrop default.
+     *
+     * The one mistake that would silently un-fix this. `legibleInk`'s `backdrop` defaults to
+     * `Color.Unspecified`, which `resolvedBackdrop` resolves to [com.norfold.app.ui.LocalChromeContainer] — the
+     * *container*, which is the colour these rows are drawn **inside** and not the colour they paint themselves.
+     * A one-argument call would therefore measure the ink against the sheet or the page while the text sits on
+     * `secondaryContainer`, produce a figure that looks fine, and change nothing on screen. That is the same
+     * class of silent pass `no chrome entry point defaults its backdrop to a theme colour` pins for the ring,
+     * and it is worth pinning separately because here the defaulting call *compiles and reads correctly*.
+     *
+     * Asserted from the source because the argument list of a `@Composable` call is not observable from a unit
+     * test. The six files are named individually rather than globbed: a seventh site is a decision someone
+     * should have to make deliberately, and this failing is the prompt to check they passed a fill.
+     */
+    @Test
+    fun `every legibleInk call site names the fill it paints`() {
+        val singleArgument = mutableListOf<String>()
+        var calls = 0
+
+        for (leaf in listOf(
+            "ui/editor/history/HistorySurface.kt",
+            "ui/editor/recovery/RecoverySurface.kt",
+            "ui/editor/style/EditorStyleSurface.kt",
+            "ui/editor/flow/FlowHostScreen.kt",
+            "ui/screens/SettingsScreen.kt",
+            "ui/tasks/TasksBoardScreen.kt",
+        )) {
+            val relative = "src/main/java/com/norfold/app/$leaf"
+            val candidates = listOf(File(relative), File("apps/android/$relative"))
+            val source = (candidates.firstOrNull(File::isFile) ?: error("$relative not found")).readText()
+            var index = source.indexOf("legibleInk(")
+            while (index >= 0) {
+                calls++
+                if (!argumentList(source, index + "legibleInk".length).contains(',')) {
+                    singleArgument += "$leaf: legibleInk with no backdrop"
+                }
+                index = source.indexOf("legibleInk(", index + 1)
+            }
+        }
+
+        assertEquals("the six text-on-chrome sites the helper exists for", 6, calls)
+        assertEquals(
+            "a legibleInk call with no backdrop measures the ink against LocalChromeContainer — the surface the " +
+                "row sits inside, not the one it paints — so it would report a passing figure and fix nothing",
+            emptyList<String>(),
+            singleArgument,
+        )
+    }
+
+    /**
+     * The text between a call's parentheses, with anything nested collapsed away.
+     *
+     * Parentheses are balanced rather than the argument list being read to the end of the line, and that is a
+     * correction: one of the six calls wraps its arguments across four lines, and `substringBefore("\n    ")`
+     * — a newline and an indent — cuts at the *first* newline, because every continuation line begins with more
+     * than four spaces. The multi-line call would have come back empty, contained no comma, and been reported as
+     * the very defect it is not. Depth-tracking is what makes "does this call have a second argument" a question
+     * about the call rather than about its formatting, and dropping nested arguments is what keeps a comma
+     * inside `MaterialTheme.colorScheme.error.copy(alpha = x, y)` from counting as this call's own.
+     */
+    private fun argumentList(source: String, openParenIndex: Int): String {
+        require(source[openParenIndex] == '(') { "not a call at $openParenIndex" }
+        val top = StringBuilder()
+        var depth = 0
+        var index = openParenIndex
+        while (index < source.length) {
+            val character = source[index]
+            when (character) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return top.toString()
+                }
+                else -> if (depth == 1) top.append(character)
+            }
+            index++
+        }
+        error("unbalanced parentheses from $openParenIndex")
+    }
+
     private fun hex(rgb: Int) = ColorValue.of((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF)
 }

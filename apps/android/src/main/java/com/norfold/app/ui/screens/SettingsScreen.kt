@@ -184,6 +184,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.rememberChromeFocus
 
@@ -2409,7 +2410,14 @@ private fun DeviceSettingsProfilesCard(
                         Text(
                             "${profile.deviceType} · ${profile.screenClass}${if (profile.deviceId == settings.settingsDeviceId) " · This device" else ""}",
                             fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            // The one line that says which of these rows is *this* device, and selecting a
+                            // row was making it harder to read: `onSurfaceVariant` measures 4.6385:1 on the
+                            // unselected 45%-alpha `surfaceVariant` — this card sits straight in the page's
+                            // `Column` with no `LocalChromeContainer`, so that is what the alpha composites
+                            // over — and 3.9043:1 on the selected `secondaryContainer`, which is Material's
+                            // baseline rather than a colour the theme paired this ink with. Tracking the fill
+                            // also handles the alpha, which `resolvedBackdrop` composites before measuring.
+                            color = NorfoldChrome.legibleInk(MaterialTheme.colorScheme.onSurfaceVariant, fill),
                         )
                     }
                     if (selectedProfile) Icon(Icons.Outlined.Check, "Selected", tint = MaterialTheme.colorScheme.primary)

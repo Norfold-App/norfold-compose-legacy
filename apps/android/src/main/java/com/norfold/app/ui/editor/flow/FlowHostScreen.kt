@@ -145,6 +145,7 @@ import com.norfold.app.editor.surface.DismissTrigger
 import com.norfold.app.editor.surface.SurfaceClass
 import com.norfold.app.editor.style.EditorStyleCommandIds
 import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.NorfoldChromeSurface
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.editor.style.EditorStyleSurface
@@ -1629,7 +1630,13 @@ private fun FlowSlashMenu(
                         Text(
                             row.reason ?: "Not available here",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            // The reason a command is unavailable, and the highlight was hiding it: on the
+                            // highlighted row's `secondaryContainer` this measured 3.9043:1 light and
+                            // 3.4548:1 dark, so the keyboard cursor landing on a disabled row made its
+                            // explanation the hardest line in the list to read. `rowFill` rather than the
+                            // `background` expression above, because it already resolves the unhighlighted
+                            // case to the card's own `surfaceContainerLow` instead of to transparency.
+                            color = NorfoldChrome.legibleInk(MaterialTheme.colorScheme.onSurfaceVariant, rowFill),
                         )
                     }
                 }

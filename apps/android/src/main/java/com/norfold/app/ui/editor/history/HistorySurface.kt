@@ -58,6 +58,7 @@ import com.norfold.app.editor.history.HistoryRuntime
 import com.norfold.app.editor.history.HistoryScope
 import com.norfold.app.editor.history.HistoryStepPlan
 import com.norfold.app.editor.presentation.PresentationMode
+import com.norfold.app.ui.NorfoldChrome
 
 /**
  * Compose invalidation adapter over [HistoryRuntime].
@@ -391,9 +392,10 @@ private fun HistoryRowItem(
     onSelect: () -> Unit,
     onUndoTo: () -> Unit,
 ) {
+    val fill = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
     Surface(
         Modifier.fillMaxWidth(),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        color = fill,
         shape = MaterialTheme.shapes.medium,
     ) {
         Row(
@@ -416,7 +418,12 @@ private fun HistoryRowItem(
                 Text(
                     entry.rowDetailLine(),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Selecting a row used to make its own detail line harder to read. `onSurfaceVariant`
+                    // is paired with the surfaces the theme picked, and `secondaryContainer` is not one of
+                    // them — it is Material's baseline, which this row paints only when selected. So the
+                    // line measured 5.0502:1 on the unselected `surface` and 3.9043:1 light / 3.4548:1 dark
+                    // the moment the user picked it. The ink now tracks the fill it is actually on.
+                    color = NorfoldChrome.legibleInk(MaterialTheme.colorScheme.onSurfaceVariant, fill),
                 )
             }
             TextButton(onClick = onSelect, modifier = Modifier.heightIn(min = 48.dp)) { Text("Details") }
