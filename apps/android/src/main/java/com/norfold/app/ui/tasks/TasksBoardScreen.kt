@@ -155,6 +155,9 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -1548,7 +1551,20 @@ private fun TaskTableDataCell(
                     Text("$progress%", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
                 checklistItems.take(4).forEach { item ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    // Read-only preview, so the row carries no toggle — and that is why the state has to be said
+                    // here. A `Checkbox` handed a null handler drops its role and its state along with its
+                    // interaction, so the tick was drawn and announced by nothing: a reader heard the item's text
+                    // and no indication of whether it was done. `stateDescription` on the merged row restores the
+                    // half that matters without claiming an interaction the cell does not offer. `clearAndSet`
+                    // rather than `semantics`, so the decorative checkbox stops contributing a second empty node.
+                    Row(
+                        modifier = Modifier.clearAndSetSemantics {
+                            contentDescription = item.text
+                            stateDescription = if (item.checked) "Done" else "Not done"
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
                         Checkbox(checked = item.checked, onCheckedChange = null, modifier = Modifier.size(22.dp))
                         Text(item.text, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

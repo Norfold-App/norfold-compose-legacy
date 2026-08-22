@@ -2,6 +2,7 @@ package com.norfold.app.domain.style
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -1678,6 +1679,236 @@ class ChromeGeometryTest {
         val relative = "src/main/java/com/norfold/app/ui/components/NorfoldPopup.kt"
         val candidates = listOf(File(relative), File("apps/android/$relative"))
         return (candidates.firstOrNull(File::isFile) ?: error("NorfoldPopup.kt not found")).readText()
+    }
+
+    /**
+     * Each radius-taking chrome modifier clips the ripple to the radius it was given.
+     *
+     * This is not a tidiness rule, it is the fix for a defect that shipped. `RippleAnimation.draw` bounds its
+     * expanding circle with `clipRect(0, 0, width, height)` — a *rectangle*. Nothing in the ripple knows about a
+     * rounded shape, so on a rounded row the ink paints square into the corners the row does not draw. Material
+     * never shows this because `Surface`'s internal helper *ends* in `.clip(shape)`, and a clip only bounds what
+     * is drawn after it; a chrome modifier arrives in the leading `modifier` argument, outside that clip. So the
+     * clip has to be inside the modifier, ahead of the interaction — which is what [clipToChrome] is.
+     *
+     * Asserted per-modifier and by order, because "contains a clip" is not the property that matters. A clip
+     * applied *after* the interaction modifier compiles, reads almost identically, and fixes nothing.
+     *
+     * `focusablePill` clips to `CircleShape` rather than through the helper: it has no radius to be given, since
+     * a pill resolves its own at layout time. Counted here as its own case rather than exempted, so that deleting
+     * its clip is a failure and not a silent gap in the pattern.
+     */
+    @Test
+    fun `every radius-taking chrome modifier clips the ripple before the interaction`() {
+        val source = chromeSource()
+        // Modifier name -> the interaction modifier whose ink the clip has to bound.
+        val expected = mapOf(
+            "focusableChrome" to ".clickable(",
+            "toggleableChrome" to ".toggleable(",
+            "selectableChrome" to ".selectable(",
+        )
+        val offenders = mutableListOf<String>()
+
+        for ((name, interaction) in expected) {
+            // The radius-taking overload is the one declaring `radiusDp: Float`; the Corner overload delegates
+            // to it and correctly has no clip of its own.
+            val body = source
+                .substringAfter("fun Modifier.$name(")
+                .let { it.substringBefore("\nfun Modifier.") }
+            val clip = body.indexOf(".clipToChrome(radiusDp)")
+            val ink = body.indexOf(interaction)
+            when {
+                clip < 0 -> offenders += "$name: no clipToChrome — its ripple paints square into the corners"
+                ink < 0 -> offenders += "$name: pattern no longer finds $interaction, so the order check is vacuous"
+                clip > ink -> offenders += "$name: clips after $interaction, which bounds nothing already drawn"
+            }
+        }
+
+        val pill = source.substringAfter("fun Modifier.focusablePill(").substringBefore("\nfun Modifier.")
+        val pillClip = pill.indexOf(".clip(CircleShape)")
+        val pillInk = pill.indexOf(".clickable(")
+        if (pillClip < 0 || pillInk < 0 || pillClip > pillInk) {
+            offenders += "focusablePill: must clip to CircleShape before .clickable("
+        }
+
+        assertEquals(
+            "a chrome modifier that does not clip ahead of its own interaction lets the ripple square off the " +
+                "corners of every row routed through it",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    /**
+     * No chrome call site clips before applying a chrome modifier.
+     *
+     * The mirror of the test above, and it exists because two call sites did. Once [clipToChrome] moved the clip
+     * inside the modifier, a caller's own `.clip(RoundedCornerShape(r))` immediately ahead of it became dead
+     * weight: same radius, same shape, one modifier earlier in the same chain. Dead weight is not harmless here —
+     * it reads as though the substrate needs help, which is what invites the next call site to add a clip at a
+     * radius that does *not* match and to quietly reintroduce the corner defect.
+     *
+     * Scoped to a clip that directly precedes the chrome modifier. A clip elsewhere in a chain is ordinary
+     * layout: [com.norfold.app.ui.screens.WorkspaceVisualDialog]'s covers, avatars and tiles all clip and none of
+     * them are chrome.
+     */
+    @Test
+    fun `no chrome call site clips ahead of the modifier that clips for it`() {
+        val chrome = Regex("""\.(focusableChrome|toggleableChrome|selectableChrome|focusablePill)\(""")
+        val offenders = mutableListOf<String>()
+
+        for ((path, source) in chromeCallerSources()) {
+            for (match in chrome.findAll(source)) {
+                // Whitespace and a newline are all that may sit between a clip and the chrome modifier for the
+                // clip to be the redundant one. Anything else in between is a different modifier doing real work.
+                val before = source.substring(maxOf(0, match.range.first - 120), match.range.first)
+                if (Regex("""\.clip\([^\n]*\)\s*$""").containsMatchIn(before)) {
+                    val line = source.substring(0, match.range.first).count { it == '\n' } + 1
+                    offenders += "$path:$line clips immediately before ${match.groupValues[1]}"
+                }
+            }
+        }
+
+        assertEquals(
+            "the chrome modifier already clips to the radius it is given, so a caller's clip is redundant at " +
+                "best and a second, disagreeing radius at worst",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    /**
+     * Every row that hands its indicator a null handler puts the semantics on the row.
+     *
+     * Passing `null` to a `Switch`, `Checkbox` or `RadioButton` is what makes it decorative, and it is half of a
+     * pair: the row must then carry the name, the role and the state, because the control no longer carries any
+     * of them. Half of the pair alone is worse than neither — a decorative control with a plain `clickable` row
+     * announces a name and no state, which reads to a screen reader as an ordinary button and gives no way to
+     * tell an enabled setting from a disabled one.
+     *
+     * The check accepts a hand-rolled `toggleable`/`selectable` as readily as the substrate modifier. Four rows
+     * are deliberately hand-rolled — `SettingsToggleRow`, the palette tile, the accent swatch, `DocumentTodoMarker`
+     * — and this invariant is about the semantics, not about which composable supplies them.
+     *
+     * A `stateDescription` counts too, and that is the answer for a row with no interaction to offer. The task
+     * table's checklist preview is read-only: making its rows toggleable would announce an action the cell does
+     * not have. What it owed was the state, which a null-handled `Checkbox` no longer reports — so it says the
+     * state directly and this test accepts that as carrying the half that was missing.
+     *
+     * Positional nulls are why the search is for the control rather than for `onCheckedChange = null`. Several of
+     * these rows write `RowSwitch(checked, null)` with no parameter name at all, and a pattern keyed on the name
+     * reports them as compliant while seeing nothing.
+     */
+    @Test
+    fun `every decorative selection control sits on a row that carries its semantics`() {
+        val decorative = Regex(
+            """(?:RowSwitch|Switch|Checkbox|RadioButton)\(\s*(?:checked\s*=\s*|selected\s*=\s*)?[^(){}]*?,\s*""" +
+                """(?:onCheckedChange\s*=\s*|onClick\s*=\s*)?null\s*[,)]""",
+        )
+        val carrier = Regex(
+            """\.(toggleableChrome|selectableChrome|toggleable|selectable)\(|stateDescription\s*=""",
+        )
+        val offenders = mutableListOf<String>()
+        var rows = 0
+
+        for ((path, source) in chromeCallerSources()) {
+            for (match in decorative.findAll(source)) {
+                rows++
+                // The row's modifier chain is written above the control it contains, so the window looks back.
+                val window = source.substring(maxOf(0, match.range.first - 1400), match.range.first)
+                if (!carrier.containsMatchIn(window)) {
+                    val line = source.substring(0, match.range.first).count { it == '\n' } + 1
+                    offenders += "$path:$line a decorative control whose row carries neither a toggle nor a state"
+                }
+            }
+        }
+
+        assertEquals(
+            "a control passed null stops reporting its own role and state, so a row that does not carry them " +
+                "leaves the setting announced as a nameless button",
+            emptyList<String>(),
+            offenders,
+        )
+        // A floor, not a count: these rows are expected to keep arriving, and the assertion above is vacuously
+        // green on an empty list if the pattern ever stops matching a control declaration.
+        assertTrue(
+            "only $rows decorative controls matched — the pattern has stopped finding them, so the check above " +
+                "is passing over nothing",
+            rows >= 12,
+        )
+    }
+
+    /**
+     * `SettingsToggleRow` stays unclipped, and that is a decision rather than an oversight.
+     *
+     * It is the one selection row that must not be routed through the substrate, because the substrate clips. Its
+     * rows stack flush inside `SettingsGroup`, which clips the *group* at 20 dp: the middle rows are square and
+     * only the first and last are rounded, following the group's radius rather than any radius of their own.
+     * Clipping each row at `Corner.Card` would round four corners the user sees as straight, on every row of
+     * every Settings group in the app. The group's own clip already bounds the ripple, so there is nothing for a
+     * per-row clip to fix.
+     *
+     * Pinned because the pressure runs the other way. Every other row in these files now reads as one modifier,
+     * and this one reads as six — so it looks like the conversion someone forgot, and the reason it was not
+     * converted lives only in a comment.
+     */
+    @Test
+    fun `the grouped settings toggle row is not routed through the clipping substrate`() {
+        val body = settingsKitSource()
+            .substringAfter("fun SettingsToggleRow(")
+            .substringBefore("\n}\n")
+
+        assertTrue(
+            "the anchors no longer bound SettingsToggleRow's body, so every assertion below is vacuous",
+            body.length in 300..2000 && body.contains("RowSwitch("),
+        )
+        assertFalse(
+            "SettingsToggleRow must not use toggleableChrome: it would clip each row at Corner.Card, rounding " +
+                "the flush edges every middle row of a SettingsGroup draws straight",
+            body.contains("toggleableChrome"),
+        )
+        assertFalse(
+            "SettingsToggleRow must not clip either — SettingsGroup clips the group, and a per-row clip rounds " +
+                "corners the group deliberately leaves square",
+            Regex("""\.clip\(""").containsMatchIn(body),
+        )
+        assertTrue(
+            "it must still be toggleable, or the row stops carrying the name, role and state its switch gave up",
+            body.contains(".toggleable("),
+        )
+        assertTrue(
+            "and it must still ring inward, because SettingsGroup would clip an outward ring away on the first " +
+                "and last row of every group",
+            body.contains("ringInward") || body.contains("ring("),
+        )
+    }
+
+    /** The files holding every chrome call site these invariants are asserted over. */
+    private fun chromeCallerSources(): List<Pair<String, String>> =
+        listOf(
+            "ui/components/ChartBuilderSheet.kt",
+            "ui/components/SettingsKit.kt",
+            "ui/components/NorfoldComponents.kt",
+            "ui/screens/SettingsScreen.kt",
+            "ui/screens/WorkspaceScreens.kt",
+            "ui/screens/WorkspaceVisualDialog.kt",
+            "ui/screens/OnboardingScreen.kt",
+            "ui/tasks/TasksBoardScreen.kt",
+            "ui/editor/chart/ChartStudioSheet.kt",
+            "ui/editor/image/ImageFocusSheet.kt",
+            "ui/editor/shape/ShapeBuilderSheet.kt",
+            "ui/components/MathBuilderSheet.kt",
+        ).map { leaf ->
+            val relative = "src/main/java/com/norfold/app/$leaf"
+            val candidates = listOf(File(relative), File("apps/android/$relative"))
+            leaf to (candidates.firstOrNull(File::isFile) ?: error("$relative not found")).readText()
+        }
+
+    /** The grouped-settings design system, for the one row that deliberately opts out of the substrate. */
+    private fun settingsKitSource(): String {
+        val relative = "src/main/java/com/norfold/app/ui/components/SettingsKit.kt"
+        val candidates = listOf(File(relative), File("apps/android/$relative"))
+        return (candidates.firstOrNull(File::isFile) ?: error("SettingsKit.kt not found")).readText()
     }
 
     /**
