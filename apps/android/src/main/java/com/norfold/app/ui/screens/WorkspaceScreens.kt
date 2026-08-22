@@ -901,7 +901,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                 // A day boundary breaks the author run: the chip sits between the groups and the
                 // first message after it gets its full header again.
                 val newDay = prev == null || !sameDay(prev.createdAt, chat.createdAt)
-                val firstOfGroup = newDay || prev?.authorUsername != chat.authorUsername
+                val firstOfGroup = newDay || prev.authorUsername != chat.authorUsername
                 val lastOfGroup = next == null || next.authorUsername != chat.authorUsername || !sameDay(chat.createdAt, next.createdAt)
                 if (index == firstUnreadIndex) {
                     Row(
@@ -2007,7 +2007,7 @@ private fun ConversationDetailsSheet(
         convoMessages, channel?.id, state.workspaceMembers, governedMembers, governedWorkspaceMembers,
     ) {
         when {
-            isDm -> listOf(channel!!.counterpartUsername to channel.counterpartUsername)
+            isDm -> listOf(channel.counterpartUsername to channel.counterpartUsername)
             channel?.kind == ChatChannelKind.Group && governedMembers.isNotEmpty() ->
                 governedMembers.map { it.handle.orEmpty() to it.displayName.ifBlank { it.handle.orEmpty() } }
             governedWorkspaceMembers.isNotEmpty() ->
@@ -2130,7 +2130,7 @@ private fun ConversationDetailsSheet(
                 Text(title, fontWeight = FontWeight.Black, fontSize = 21.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(kindLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                 if (isDm) {
-                    val status = presence.firstOrNull { it.username.equals(channel!!.counterpartUsername, true) }?.availability
+                    val status = presence.firstOrNull { it.username.equals(channel.counterpartUsername, true) }?.availability
                     PresenceLine(status)
                 }
             }
@@ -2141,7 +2141,7 @@ private fun ConversationDetailsSheet(
             ) {
                 if (isDm) {
                     DetailActionChip(Icons.Outlined.Person, "Profile", Modifier.weight(1f)) {
-                        onOpenProfile(channel!!.counterpartUsername, title)
+                        onOpenProfile(channel.counterpartUsername, title)
                     }
                 }
                 DetailActionChip(
@@ -3485,7 +3485,7 @@ private fun groupChatMessages(messages: List<ChatMessageItem>): List<List<ChatMe
             previous.authorUsername.equals(message.authorUsername, ignoreCase = true) &&
             previous.channelId == message.channelId && sameDay(previous.createdAt, message.createdAt) &&
             message.createdAt - previous.createdAt in 0..60_000L
-        if (joinsPrevious) previousGroup!!.add(message) else result += mutableListOf(message)
+        if (joinsPrevious) previousGroup.add(message) else result += mutableListOf(message)
     }
     return result
 }

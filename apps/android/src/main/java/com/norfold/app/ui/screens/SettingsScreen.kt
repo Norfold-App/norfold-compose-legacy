@@ -46,7 +46,6 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Bedtime
-import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.CloudOff
@@ -57,11 +56,9 @@ import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.FileUpload
-import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.ImportExport
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Groups
-import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Lock
@@ -1644,7 +1641,7 @@ private fun ScalePreferenceEditor(
                     val numeric = raw.toFloatOrNull()
                     val inRange = numeric != null && numeric in 50f..200f
                     onValidity(setting, inRange)
-                    if (inRange) onValue(numeric!! / 100f)
+                    if (inRange) onValue(numeric / 100f)
                 },
                 modifier = Modifier
                     .widthIn(min = 88.dp, max = 104.dp),
@@ -2031,10 +2028,14 @@ private fun SyncSettings(
                     when (val phase = emailAuthPhase) {
                         is EmailAuthPhase.AwaitSignupCode,
                         is EmailAuthPhase.AwaitRecoveryCode -> {
+                            // No `else` on purpose. The outer branch admits exactly these two
+                            // phases, so this is already exhaustive by smart cast. An `else ""`
+                            // here would mean a third code-bearing phase added to the branch above
+                            // silently renders "code sent to " with no address, instead of failing
+                            // to compile until someone supplies its email.
                             val target = when (phase) {
                                 is EmailAuthPhase.AwaitSignupCode -> phase.email
                                 is EmailAuthPhase.AwaitRecoveryCode -> phase.email
-                                else -> ""
                             }
                             Text("Enter the 6-digit code sent to $target", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("Verification code") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())

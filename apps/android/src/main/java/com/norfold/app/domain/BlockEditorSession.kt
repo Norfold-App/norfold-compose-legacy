@@ -621,7 +621,7 @@ class BlockEditorSession(initial: BlockDocument) {
             deletedBlockIds += containerId
             container.children.forEach { child -> document.rootAncestorId(child.id)?.let { dirtyBlockIds += it } }
         } else {
-            parentId?.let { document.rootAncestorId(it) }?.let { dirtyBlockIds += it }
+            document.rootAncestorId(parentId)?.let { dirtyBlockIds += it }
         }
     }
 

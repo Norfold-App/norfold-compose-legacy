@@ -883,6 +883,15 @@ private fun FlowHtmlBlock(
                         modifier = Modifier.fillMaxWidth().height(FlowSizePolicy.SOURCE_PANE.clamp(block.editorHeightDp).dp)
                             .semantics { contentDescription = "Sandboxed HTML preview" },
                         factory = { androidContext ->
+                            // Three of these setters are deprecated as of API 36 and are kept
+                            // deliberately. Each one closes a hole rather than opening a feature, and
+                            // `minSdk` is 26 — on the older platforms in that range the framework
+                            // default is not guaranteed to be the safe value, so dropping the call to
+                            // silence a warning would widen the sandbox on exactly the devices least
+                            // able to defend themselves. A deprecated *tightening* call is still a
+                            // tightening call; it is removed when `minSdk` rises past the versions
+                            // that need it, not when the warning appears.
+                            @Suppress("DEPRECATION")
                             WebView(androidContext).apply {
                                 settings.javaScriptEnabled = false
                                 settings.javaScriptCanOpenWindowsAutomatically = false

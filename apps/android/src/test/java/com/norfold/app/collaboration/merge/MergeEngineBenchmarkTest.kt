@@ -20,6 +20,12 @@ import org.junit.Test
  */
 class MergeEngineBenchmarkTest {
 
+    // The two engines below are `@Deprecated("Inactive benchmark candidate")` precisely so that
+    // production code cannot reach for them. This test is the one caller that is *supposed* to:
+    // measuring an inactive candidate is what the file exists for, and the conformance sweep is
+    // only meaningful if it covers every registered engine rather than the convenient ones. The
+    // suppression is therefore scoped to the registry, not to the file.
+    @Suppress("DEPRECATION")
     private val engines: List<CollaborationMergeEngine> = listOf(
         NoOpMergeEngine(),
         SemanticOpSetMergeEngine(),
@@ -160,6 +166,7 @@ class MergeEngineBenchmarkTest {
         assertTrue("superseded register history must compact", snapshot.bytes.size < 64 * 1024)
     }
 
+    @Suppress("DEPRECATION")
     @Test fun `Automerge engine benchmark (skipped if library absent)`() {
         val engine = AutomergeMergeEngine()
         if (!isAvailable(engine)) {
@@ -169,6 +176,7 @@ class MergeEngineBenchmarkTest {
         runThroughputBenchmark(engine, n = 1_000)
     }
 
+    @Suppress("DEPRECATION")
     @Test fun `Yjs engine benchmark (skipped if library absent)`() {
         val engine = YjsMergeEngine()
         if (!isAvailable(engine)) {

@@ -852,7 +852,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 val changed = local != null && remote.serverVersion > existingBinding.remoteVersion
                 if (changed) {
                     dao.insertChatMessage(
-                        local!!.copy(
+                        local.copy(
                             body = content["body"]?.jsonPrimitive?.contentOrNull ?: local.body,
                             replyPreview = content["replyPreview"]?.jsonPrimitive?.contentOrNull,
                             editedAt = content["editedAt"]?.jsonPrimitive?.longOrNull,

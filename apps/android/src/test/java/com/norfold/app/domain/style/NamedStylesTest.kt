@@ -458,7 +458,7 @@ class NamedStylesTest {
         try {
             java.util.Locale.setDefault(java.util.Locale.forLanguageTag("de-DE"))
             val value = StyleValue.of(12.5f)
-            assertEquals("12.5", (value as StyleValue.Literal).text)
+            assertEquals("12.5", value.text)
             assertEquals(12.5f, value.text.toFloat(), 0.0001f)
         } finally {
             java.util.Locale.setDefault(previous)

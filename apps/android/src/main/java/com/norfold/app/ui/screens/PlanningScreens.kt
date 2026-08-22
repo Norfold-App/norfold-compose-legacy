@@ -417,7 +417,7 @@ private fun WeekPanel(
                                 ) {
                                     if (band.busy) {
                                         timed
-                                            .filter { it.date == day && it.time!!.hour >= band.startHour && it.time!!.hour < band.endHour }
+                                            .filter { it.date == day && it.time!!.hour in band.startHour until band.endHour }
                                             .forEach { event -> WeekEventChip(event, onEventClick) }
                                     }
                                 }
