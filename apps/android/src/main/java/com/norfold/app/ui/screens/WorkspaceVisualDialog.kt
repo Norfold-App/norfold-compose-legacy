@@ -8,7 +8,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,7 +33,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,7 +56,7 @@ import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.components.RowSwitch
-import com.norfold.app.ui.rememberChromeFocus
+import com.norfold.app.ui.toggleableChrome
 
 enum class WorkspaceVisualTab { Identity, CoverPermissions }
 
@@ -390,7 +388,7 @@ private fun EmojiPickerGrid(selected: String, onPick: (String) -> Unit) {
 /**
  * One workspace permission: a label and a switch, activated anywhere along the row.
  *
- * The row is `toggleable` rather than `clickable`, and the [RowSwitch] is decorative. Before, both were live,
+ * The row carries the toggle rather than a plain click, and the [RowSwitch] is decorative. Before, both were live,
  * which made each permission two accessibility nodes — the row named it without stating it, the switch stated it
  * without naming it — because Compose's semantics merge stops at any descendant that merges, and every Material
  * selection control does. Three of these stack here, so a screen reader met three unnamed switches. The same
@@ -404,25 +402,21 @@ private fun EmojiPickerGrid(selected: String, onPick: (String) -> Unit) {
  * [com.norfold.app.ui.components.NorfoldDialog] announces — so nothing here names a colour, and the row stays
  * correct if the dialog's container token changes.
  *
- * `heightIn(min = 48.dp)` replaces the floor Material was attaching to the switch, which its null handler
- * removes along with the interaction. It is load-bearing here: this row has no padding of its own.
+ * [com.norfold.app.ui.toggleableChrome]'s 48 dp floor replaces the one Material was attaching to the switch,
+ * which its null handler removes along with the interaction. It is load-bearing here: this row has no padding of
+ * its own.
  */
 @Composable
 private fun PermissionRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val focus = rememberChromeFocus()
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
-            .toggleable(
-                value = checked,
-                interactionSource = focus.source,
-                indication = ripple(),
+            .toggleableChrome(
+                checked = checked,
+                corner = Corner.Media,
                 role = Role.Switch,
                 onValueChange = onChange,
-            )
-            .then(focus.ring(Corner.Media)),
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {

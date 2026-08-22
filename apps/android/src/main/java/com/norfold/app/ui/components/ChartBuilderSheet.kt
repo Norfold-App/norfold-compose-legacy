@@ -26,8 +26,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -75,6 +73,8 @@ import com.norfold.app.domain.ChartSpecCodec
 import com.norfold.app.domain.ChartType
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.ImageBlock
+import com.norfold.app.ui.selectableChrome
+import com.norfold.app.ui.toggleableChrome
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -236,10 +236,11 @@ fun ChartBuilderSheet(
  *
  * Before, the `Text` and the `Switch` were two independent children of a plain `Row` with nothing joining them,
  * so a screen reader heard "Legend" and then, separately, an unnamed switch — the name on one node, the role and
- * state on another. `toggleable` on the row makes it one node carrying all three, and the [RowSwitch] becomes
- * decorative. [com.norfold.app.ui.components.SettingsToggleRow] documents why passing `null` is what makes that
- * work, and why the 48 dp floor has to be restated here: Material gates the switch's whole interaction modifier
- * — `minimumInteractiveComponentSize` included — on that handler being non-null.
+ * state on another. [com.norfold.app.ui.toggleableChrome] on the row makes it one node carrying all three, and the
+ * [RowSwitch] becomes decorative. [com.norfold.app.ui.components.SettingsToggleRow] documents why passing `null`
+ * is what makes that work, and why a 48 dp floor is needed at all: Material gates the switch's whole interaction
+ * modifier — `minimumInteractiveComponentSize` included — on that handler being non-null. That modifier applies
+ * the floor, so this call site does not restate it.
  *
  * The floor is load-bearing rather than defensive. This row has no padding of its own, so the switch's own
  * touch-target box was the only thing holding it open; without the constraint the line would collapse toward the
@@ -251,20 +252,15 @@ fun ChartBuilderSheet(
  */
 @Composable
 private fun LegendToggleRow(checked: Boolean, onChange: (Boolean) -> Unit) {
-    val focus = rememberChromeFocus()
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(ChromeGeometry.Corner.Media.radiusDp.dp))
-            .toggleable(
-                value = checked,
-                interactionSource = focus.source,
-                indication = ripple(),
+            .toggleableChrome(
+                checked = checked,
+                corner = ChromeGeometry.Corner.Media,
                 role = Role.Switch,
                 onValueChange = onChange,
-            )
-            .then(focus.ring(ChromeGeometry.Corner.Media)),
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("Legend", Modifier.weight(1f))
@@ -279,14 +275,14 @@ private fun LegendToggleRow(checked: Boolean, onChange: (Boolean) -> Unit) {
  * — which produced two accessibility nodes for one option: a row carrying "As image" with no selection state,
  * then an indicator carrying the state with no name. Compose does not fold the second into the first, because
  * its merge walk stops descending at any child that merges and every Material selection control merges.
- * `selectable` gives one node with the label as its name, `Role.RadioButton` as its role, and the selection as
- * its state; `selectableGroup` on the parent row then announces the pair as one exclusive choice with a position
- * rather than as two unrelated controls.
+ * [com.norfold.app.ui.selectableChrome] gives one node with the label as its name, `Role.RadioButton` as its
+ * role, and the selection as its state; `selectableGroup` on the parent row then announces the pair as one
+ * exclusive choice with a position rather than as two unrelated controls.
  *
  * The indicator keeps drawing from [selected]; only its interaction is gone, which also removes the 48 dp floor
- * Material was attaching to it — hence `heightIn` here. The label wraps to two lines on a narrow sheet ("As
- * editable chart" beside a 20 dp indicator in half the sheet's width), so this is a minimum rather than a fixed
- * height.
+ * Material was attaching to it. That modifier restores the floor as a minimum rather than a fixed height, which
+ * is what this row needs: the label wraps to two lines on a narrow sheet ("As editable chart" beside a 20 dp
+ * indicator in half the sheet's width).
  */
 @Composable
 private fun PlacementOption(
@@ -295,19 +291,13 @@ private fun PlacementOption(
     modifier: Modifier = Modifier,
     onSelect: () -> Unit,
 ) {
-    val focus = rememberChromeFocus()
     Row(
         modifier
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(ChromeGeometry.Corner.Media.radiusDp.dp))
-            .selectable(
+            .selectableChrome(
                 selected = selected,
-                interactionSource = focus.source,
-                indication = ripple(),
-                role = Role.RadioButton,
+                corner = ChromeGeometry.Corner.Media,
                 onClick = onSelect,
-            )
-            .then(focus.ring(ChromeGeometry.Corner.Media)),
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected, null)

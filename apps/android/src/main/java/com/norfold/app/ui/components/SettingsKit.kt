@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
@@ -52,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.LocalChromeContainer
 import com.norfold.app.ui.rememberChromeFocus
+import com.norfold.app.ui.selectableChrome
 
 /**
  * Shared iOS-style "grouped rows" design system used across every Settings screen,
@@ -233,6 +233,13 @@ fun SettingsRow(
  *
  * The focus ring is inward at [Corner.Card], for the same structural reason [SettingsRow] gives: [SettingsGroup]
  * clips its children, so an outward ring would be cut away on the first and last row of every group.
+ *
+ * **Why this is wired by hand rather than through [com.norfold.app.ui.toggleableChrome].** That modifier also
+ * clips the ripple to the radius it is given, which is right for a row that is its own rounded surface and wrong
+ * for this one. These rows are stacked flush inside [SettingsGroup], which clips the whole group at 20 dp: the
+ * rows in the middle are square, and the first and last follow the *group's* radius, not a row radius. Clipping
+ * each row at [Corner.Card] would round four corners that the user sees as straight. The group's own clip already
+ * bounds the ripple correctly, so there is nothing left for a per-row clip to fix.
  */
 @Composable
 fun SettingsToggleRow(
@@ -478,19 +485,21 @@ fun EditFieldDialog(
  *
  * ## One node per option, and a group around them
  *
- * The row is `selectable`, not `clickable`, and the [RadioButton] is passed a null `onClick`. Before, both were
+ * The row is selectable rather than clickable, and the [RadioButton] is passed a null `onClick`. Before, both were
  * live, and because Compose's semantics merge stops at any descendant that merges — which every Material
  * selection control is — each option was **two** nodes: a row carrying the option's text and no selection
  * state, then a radio button carrying the state and no text. A reader moving through a font list heard the name
  * and the selection as two separate stops, neither complete.
  *
- * `selectable` gives one node with all three: the option's text as its name, `Role.RadioButton`, and the
- * selection as its state. `selectableGroup` on the column then makes the list announce itself as one exclusive
- * choice with a position — "2 of 9" — rather than as N independent controls that happen to be stacked.
+ * [com.norfold.app.ui.selectableChrome] gives one node with all three: the option's text as its name,
+ * `Role.RadioButton`, and the selection as its state. `selectableGroup` on the column then makes the list announce
+ * itself as one exclusive choice with a position — "2 of 9" — rather than as N independent controls that happen to
+ * be stacked. Unlike [SettingsToggleRow], each option here *is* its own rounded surface, so the modifier's ripple
+ * clip at [Corner.Media] is what the row already draws.
  *
  * The radio button keeps drawing from `selected`; only its interaction is gone. That also removes the 48 dp
- * floor Material was attaching to it, so the row states `heightIn(min = 48.dp)` itself. The 12 dp of vertical
- * padding around a 20 dp indicator already exceeds it, so nothing moves today.
+ * floor Material was attaching to it, which the modifier restates. The 12 dp of vertical padding around a 20 dp
+ * indicator already exceeds it, so nothing moves today.
  */
 @Composable
 fun OptionPickerDialog(
@@ -511,19 +520,13 @@ fun OptionPickerDialog(
                     .selectableGroup(),
             ) {
                 options.forEach { opt ->
-                    val focus = rememberChromeFocus()
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
-                            .selectable(
+                            .selectableChrome(
                                 selected = opt == selected,
-                                interactionSource = focus.source,
-                                indication = ripple(),
-                                role = Role.RadioButton,
+                                corner = Corner.Media,
                             ) { onPick(opt); onDismiss() }
-                            .then(focus.ring(Corner.Media))
                             .padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),

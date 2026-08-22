@@ -80,7 +80,6 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -217,6 +216,7 @@ import com.norfold.app.ui.SemanticColors
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.SecureRelayConnection
 import com.norfold.app.ui.PrivateChatArchiveUiState
+import com.norfold.app.ui.toggleableChrome
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -853,7 +853,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
                 tonalElevation = 2.dp,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clip(RoundedCornerShape(12.dp))
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
                     .focusableChrome(
                         radiusDp = 12f,
                         surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
@@ -3961,12 +3961,12 @@ private fun ReportMessageDialog(
  * produced two semantics nodes for one decision: the row named the option and its explanation without stating
  * whether it was on, the checkbox stated it without naming it. Compose does not fold the second into the first —
  * its merge walk stops descending at any child that merges, and every Material selection control does — so a
- * screen reader met an unnamed checkbox immediately before the Report button. `toggleable` with
- * `Role.Checkbox` makes it a single node carrying the label, the role and the state, and the indicator becomes
- * decorative. [com.norfold.app.ui.components.SettingsToggleRow] documents the mechanism and Material's
- * null-handler gate.
+ * screen reader met an unnamed checkbox immediately before the Report button.
+ * [com.norfold.app.ui.toggleableChrome] with `Role.Checkbox` makes it a single node carrying the label, the role
+ * and the state, and the indicator becomes decorative.
+ * [com.norfold.app.ui.components.SettingsToggleRow] documents the mechanism and Material's null-handler gate.
  *
- * `heightIn(min = 48.dp)` replaces the touch-target floor that gate removes with the interaction. It is
+ * That modifier's 48 dp floor replaces the touch target the gate removes along with the interaction. It is
  * defensive here rather than load-bearing: two lines of text already measure past 48 dp. It matters because this
  * decision is consequential and adjacent to a submit button, so the target must not narrow if the subtitle is
  * ever shortened to one line.
@@ -3976,20 +3976,15 @@ private fun ReportMessageDialog(
  */
 @Composable
 private fun AlsoBlockRow(checked: Boolean, onChange: (Boolean) -> Unit) {
-    val focus = rememberChromeFocus()
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
-            .toggleable(
-                value = checked,
-                interactionSource = focus.source,
-                indication = androidx.compose.material3.ripple(),
+            .toggleableChrome(
+                checked = checked,
+                corner = Corner.Media,
                 role = androidx.compose.ui.semantics.Role.Checkbox,
                 onValueChange = onChange,
-            )
-            .then(focus.ring(Corner.Media)),
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = checked, onCheckedChange = null)

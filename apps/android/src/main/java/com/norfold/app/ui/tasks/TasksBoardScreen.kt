@@ -49,7 +49,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -108,7 +107,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ripple
 import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -157,7 +155,6 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -202,6 +199,7 @@ import com.norfold.app.ui.feedback.performNorfoldHaptic
 import com.norfold.app.ui.components.NorfoldAnchoredPopupAt
 import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.components.NorfoldDropdownMenu
+import com.norfold.app.ui.selectableChrome
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -2627,7 +2625,7 @@ private fun TaskRailRow(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).focusableChrome(
+        modifier = Modifier.fillMaxWidth().focusableChrome(
             corner = ChromeGeometry.Corner.Card,
             surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
             onClick = onClick,
@@ -2846,8 +2844,8 @@ private fun TaskPropertyDefinitionDialog(
  * without naming it. Compose does not fold the second into the first: its merge walk stops descending at any
  * child that itself merges, and every Material selection control does.
  * [com.norfold.app.ui.components.SettingsToggleRow] carries the mechanism and Material's null-handler gate.
- * `selectable` gives one node with the name, `Role.RadioButton` and the selection; the indicator keeps drawing
- * from [selected] and stops being a target.
+ * [com.norfold.app.ui.selectableChrome] gives one node with the name, `Role.RadioButton` and the selection; the
+ * indicator keeps drawing from [selected] and stops being a target.
  *
  * **No `selectableGroup` on the [LazyColumn], deliberately — here it would be wrong rather than merely absent.**
  * The pattern in [com.norfold.app.ui.components.OptionPickerDialog] puts it on a `verticalScroll` column, which
@@ -2859,15 +2857,16 @@ private fun TaskPropertyDefinitionDialog(
  * delegate returns early on that marker rather than recomputing — so the honest announcement is the one the list
  * already makes, and adding the group modifier would replace a correct total with a wrong index.
  *
- * `heightIn(min = 48.dp)` is load-bearing. Material attaches `minimumInteractiveComponentSize` inside the same
- * `ifnull` branch as the indicator's own `selectable`, so nulling the handler removes the touch floor along with
- * the interaction. What is left is `requiredSize(IconSize)` at 20 dp *inside* `padding(RadioButtonPadding)` at
- * 2 dp — a 24 dp indicator, which with this row's 8 dp of vertical padding measures 40 dp. Eight dp short.
+ * [com.norfold.app.ui.selectableChrome]'s 48 dp floor is load-bearing here. Material attaches
+ * `minimumInteractiveComponentSize` inside the same `ifnull` branch as the indicator's own `selectable`, so
+ * nulling the handler removes the touch floor along with the interaction. What is left is `requiredSize(IconSize)`
+ * at 20 dp *inside* `padding(RadioButtonPadding)` at 2 dp — a 24 dp indicator, which with this row's 8 dp of
+ * vertical padding measures 40 dp. Eight dp short.
  *
- * The ring uses [com.norfold.app.ui.ChromeFocus.ringOnShape] at the row's own 10 dp rather than a [Corner] tier,
- * because 10 dp is not one: a ring built on a larger radius bulges past the container's curve. It is measured
- * against `surface`, matching this file's other `ringOnShape` sites — the dialog's own container is
- * `AlertDialogDefaults.containerColor`, which resolves to `surface` in both schemes.
+ * The ring is built on the row's own 10 dp rather than a [Corner] tier, because 10 dp is not one: a ring built on
+ * a larger radius bulges past the container's curve. It is measured against `surface`, matching this file's other
+ * chrome sites — the dialog's own container is `AlertDialogDefaults.containerColor`, which resolves to `surface`
+ * in both schemes.
  */
 @Composable
 private fun PropertyTypeOption(
@@ -2876,20 +2875,15 @@ private fun PropertyTypeOption(
     selected: Boolean,
     onSelect: () -> Unit,
 ) {
-    val focus = rememberChromeFocus()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .selectable(
+            .selectableChrome(
                 selected = selected,
-                interactionSource = focus.source,
-                indication = ripple(),
-                role = Role.RadioButton,
+                radiusDp = 10f,
+                surface = MaterialTheme.colorScheme.surface,
                 onClick = onSelect,
             )
-            .then(focus.ringOnShape(10f, MaterialTheme.colorScheme.surface))
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

@@ -36,7 +36,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -178,6 +177,7 @@ import com.norfold.app.ui.fonts.FontCatalogPickerSheet
 import com.norfold.app.ui.fonts.FontCatalogSnapshot
 import com.norfold.app.ui.fonts.FontCatalogStore
 import coil.compose.AsyncImage
+import com.norfold.app.ui.toggleableChrome
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -2727,35 +2727,31 @@ private const val SelectedTileBorder = 3f
  *
  * The row was `clickable` and the [Checkbox] carried its own handler, so the same action existed twice and the
  * semantics split in two — the row named the category without stating whether it was included, the checkbox
- * stated it without naming it. `toggleable` with [Role.Checkbox] gives one node with the name, the role and the
- * state; the indicator keeps drawing from [checked] and stops being a target. [SettingsToggleRow] carries the
- * detail of why Compose does not merge the two by itself, and why the 48 dp floor has to be restated once the
- * handler is `null`.
+ * stated it without naming it. [com.norfold.app.ui.toggleableChrome] with [Role.Checkbox] gives one node with the
+ * name, the role and the state; the indicator keeps drawing from [checked] and stops being a target.
+ * [SettingsToggleRow] carries the detail of why Compose does not merge the two by itself, and why a 48 dp floor is
+ * needed once the handler is `null`.
  *
  * `Role.Checkbox`, not `Role.Switch`: these are an independent multi-select, not a set of switches, and unlike
  * the radio list in [com.norfold.app.ui.components.OptionPickerDialog] there is deliberately no
  * `selectableGroup` — any combination of categories is valid, so announcing them as one exclusive choice with a
  * position would be wrong.
  *
- * The ring is inward at [Corner.Media] against the card colour [SettingsCard] provides, so nothing here names a
- * colour.
+ * [com.norfold.app.ui.toggleableChrome] supplies the semantics, the inward ring at [Corner.Media], the 48 dp
+ * floor and the ripple clip. The ring is measured against the card colour [SettingsCard] provides, so nothing
+ * here names a colour.
  */
 @Composable
 private fun CategoryIncludeRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val focus = rememberChromeFocus()
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
-            .toggleable(
-                value = checked,
-                interactionSource = focus.source,
-                indication = ripple(),
+            .toggleableChrome(
+                checked = checked,
+                corner = Corner.Media,
                 role = Role.Checkbox,
                 onValueChange = onChange,
-            )
-            .then(focus.ring(Corner.Media)),
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = checked, onCheckedChange = null)
@@ -2768,35 +2764,30 @@ private fun CategoryIncludeRow(label: String, checked: Boolean, onChange: (Boole
  *
  * The three diagnostics switches this serves had the same split every `SettingsRow(trailing = { RowSwitch(…) })`
  * had: a `Text` carrying the label and a `Switch` carrying the state, with nothing joining them, so a reader
- * heard "Enable local logging" and then an unnamed switch. The row is `toggleable` now, the switch is
+ * heard "Enable local logging" and then an unnamed switch. The row carries the toggle now, the switch is
  * decorative, and the label is the node's name — see [SettingsToggleRow], which does the same for the grouped
  * rows and documents why Material's null-handler gate is what makes it work.
  *
  * This is not routed through [SettingsToggleRow] because it is not that row: no icon tile, no subtitle, 13 sp
  * rather than 15 sp, and it sits in a padded card rather than a clipped group. Only the semantics are shared,
- * and those come from `toggleable` rather than from a common composable.
+ * and those come from [com.norfold.app.ui.toggleableChrome] rather than from a common composable.
  *
- * `heightIn(min = 48.dp)` replaces the floor Material was attaching to the switch, which its null handler
- * removes along with the interaction. Here it is load-bearing rather than defensive: the row is a single line of
- * 13 sp text with no padding of its own, so the switch's own 48 dp box was the only thing holding the target
- * open. Without the constraint the line would collapse toward the 32 dp the switch draws.
+ * That modifier's 48 dp floor replaces the one Material was attaching to the switch, which its null handler
+ * removes along with the interaction. Here the floor is load-bearing rather than defensive: the row is a single
+ * line of 13 sp text with no padding of its own, so the switch's own 48 dp box was the only thing holding the
+ * target open. Without it the line would collapse toward the 32 dp the switch draws.
  */
 @Composable
 private fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val focus = rememberChromeFocus()
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
-            .toggleable(
-                value = checked,
-                interactionSource = focus.source,
-                indication = ripple(),
+            .toggleableChrome(
+                checked = checked,
+                corner = Corner.Media,
                 role = Role.Switch,
                 onValueChange = onChange,
-            )
-            .then(focus.ring(Corner.Media)),
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
