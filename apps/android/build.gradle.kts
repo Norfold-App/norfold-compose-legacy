@@ -55,8 +55,15 @@ android {
         applicationId = "com.norfold.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // Bumped by hand, one step per release that leaves this machine. There is deliberately no
+        // derivation from a tag or a commit count: `versionCode` is the one number Play treats as
+        // permanent — a rollback or a re-run of CI must never be able to reissue one — and a
+        // computed value is exactly what silently reissues after a squash, a re-tag, or a shallow
+        // clone. `versionName` carries the pre-release suffix so a tester reading About can say
+        // which alpha they are holding; `versionCode` does not encode it, because Play compares
+        // integers and `alpha.3` is not one.
+        versionCode = 2
+        versionName = "0.1.0-alpha.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", buildConfigString(publicConfig("SUPABASE_URL")))
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", buildConfigString(publicConfig("SUPABASE_PUBLISHABLE_KEY")))
@@ -106,6 +113,18 @@ android {
             buildConfigField("boolean", "ALLOW_DESTRUCTIVE_SCHEMA_RESET", "true")
         }
         release {
+            // There is deliberately no `signingConfig` here, and its absence is the policy rather
+            // than an omission to be tidied up later. The production signing identity does not
+            // exist yet and will be generated on Linux, not in this WSL environment: a key created
+            // under a filesystem bridged from Windows is one whose durability and permissions
+            // nobody can vouch for, and an upload key cannot be rotated once Play has seen it.
+            // So `assembleRelease` produces an unsigned artefact on purpose. `bundleRelease` in CI
+            // exercises R8, resource shrinking and the manifest merge — everything that can break
+            // in a release build except the signature — which is the part worth gating on now.
+            // Signing arrives as one deliberate step at the clean-room migration, with the keystore
+            // and its passwords held outside the repository. Do not point this at `ciDevelopment`;
+            // that key is a throwaway for installing test builds, and shipping under it would
+            // permanently bind the application id to a credential that lives in CI settings.
             buildConfigField("boolean", "ALLOW_DESTRUCTIVE_SCHEMA_RESET", "false")
             isMinifyEnabled = true
             isShrinkResources = true
