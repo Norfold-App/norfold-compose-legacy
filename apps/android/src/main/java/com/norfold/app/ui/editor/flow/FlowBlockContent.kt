@@ -943,31 +943,6 @@ internal fun htmlSandboxDocument(source: String): String = buildString(source.le
     append(source)
 }
 
-@Composable
-private fun FlowWideSource(title: String, source: String, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f))
-            .padding(vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
-        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            Text(
-                source,
-                style = FlowContentMono,
-                softWrap = false,
-                modifier = Modifier.padding(horizontal = 12.dp),
-            )
-        }
-    }
-}
-
 private enum class FlowRenderableMode { Source, Preview }
 
 /**

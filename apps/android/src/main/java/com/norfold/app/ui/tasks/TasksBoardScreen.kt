@@ -2234,9 +2234,6 @@ private fun sameDay(a: Long, b: Long): Boolean {
     return ca.get(Calendar.YEAR) == cb.get(Calendar.YEAR) && ca.get(Calendar.DAY_OF_YEAR) == cb.get(Calendar.DAY_OF_YEAR)
 }
 
-private fun calField(ms: Long, field: Int): Int =
-    Calendar.getInstance().apply { timeInMillis = ms }.get(field)
-
 private fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {
     timeInMillis = ms
     set(Calendar.HOUR_OF_DAY, 0)

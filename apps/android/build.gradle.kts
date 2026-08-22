@@ -72,8 +72,21 @@ android {
         buildConfigField("String", "GOOGLE_CLOUD_PROJECT_ID", buildConfigString(publicConfig("GOOGLE_CLOUD_PROJECT_ID")))
         buildConfigField("String", "FIREBASE_PROJECT_ID", buildConfigString(publicConfig("FIREBASE_PROJECT_ID")))
         buildConfigField("String", "KLIPY_API_KEY", buildConfigString(publicConfig("KLIPY_API_KEY")))
-        buildConfigField("String", "AUTH_CALLBACK", buildConfigString("norfold://auth/callback"))
-        buildConfigField("String", "CALENDAR_CALLBACK", buildConfigString("norfold://integrations/calendar"))
+        // No AUTH_CALLBACK or CALENDAR_CALLBACK constant. Both were declared in the initial
+        // commit and never read by a single line of Kotlin, but neither URI is dead, so the
+        // coupling is written here rather than lost with the field:
+        //
+        //   norfold://auth/callback       is `site_url` and the sole `additional_redirect_urls`
+        //                                 entry in supabase/config.toml. Email sign-in is OTP
+        //                                 codes and Google is CredentialManager, so nothing
+        //                                 returns through a browser and the app never needs the
+        //                                 string — but changing the scheme or applicationId
+        //                                 means changing that file too.
+        //   norfold://integrations/calendar  is what supabase/functions/calendar-callback
+        //                                 redirects to on both success and failure, and the
+        //                                 manifest already registers an intent-filter for it.
+        //                                 The flow that would reach that function does not
+        //                                 exist yet on either side.
         // The published site moved with the repository to the Norfold-App organisation. The old
         // user-site host serves 404 for every one of these paths, so anything still pointing there
         // sends a reader looking for the privacy policy to a GitHub error page instead.

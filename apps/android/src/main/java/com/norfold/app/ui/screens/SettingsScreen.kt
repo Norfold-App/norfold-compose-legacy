@@ -2134,9 +2134,6 @@ private fun SyncSettings(
     }
 }
 
-private fun relativeSyncStatus(state: DocsUiState): String =
-    state.settings.lastSyncAt?.let { relativeSettingsTime(it) + " ago" } ?: "Just now"
-
 @Composable
 private fun ManualSyncCard(
     state: DocsUiState,

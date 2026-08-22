@@ -36,6 +36,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Registered but not yet handled. supabase/functions/calendar-callback redirects
+                 here with ?status=connected or ?status=error once a provider grants offline
+                 access, and it stores the encrypted refresh token before it does. What does not
+                 exist is the other half: no function issues the signed `state` that callback
+                 verifies, and no screen in the app starts the authorization. So this filter
+                 opens the app to its launch state and drops the result. It stays because the
+                 deployed function already redirects to exactly this URI — removing it would
+                 hand the user a "no app can open this link" dialog instead of a silent
+                 no-op — and because the filter is the record of the contract the app owes. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

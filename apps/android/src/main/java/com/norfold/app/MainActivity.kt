@@ -63,6 +63,18 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /**
+     * Hands a `norfold://auth/...` return to Supabase, if one ever arrives.
+     *
+     * Nothing routes here today and that is deliberate rather than broken: the manifest
+     * registers `norfold://integrations/calendar` and `norfold://verify/telegram` and no
+     * `auth` host at all, email sign-in is verified with a 6-digit OTP, and Google goes
+     * through CredentialManager — so no flow currently returns through the browser. The
+     * host guard stays because `norfold://auth/callback` is still this project's declared
+     * `site_url` in supabase/config.toml, which means a future provider or a magic-link
+     * flow can start delivering here after only a manifest change. Deleting it would make
+     * that change look complete while dropping every session on the floor.
+     */
     private fun handleAuthDeepLink(intent: Intent) {
         if (intent.data?.host != "auth") return
         NorfoldSupabase.clientOrNull?.handleDeeplinks(
