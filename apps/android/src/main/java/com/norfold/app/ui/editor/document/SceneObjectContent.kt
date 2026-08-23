@@ -186,6 +186,12 @@ class SceneContentCallbacks(
  * selects the object so it can be moved, resized, layered and deleted; only a deliberate second tap on an
  * already-selected frame enters its text. Entering on the first tap would mean every attempt to drag a text
  * frame instead dropped a caret into it.
+ *
+ * **The two `clickable` sites below take no chrome focus ring, and `ChromeGeometryTest` exempts this function
+ * by name.** Both open a full-screen editor from a placed image or chart, and the object they sit on already
+ * draws its own selection frame with handles — the vocabulary the scene editor uses for "this is the object
+ * your next action addresses". A chrome ring 3 dp outside that frame would be a second, differently-shaped
+ * answer to the same question, on a surface where the first answer is also the drag target.
  */
 @Composable
 fun SceneObjectContent(
@@ -917,6 +923,16 @@ private fun SceneTable(
  */
 private const val MINIMUM_TABLE_COLUMN_POINTS = 44f
 
+/**
+ * One cell of a document table, addressable in edit mode and read-only otherwise.
+ *
+ * **No chrome focus ring, and `ChromeGeometryTest` exempts it by name.** This is authored page content rather
+ * than app chrome, and it already has a focus vocabulary of its own that a ring would collide with: the
+ * addressed cell shows a text cursor and a `BasicTextField` of its own, and the `semantics` block below says
+ * "selected and editable" for exactly that state. A second, outer indicator drawn 3 dp off a cell that borders
+ * three neighbours would read as a fourth grid line — and it would appear on a page whose zoom it does not
+ * scale with, since every other measurement here is in authored points.
+ */
 @Composable
 private fun SceneTableCell(
     text: String,

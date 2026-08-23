@@ -856,6 +856,9 @@ private fun GridHeader(
             // actually hard to see here is not the seam but which band is header and which is data. That is a fill
             // decision, not an edge one, and it is recorded rather than changed here.
             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+            // No chrome focus ring, and exempt for the nesting reason above: the header's selected state is a
+            // `primaryContainer` fill, which is the whole box rather than a line, and a ring outside a header
+            // that shares its left and right edges with the next column would draw over both.
             .clickable(onClick = onClick)
             .then(
                 if (onResize == null) Modifier else Modifier.pointerInput(onResize, resizeAxis) {
@@ -940,6 +943,9 @@ private fun GridCell(
             // boundary: at 2 dp on the accent it is the only thing saying which cell the formula bar is showing.
             .border(if (selected) 2.dp else 0.5.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
             .cellBorders(format)
+            // No chrome focus ring either, and exempt for the same nesting reason: the 2 dp accent edge above
+            // *is* this cell's focus vocabulary, the `semantics` block below states it, and a ring drawn 3 dp
+            // outside a cell that shares all four edges would land inside four neighbours.
             .clickable(enabled = !editing, onClick = onClick)
             .semantics {
                 role = Role.Button

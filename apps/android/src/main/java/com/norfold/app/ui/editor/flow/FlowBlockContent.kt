@@ -1323,6 +1323,15 @@ private fun FlowMermaidPreview(
     }
 }
 
+/**
+ * A diagram laid out by branch level, whose nodes are selectable.
+ *
+ * **No chrome focus ring on the node `clickable`, and `ChromeGeometryTest` exempts this function by name.** A
+ * selected node already draws `ChromeGeometry.SELECTED_EDGE_WIDTH` of accent around itself and announces its
+ * state through `stateDescription`, which is the diagram's own answer to "which node does your next action
+ * address". Adding a ring outside that would put two concentric accent rings around one 112×42 dp node, and
+ * the outer one would overlap the connector lines this layout draws between levels.
+ */
 @Composable
 private fun FlowBranchedDiagram(
     levels: List<List<String>>,
@@ -1405,6 +1414,14 @@ private fun FlowBranchedDiagram(
     }
 }
 
+/**
+ * A diagram whose nodes carry authored positions, and can be dragged to new ones.
+ *
+ * **No chrome focus ring, and `ChromeGeometryTest` exempts this function by name**, for the reason
+ * [FlowBranchedDiagram] gives — a selected node is already outlined at `ChromeGeometry.SELECTED_EDGE_WIDTH`
+ * with a `stateDescription` to match. It applies more strongly here: this node is also the *drag* target, so a
+ * ring drawn outside its bounds would sit under the pointer during a move and travel with it.
+ */
 @Composable
 private fun FlowPositionedDiagram(
     model: com.norfold.app.ui.components.DiagramBuilderModel,
@@ -1634,6 +1651,14 @@ private fun FlowTablePreview(
     }
 }
 
+/**
+ * One cell of a Flow table, addressable for editing.
+ *
+ * **No chrome focus ring, and `ChromeGeometryTest` exempts this function by name.** The addressed cell already
+ * shows a caret and a field of its own, and says so through `contentDescription`; a chrome ring outside a cell
+ * that shares three edges with neighbours would read as another grid line rather than as focus. This is the
+ * same call the Document host's `SceneTableCell` makes, for a table with the same geometry.
+ */
 @Composable
 private fun FlowTableCell(
     text: String,

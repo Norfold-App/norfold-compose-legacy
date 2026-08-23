@@ -2143,6 +2143,151 @@ class ChromeGeometryTest {
     }
 
     /**
+     * Every hand-rolled `clickable` in the tree either draws a focus ring or is named here as not needing one.
+     *
+     * This is the invariant #61 was missing. The work itself is done — 38 sites across 34 functions now watch a
+     * `MutableInteractionSource` and draw [com.norfold.app.ui.NorfoldChrome.focusRing] from it — but nothing
+     * stopped the thirty-ninth from arriving bare, and a keyboard user cannot tell a control with no ring from
+     * one that is not focused. The population is what makes a check necessary rather than optional: the 561
+     * Material button call sites in this tree get an indicator from the library, and *these* are exactly the
+     * sites that opted out of that.
+     *
+     * **Reachability was never the gap, which is why this looks only for the indicator.** Verified from
+     * bytecode rather than from documentation: in the resolved `androidx.compose.foundation` 1.9.4,
+     * `AbstractClickableNode` holds a `FocusableNode` and delegates to it in both `onAttach` and `update`,
+     * guarded on `enabled` — it delegates when enabled and *undelegates* when not, which is the behaviour we
+     * want, since a disabled control should leave the tab order. `FocusableNode` in turn wraps a focus target
+     * and emits `FocusInteraction.Focus` into the interaction source. So every enabled site here is already
+     * tab-reachable and already *emits* focus. What none of them did was draw anything when it arrived.
+     *
+     * **What is exempt, and why it is a short list.** Nine sites in eight functions, and every one of them is
+     * authored content rather than app chrome — a spreadsheet cell, a table cell in either host, a diagram
+     * node, a placed image or chart. Each already has a focus vocabulary of its own that a ring would fight:
+     * a selection edge at [ChromeGeometry.SELECTED_EDGE_WIDTH], a text caret, a drag frame with handles, and a
+     * `stateDescription` saying which of those applies. Geometry is the second half of the argument — every one
+     * of these boxes shares edges with neighbours, so a ring drawn at [ChromeGeometry.FOCUS_RING_INSET] outside
+     * one cell is drawn *inside* the next, which is why the answer is not "ring them more tightly".
+     *
+     * The exemption list is keyed by site count for the reason [rawEdgeExemptions] is: `SceneObjectContent`
+     * owns two, and a third appearing inside an already-exempt function must still fail. Each exempt function
+     * also has to name this test in the prose beside it, so the reasoning lives where the next reader of that
+     * function will be standing.
+     *
+     * **`ChatHomeScreen.ContactRow` is the one exemption that is not content**, and it is here as a marker for
+     * #74 rather than as a design decision. Its `onClick` is `{}` — a no-op — so ringing it would advertise a
+     * focusable control that does nothing on activation. Its real action is long-press only. The row does carry
+     * `onLongClickLabel`, which puts the action in TalkBack's actions menu, but keyboard and switch access
+     * still cannot reach it. That is a defect with a task of its own; what this list records is that the
+     * missing ring here is a *symptom* of it and must not be closed by drawing one.
+     *
+     * The scan reuses [uiSources], [blankComments], [functionDeclarations], [regionOf] and [documentedFrom]
+     * from the raw-edge check above, so the four scanner corrections documented there apply unchanged — in
+     * particular that comments are blanked rather than deleted, and that the prose window starts at the KDoc
+     * rather than at `fun`, since most of these exemptions argue for themselves above their declaration.
+     */
+    @Test
+    fun `every hand-rolled clickable draws a focus ring or says why it does not`() {
+        val bare = mutableListOf<String>()
+        val silent = mutableListOf<String>()
+        val counted = mutableMapOf<String, Int>()
+        var ringed = 0
+        var files = 0
+
+        for ((leaf, text) in uiSources()) {
+            files++
+            val code = blankComments(text)
+            val declarations = functionDeclarations(code)
+
+            for (match in Regex("""\.(?:combinedClickable|clickable)\s*\(""").findAll(code)) {
+                val region = regionOf(declarations, match.range.first, code.length)
+                // A ring anywhere in the enclosing function, not in a line window: several of these hoist
+                // `rememberChromeFocus()` to the top of the composable and apply the ring twenty lines below
+                // the gesture, and one applies it to a child rather than to the same modifier chain.
+                if (FOCUS_RING.containsMatchIn(code.substring(region.start, region.end))) {
+                    ringed++
+                    continue
+                }
+                val key = "$leaf#${region.name}"
+                counted[key] = (counted[key] ?: 0) + 1
+                if (ringExemptions[key] == null) {
+                    val line = code.substring(0, match.range.first).count { it == '\n' } + 1
+                    bare += "$leaf:$line ${region.name} is clickable with no focus indication"
+                } else if (!text.substring(documentedFrom(text, region.start), region.end).contains(TEST_NAME)) {
+                    silent += key
+                }
+            }
+        }
+
+        assertEquals(
+            "a clickable with no focus ring is a control a keyboard or switch-access user cannot locate — give " +
+                "it NorfoldChrome.focusableChrome or a rememberChromeFocus ring, or add it to ringExemptions " +
+                "with the focus vocabulary it has instead",
+            emptyList<String>(),
+            bare,
+        )
+        assertEquals(
+            "an exemption has to argue for itself where the gesture is — the prose beside it must name " +
+                "$TEST_NAME, so the next reader knows the missing ring is a decision and what replaces it",
+            emptyList<String>(),
+            silent,
+        )
+        assertEquals(
+            "every exemption must still be a live site: a stale entry silently licenses a bare clickable " +
+                "elsewhere in the same function",
+            ringExemptions,
+            counted.toSortedMap(),
+        )
+        // Floors, for the same reason the raw-edge check has them: all three assertions above pass on an empty
+        // scan, so a renamed package or a regex that stops matching would read as green.
+        assertTrue("only $files files scanned under ui/ — the walk has stopped finding them", files >= 80)
+        assertTrue(
+            "only $ringed ringed sites found — the focus-ring entry points have stopped being recognised, so " +
+                "every already-ringed site would now be reported as bare",
+            ringed >= 30,
+        )
+        assertEquals(
+            "the exempt sites are counted individually, so a third bare gesture inside an already-exempt " +
+                "function is still visible here",
+            9,
+            counted.values.sum(),
+        )
+    }
+
+    /**
+     * The clickable functions that deliberately draw no focus ring, and how many sites each owns.
+     *
+     * Eight functions, nine sites. Seven are authored content with their own focus vocabulary; the eighth,
+     * `ContactRow`, is #74's marker. The reasoning for each is in the test above and in the prose beside the
+     * gesture itself, which the second assertion there enforces.
+     */
+    private val ringExemptions = sortedMapOf(
+        // Editor content: a selection edge, a caret or a drag frame already answers "where am I".
+        "editor/document/SceneObjectContent.kt#SceneObjectContent" to 2,
+        "editor/document/SceneObjectContent.kt#SceneTableCell" to 1,
+        "editor/flow/FlowBlockContent.kt#FlowBranchedDiagram" to 1,
+        "editor/flow/FlowBlockContent.kt#FlowPositionedDiagram" to 1,
+        "editor/flow/FlowBlockContent.kt#FlowTableCell" to 1,
+        "editor/spreadsheet/SpreadsheetHostScreen.kt#GridCell" to 1,
+        "editor/spreadsheet/SpreadsheetHostScreen.kt#GridHeader" to 1,
+        // Not content, and not settled: a no-op onClick standing in for a long-press-only action. See #74.
+        "screens/ChatHomeScreen.kt#ContactRow" to 1,
+    )
+
+    /**
+     * Every way a site can draw the focus ring.
+     *
+     * Five spellings rather than one, because the substrate offers a modifier that takes the gesture
+     * ([com.norfold.app.ui.focusableChrome]) and a family that takes only the state, for callers whose gesture
+     * has to stay `combinedClickable` or `Surface(onClick =)`. Matching only the first reported thirty-two
+     * already-ringed sites as bare; matching a bare `.ring(` alone matches unrelated shape code, so the
+     * receiver-qualified spellings are listed explicitly.
+     */
+    private val FOCUS_RING = Regex(
+        """\bfocusableChrome\s*\(|\bfocusablePill\s*\(|\bchromeFocusRing\s*\(|\bfocusRing\s*\(""" +
+            """|\.ring\s*\(|\.ringOnShape\s*\(|\.ringOnCircle\s*\(|\.ringOnPill\s*\(""",
+    )
+
+    /**
      * The functions that draw a raw `outline` stroke deliberately, and how many each owns.
      *
      * Keyed by `file#function` with a site count, so an exemption licenses a *known* number of strokes rather

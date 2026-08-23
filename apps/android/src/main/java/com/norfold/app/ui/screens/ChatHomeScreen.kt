@@ -1750,10 +1750,14 @@ private fun ContactRow(contact: NorfoldSocial.RemoteContact, onLongPress: () -> 
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            // No focus ring: `onClick` is a no-op, so ringing this row would advertise a focusable control
-            // that does nothing on activation. The long-press *is* labelled, though — that puts the contact
-            // actions in TalkBack's actions menu, which is the one route to them that does not require
-            // holding a finger on the right pixel. Keyboard and switch access still cannot reach them.
+            // No focus ring, and `ChromeGeometryTest` exempts it by name — but as a marker, not a decision.
+            // `onClick` is a no-op, so ringing this row would advertise a focusable control that does nothing
+            // on activation. The long-press *is* labelled, which puts the contact actions in TalkBack's
+            // actions menu — the one route to them that does not require holding a finger on the right pixel.
+            // Keyboard and switch access still cannot reach them, and that is the actual defect here: this is
+            // the only clickable in the tree with no focus indication, and it is bare *because* its activation
+            // does nothing. Give the row a real primary action and the ring follows from it; drawing one
+            // without that would only hide the gap. Do not close this by adding a ring alone.
             .combinedClickable(onClick = {}, onLongClickLabel = "Contact actions", onLongClick = onLongPress)
             .padding(horizontal = 6.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
