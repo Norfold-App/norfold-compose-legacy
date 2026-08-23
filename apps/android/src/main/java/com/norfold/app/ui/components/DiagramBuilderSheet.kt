@@ -48,6 +48,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.MermaidBlock
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.NorfoldChrome
 import java.util.Locale
 import kotlinx.coroutines.delay
 
@@ -843,11 +845,21 @@ private fun TemplatePicker(templates: List<DiagramTemplate>, onSelect: (DiagramT
 private fun DiagramPreview(source: String) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Live preview", fontWeight = FontWeight.SemiBold)
+        // The preview's fill, hoisted so its edge measures against it. Left translucent: the substrate composites
+        // a declared alpha fill over the resolved container, which here is the bottom sheet `NorfoldBottomSheet`
+        // publishes.
+        val previewFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            color = previewFill,
+            // Measured, and the whole sheet shares the finding: `surfaceVariant` at any of the alphas used in this
+            // file composites over `surfaceContainerLow` to **1.0012:1 of the sheet in dark mode** — the same
+            // colour to any eye — and 1.0345:1 light. So on the five bordered regions here the stroke is not one
+            // cue among several, it is the only cue, and `outlineVariant` on this fill drew 1.0744:1 light and
+            // 1.0786:1 dark. This one matters most of the five: a monospace structural dump of the diagram the
+            // user is building, which without an edge reads as loose text dropped into the form.
+            border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(previewFill) }),
         ) {
             Text(
                 text = source.trim().ifBlank { "Add diagram nodes to preview its structure" },
@@ -957,9 +969,12 @@ private fun FlowchartNodeCard(
     onUpdate: (DiagramNodeInput) -> Unit,
     onDelete: () -> Unit,
 ) {
+    // Same population and same solve as [DiagramPreview] above: the fill is 1.0012:1 from the sheet in dark, so
+    // this edge is what says one box's fields end and the next box's begin. Several of these stack 12 dp apart.
+    val cardFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(containerColor = cardFill),
+        border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(cardFill) }),
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1028,9 +1043,13 @@ private fun FlowchartEdgeCard(
     onUpdate: (DiagramEdgeInput) -> Unit,
     onDelete: () -> Unit,
 ) {
+    // Same population, one step fainter in the source: 0.28 rather than 0.36. Both composite to within 1.0012:1
+    // of the sheet in dark mode, so the alpha difference the code implies is not a difference anyone sees, and
+    // the solve is what actually distinguishes a connection card from the page.
+    val cardFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(containerColor = cardFill),
+        border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(cardFill) }),
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1123,9 +1142,11 @@ private fun SequenceForm(model: DiagramBuilderModel, onChange: (DiagramBuilderMo
             ) { Text("+ Participant") }
         }
         model.participants.forEachIndexed { index, participant ->
+            // Same population as the flowchart cards above; the two forms are the same shape of editor.
+            val cardFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                colors = CardDefaults.cardColors(containerColor = cardFill),
+                border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(cardFill) }),
             ) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1189,9 +1210,12 @@ private fun SequenceForm(model: DiagramBuilderModel, onChange: (DiagramBuilderMo
             ) { Text("+ Message") }
         }
         model.messages.forEachIndexed { index, message ->
+            // Last of the five, same solve. A sequence message card has two endpoint fields and a label, so
+            // without an edge a list of them reads as one continuous run of text inputs.
+            val cardFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                colors = CardDefaults.cardColors(containerColor = cardFill),
+                border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(cardFill) }),
             ) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

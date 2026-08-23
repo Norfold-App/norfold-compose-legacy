@@ -149,6 +149,7 @@ import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
 import java.util.UUID
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.toggleableChrome
 import com.norfold.app.domain.style.ChromeGeometry
@@ -177,7 +178,7 @@ private fun ImagePrimaryTab(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
         color = fill,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = with(NorfoldChrome) { restingStroke(fill) },
         interactionSource = focus.source,
         modifier = modifier.then(focus.ringOnShape(12f, fill)),
     ) {
@@ -202,7 +203,7 @@ private fun ImageFocusCropCard(
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
         color = MaterialTheme.colorScheme.surface,
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -236,7 +237,13 @@ private fun ImageFocusCropCard(
                         onClick = { edit { it.copy(crop = ImageCropGeometry.applyMode(it.crop, it.sourceMetadata, mode)) } },
                         enabled = !disabled,
                         color = modeFill,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (modeSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            // The five buttons are flush — `weight(1f)` with no arrangement spacing — so an
+                            // unselected button's edge is the only thing dividing it from its neighbour, and
+                            // it cannot be dropped the way a spaced nested row's can. Measured instead.
+                            if (modeSelected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(modeFill) },
+                        ),
                         interactionSource = modeFocus.source,
                         // Radius 0: this `Surface` passes no `shape`, so it draws `RectangleShape`. A ring
                         // with a rounded radius on square chrome would leave four visible gaps at the corners.
@@ -303,7 +310,7 @@ private fun ImageCompactSlider(
 private fun ImageFocusCaptionCard(caption: String, disabled: Boolean, onCaptionChange: (String) -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
     ) {
@@ -326,7 +333,7 @@ private fun ImageFocusCaptionCard(caption: String, disabled: Boolean, onCaptionC
 private fun ImageReplaceCard(enabled: Boolean, onReplace: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
     ) {
@@ -1312,6 +1319,10 @@ private fun ImageSignatureSheet(
     var points by remember { mutableStateOf(emptyList<ImageMarkupPoint>()) }
     var boardSize by remember { mutableStateOf(IntSize.Zero) }
     val ink = MaterialTheme.colorScheme.onSurface
+    // The board's own fill, hoisted because its edge has to be measured against it: `surfaceVariant` inside
+    // this dialog's `surface` separates by 1.12:1, so the fill alone does not tell the user where they may draw.
+    val board = MaterialTheme.colorScheme.surfaceVariant
+    val boardEdge = with(NorfoldChrome) { restingEdge(board) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(28.dp),
@@ -1330,8 +1341,8 @@ private fun ImageSignatureSheet(
                         .fillMaxWidth()
                         .height(220.dp)
                         .clip(RoundedCornerShape(18.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
+                        .background(board)
+                        .border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, boardEdge, RoundedCornerShape(18.dp))
                         .onSizeChanged { boardSize = it }
                         .pointerInput(boardSize) {
                             detectDragGestures(
@@ -1412,8 +1423,8 @@ private fun ImageVisualChoice(
         shape = RoundedCornerShape(16.dp),
         color = fill,
         border = androidx.compose.foundation.BorderStroke(
-            if (selected) 2.dp else 1.dp,
-            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+            if (selected) 2.dp else ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            if (selected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(fill) },
         ),
         interactionSource = focus.source,
         // The selected state carries a 2 dp border, which the substrate's default 3 dp inset does not clear

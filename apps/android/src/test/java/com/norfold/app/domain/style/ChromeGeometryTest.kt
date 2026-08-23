@@ -701,6 +701,55 @@ class ChromeGeometryTest {
     }
 
     /**
+     * The resting edge is the one population where the floor and the target answer identically — which is
+     * what lets the substrate keep calling [ContrastAnalysis.legibleChrome] unchanged.
+     *
+     * [ContrastAnalysis.settledChrome] was added because a floor cannot express a quiet target: it returns
+     * anything already past the target untouched, so the document editor's grid asked for 1.6:1 and drew at
+     * 17.71:1. That fix is about *structure aids*. It deliberately does not touch `NorfoldChrome.restingEdge`,
+     * and the justification is measured here rather than assumed: on all fifteen surfaces, in both modes, the
+     * nearest passing lightness and the lowest passing ratio are the same colour. So the substrate's edge is
+     * already minimal and switching it would be a no-op — but only for *this* palette and *this* target.
+     *
+     * The reason to assert it rather than note it is that both premises can move. A ramp edit or a
+     * [ChromeGeometry.RESTING_EDGE_RATIO] change could split the two answers apart, and if it did, the
+     * argument for leaving `restingEdge` on the floor would quietly stop holding while every test still
+     * passed. This is the test that notices.
+     *
+     * It is a narrow claim on purpose. The two functions differ in 59 of 70 cases on the accent/page fixture
+     * in `ContrastAnalysisTest`; the agreement here is a property of these thirty inputs, not of the
+     * functions.
+     */
+    @Test
+    fun `the floor and the target agree on every derived resting edge`() {
+        val cases = listOf(
+            0xE4E6EF to lightSurfaces,
+            0x252C3A to darkSurfaces,
+        )
+        var compared = 0
+
+        for ((outline, surfaces) in cases) {
+            for (surface in surfaces) {
+                val backdrop = hex(surface)
+                val floor = ContrastAnalysis.legibleChrome(hex(outline), backdrop, ChromeGeometry.RESTING_EDGE_RATIO)
+                val target = ContrastAnalysis.settledChrome(hex(outline), backdrop, ChromeGeometry.RESTING_EDGE_RATIO)
+                assertEquals(
+                    "on %06X the floor gives %s and the target gives %s".format(
+                        surface,
+                        floor.toHexRgb(),
+                        target.toHexRgb(),
+                    ),
+                    floor,
+                    target,
+                )
+                compared++
+            }
+        }
+
+        assertEquals("every surface in the scheme", 15, compared)
+    }
+
+    /**
      * The ten shipped brand accents, mirrored from `BrandPalettes` — one of them is whatever the user's
      * theme currently resolves `colorScheme.primary` to, so a focus ring has to work for all ten.
      *
@@ -1985,6 +2034,372 @@ class ChromeGeometryTest {
     }
 
     /**
+     * No composable in `ui/` draws a raw `outline`/`outlineVariant` **container** edge.
+     *
+     * The invariant #62 leaves behind, and the reason it is a classification rather than a count. Both tokens are
+     * invisible as boundaries — `outline` measures 1.17:1 on the light page and 1.41:1 on the dark one,
+     * `outlineVariant` 1.07:1 and 1.24:1 — so a border drawn in either states a boundary the user cannot see.
+     * [com.norfold.app.ui.NorfoldChrome.restingEdge] solves it to [ChromeGeometry.RESTING_EDGE_RATIO] against the
+     * fill it is actually drawn on, and this test pins that no new site skips that.
+     *
+     * **What is not a boundary is the whole substance of the check.** A stroke that *rules* — a grid seam shared
+     * on all four sides by two cells — *separates* (a divider), or *links* (a timeline spine, a chain connector)
+     * is not enclosing anything, and solving it to a visible ratio is the box farm: fourteen table columns of
+     * 2.2:1 mesh is graph paper, twenty-four stacked day rows is a set of boxes, and three 2.2:1 ticks between
+     * four sync nodes read as the diagram's subject rather than its wiring. So [rawEdgeExemptions] names those
+     * functions, each with the number of sites it owns, and each of those functions carries the measurement and
+     * the reasoning in prose beside the stroke. The second assertion below requires that prose to name this test,
+     * which is what stops an exemption from being a line in a list nobody has to justify.
+     *
+     * Four scanner corrections, each of which produced a wrong count first:
+     *
+     * 1. **Comments are blanked to spaces, not deleted.** Blanked, because both passes need the same offsets: the
+     *    classification pass must not read a KDoc's `Card(border = …)` as a call site, and the naming pass must
+     *    read the prose. Deleting instead of blanking moves every subsequent byte and the two passes stop
+     *    agreeing about where a function begins.
+     * 2. **Arguments are extracted by balancing parentheses.** Reading `border = <expr>` to end-of-line matched
+     *    documentation and truncated the multi-line calls; `.border(BorderStroke(0.25.dp, …))` is *one* site
+     *    rather than two, so a nested match inside a call already counted has to be skipped.
+     * 3. **Local aliases are tracked in both directions, over their full initialiser.** `val border =
+     *    MaterialTheme.colorScheme.outlineVariant` hides five raw sites behind one name in a single function, and
+     *    `val frame = with(NorfoldChrome) { restingEdge(background) }` hides a routed one — ignoring the derived
+     *    direction reported every routed site as raw. A one-line initialiser window is not enough either: the
+     *    chat attachment's `val frameBorder = if (mine) … else with(NorfoldChrome) { restingEdge(…) }` puts the
+     *    derivation on the *second* line, and reading one line reported an already-routed site as an offender.
+     * 4. **The naming window starts at the preceding KDoc, not at `fun`.** `SettingsKit.RowDivider` documents its
+     *    own exemption *above* its declaration, like most of these do, and a window anchored at `fun` reported it
+     *    silent — a false negative that would have demanded a comment which already existed.
+     *
+     * The scan found one real defect while being built, which is the argument for running it over the tree rather
+     * than over a list of files: `FlowHostScreen.FlowDropMarker` drew its edge, its fill *and* its label from one
+     * `outlineVariant`, so the no-op drop marker's "Current position" label read at 1.0724:1 light. It is fixed
+     * rather than exempted, and the measured before-and-after sits in that function.
+     */
+    @Test
+    fun `no chrome site draws a raw outline container edge`() {
+        val offenders = mutableListOf<String>()
+        val silent = mutableListOf<String>()
+        val counted = mutableMapOf<String, Int>()
+        var derived = 0
+        var files = 0
+
+        for ((leaf, text) in uiSources()) {
+            files++
+            val code = blankComments(text)
+            val declarations = functionDeclarations(code)
+            val aliases = edgeAliases(code)
+
+            for (site in edgeSites(code, aliases)) {
+                if (site.derived) {
+                    derived++
+                    continue
+                }
+                val region = regionOf(declarations, site.index, code.length)
+                val key = "$leaf#${region.name}"
+                counted[key] = (counted[key] ?: 0) + 1
+                if (rawEdgeExemptions[key] == null) {
+                    val line = code.substring(0, site.index).count { it == '\n' } + 1
+                    offenders += "$leaf:$line ${region.name} draws a raw ${site.token} edge"
+                } else if (!text.substring(documentedFrom(text, region.start), region.end).contains(TEST_NAME)) {
+                    silent += key
+                }
+            }
+        }
+
+        assertEquals(
+            "a raw outline border states a boundary at 1.07–1.41:1, which is a boundary the user cannot see — " +
+                "route it through NorfoldChrome.restingEdge, or add it to rawEdgeExemptions with the measurement " +
+                "that says why it rules, separates or links rather than bounds",
+            emptyList<String>(),
+            offenders,
+        )
+        assertEquals(
+            "an exemption has to argue for itself where the stroke is, not only in this test's list — the prose " +
+                "beside it must name $TEST_NAME so the next reader of that function knows the faintness is a " +
+                "decision and can find the figures behind it",
+            emptyList<String>(),
+            silent,
+        )
+        assertEquals(
+            "every exemption must still be a live site: a stale entry silently licenses a raw edge somewhere " +
+                "else in the same function",
+            rawEdgeExemptions,
+            counted.toSortedMap(),
+        )
+        // Three floors, because all four assertions above are vacuously green on an empty scan — a renamed
+        // package, a regex that stops matching, or a `blankComments` that blanks everything would each pass.
+        assertTrue("only $files files scanned under ui/ — the walk has stopped finding them", files >= 80)
+        assertTrue(
+            "only $derived derived edges found — restingEdge/restingStroke/chromeEdge have stopped being " +
+                "recognised, so every routed site would now be reported as an offender",
+            derived >= 50,
+        )
+        assertEquals(
+            "the exempt sites are counted individually, so a fifth grid line appearing inside an already-exempt " +
+                "function is still visible here",
+            18,
+            counted.values.sum(),
+        )
+    }
+
+    /**
+     * The functions that draw a raw `outline` stroke deliberately, and how many each owns.
+     *
+     * Keyed by `file#function` with a site count, so an exemption licenses a *known* number of strokes rather
+     * than the function. Adding a sixth grid line to `TaskDatabaseTable` fails this test even though the
+     * function is already exempt, which is the point: the exemption is for the five strokes someone measured.
+     *
+     * Two populations, and the distinction is worth keeping visible. The **borders** are grid rulings — a cell
+     * bordered on all four sides by neighbours, where what a reader sees is the rule between two cells. The
+     * **hairlines** are `background` on a chain 2 dp or less across: a divider, or a spine linking a row's dot
+     * to the next one. Neither encloses anything.
+     *
+     * `SpreadsheetHostScreen.GridCell` is the clearest case for why this list is not just about density. Its
+     * fill is whatever `format.fillColor` the *user* set, so the backdrop this stroke sits on is unknowable at
+     * composition — there is no colour to solve against, and inventing one would measure against a pixel the
+     * renderer never produces.
+     */
+    private val rawEdgeExemptions = sortedMapOf(
+        // Grid rulings: shared edges, where the stroke is a rule and not a boundary.
+        "editor/spreadsheet/SpreadsheetHostScreen.kt#GridCell" to 1,
+        "editor/spreadsheet/SpreadsheetHostScreen.kt#GridHeader" to 1,
+        "screens/PlanningScreens.kt#DayTimeline" to 1,
+        "screens/PlanningScreens.kt#WeekPanel" to 1,
+        "tasks/TasksBoardScreen.kt#TaskDatabaseTable" to 5,
+        "tasks/TasksBoardScreen.kt#TaskTableDataCell" to 1,
+        "tasks/TasksBoardScreen.kt#TaskTableHeaderCell" to 1,
+        "tasks/TasksBoardScreen.kt#TaskTimelineView" to 3,
+        // Hairlines: a divider and three connectors, each 2 dp or less across.
+        "components/SettingsKit.kt#RowDivider" to 1,
+        "screens/SettingsScreen.kt#SyncChainConnector" to 1,
+        "screens/WorkspaceHubScreens.kt#ActivityTimelineRow" to 1,
+        "screens/WorkspaceHubScreens.kt#DatabaseTimelineRow" to 1,
+    )
+
+    private val TEST_NAME = "ChromeGeometryTest"
+
+    /** One `border`/`background` site: where it is, which token it names, and whether it derives. */
+    private data class EdgeSite(val index: Int, val token: String, val derived: Boolean)
+
+    /** A function's name and the source range it owns, from its declaration to the next one. */
+    private data class Region(val name: String, val start: Int, val end: Int)
+
+    /**
+     * Every Kotlin file under `ui/`, as `path-relative-to-ui` to text.
+     *
+     * Walked rather than listed, unlike [chromeCallerSources]. The two are answering different questions: that
+     * one asserts over the twelve files that *call* the substrate, where a thirteenth is a deliberate decision;
+     * this one asserts an absence across the whole tree, and an absence proved over a hand-written list is only
+     * an absence from that list. The defect this scan found — `FlowDropMarker` — is in a file
+     * [chromeCallerSources] does not name.
+     */
+    private fun uiSources(): List<Pair<String, String>> {
+        val relative = "src/main/java/com/norfold/app/ui"
+        val candidates = listOf(File(relative), File("apps/android/$relative"))
+        val root = candidates.firstOrNull(File::isDirectory) ?: error("$relative not found")
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.relativeTo(root).path.replace(File.separatorChar, '/') to it.readText() }
+            .sortedBy { it.first }
+            .toList()
+    }
+
+    /**
+     * The same source with every comment and string literal blanked to spaces, newlines kept.
+     *
+     * Blanked rather than removed, because the offsets have to survive: this text is scanned for call sites and
+     * the *original* is then read for the prose at the same coordinates. `HistoryBoundaryTest.codeOnly` deletes,
+     * which is right for a scan that only asks whether a name appears anywhere, and wrong here.
+     *
+     * String literals go too, and that is not fussiness — a UI string mentioning a border would otherwise be
+     * read as a call, and one containing an unbalanced parenthesis would derail the balancing below.
+     */
+    private fun blankComments(source: String): String {
+        val out = source.toCharArray()
+        var index = 0
+        while (index < out.size) {
+            when {
+                source.startsWith("//", index) -> {
+                    val stop = source.indexOf('\n', index).let { if (it < 0) out.size else it }
+                    for (at in index until stop) out[at] = ' '
+                    index = stop
+                }
+                source.startsWith("/*", index) -> {
+                    val stop = source.indexOf("*/", index + 2).let { if (it < 0) out.size else it + 2 }
+                    for (at in index until stop) if (out[at] != '\n') out[at] = ' '
+                    index = stop
+                }
+                source.startsWith("\"\"\"", index) -> {
+                    val stop = source.indexOf("\"\"\"", index + 3).let { if (it < 0) out.size else it + 3 }
+                    for (at in index until stop) if (out[at] != '\n') out[at] = ' '
+                    index = stop
+                }
+                out[index] == '"' || out[index] == '\'' -> {
+                    val quote = out[index]
+                    var at = index + 1
+                    while (at < out.size && out[at] != quote && out[at] != '\n') {
+                        at += if (out[at] == '\\') 2 else 1
+                    }
+                    for (blank in index..minOf(at, out.size - 1)) if (out[blank] != '\n') out[blank] = ' '
+                    index = at + 1
+                }
+                else -> index++
+            }
+        }
+        return String(out)
+    }
+
+    /** The index of the `)` that closes the `(` at [open]. */
+    private fun closingParen(source: String, open: Int): Int {
+        var depth = 0
+        var index = open
+        while (index < source.length) {
+            when (source[index]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+            index++
+        }
+        return source.length - 1
+    }
+
+    /** Every `fun` declaration in the file, as an offset-to-name pair in source order. */
+    private fun functionDeclarations(code: String): List<Pair<Int, String>> =
+        Regex("""\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?(\w+)\s*[(<]""")
+            .findAll(code)
+            .map { it.range.first to it.groupValues[1] }
+            .toList()
+
+    /** Which function owns [position], and the range that function spans. */
+    private fun regionOf(declarations: List<Pair<Int, String>>, position: Int, length: Int): Region {
+        var start = 0
+        var name = "<top-level>"
+        for ((at, declared) in declarations) {
+            if (at <= position) {
+                start = at
+                name = declared
+            } else {
+                return Region(name, start, at)
+            }
+        }
+        return Region(name, start, length)
+    }
+
+    /**
+     * The offset where [declaration]'s documentation begins.
+     *
+     * Walks back line by line over annotations and comment lines. Line-by-line rather than by pattern because a
+     * KDoc's interior lines start with `*`, its opening line with the block-comment marker and an annotation with
+     * `@`, and only their position relative to the declaration says they belong to it.
+     */
+    private fun documentedFrom(text: String, declaration: Int): Int {
+        var start = text.lastIndexOf('\n', declaration) + 1
+        while (start > 0) {
+            val previous = text.lastIndexOf('\n', start - 2) + 1
+            val line = text.substring(previous, start - 1).trim()
+            val documents = line.startsWith("//") || line.startsWith("*") ||
+                line.startsWith("/*") || line.startsWith("@") || line.endsWith("*/")
+            if (!documents) return start
+            start = previous
+        }
+        return start
+    }
+
+    /**
+     * The local `val`s that stand in for an edge colour, split by whether they derive one.
+     *
+     * Both directions matter and for opposite reasons: a raw alias hides sites from the scan, and a derived
+     * alias makes routed sites look raw. The initialiser is read to the end of its indented continuation rather
+     * than to the end of its line, because a derivation is quite often on the second line of an `if`.
+     */
+    private fun edgeAliases(code: String): Pair<Set<String>, Set<String>> {
+        val derived = mutableSetOf<String>()
+        val raw = mutableSetOf<String>()
+        for (match in Regex("""\bval\s+(\w+)(?:\s*:\s*\w+)?\s*=""").findAll(code)) {
+            val initialiser = initialiserOf(code, match.range.first, match.range.last + 1)
+            when {
+                DERIVED_EDGE.containsMatchIn(initialiser) -> derived += match.groupValues[1]
+                initialiser.contains("colorScheme.outline") -> raw += match.groupValues[1]
+            }
+        }
+        return derived to raw
+    }
+
+    /** A `val` initialiser: its own line, plus every following line indented deeper than the `val`. */
+    private fun initialiserOf(code: String, declaration: Int, from: Int): String {
+        val lineStart = code.lastIndexOf('\n', declaration) + 1
+        val indent = code.substring(lineStart).takeWhile { it == ' ' }.length
+        var end = code.indexOf('\n', from).let { if (it < 0) code.length else it }
+        while (end < code.length) {
+            val next = code.indexOf('\n', end + 1).let { if (it < 0) code.length else it }
+            val line = code.substring(end + 1, next)
+            if (line.isBlank()) break
+            if (line.takeWhile { it == ' ' }.length <= indent) break
+            end = next
+        }
+        return code.substring(declaration, end)
+    }
+
+    /**
+     * Every border and hairline site in the file, classified.
+     *
+     * `.border(...)` and `BorderStroke(...)` are boundaries by construction. A `.background(...)` is only a
+     * *line* when its chain carries a `width`/`height` of 2 dp or less — that is the #62/#79 boundary, and it is
+     * a real one: `outline` filling a 6 dp dot is not a faint edge, it is ink standing in for a glyph, which is
+     * #79's business and needs a different ratio. The dimension is searched from the nearest preceding
+     * `Modifier` so a neighbouring composable's size cannot be read as this one's.
+     */
+    private fun edgeSites(code: String, aliases: Pair<Set<String>, Set<String>>): List<EdgeSite> {
+        val (derivedAliases, rawAliases) = aliases
+        fun names(candidates: Set<String>, arguments: String) =
+            candidates.any { Regex("""\b$it\b""").containsMatchIn(arguments) }
+
+        val sites = mutableListOf<EdgeSite>()
+        var consumed = -1
+        for (match in Regex("""(?:\.border|\bBorderStroke)\s*\(""").findAll(code)) {
+            // A nested match sits inside a call already counted: `.border(BorderStroke(w, c))` is one site.
+            if (match.range.first < consumed) continue
+            val open = code.lastIndexOf('(', match.range.last)
+            consumed = closingParen(code, open)
+            val arguments = code.substring(open + 1, consumed)
+            val token = if (arguments.contains("outlineVariant")) "outlineVariant" else "outline"
+            when {
+                DERIVED_EDGE.containsMatchIn(arguments) || names(derivedAliases, arguments) ->
+                    sites += EdgeSite(match.range.first, token, derived = true)
+                arguments.contains("colorScheme.outline") || names(rawAliases, arguments) ->
+                    sites += EdgeSite(match.range.first, token, derived = false)
+            }
+        }
+        for (match in Regex("""\.background\s*\(""").findAll(code)) {
+            val open = code.lastIndexOf('(', match.range.last)
+            val arguments = code.substring(open + 1, closingParen(code, open))
+            if (!arguments.contains("colorScheme.outline") && !names(rawAliases, arguments)) continue
+            val anchor = code.lastIndexOf("Modifier", match.range.first)
+            val window = code.substring(
+                if (anchor >= 0) anchor else maxOf(0, match.range.first - 320),
+                match.range.first,
+            )
+            val thin = THIN_DIMENSION.findAll(window)
+                .mapNotNull { (it.groupValues[1] + it.groupValues[2]).toFloatOrNull() }
+                .toList()
+            if (thin.isNotEmpty() && thin.min() <= 2f) {
+                val token = if (arguments.contains("outlineVariant")) "outlineVariant" else "outline"
+                sites += EdgeSite(match.range.first, token, derived = false)
+            }
+        }
+        return sites
+    }
+
+    private val DERIVED_EDGE = Regex("""\b(?:restingEdge|restingStroke|chromeEdge|selectedEdge)\b""")
+
+    private val THIN_DIMENSION = Regex(
+        """\.(?:width|height)\(\s*(\d+(?:\.\d+)?)\.dp\s*\)|\b(?:width|height)\s*=\s*(\d+(?:\.\d+)?)\.dp""",
+    )
+
+    /**
      * Every row that hands its indicator a null handler puts the semantics on the row.
      *
      * Passing `null` to a `Switch`, `Checkbox` or `RadioButton` is what makes it decorative, and it is half of a
@@ -2608,7 +3023,7 @@ class ChromeGeometryTest {
     }
 
     /**
-     * Every one of the six sites passes its own fill rather than letting the backdrop default.
+     * Every one of the eight sites passes its own fill rather than letting the backdrop default.
      *
      * The one mistake that would silently un-fix this. `legibleInk`'s `backdrop` defaults to
      * `Color.Unspecified`, which `resolvedBackdrop` resolves to [com.norfold.app.ui.LocalChromeContainer] — the
@@ -2619,8 +3034,12 @@ class ChromeGeometryTest {
      * and it is worth pinning separately because here the defaulting call *compiles and reads correctly*.
      *
      * Asserted from the source because the argument list of a `@Composable` call is not observable from a unit
-     * test. The six files are named individually rather than globbed: a seventh site is a decision someone
+     * test. The six files are named individually rather than globbed: a seventh file is a decision someone
      * should have to make deliberately, and this failing is the prompt to check they passed a fill.
+     *
+     * Eight calls across those six files, because `FlowHostScreen.FlowDropMarker` has two — its muted branch and
+     * its active one solve different inks against the same fill, and both had to stop drawing their label from
+     * the colour that draws the marker's edge.
      */
     @Test
     fun `every legibleInk call site names the fill it paints`() {
@@ -2648,7 +3067,7 @@ class ChromeGeometryTest {
             }
         }
 
-        assertEquals("the six text-on-chrome sites the helper exists for", 6, calls)
+        assertEquals("the eight text-on-chrome sites the helper exists for", 8, calls)
         assertEquals(
             "a legibleInk call with no backdrop measures the ink against LocalChromeContainer — the surface the " +
                 "row sits inside, not the one it paints — so it would report a passing figure and fix nothing",

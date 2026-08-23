@@ -88,8 +88,10 @@ import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.domain.ChatChannel
 import com.norfold.app.domain.ChatChannelKind
 import com.norfold.app.domain.ChatMessageItem
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.components.NorfoldContentDialog
 import com.norfold.app.ui.components.NorfoldDialog
 import com.norfold.app.ui.components.NorfoldEmptyState
@@ -1264,13 +1266,18 @@ private fun NewConversationOption(
     onClick: () -> Unit,
 ) {
     val focus = rememberChromeFocus()
+    // Read once for the edge and the ring, so both are measured against the same pixel.
+    val fill = MaterialTheme.colorScheme.surface
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        color = fill,
+        // Three of these stack 4 dp apart inside a dialog, and each is a tappable card. The edge was
+        // `outlineVariant` — the fainter token — halved again, which on `surface` is 1.1402:1 light and 1.1648:1
+        // dark: not a boundary, just a tint. `restingEdge` solves from `outline` against the fill instead.
+        border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(fill) }),
         interactionSource = focus.source,
-        modifier = Modifier.fillMaxWidth().then(focus.ringOnShape(14f, MaterialTheme.colorScheme.surface)),
+        modifier = Modifier.fillMaxWidth().then(focus.ringOnShape(14f, fill)),
     ) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 10.dp),

@@ -75,6 +75,7 @@ import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.chromeFocusRing
 import com.norfold.app.ui.focusableChrome
 import com.norfold.app.ui.focusablePill
@@ -241,7 +242,7 @@ private fun PlanningProgressCard(
         ),
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -693,6 +694,13 @@ private fun DatabaseTimelineRow(obj: WorkspaceObject, state: DocsUiState, viewMo
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(12.dp).clip(CircleShape).background(Color(obj.color)))
+            // A connector, not a container edge, and the distinction is why this keeps a raw `outline` where
+            // every bordered surface in this file now derives one. The bar carries no boundary: it joins this
+            // row's dot to the next one, and the thing a reader is meant to see is the dot — drawn in the
+            // object's own colour, at full strength, 12 dp across. At `outline@0.32` the spine measures
+            // 1.0527:1 light / 1.0845:1 dark on the page, faint on purpose. Solved to the resting-edge ratio
+            // it would read as a rule down the page and compete with the dots it exists to link.
+            // `ChromeGeometryTest` exempts it by name alongside the grid lines and dividers.
             Box(Modifier.width(2.dp).height(58.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.32f)))
         }
         DatabaseObjectRow(obj, state, viewModel)
@@ -828,6 +836,10 @@ private fun ActivityTimelineRow(entry: ActivityTimelineEntry, modifier: Modifier
             Surface(shape = CircleShape, color = entry.color.copy(alpha = 0.22f)) {
                 Icon(entry.icon, null, tint = entry.color, modifier = Modifier.padding(7.dp).size(16.dp))
             }
+            // The same connector as `DatabaseTimelineRow`, quieter again at `outline@0.18` — 1.0259:1 light /
+            // 1.0401:1 dark — because the badge above it is a filled circle rather than a bare dot and needs
+            // less help being found. Exempted for the same reason: it links, it does not bound, so
+            // `ChromeGeometryTest` names this function too.
             Box(Modifier.width(2.dp).height(44.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)))
         }
         Surface(

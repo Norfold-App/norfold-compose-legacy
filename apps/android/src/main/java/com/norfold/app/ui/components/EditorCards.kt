@@ -46,6 +46,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 
 /**
@@ -378,11 +380,17 @@ fun EditorCardStepperRow(
 @Composable
 private fun StepperButton(glyph: String, onClick: () -> Unit) {
     val focus = rememberChromeFocus()
+    // The fill is read once and passed to both the ring and the edge: two measurements against the same
+    // pixel, which is what keeps a 2 dp focus ring at 3:1 distinguishable from a 1 dp resting edge at 2.2:1.
+    val fill = MaterialTheme.colorScheme.surfaceContainerHigh
     Surface(
-        modifier = Modifier.size(30.dp).then(focus.ringOnCircle(30f, MaterialTheme.colorScheme.surfaceContainerHigh)),
+        modifier = Modifier.size(30.dp).then(focus.ringOnCircle(30f, fill)),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = fill,
+        border = androidx.compose.foundation.BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            with(NorfoldChrome) { restingEdge(fill) },
+        ),
         interactionSource = focus.source,
         onClick = onClick,
     ) {

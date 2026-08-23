@@ -44,6 +44,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ColorValue
 import com.norfold.app.editor.chart.AccessibleChartTable
 import com.norfold.app.editor.chart.ChartAccessibility
@@ -58,6 +59,8 @@ import com.norfold.app.editor.chart.ChartMark
 import com.norfold.app.editor.chart.ChartPoint
 import com.norfold.app.editor.chart.ResolvedChartData
 import com.norfold.app.ui.components.NorfoldBottomSheet
+import com.norfold.app.ui.EditorChromeColors
+import com.norfold.app.ui.NorfoldChrome
 
 data class ChartDirectManipulationCallbacks(
     val onSelect: (seriesId: String, sourceRowIndex: Int, sourceRowId: String?) -> Unit,
@@ -105,13 +108,48 @@ private fun ReadyChart(
     val scheme = MaterialTheme.colorScheme
     val background = document.style.background?.let { Color(it.toArgb()) } ?: scheme.surface
     val foregroundColor = document.style.foreground?.let { Color(it.toArgb()) } ?: scheme.onSurface
-    val gridColor = document.style.grid?.let { Color(it.toArgb()) } ?: scheme.outlineVariant
+    val gridBase = document.style.grid?.let { Color(it.toArgb()) } ?: scheme.outlineVariant
+    // One declared colour, two populations, two weights — so two derived colours. The `grid` local was drawing
+    // both the gridlines at 1 px and the x/y/y2 axis rules at 1.5 px, which under the Document host's own
+    // vocabulary are different things: a grid is a background you align against (GRID_RATIO, 1.6:1) and an axis
+    // rule is a guide you look for (GUIDE_RATIO, 2.2:1). Drawing them in one colour made the 1.5 px the only
+    // thing separating them, which is not a separation at 1 dp on a phone.
+    //
+    // Both are `settled` rather than `legible` for the reason `ContrastAnalysis.settledChrome` gives: these are
+    // targets, not floors, and a floor cannot quieten. It matters here in both directions. Downward, the theme
+    // fallback `outlineVariant` measures 1.1402:1 on light `surface` and 1.1648:1 on dark — invisible — and
+    // solves to #C4CBDC / #2D3951 for the grid and #A1ACC8 / #3E4E6E for the axes. Upward, a chart the user
+    // painted white in dark mode leaves `outlineVariant` at 15.9321:1, a near-black grid on a white card, which
+    // `legible` would have returned untouched; `settled` brings it to #C3CCDD (1.6152).
+    //
+    // That upward case is currently **latent, not shipping**: `ChartStyle.background`, `foreground` and `grid`
+    // are serialized and documented as settable, but nothing in the app writes them. Chart Studio's Color
+    // Studio `apply()` handles only `series:`, `mark:` and `palette:0` targets, the legacy Vega migration sets
+    // `ChartStyle(opacity = 1f)`, and every `style.copy(` in chart code touches `palette` or `opacity`. A
+    // user-set chart fill is reachable only through hand-authored JSON via the codec's `ignoreUnknownKeys`
+    // decode. Deriving anyway is what keeps that from becoming a defect the day a colour picker is wired up.
+    val gridColor = EditorChromeColors.settled(gridBase, background, ChromeGeometry.GRID_RATIO)
+    val axisColor = EditorChromeColors.settled(gridBase, background, ChromeGeometry.GUIDE_RATIO)
     val description = remember(document, data) { ChartAccessibility.description(document, data) }
     val table = remember(data) { ChartAccessibility.table(data) }
     Column(
         modifier
             .background(background, RoundedCornerShape(16.dp))
-            .border(1.dp, scheme.outlineVariant, RoundedCornerShape(16.dp))
+            // Measured, and against `background` rather than a theme token because that local is the fill this
+            // stroke is actually drawn on: `document.style.background` is a colour the *user* set on the chart,
+            // falling back to `scheme.surface` only when they have not. On the theme fallback `outlineVariant`
+            // reads 1.1402:1 light and 1.1648:1 dark, and the solved edge is #ACAEB7 / #474E5C. On a chart the
+            // user painted cream #FFF6E5 it solves to #A6A8B1 (2.2090); on slate #223042 it inverts to #5C6371
+            // (2.2162) in dark and to the light token at 10.7450 in light. One expression covers all of them
+            // because the fill is a resolved `Color` here, so unlike a spreadsheet cell this fill *is* knowable
+            // at composition and can be solved against exactly.
+            //
+            // This card's edge is the boundary at Chart Studio, where the chart sits alone on the sheet with
+            // nothing else stating its extent. At the two *nested* hosts the surrounding object chrome is what
+            // states extent — the Document page draws `DocumentChromeColors.restingObject` at the object bounds,
+            // and the Flow canvas now passes `resting = false` to `FlowObjectFrame` for exactly this reason, so
+            // the two 16 dp radii no longer draw one rounded rect 6 dp inside another.
+            .border(1.dp, with(NorfoldChrome) { restingEdge(background) }, RoundedCornerShape(16.dp))
             .padding(14.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = description
@@ -192,6 +230,7 @@ private fun ReadyChart(
             }
             Canvas(Modifier.fillMaxWidth().height(heightDp.dp).then(tapModifier).then(gestureModifier)) {
                 val grid = gridColor
+                val axis = axisColor
                 val foreground = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                     color = foregroundColor.toArgb()
                     textSize = 11.dp.toPx()
@@ -203,7 +242,7 @@ private fun ReadyChart(
                     drawLine(grid, Offset(tick.position, layout.plot.top), Offset(tick.position, layout.plot.bottom), 1f)
                 }
                 if (document.axes.y.visible) {
-                    drawLine(grid, Offset(layout.plot.left, layout.plot.top), Offset(layout.plot.left, layout.plot.bottom), 1.5f)
+                    drawLine(axis, Offset(layout.plot.left, layout.plot.top), Offset(layout.plot.left, layout.plot.bottom), 1.5f)
                     drawIntoCanvas { canvas ->
                         layout.yTicks.forEach { tick ->
                             foreground.textAlign = android.graphics.Paint.Align.RIGHT
@@ -212,7 +251,7 @@ private fun ReadyChart(
                     }
                 }
                 document.axes.y2?.takeIf { it.visible }?.let {
-                    drawLine(grid, Offset(layout.plot.right, layout.plot.top), Offset(layout.plot.right, layout.plot.bottom), 1.5f)
+                    drawLine(axis, Offset(layout.plot.right, layout.plot.top), Offset(layout.plot.right, layout.plot.bottom), 1.5f)
                     drawIntoCanvas { canvas ->
                         layout.y2Ticks.forEach { tick ->
                             foreground.textAlign = android.graphics.Paint.Align.LEFT
@@ -221,7 +260,7 @@ private fun ReadyChart(
                     }
                 }
                 if (document.axes.x.visible) {
-                    drawLine(grid, Offset(layout.plot.left, layout.plot.bottom), Offset(layout.plot.right, layout.plot.bottom), 1.5f)
+                    drawLine(axis, Offset(layout.plot.left, layout.plot.bottom), Offset(layout.plot.right, layout.plot.bottom), 1.5f)
                     val every = (layout.xTicks.size / 6).coerceAtLeast(1)
                     drawIntoCanvas { canvas ->
                         foreground.textAlign = android.graphics.Paint.Align.CENTER

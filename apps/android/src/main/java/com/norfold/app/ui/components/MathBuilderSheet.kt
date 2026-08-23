@@ -54,6 +54,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.toggleableChrome
 
 enum class MathInsertionKind(val label: String) {
@@ -323,11 +325,21 @@ fun MathBuilderSheet(
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
+            val previewFill = colorScheme.surfaceVariant.copy(alpha = 0.42f)
             Surface(
                 modifier = Modifier.fillMaxWidth().testTag("math-live-preview"),
                 shape = RoundedCornerShape(16.dp),
-                color = colorScheme.surfaceVariant.copy(alpha = 0.42f),
-                border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                color = previewFill,
+                // Measured, and the same fill as the chart builder's preview because it is the same idea: 42%
+                // `surfaceVariant` over `NorfoldBottomSheet`'s `surfaceContainerLow` composites to **1.0012:1 of
+                // the sheet in dark mode** and 1.0345:1 light, so the fill states nothing and the stroke is the
+                // only cue. `outlineVariant` over it drew 1.0744:1 / 1.0786:1. What is inside is a monospace
+                // rendering of the equation being built, which without an edge reads as loose text in the form
+                // rather than as the output the label above it promises.
+                border = BorderStroke(
+                    ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                    with(NorfoldChrome) { restingEdge(previewFill) },
+                ),
             ) {
                 Text(
                     text = mathPreviewText(equation.text, insertionKind),

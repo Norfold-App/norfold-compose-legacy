@@ -819,10 +819,26 @@ private fun rememberFlowDragState(): FlowDragState = remember { FlowDragState() 
  */
 @Composable
 private fun FlowDropMarker(placement: FlowDropPlacement, modifier: Modifier = Modifier) {
-    val color = if (placement.isNoOp) {
-        MaterialTheme.colorScheme.outlineVariant
+    // Three colours, not one. The marker used to draw its edge, its fill and its label from a single `color`,
+    // and in the no-op state that colour was `outlineVariant` at 6% over the page — so "Current position"
+    // announced itself at **1.0724:1 light and 1.2338:1 dark**, and the 2 dp edge that is supposed to show
+    // where the block sits measured the same. A muted state is the point ("this changes nothing" is feedback),
+    // but muted has to mean quieter than the active marker, not absent.
+    //
+    // So the fill stays exactly as it was — it is the mute — and the edge and the label are each measured
+    // against it. The no-op edge lands at 2.2090:1 / 2.2411:1 and its label is `onSurfaceVariant`, which the
+    // theme already pairs correctly with a near-page fill (4.7499:1 / 7.3053:1, so `legibleInk` returns it
+    // unchanged and is here for the fills it does not). The active marker gains from the same treatment: the
+    // accent-on-accent-wash label failed 4.5:1 on **9 of 10 accents in light mode** — Gold worst at 2.0829:1,
+    // which also failed the edge ratio — and after solving, all ten clear both, worst 2.2128 edge / 4.5100
+    // label light and 4.0982 / 4.5821 dark.
+    val accent = if (placement.isNoOp) MaterialTheme.colorScheme.outlineVariant else MaterialTheme.colorScheme.primary
+    val fill = accent.copy(alpha = if (placement.isNoOp) .06f else .10f)
+    val edge = with(NorfoldChrome) { restingEdge(fill) }
+    val ink = if (placement.isNoOp) {
+        NorfoldChrome.legibleInk(MaterialTheme.colorScheme.onSurfaceVariant, fill)
     } else {
-        MaterialTheme.colorScheme.primary
+        NorfoldChrome.legibleInk(accent, fill)
     }
     Row(
         modifier
@@ -837,14 +853,14 @@ private fun FlowDropMarker(placement: FlowDropPlacement, modifier: Modifier = Mo
         Surface(
             modifier = Modifier.weight(1f).height(42.dp),
             shape = RoundedCornerShape(14.dp),
-            color = color.copy(alpha = if (placement.isNoOp) .06f else .10f),
-            border = androidx.compose.foundation.BorderStroke(2.dp, color),
+            color = fill,
+            border = androidx.compose.foundation.BorderStroke(2.dp, edge),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
                     if (placement.isNoOp) "Current position" else "Drop block here",
                     style = MaterialTheme.typography.labelLarge,
-                    color = color,
+                    color = ink,
                 )
             }
         }

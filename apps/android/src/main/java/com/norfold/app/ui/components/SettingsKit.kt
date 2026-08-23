@@ -48,8 +48,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.LocalChromeContainer
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.selectableChrome
 
@@ -121,8 +123,22 @@ fun SettingsGroup(
                 .clip(GroupShape)
                 .background(cardColor)
                 .border(
-                    width = 1.dp,
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = if (dark) 0.5f else 0.7f),
+                    width = ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                    // Measured, and it has to be: this edge is the only thing that says where a Settings group
+                    // begins, because the other cue is not doing any work. The card's fill separates from the
+                    // page by 1.0613:1 light and 1.0664:1 dark — a difference no eye reads as a boundary — so a
+                    // faint stroke here is not one cue among several, it is the cue. As written it was
+                    // `outline` reduced to 0.7/0.5 alpha, which drew 1.1637:1 light and 1.1320:1 dark against
+                    // the card it surrounds; the alpha was cutting into a token that already only reaches
+                    // 1.2453:1 and 1.3256:1 at full strength. Dropping the mode conditional with it: it was
+                    // compensating for the two modes' tokens differing, which is precisely what the solver does
+                    // from the measured pixel instead of from a guess.
+                    //
+                    // [cardColor] is named rather than left to the ambient container on purpose. The provider
+                    // below is *inside* this `Column`, so at the point this modifier chain is built the ambient
+                    // answer is still the Settings page — the card publishes itself for its rows, not for its
+                    // own edge.
+                    color = with(NorfoldChrome) { restingEdge(cardColor) },
                     shape = GroupShape,
                 ),
         ) {
@@ -136,7 +152,17 @@ fun SettingsGroup(
     }
 }
 
-/** Hairline divider that lines up under the row text (past the icon tile). */
+/**
+ * Hairline divider that lines up under the row text (past the icon tile).
+ *
+ * Deliberately left on the raw token at 0.35 alpha, and not routed through
+ * [NorfoldChrome.restingEdge] like [SettingsGroup]'s edge above. A divider is not a container edge: it does not
+ * say where anything begins or ends, it says two adjacent rows are separate — and the rows already say that
+ * themselves, through 60 dp of consistent text inset, a tile per row and the whole card's shape. Solving this
+ * line to 2.2:1 would make a stack of eight settings rows read as eight boxes, which is the box farm the group
+ * card exists to avoid. It measures 1.0776:1 light and 1.0863:1 dark against the card, and that faintness is the
+ * intent rather than an oversight: it is a seam, not a boundary. `ChromeGeometryTest` exempts it by name.
+ */
 @Composable
 fun RowDivider(inset: Boolean = true) {
     Box(

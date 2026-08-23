@@ -1265,13 +1265,21 @@ private fun NotificationSettings(state: DocsUiState, viewModel: DocsViewModel) {
 @Composable
 private fun ThemeTile(label: String, icon: ImageVector, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val edgeWidth = if (selected) ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH else ChromeGeometry.RESTING_EDGE_WIDTH
+    // The tile's fill, hoisted for the same reason the edge weight is: one value driving the paint and the
+    // measurement of the edge drawn on it.
+    val tileFill = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surface
     Column(
         modifier
             .clip(NorfoldChrome.shape(Corner.Card))
-            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surface)
+            .background(tileFill)
             .border(
                 width = edgeWidth.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                // Resting edge measured; `primary` when selected stays a literal, because a selected edge is
+                // state rather than a boundary and solving it to a neutral would erase the answer to "which
+                // theme am I on". The resting one needed the solve: `outline` at 0.7 alpha on an unselected
+                // tile's `surface` fill, inside a `SettingsGroup` card that is *also* white in light mode, so
+                // the fill states nothing and a faded token was the only thing separating three tiles.
+                color = if (selected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(tileFill) },
                 shape = NorfoldChrome.shape(Corner.Card),
             )
             .selectableChrome(
@@ -2639,6 +2647,15 @@ private fun SyncChainNode(
 
 @Composable
 private fun SyncChainConnector() {
+    // Left on the raw token: this is a 2 dp tick joining two sync steps, so it is a connector rather than a
+    // container edge — nothing is inside it and it encloses nothing. Solving it to a boundary ratio would make
+    // the chain louder than the steps it connects.
+    //
+    // Measured for the record: [SettingsCard] is a bare `Card`, which paints Material's `FilledCardTokens`
+    // container at elevation level 0 — `surfaceContainerHighest`, #F1F2F6 light and #283650 dark, with no tonal
+    // overlay on top. Against that fill this tick reads 1.0192:1 light and 1.3153:1 dark, and a
+    // [ChromeGeometry.RESTING_EDGE_RATIO] connector would be #97A4C2 / #546A95 — three of those between four
+    // nodes would read as the diagram's subject rather than its wiring. `ChromeGeometryTest` exempts it by name.
     Box(Modifier.padding(start = 20.dp).size(width = 2.dp, height = 18.dp).background(MaterialTheme.colorScheme.outlineVariant))
 }
 
@@ -3018,7 +3035,12 @@ private fun BuiltInSettingsCoverStrip(selectedUri: String, onSelect: (String) ->
                     .size(width = 104.dp, height = 58.dp)
                     .border(
                         width = edgeWidth.dp,
-                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+                        // Solved against the ambient container — the `SettingsGroup` card this strip scrolls
+                        // inside — and not against the cover, for the reason `BuiltInBackgroundStrip` states:
+                        // what fills a cover is a photograph, so the pixel beneath the stroke is unknowable at
+                        // composition and differs on each side. The boundary that *can* be measured is the one
+                        // against the card behind the 8 dp gaps, and that is the one doing the work.
+                        color = if (selected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge() },
                         shape = RoundedCornerShape(Corner.Media.radiusDp.dp),
                     )
                     .selectableChrome(

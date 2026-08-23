@@ -116,8 +116,10 @@ import com.norfold.app.domain.stylesheet
 import com.norfold.app.domain.findById
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.norfold.app.domain.style.resolvedPageBackground
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.ui.EditorChromeColors
+import com.norfold.app.ui.LocalChromeContainer
 import com.norfold.app.ui.editor.style.backgroundPaint
 import com.norfold.app.editor.chart.ChartBlockAdapter
 import com.norfold.app.ui.editor.chart.ChartStudioSheet
@@ -720,17 +722,32 @@ private fun PageSheet(
             }
             .semantics { contentDescription = "Page ${numberLabel ?: (pageIndex + 1)}" },
     ) {
-        // Header, footer and page number are page *metadata*, drawn beneath the objects so content placed
-        // over a running head still wins. Reserved-but-invisible bands were the defect: the geometry
-        // reserved space the user could not see, so their content sat mysteriously low on the sheet.
-        PageMetadata(page, pageIndex, numberLabel, scale)
+        // The page's own painted colour, published for the chrome drawn *inside* an object rather than around
+        // it. `chrome` below covers the outlines this file draws itself; the content of an object is composed by
+        // [com.norfold.app.ui.editor.document.SceneObjectContent], which is eleven levels of recursion away and
+        // has no way to know what colour the sheet is — and here that is not a theme token at all but whatever
+        // paint the user chose for this page, live-previewed mid-Color-Studio. Publishing it is what lets a
+        // resting edge down there measure against the pixel it is actually drawn on instead of guessing the app
+        // background; the alternative was a sixteenth parameter threaded through every block type.
+        //
+        // `pageBackdrop` resolves a ramp to its worst stop for the reason it documents: one chrome colour has to
+        // survive every stop, and the extreme is what decides.
+        val scope = this
+        CompositionLocalProvider(LocalChromeContainer provides EditorChromeColors.pageBackdrop(pagePaint)) {
+            with(scope) {
+                // Header, footer and page number are page *metadata*, drawn beneath the objects so content placed
+                // over a running head still wins. Reserved-but-invisible bands were the defect: the geometry
+                // reserved space the user could not see, so their content sat mysteriously low on the sheet.
+                PageMetadata(page, pageIndex, numberLabel, scale)
 
-        // Back-to-front: the front-most object is drawn last, so it is the one that overlaps the others.
-        visible.sortedBy { it.z }.forEach { obj ->
-            SceneObjectBox(
-                obj, page, scale, presenter, chrome,
-                onOpenTableInSpreadsheet, onOpenChart, onOpenImage, onOpenShape,
-            )
+                // Back-to-front: the front-most object is drawn last, so it is the one that overlaps the others.
+                visible.sortedBy { it.z }.forEach { obj ->
+                    SceneObjectBox(
+                        obj, page, scale, presenter, chrome,
+                        onOpenTableInSpreadsheet, onOpenChart, onOpenImage, onOpenShape,
+                    )
+                }
+            }
         }
     }
 }
@@ -1351,8 +1368,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPageStructure(
  * so a document whose pages are different colours needs a different answer per page, and a single
  * theme-resolved set computed once for the whole host would be wrong for all but one of them.
  *
- * Every field is derived from the theme via [EditorChromeColors.legible], so the user's accent still drives
- * the chrome on an ordinary white page and is adjusted only as far as the page colour forces.
+ * Every field is derived from the theme — the selection tiers via [EditorChromeColors.legible] and the
+ * structure aids via [EditorChromeColors.settled] — so the user's accent still drives the chrome on an
+ * ordinary white page and is adjusted only as far as the page colour forces. `rememberDocumentChromeColors`
+ * says why the two groups need different functions.
  */
 private data class DocumentChromeColors(
     /** Every "this is the selection" state — primary object, secondary selection, selected page. */
@@ -1375,6 +1394,20 @@ private data class DocumentChromeColors(
  * content is a grid that has stopped being a background. Those two are judgements about how loud a hint
  * should be; the 3:1 is a requirement.
  *
+ * **That difference in kind is why the two groups call different functions.** [EditorChromeColors.legible] is
+ * a floor — it returns its input untouched when the input already clears the target — which is right for a
+ * requirement and wrong for a judgement. Passing `GRID_RATIO` to it did not produce a 1.6:1 grid: on the
+ * white page `PageGeometry.effectiveBackgroundPaint` defaults to, `onSurface` already measures 17.7110:1, so
+ * the grid, the margin guide and the column divider all came back as full-strength ink `#171725` and the three
+ * constants above named one weight between them. Dark mode on the near-black page landed all three at
+ * 15.0379:1. The structure aids now use [EditorChromeColors.settled], which clears the same target without
+ * overshooting it: the grid solves to `#C9C9DD` (1.6301) on white and `#334073` (1.6265) on the near-black
+ * page in dark mode, and across the eight page-by-mode cases every aid lands between 0.0028 and 0.0755 above
+ * its target — with the guide always at least 0.56 louder than the grid, which under the floor it was not.
+ * All of those figures are pinned in `ContrastAnalysisTest`. The selection tiers keep
+ * [EditorChromeColors.legible], because 3:1 is a minimum and there is no such thing as a selection outline
+ * seen too well.
+ *
  * The resting edge derives from the page's own ink rather than from the accent: an unselected object is not
  * in an accent-worthy state, and tinting every object edge with the user's brand colour would make a page of
  * ordinary objects look like a page of selected ones.
@@ -1393,24 +1426,15 @@ private fun rememberDocumentChromeColors(paint: ColorPaint): DocumentChromeColor
         val selectionAccent = EditorChromeColors.legible(accent, page)
         DocumentChromeColors(
             selection = selectionAccent,
-            restingObject = EditorChromeColors.legible(ink, page, target = RESTING_EDGE_RATIO),
+            restingObject = EditorChromeColors.settled(ink, page, ChromeGeometry.RESTING_EDGE_RATIO),
             badge = EditorChromeColors.badgeInk(page),
             activePage = EditorChromeColors.legible(secondary, page),
-            marginGuide = EditorChromeColors.legible(ink, page, target = GUIDE_RATIO),
-            grid = EditorChromeColors.legible(ink, page, target = GRID_RATIO),
-            columnDivider = EditorChromeColors.legible(ink, page, target = GUIDE_RATIO),
+            marginGuide = EditorChromeColors.settled(ink, page, ChromeGeometry.GUIDE_RATIO),
+            grid = EditorChromeColors.settled(ink, page, ChromeGeometry.GRID_RATIO),
+            columnDivider = EditorChromeColors.settled(ink, page, ChromeGeometry.GUIDE_RATIO),
         )
     }
 }
-
-/** A resting object edge states a boundary without competing with the content it bounds. */
-private const val RESTING_EDGE_RATIO = 2.2
-
-/** A margin or column hint: visible when looked for, not while reading. */
-private const val GUIDE_RATIO = 2.2
-
-/** A grid is a background. Legible enough to align against, quiet enough to forget. */
-private const val GRID_RATIO = 1.6
 
 /**
  * Object chrome: the selection outline, the primary marker and the lock badge.

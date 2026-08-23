@@ -48,6 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.NorfoldChrome
 
 @Composable
 fun ShapeCatalogSheet(
@@ -175,7 +176,21 @@ private fun ShapeCatalogRow(
         ),
         shape = RoundedCornerShape(14.dp),
         color = fill,
-        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+        // Measured. These rows sit in a `LazyColumn` inside `NorfoldBottomSheet`, whose container is
+        // `surfaceContainerLow` — and after the ramp derivation that colour is *lighter* than the row's own
+        // `surface` in light mode, so the two separate by 1.0259:1 light and 1.0812:1 dark. `outlineVariant` over
+        // the row drew 1.1402:1 / 1.1648:1. Each row carries a 52 dp thumbnail, a title, a licence line and
+        // sometimes a spinner, so with no visible edge the list reads as one continuous column of metadata rather
+        // than as a set of shapes to choose from — and it is a *picker*, so "which one am I about to tap" is the
+        // only question it has to answer.
+        //
+        // Not nested inside a bordered surface: the sheet paints a fill, not an edge, and 3 dp of vertical padding
+        // separates each row from the next. The selected edge stays `primary` — that is state, matched by the check
+        // icon in the trailing slot.
+        border = BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            if (selected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(fill) },
+        ),
     ) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(52.dp)) {
@@ -221,7 +236,13 @@ private fun PrimitiveShapeRow(kind: ShapeKind, selected: Boolean, onClick: () ->
         ),
         shape = RoundedCornerShape(14.dp),
         color = fill,
-        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+        // Same population and the same figures as [ShapeCatalogRow] above — these two row types interleave in one
+        // list under the same two section labels, so a solved edge on one and a 1.1402:1 edge on the other would
+        // make the basic shapes look like a different kind of thing from the catalogue shapes.
+        border = BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            if (selected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(fill) },
+        ),
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(Icons.Outlined.Category, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)

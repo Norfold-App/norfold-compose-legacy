@@ -75,14 +75,22 @@ fun NorfoldPageHeader(
  * `Modifier.clickable` with no `role`, no `onClickLabel` — that a real target needs. Removed instead. A
  * future caller that genuinely needs a clickable card should use [SettingsRow] or add the parameter back
  * together with its semantics and its ring.
+ *
+ * **Its edge is measured, not named.** The card is unelevated and unfilled relative to the page — `surface`
+ * on `background` separates by 1.06:1 — so the border is the only thing that says where the card is. Drawn in
+ * raw `outline` that border measures 1.25:1 against its own fill, which is a boundary the user cannot see on
+ * a card whose fill cannot state one either. [NorfoldChrome.restingEdge] solves the same token in lightness
+ * until it clears [ChromeGeometry.RESTING_EDGE_RATIO], and takes the fill as its backdrop because that is the
+ * pixel the edge is drawn against.
  */
 @Composable
 fun NorfoldCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val fill = MaterialTheme.colorScheme.surface
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        color = fill,
+        border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(fill) }),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
         content = content,
@@ -119,17 +127,24 @@ fun NorfoldMetric(label: String, value: String, icon: ImageVector, tint: Color, 
  * Focus is not selection here either: the active segment is already stated by fill, text colour and weight.
  * A user tabbing across the strip is focused on inactive segments most of the time, so the ring has to be
  * legible on a transparent segment as well as on the filled one.
+ *
+ * **The strip's own edge is measured against the strip's fill**, for the same reason [NorfoldCard]'s is: raw
+ * `outline` on `surfaceVariant` measures 1.11:1 light and 1.23:1 dark, so it drew a boundary that was not
+ * there. The two boundaries stay distinguishable by construction — the strip's edge is 1 dp at
+ * [ChromeGeometry.RESTING_EDGE_RATIO] and a segment's ring is 2 dp at 3:1, and the 3 dp of strip padding
+ * between them means neither is ever drawn on top of the other.
  */
 @Composable
 fun NorfoldSegmentedControl(options: List<String>, selected: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
-    Surface(modifier, shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceVariant, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+    val strip = MaterialTheme.colorScheme.surfaceVariant
+    Surface(modifier, shape = RoundedCornerShape(10.dp), color = strip, border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(strip) })) {
         Row(Modifier.padding(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             options.forEach { option ->
                 val active = option == selected
                 val focus = rememberChromeFocus()
                 // What the ring is drawn on, not what the strip sits on: the active segment's own accent
                 // fill would otherwise measure 1.00:1 against an accent-coloured ring.
-                val ringBackdrop = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                val ringBackdrop = if (active) MaterialTheme.colorScheme.primary else strip
                 Surface(
                     Modifier
                         .clickable(interactionSource = focus.source, indication = ripple()) { onSelect(option) }

@@ -146,6 +146,8 @@ import com.norfold.app.editor.style.CalloutTone
 import com.norfold.app.ui.editor.editorFlags
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 import com.norfold.app.ui.screens.highlightColor
+import com.norfold.app.ui.NorfoldChrome
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
@@ -495,12 +497,19 @@ fun FlowBlockContent(
         is ContainerBlock -> if (context.insideContainer) {
             FlowStyledChildren(block.children, callbacks, context)
         } else if (block.axis == ContainerAxis.Row && !context.compact) {
+            // The container's fill, read once for both axes' edges below. `surfaceContainer` is the theme's own
+            // ramp step, and in light mode it lands 1.0006:1 from `background` — one bit of blue away from the
+            // page, which is a deliberate consequence of fitting five ramp steps into a narrow light band (see
+            // `NorfoldTheme`'s "one near-collision" note). That makes the edge the only thing on screen saying a
+            // column layout is a column layout, and `outlineVariant` on this fill was drawing 1.0750:1 light and
+            // 1.0427:1 dark. Both axes are the same population and get the same solve.
+            val containerFill = MaterialTheme.colorScheme.surfaceContainer
             Row(
                 modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                    .background(containerFill)
+                    .border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(containerFill) }, RoundedCornerShape(16.dp))
                     .padding(14.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -511,16 +520,20 @@ fun FlowBlockContent(
                 }
             }
         } else {
+            val containerFill = MaterialTheme.colorScheme.surfaceContainer
             Column(
                 modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                    .background(containerFill)
+                    .border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(containerFill) }, RoundedCornerShape(16.dp))
                     .padding(horizontal = 16.dp, vertical = 14.dp),
             ) {
                 block.children.forEachIndexed { index, child ->
                     if (index > 0 && block.axis == ContainerAxis.Row) {
+                        // Divider population: a seam between two children *inside* the bordered container above,
+                        // not a boundary of its own. Solving it would draw a line as strong as the container's
+                        // edge across the middle of the container.
                         HorizontalDivider(
                             Modifier.padding(vertical = 13.dp),
                             color = MaterialTheme.colorScheme.outlineVariant,
@@ -591,7 +604,14 @@ fun FlowBlockContent(
 
         is ChartBlock -> if (editorFlags.isEnabled(EditorFeatureFlag.CHART_STUDIO)) {
             val loaded = remember(block.chartDocument, block.vegaLiteSpec) { ChartBlockAdapter.load(block) }
-            FlowObjectFrame(block, selected = context.objectSelected, modifier = modifier) {
+            // `resting = false` for the same reason the image path uses it, arrived at from the other
+            // direction: media needs no frame because the photograph is its own boundary, and a chart needs no
+            // frame because [com.norfold.app.ui.editor.chart.ChartRenderer] draws its own — a 16 dp rounded
+            // rect solved to 2.2:1 against the chart's own fill. This frame is also 16 dp, 6 dp outside it, so
+            // both drawn at rest produced two concentric hairlines around every chart on the canvas. The
+            // selection edge still comes from here, which is the whole point of the parameter: opting out of a
+            // resting edge is not opting out of showing the user what they selected.
+            FlowObjectFrame(block, selected = context.objectSelected, resting = false, modifier = modifier) {
                 Column(
                     Modifier
                         .background(MaterialTheme.colorScheme.surface)
@@ -1278,7 +1298,12 @@ private fun FlowMermaidPreview(
                         participant.label,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                            // Solved against the ambient container rather than a named fill, because this chip
+                            // paints none — it is a label with a box drawn round it, so what is under the stroke
+                            // is whatever the diagram sits on. That also makes the stroke the *entire* chip: with
+                            // no fill and no elevation, an edge at 1.0750:1 light is a sequence diagram whose
+                            // participants have no lifelines.
+                            .border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge() }, RoundedCornerShape(8.dp))
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     )
                 }
@@ -1358,8 +1383,12 @@ private fun FlowBranchedDiagram(
                     .clip(RoundedCornerShape(if (node.shape.name == "Rounded") 10.dp else 6.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .border(
-                        if (selectedNodeId == id) 3.dp else 1.dp,
-                        if (selectedNodeId == id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                        if (selectedNodeId == id) ChromeGeometry.SELECTED_EDGE_WIDTH.dp else ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                        // A diagram node is nothing but a box: its fill is `surface`, the canvas behind it is
+                        // `surface`, so the two separate at exactly 1.0:1 and this stroke is the node. The
+                        // selected 3 dp stays `primary` — that is state, and a solved neutral would say "node"
+                        // where the user needs "the node I picked".
+                        if (selectedNodeId == id) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surface) },
                         RoundedCornerShape(10.dp),
                     )
                     .clickable(enabled = onSelectNode != null) { onSelectNode?.invoke(id) }
@@ -1408,8 +1437,11 @@ private fun FlowPositionedDiagram(
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .border(
-                        if (selectedNodeId == node.id) 3.dp else 1.dp,
-                        if (selectedNodeId == node.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        if (selectedNodeId == node.id) ChromeGeometry.SELECTED_EDGE_WIDTH.dp else ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                        // Same population as the mind-map node above, and the same 1.0:1 fill separation. This
+                        // one already read the stronger of the two tokens; routing it through the substrate is
+                        // what makes it measured rather than merely better-chosen.
+                        if (selectedNodeId == node.id) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surface) },
                         RoundedCornerShape(8.dp),
                     )
                     .pointerInput(node.id, onMoveNode) {

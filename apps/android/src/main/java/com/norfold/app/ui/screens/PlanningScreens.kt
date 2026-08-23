@@ -68,8 +68,10 @@ import com.norfold.app.domain.GoalItem
 import com.norfold.app.domain.GoalStatus
 import com.norfold.app.domain.TaskStatus
 import com.norfold.app.domain.WeekHourBands
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.components.NorfoldCard
 import com.norfold.app.ui.components.NorfoldEmptyState
 import com.norfold.app.ui.components.NorfoldMetric
@@ -387,7 +389,15 @@ private fun WeekPanel(
         modifier = Modifier.fillMaxSize(),
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        // Measured. This is the week grid's outer frame, and the one edge here that *is* a container edge — the
+        // 0.25 dp cell rules inside it are grid lines and stay as they are (see the band loop below). Its
+        // `surface` fill separates from the page by 1.0613:1 light and 1.0664:1 dark, and it already read the
+        // stronger of the two tokens, which still only draws 1.2453:1 / 1.3256:1. A calendar whose outer frame is
+        // invisible is a calendar whose seven columns appear to run off the page.
+        border = BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surface) },
+        ),
     ) {
         Column {
             // `selectableGroup` on the header row: the seven days are all composed, so the announced position
@@ -453,6 +463,13 @@ private fun WeekPanel(
                             weekDays.forEach { day ->
                                 Column(
                                     Modifier.weight(1f).fillMaxHeight()
+                                        // Grid line, not a container edge, and deliberately left alone. Seven of
+                                        // these per band across every band of the week: this is the ruling that
+                                        // lets the eye follow Wednesday down the page, and it is drawn *inside*
+                                        // the frame above, which is what states the grid's extent. At 0.25 dp and
+                                        // 1.0786:1 light / 1.0877:1 dark it is faint on purpose — solved to a
+                                        // boundary ratio, a week view becomes 42 boxes and the events inside them
+                                        // stop being the loudest thing on screen. `ChromeGeometryTest` exempts it.
                                         .border(BorderStroke(0.25.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)))
                                         .padding(1.dp),
                                     verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -713,6 +730,13 @@ private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>, onEventCli
                             textAlign = TextAlign.End,
                         )
                         Column(
+                            // Hour ruling, and left alone for the same reason as the week grid's cell lines: 24 of
+                            // these stack inside a `NorfoldCard` that already states the timeline's extent, so
+                            // each one is a seam between two hours rather than the edge of a container. Solving 24
+                            // stacked full borders to 2.2:1 is precisely the box farm — a day would read as two
+                            // dozen empty boxes with the occasional event inside one. 0.5 dp at 1.0991:1 light and
+                            // 1.1130:1 dark, with a 1 dp radius that is there to soften the join, not to enclose.
+                            // `ChromeGeometryTest` exempts it.
                             Modifier.weight(1f).padding(start = 10.dp).border(
                                 width = 0.5.dp,
                                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),

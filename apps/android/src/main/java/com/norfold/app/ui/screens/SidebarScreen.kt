@@ -130,7 +130,9 @@ import com.norfold.app.ui.components.NorfoldBottomSheet
 import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.SemanticAppIcon
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.focusableChrome
 import androidx.compose.ui.semantics.Role
@@ -336,11 +338,22 @@ private fun UnifiedSidebarHeader(
     query: String,
     onQueryChange: (String) -> Unit,
 ) {
+    // The header region's fill, hoisted so its edge measures against it. Left translucent: the substrate
+    // composites a declared alpha fill over the resolved container, which for the sidebar is the sheet.
+    val headerFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = headerFill,
+        // Measured, because in dark mode this region has *no* other boundary: `surfaceVariant` at 32% over the
+        // sheet composites to within 1.0011:1 of the sheet itself — the same colour to any eye — and the
+        // `outlineVariant` edge on top of it drew 1.0785:1. Light is barely better at 1.0276 and 1.0816. This is
+        // the region that groups the workspace identity with cross-object search, so with neither cue the
+        // sidebar opens as one undifferentiated column of controls.
+        border = androidx.compose.foundation.BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            with(NorfoldChrome) { restingEdge(headerFill) },
+        ),
     ) {
         Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             WorkspaceSwitcher(state, viewModel)
@@ -703,12 +716,21 @@ private fun SidebarContent(state: DocsUiState, viewModel: DocsViewModel, modifie
 @Composable
 private fun SidebarQuickCreate(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val focus = rememberChromeFocus()
+    // Read once and handed to the ring and the edge alike — two measurements against the same pixel, which is
+    // what keeps a 2 dp focus ring at 3:1 distinguishable from a 1 dp resting edge at 2.2:1.
+    val fill = MaterialTheme.colorScheme.surface
     Surface(
-        modifier = modifier.height(40.dp).then(focus.ringOnShape(9f, MaterialTheme.colorScheme.surface)),
+        modifier = modifier.height(40.dp).then(focus.ringOnShape(9f, fill)),
         shape = RoundedCornerShape(9.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = fill,
         contentColor = MaterialTheme.colorScheme.primary,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        // Three buttons sitting on the sheet with 1.0259:1 light / 1.0812:1 dark of fill separation from it,
+        // edged in `outlineVariant` at 1.1402 / 1.1648. Nothing said these were buttons rather than three
+        // labels; the accent `contentColor` is the only surviving hint, and colour alone is not an affordance.
+        border = androidx.compose.foundation.BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            with(NorfoldChrome) { restingEdge(fill) },
+        ),
         interactionSource = focus.source,
         onClick = onClick,
     ) {
@@ -1137,6 +1159,12 @@ private fun CollaboratorAvatar(name: String, color: Long, active: Boolean) {
         Modifier.size(30.dp),
         shape = CircleShape,
         color = Color(color),
+        // Neither of these is a resting edge, so neither routes through the substrate. The `surface` ring is a
+        // *cutout*: four avatars are laid out overlapping, and it is what keeps the one in front from merging
+        // into the one behind — it is deliberately the page's colour, not a contrast against it. The `primary`
+        // ring at 2 dp is state ("this person is editing right now"), which is the same reason a selected
+        // picker edge stays a literal. The fill under both is the collaborator's identity colour, so a solved
+        // neutral here would discard exactly the information the avatar exists to carry.
         border = androidx.compose.foundation.BorderStroke(if (active) 2.dp else 1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface),
     ) {
         Box(contentAlignment = Alignment.Center) {

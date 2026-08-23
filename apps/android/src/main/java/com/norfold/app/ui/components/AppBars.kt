@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -42,9 +43,12 @@ import com.norfold.app.domain.Destination
 import com.norfold.app.domain.ChatSection
 import com.norfold.app.domain.ControlLabelMode
 import com.norfold.app.domain.SemanticActionId
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.LocalChromeContainer
 import com.norfold.app.ui.LocalControlLabelMode
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.screens.totalChatUnread
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -71,14 +75,34 @@ fun MobileBottomBar(state: DocsUiState, viewModel: DocsViewModel, modifier: Modi
             .height(88.dp)
             .padding(horizontal = 14.dp, vertical = 6.dp),
     ) {
+        // The bar's own fill, hoisted because two different things have to measure against it: this Surface's
+        // edge, and the focus rings of the eight NavBarItems inside, which call `focus.ring(Corner.Media)` with
+        // no backdrop and so read whatever the ambient container says. Left *translucent* on purpose — the
+        // substrate composites a declared alpha fill over the resolved container itself, so handing it the
+        // painted expression is what makes both land on the pixel that is actually there. The 1 dp of tonal
+        // elevation correctly contributes nothing to it: Material applies the tint only when a Surface's colour
+        // **is** `colorScheme.surface`, and an alpha copy is not.
+        val barFill = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
         Surface(
             modifier = Modifier.fillMaxWidth().height(68.dp).align(Alignment.BottomCenter),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+            color = barFill,
             shape = RoundedCornerShape(28.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+            // Measured, because this edge is carrying the whole boundary on its own. The bar floats over the
+            // page with 14 dp of margin, and its fill separates from that page by 1.0550:1 light and 1.0584:1
+            // dark — so nothing but this stroke says where a floating navigation bar ends and the scrolling
+            // content behind it begins. As written it was `outlineVariant` cut to 0.55 alpha, drawing 1.0706:1
+            // light and 1.0837:1 dark against the bar: the fainter of the two outline tokens, reduced further,
+            // on the one control that must never be ambiguous. `restingEdge` solves from `outline` against the
+            // composited bar pixel instead.
+            border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(barFill) }),
             shadowElevation = 6.dp,
             tonalElevation = 1.dp,
         ) {
+            // Published for the eight destinations inside. Their rings are drawn on this bar, not on the page,
+            // and the difference is small here only by coincidence — the two fills happen to sit 1.055:1 apart.
+            // A bar that tinted itself, or a theme whose surface moved away from its background, would make
+            // every one of those rings wrong at once.
+            CompositionLocalProvider(LocalChromeContainer provides barFill) {
             androidx.compose.animation.AnimatedContent(
                 targetState = chatContext,
                 transitionSpec = {
@@ -107,6 +131,7 @@ fun MobileBottomBar(state: DocsUiState, viewModel: DocsViewModel, modifier: Modi
                         NavBarItem("Chat", SemanticActionId.AppChat, state.destination == Destination.Chat, Modifier.weight(1f), badgeCount = chatUnread) { viewModel.openChatInbox() }
                     }
                 }
+            }
             }
         }
         Column(

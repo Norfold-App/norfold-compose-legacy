@@ -70,6 +70,7 @@ import com.norfold.app.domain.style.ColorDomain
 import com.norfold.app.domain.style.ColorPaint
 import com.norfold.app.domain.style.ColorRole
 import com.norfold.app.domain.style.ColorTarget
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.editor.chart.ChartAxisPosition
 import com.norfold.app.editor.chart.ChartAxis
 import com.norfold.app.editor.chart.ChartCalculationDataProvider
@@ -93,6 +94,7 @@ import com.norfold.app.ui.components.NorfoldColorDot
 import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.editor.style.EditorStyleSurface
 import com.norfold.app.ui.editor.style.EditorStyleSurfaceActions
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.toggleableChrome
 
@@ -116,9 +118,25 @@ private fun RowScope.ChartTypeButton(
         onClick = onClick,
         enabled = !readOnly,
         shape = RoundedCornerShape(10.dp),
+        // Six of these sit side by side inside the settings card above, and the unselected ones paint the *same*
+        // `surface` the card paints — 1.0000:1 of fill separation, with `outlineVariant` over it drawing 1.1402:1
+        // light and 1.1648:1 dark. So a chart-type picker where five of six choices had no boundary read as a run
+        // of loose icon-and-label pairs rather than as six tiles you can pick between. Nested inside a bordered
+        // card, but the card's 14 dp of padding keeps this from being a border pressed against a border, and the
+        // tile's extent is not self-evident from an icon over a one-word label.
+        //
+        // The selected edge stays `primary`: that is state — "this is the chart you have" — and its
+        // `primaryContainer` fill is an accent tint, so the state edge has something to stand on that the neutral
+        // one does not. Passing `fill` also means the tonal-tint gate fires for the unselected branch only, which
+        // is correct: `primaryContainer` is not `colorScheme.surface`, so Material tints it no more than the
+        // substrate does.
         border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                with(NorfoldChrome) { restingEdge(fill) }
+            },
         ),
         color = fill,
         interactionSource = focus.source,
@@ -271,7 +289,20 @@ fun ChartStudioSheet(
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surface,
                     tonalElevation = 1.dp,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    // Measured. This card holds the whole settings column of Chart Studio, and its `surface` fill
+                    // separates from the sheet's `background` page by 1.0613:1 light and 1.0664:1 dark, so the
+                    // stroke is the only thing saying the six rows below belong together. `outlineVariant` over it
+                    // drew 1.1402:1 and 1.1648:1.
+                    //
+                    // The *named* token is passed rather than the default so the tonal-tint gate applies, and here
+                    // it changes the answer rather than merely being tidy: this `Surface` declares 1 dp and paints
+                    // exactly `colorScheme.surface`, which is the equality Material tests before compositing
+                    // `surfaceTint`, so the real pixel is #F5F8F6 light / #101821 dark. A stroke solved against the
+                    // untinted token reads 2.0691:1 / 2.1387:1 on that pixel — under the 2.2 target in both modes.
+                    border = androidx.compose.foundation.BorderStroke(
+                        ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                        with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surface) },
+                    ),
                 ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {

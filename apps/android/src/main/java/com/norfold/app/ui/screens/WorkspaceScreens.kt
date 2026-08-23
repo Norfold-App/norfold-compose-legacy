@@ -208,10 +208,12 @@ import com.norfold.app.domain.ChatChannelVisibility
 import com.norfold.app.domain.ChatMessageItem
 import com.norfold.app.domain.ConflictSideSummary
 import com.norfold.app.domain.Destination
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.ChatAudioState
 import com.norfold.app.ui.focusableChrome
 import com.norfold.app.ui.focusablePill
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.ChatUploadItem
 import com.norfold.app.ui.ChatUploadStatus
@@ -1026,16 +1028,26 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 6.dp),
         ) {
             val jumpFocus = rememberChromeFocus()
+            // Read once for the edge and the ring, so both measure against the same pixel.
+            val jumpFill = MaterialTheme.colorScheme.surface
             Surface(
                 onClick = { chatScope.launch { listState.animateScrollToItem(messageGroups.lastIndex) } },
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
+                color = jumpFill,
                 shadowElevation = 6.dp,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                // Measured. This 40 dp circle floats over the message list, and its `surface` fill separates from
+                // the page by 1.0613:1 light and 1.0664:1 dark — so nothing but the stroke says a button is there
+                // rather than a stray glyph. `outlineVariant` drew 1.1402:1 and 1.1648:1 on top of that. The
+                // 6 dp shadow helps in light mode and does almost nothing in dark, which is exactly where the
+                // faint token was faintest relative to what it had to separate.
+                border = androidx.compose.foundation.BorderStroke(
+                    ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                    with(NorfoldChrome) { restingEdge(jumpFill) },
+                ),
                 interactionSource = jumpFocus.source,
                 // A 40 dp circle, so radius 20 — measured on its own `surface`, which is what the ring is
                 // drawn on as the button floats over the message list.
-                modifier = Modifier.size(40.dp).then(jumpFocus.ringOnCircle(40f, MaterialTheme.colorScheme.surface)),
+                modifier = Modifier.size(40.dp).then(jumpFocus.ringOnCircle(40f, jumpFill)),
             ) {
                 Icon(
                     Icons.Outlined.KeyboardArrowDown,
@@ -1067,11 +1079,26 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             )
         }
+        // The composer's fill, hoisted for the edge below. Left translucent on purpose: the substrate composites
+        // a declared alpha fill over the resolved container, and here there is no container to resolve — this
+        // `Surface` publishes none — so the page is the right backdrop and passing the painted expression is what
+        // lands the solve on the pixel. The 3 dp of tonal elevation contributes nothing: Material tints only a
+        // fill that **is** `colorScheme.surface`, and an alpha copy is not, which [ChatRecordingRow] below
+        // already relies on.
+        val composerFill = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
         Surface(
             composerModifier.padding(horizontal = 8.dp, vertical = 6.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+            color = composerFill,
             shape = RoundedCornerShape(26.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            // Measured. This is the app's most-used control — the chat composer — and its fill separates from the
+            // page by 1.0613:1 light and 1.0664:1 dark, so the stroke is what says where the text field ends and
+            // the thread begins. `outlineVariant` drew 1.1402:1 and 1.1648:1: the fainter of the two tokens on the
+            // one surface a user looks at for the whole session. The 12 dp shadow does real work in light mode
+            // and very little in dark, which is where the token was weakest.
+            border = androidx.compose.foundation.BorderStroke(
+                ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                with(NorfoldChrome) { restingEdge(composerFill) },
+            ),
             tonalElevation = 3.dp,
             shadowElevation = 12.dp,
         ) {
@@ -3617,9 +3644,23 @@ private fun ChatBubble(
                         Surface(
                             shape = RoundedCornerShape(99.dp),
                             color = pillFill,
+                            // Measured, on whichever fill is painted. These pills hang *below* the bubble on the
+                            // page, not inside it, so the un-reacted one is `surface` on `background`: 1.0613:1
+                            // light and 1.0664:1 dark of separation, with an `outlineVariant` stroke drawing
+                            // 1.1402:1 and 1.1648:1 over it. A reaction pill with no visible edge reads as loose
+                            // emoji text under the message rather than a counter you can tap.
+                            //
+                            // The reacted case keeps `primary` at half alpha: that is state — "I'm in this
+                            // reaction" — and a solved neutral would say "pill" where the user needs "my pill".
+                            // Its `primaryContainer` fill is already an accent tint, so the state edge has
+                            // something to sit on that the neutral one does not.
                             border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (reactedByMe) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant,
+                                ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                                if (reactedByMe) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                } else {
+                                    with(NorfoldChrome) { restingEdge(pillFill) }
+                                },
                             ),
                             // A pill, so the radius is resolved in the draw scope from the pill's own height
                             // rather than guessed here — `99.dp` is "fully round", not a measurement. The fill
@@ -3645,14 +3686,23 @@ private fun ChatBubble(
                     }
                     if (overflow > 0) {
                         val overflowFocus = rememberChromeFocus()
+                        // Read once for the edge and the ring.
+                        val overflowFill = MaterialTheme.colorScheme.surfaceVariant
                         Surface(
                             shape = RoundedCornerShape(99.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            color = overflowFill,
+                            // Same population as the pills beside it, and the faintest fill of the three:
+                            // `surfaceVariant` on the page is 1.0534:1 light, and `outlineVariant` over it drew
+                            // **1.0199:1** — the single faintest edge in this file. "+3" with no boundary is not a
+                            // control, it is a fragment of text.
+                            border = androidx.compose.foundation.BorderStroke(
+                                ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                                with(NorfoldChrome) { restingEdge(overflowFill) },
+                            ),
                             // Tap and long-press both open the full reaction list, so this is one action with
                             // two ways in — it still needs a ring, on its own `surfaceVariant` fill.
                             modifier = Modifier
-                                .then(overflowFocus.ringOnPill(MaterialTheme.colorScheme.surfaceVariant))
+                                .then(overflowFocus.ringOnPill(overflowFill))
                                 .combinedClickable(
                                     interactionSource = overflowFocus.source,
                                     indication = androidx.compose.material3.ripple(),
@@ -3925,7 +3975,18 @@ private fun MentionSuggestions(candidates: List<WorkspaceMember>, onPick: (Works
         Modifier.fillMaxWidth().padding(bottom = 6.dp),
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        // Measured against its own `surface`, which the rows below already name for the same reason. This popover
+        // floats above the composer over the message list, so its fill separates from the page by 1.0613:1 light
+        // and 1.0664:1 dark and `outlineVariant` over it drew 1.1402:1 / 1.1648:1. Without a visible edge a
+        // mention list overlapping the thread looks like the thread — the rows read as messages.
+        //
+        // `restingEdge` is given the *named* colour rather than the default so the tonal-tint gate applies: this
+        // `Surface` declares 2 dp and paints `colorScheme.surface`, which is exactly the equality Material tests
+        // before tinting, so the stroke has to measure the tinted pixel and not the raw token.
+        border = androidx.compose.foundation.BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surface) },
+        ),
         tonalElevation = 2.dp,
     ) {
         Column(Modifier.heightIn(max = 196.dp).verticalScroll(rememberScrollState())) {
@@ -4544,12 +4605,27 @@ private fun ChatAttachmentCard(
         // floating on the wallpaper. Non-visual files keep their solid tonal chip.
         val frameColor = if (mine) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.10f)
             else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
+        // Two different populations wearing one name, which is why only one half is solved.
+        //
+        // `mine` keeps `onPrimary` at 16%: this frame is drawn *inside* an accent bubble, so its edge is a tint of
+        // the bubble's own foreground — reading it as a neutral boundary would put a grey line inside an accent
+        // card and break the one thing outgoing media has going for it, that it belongs to the accent.
+        //
+        // `!mine` is solved. Its fill is `surfaceVariant` at 90%, and an attachment-only message is *chromeless* —
+        // `bubbleColor` is `Color.Transparent` — so the frame sits straight on the page at 1.0448:1 light and
+        // 1.1278:1 dark, with `outlineVariant` over it drawing 1.0283:1 and 1.1014:1. That is the case this frame
+        // exists for: the comment above says photos should "read as framed cards instead of raw bitmaps floating
+        // on the wallpaper", and at 1.0283:1 the frame was not doing it.
         val frameBorder = if (mine) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.16f)
-            else MaterialTheme.colorScheme.outlineVariant
+            else with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)) }
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = if (visualMedia) frameColor else bg,
-            border = if (visualMedia) androidx.compose.foundation.BorderStroke(1.dp, frameBorder) else null,
+            border = if (visualMedia) {
+                androidx.compose.foundation.BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, frameBorder)
+            } else {
+                null
+            },
             modifier = Modifier.focusableChrome(
                 radiusDp = 20f,
                 surface = if (visualMedia) frameColor else bg,

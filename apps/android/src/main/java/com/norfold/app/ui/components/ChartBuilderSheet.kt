@@ -392,11 +392,22 @@ private fun VisualChartComposer(
         runCatching { Color(android.graphics.Color.parseColor(row.color)) }.getOrDefault(default)
     val values = rows.map { it.value.toFloatOrNull()?.coerceAtLeast(0f) ?: 0f }
     val maximum = (values.maxOrNull() ?: 1f).coerceAtLeast(1f)
+    val previewFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        // The preview's fill, hoisted so the edge below measures against it. Left translucent: the substrate
+        // composites a declared alpha fill over the resolved container, which here is the bottom sheet's.
+        color = previewFill,
+        // Measured, and this is the sharpest instance of the finding in the app: `surfaceVariant` at 42% over the
+        // sheet's `surfaceContainerLow` composites to **#151B2A against a #151B2B sheet in dark mode** — 1.0012:1,
+        // which is the same colour to any eye — and 1.0345:1 light. So the fill states nothing at all and the
+        // stroke is the only cue, while `outlineVariant` over it drew 1.0744:1 / 1.0786:1. This box holds a live
+        // chart the user is building; without an edge the bars and slices float in the middle of a form.
+        border = androidx.compose.foundation.BorderStroke(
+            ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+            with(NorfoldChrome) { restingEdge(previewFill) },
+        ),
     ) {
         Box(Modifier.fillMaxWidth().height(190.dp).padding(14.dp)) {
             Canvas(Modifier.fillMaxWidth().height(160.dp)) {

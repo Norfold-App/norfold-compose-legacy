@@ -57,6 +57,7 @@ import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.components.RowSwitch
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.selectableChrome
 import com.norfold.app.ui.toggleableChrome
 
@@ -323,7 +324,15 @@ private fun BuiltInBackgroundStrip(selectedUri: String, onSelect: (String) -> Un
                         .size(width = 112.dp, height = 64.dp)
                         .border(
                             width = edgeWidth.dp,
-                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.24f),
+                            // The resting edge is solved against the dialog card, not against what fills the
+                            // cover. That is deliberate and it is the only honest choice available: a cover is a
+                            // *photograph*, so the pixel under this stroke is whatever the image happens to be —
+                            // unknowable at composition, and different at each of the four sides. What the
+                            // measurement can pin is the outside: the stroke is drawn at the cover's boundary
+                            // against the dialog card behind the strip, and that is the contrast that says where
+                            // one cover ends and the next begins across an 8 dp gap. `primary` when selected
+                            // stays a literal, for the reason [EmojiPickerGrid] gives.
+                            color = if (selected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge() },
                             shape = RoundedCornerShape(Corner.Media.radiusDp.dp),
                         )
                         .selectableChrome(
@@ -351,13 +360,20 @@ private fun BuiltInBackgroundStrip(selectedUri: String, onSelect: (String) -> Un
 
 @Composable
 private fun WorkspacePreview(name: String, icon: String, iconKind: WorkspaceIconKind, iconUri: String, backgroundUri: String) {
+    // The preview's own accent wash, hoisted so the edge below can measure against it rather than against the
+    // dialog card. It is the difference between an edge that draws and one that does not: `outline` cut to 0.22
+    // alpha on this wash measured **1.0023:1** at its worst (Forest, light) — arithmetically present and
+    // visually nothing, on the one element in this dialog whose whole job is to show the user what they are
+    // about to save. The wash is left translucent because the substrate composites a declared alpha fill over
+    // the resolved container, which here is the dialog card `NorfoldDialog` publishes.
+    val wash = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
     Box(
         Modifier
             .fillMaxWidth()
             .height(112.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f), RoundedCornerShape(20.dp)),
+            .background(wash)
+            .border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(wash) }, RoundedCornerShape(20.dp)),
     ) {
         if (backgroundUri.isNotBlank()) {
             AsyncImage(backgroundUri, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
@@ -411,15 +427,25 @@ private fun EmojiPickerGrid(selected: String, onPick: (String) -> Unit) {
                 row.forEach { emoji ->
                     val isSel = selected == emoji
                     val edgeWidth = if (isSel) ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH else ChromeGeometry.RESTING_EDGE_WIDTH
+                    // The cell's own fill, hoisted for the same reason the edge weight is: one value, read once,
+                    // used by the fill and by the measurement of the edge drawn on it.
+                    val cellFill = if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                     Box(
                         Modifier
                             .weight(1f)
                             .height(52.dp)
                             .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
-                            .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .background(cellFill)
                             .border(
                                 width = edgeWidth.dp,
-                                color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                // Only the resting edge is measured; `primary` stays a literal because a
+                                // selected edge is not a boundary cue — it is the answer to "which one did I
+                                // pick", and solving it to a neutral ratio would erase that. The resting one
+                                // needed it: `outline` at 0.3 alpha on this cell drew 1.0364:1 light and
+                                // 1.0287:1 dark, over a fill that separates from the dialog card by 1.0133:1
+                                // light. Sixteen cells with neither cue are a wall of emoji with no grid.
+                                color = if (isSel) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(cellFill) },
                                 shape = RoundedCornerShape(Corner.Media.radiusDp.dp),
                             )
                             .selectableChrome(

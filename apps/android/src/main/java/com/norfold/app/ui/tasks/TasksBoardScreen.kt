@@ -122,6 +122,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
@@ -194,6 +195,7 @@ import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.EditorChromeColors
+import com.norfold.app.ui.LocalChromeContainer
 import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.chromeFocusRing
 import com.norfold.app.ui.focusableChrome
@@ -870,13 +872,16 @@ private fun TaskPointerKanbanBoard(
                 )
             }
             item {
+                // Read once and shared by the edge and the ring: a 16%-alpha accent is not the page, so a
+                // stroke solved against the page would be measured against a colour that is not drawn here.
+                val newColumnFill = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.16f)
                 Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.16f),
+                    color = newColumnFill,
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    border = with(NorfoldChrome) { restingStroke(newColumnFill) },
                     modifier = Modifier.width(280.dp).height(72.dp).focusableChrome(
                         radiusDp = 12f,
-                        surface = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.16f),
+                        surface = newColumnFill,
                     ) { showNewColumnDialog = true },
                 ) {
                     Row(
@@ -965,8 +970,15 @@ private fun TaskKanbanColumn(
     var renameValue by remember(column.id, column.name) { mutableStateOf(column.name) }
     val columnColor = column.resolvedColor()
     val target = drag.currentTarget()
+    // The column card's fill, hoisted because the add-task row at the foot of this column is drawn on it and
+    // has to measure against it. Left *translucent* on purpose — the substrate composites a declared alpha fill
+    // over the resolved container itself, so handing it the painted expression is what makes both the ring and
+    // the identity border land on the pixel that is actually there. It also correctly gets no tonal tint from
+    // the 2 dp below: Material applies the tint only when a `Surface`'s colour **is** `colorScheme.surface`,
+    // and an alpha copy is not.
+    val columnFill = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f)
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
+        color = columnFill,
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 2.dp,
         modifier = modifier
@@ -1060,10 +1072,21 @@ private fun TaskKanbanColumn(
                 DropSlot(modifier = Modifier.fillMaxWidth(), height = slotHeight)
             }
             Surface(
-                modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f) { onAddTask() },
+                // Measured against the column card, not the page. Without it the ring is solved against
+                // `background` — the board's gradient behind this card — while it is drawn on the card's own
+                // 74%-alpha fill, and the substrate cannot know the difference from here.
+                modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = columnFill) { onAddTask() },
                 shape = RoundedCornerShape(10.dp),
                 color = Color.Transparent,
-                border = BorderStroke(1.dp, columnColor.copy(alpha = 0.55f)),
+                // Stays an identity colour rather than routing through `restingEdge`, and this is the one
+                // exception in the file worth stating: the border is the *column's* colour, so measuring it to a
+                // neutral ratio would discard the thing it communicates — which column this button belongs to,
+                // in a row of columns whose only other identity cue is a 12 dp dot in the header. Measured
+                // anyway, to check the 55% alpha is not hiding it: across the ten shipped accents on this card
+                // it runs 1.6889:1 (Gold) to 3.1230:1 (Graphite) light and 1.2537:1 (Graphite) to 2.8727:1
+                // (Gold) dark, so nine of ten clear the ~1.5:1 a non-text boundary needs and the tenth is a
+                // deliberate identity trade rather than an invisible neutral.
+                border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, columnColor.copy(alpha = 0.55f)),
             ) {
                 Row(Modifier.padding(vertical = 9.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.Add, null, Modifier.size(17.dp), tint = columnColor)
@@ -1216,6 +1239,15 @@ private fun TaskDatabaseTable(
     var selectedCell by remember { mutableStateOf<Pair<Long, TaskTableColumn>?>(null) }
     var showPropertyPicker by remember { mutableStateOf(false) }
     val horizontal = rememberScrollState()
+    // The table's *grid* colour, and deliberately still the raw theme token. A cell edge here is a rule
+    // between two cells, not a container boundary: seven of these meet at every corner, so solving them to
+    // [ChromeGeometry.RESTING_EDGE_RATIO] the way a card's edge is solved would turn a data table into graph
+    // paper. The table's own outer edge below is the container boundary and *is* measured.
+    //
+    // Measured for the record: 0.5 dp `outlineVariant` reads 1.1402:1 light and 1.1648:1 dark on the `surface`
+    // every cell paints, and a 2.2:1 rule would be #A1ACC8 / #3E4E6E — a mesh of those, fourteen columns wide,
+    // is the box farm rather than a table. `ChromeGeometryTest` exempts it by name, along with the two cell
+    // composables that read this local's colour directly.
     val border = MaterialTheme.colorScheme.outlineVariant
     val taskIds = remember(tasks) { tasks.mapTo(mutableSetOf()) { it.id } }
     val visibleColumns = remember(tasks, properties, propertyValues, checklistItems, filesByTask) {
@@ -1244,7 +1276,7 @@ private fun TaskDatabaseTable(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, border),
+            border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
         ) {
             Box(Modifier.fillMaxSize().horizontalScroll(horizontal)) {
             LazyColumn(
@@ -1476,6 +1508,9 @@ private fun TaskTableHeaderCell(column: TaskTableColumn, compact: Boolean) {
             .width(column.width(compact))
             .height(48.dp)
             .background(MaterialTheme.colorScheme.surface)
+            // A grid line, not a container edge — see the `border` local in [TaskDatabaseTable], which is the
+            // same colour for the same reason. Header cells share every edge with a neighbour, so
+            // `ChromeGeometryTest` exempts this function by name.
             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1507,6 +1542,10 @@ private fun TaskTableDataCell(
     val raw = property?.let { definition ->
         propertyValues.firstOrNull { it.taskId == task.id && it.propertyId == definition.id }?.valueJson.orEmpty()
     }.orEmpty()
+    // The resting half of this is the grid line [TaskDatabaseTable]'s `border` local documents and
+    // `ChromeGeometryTest` exempts: a data cell borders on all four sides, so what a reader sees is the rule
+    // between two cells rather than the edge of a container. The selected half is a different thing — 2 dp of
+    // `primary` is the selection *indicator*, and it is what says which row the detail sheet would open.
     val cellBorder = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     val cellWidth = column.width(compact)
     var bounds by remember(task.id, column) { mutableStateOf(Rect.Zero) }
@@ -1735,7 +1774,7 @@ private fun CompactGroupedTaskTable(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         columns.forEach { column ->
             val columnTasks = tasks.filter { it.taskColumnId == column.id }.sortedBy { it.sortOrder }
-            Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+            Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.size(14.dp).clip(CircleShape).background(column.resolvedColor()))
@@ -1748,10 +1787,21 @@ private fun CompactGroupedTaskTable(
                     if (collapsed[column.id] != true) {
                         columnTasks.forEachIndexed { index, task ->
                             TaskSwipeRow(task = task, startAction = swipeStartAction, endAction = swipeEndAction, onAction = onSwipeAction) {
+                            // Nested inside the column card above, and it keeps its edge where
+                            // `OnboardingScreen`'s choice rows gave theirs up. The difference is the content: a
+                            // preference row is one line, so its extent is self-evident from the text rhythm,
+                            // while a task card is variable-height and multi-line — title, checklist, chips —
+                            // and nothing else says where one task ends and the next begins.
+                            //
+                            // Composited explicitly rather than left to the substrate: this fill is 24% alpha
+                            // and it sits on the column card's `surface`, not on the page the default would use.
+                            val taskFill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f)
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                color = taskFill,
+                                border = with(NorfoldChrome) {
+                                    restingStroke(EditorChromeColors.opaque(taskFill, MaterialTheme.colorScheme.surface))
+                                },
                                 modifier = Modifier.fillMaxWidth().animateContentSize(),
                             ) {
                                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1822,11 +1872,11 @@ private fun CompactGroupedTaskTable(
                         }
                         Surface(
                             // No `surface`: the fill is `Color.Transparent`, which composites to exactly the
-                            // page, so the default backdrop is already the right measurement basis.
-                            modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f) { onNewTask(column) },
+                            // column card behind it, so both the ring and the edge measure that card's fill.
+                            modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = MaterialTheme.colorScheme.surface) { onNewTask(column) },
                             shape = RoundedCornerShape(10.dp),
                             color = Color.Transparent,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
                         ) {
                             Row(Modifier.padding(vertical = 9.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Outlined.Add, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
@@ -2060,16 +2110,23 @@ private fun TaskTimelineView(tasks: List<TaskItem>, columns: List<TaskColumnItem
         Text("Timeline", fontWeight = FontWeight.Black, fontSize = 22.sp)
         Text("Drag tasks on the board or edit their date range to update this schedule.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         if (dated.isEmpty()) {
-            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+            Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) {
                 Text("Add a start or due date to place tasks on the timeline.", Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
-            Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))) {
+            // The timeline's outer edge is a container boundary and is measured. Everything inside it — the day
+            // header strip, the frozen label column, the lane boxes — is a *grid*, drawn in the raw token for
+            // the reason [TaskDatabaseTable]'s `border` local states: solving 14 columns × N rows of shared cell
+            // edges to a visible ratio produces graph paper, not a schedule. `ChromeGeometryTest` exempts this
+            // function by name for those three; the `frame` below is the boundary and derives.
+            val grid = MaterialTheme.colorScheme.outlineVariant
+            val frame = with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.background) }
+            Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, frame, RoundedCornerShape(16.dp))) {
                 Row {
                     Spacer(Modifier.width(190.dp))
                     repeat(14) { day ->
                         val time = origin + day * 86_400_000L
-                        Text(formatCalendarDate(time), Modifier.width(dayWidth).border(1.dp, MaterialTheme.colorScheme.outlineVariant).padding(10.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Text(formatCalendarDate(time), Modifier.width(dayWidth).border(1.dp, grid).padding(10.dp), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 }
                 dated.forEach { task ->
@@ -2092,14 +2149,14 @@ private fun TaskTimelineView(tasks: List<TaskItem>, columns: List<TaskColumnItem
                             Modifier
                                 .width(190.dp)
                                 .fillMaxHeight()
-                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                .border(1.dp, grid)
                                 .focusableChrome(radiusDp = 0f, onClickLabel = "Open task") { onTaskClick(task) }
                                 .padding(12.dp),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             fontWeight = FontWeight.Bold,
                         )
-                        Box(Modifier.width(dayWidth * 14).heightIn(min = 58.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                        Box(Modifier.width(dayWidth * 14).heightIn(min = 58.dp).border(1.dp, grid)) {
                             // The bar's own fill is 22% of the task's accent, which is a per-task colour and so
                             // the one backdrop no token could name — and it is translucent, which the arithmetic
                             // cannot measure at all. Composited over the page here for both reasons.
@@ -2613,7 +2670,18 @@ private fun TaskRailPanel(
     val activeFilters = listOf(assigneeFilter.isNotBlank(), labelFilter.isNotBlank(), priorityFilter != null).count { it }
     val selectedBoardName = boards.firstOrNull { it.id == selectedBoardId }?.name ?: "Default board"
     AnimatedVisibility(visible = action != null, modifier = modifier) {
+        // Provides [LocalChromeContainer] for the reason `SettingsGroup` does: this panel's fill is not the
+        // page. It is `surface` lifted by 6 dp of tonal elevation, which on the dark ramp is a visibly
+        // different colour, and every row inside solves both its edge and its focus ring against whatever it
+        // is told the backdrop is. Naming it once here is what lets the five [TaskRailRow]s below stay
+        // backdrop-agnostic instead of each restating this arithmetic.
+        val panel = EditorChromeColors.elevated(
+            surface = MaterialTheme.colorScheme.surface,
+            tint = MaterialTheme.colorScheme.surfaceTint,
+            elevationDp = 6f,
+        )
         Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp), tonalElevation = 6.dp) {
+            CompositionLocalProvider(LocalChromeContainer provides panel) {
             Column(
                 Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()).padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2656,6 +2724,7 @@ private fun TaskRailPanel(
                     summary = if (compact) "Compact cards" else "Comfortable cards",
                     onClick = { onCompactChange(!compact) },
                 )
+            }
             }
         }
     }
@@ -2726,7 +2795,7 @@ private fun TaskRailPanel(
                     Surface(
                         color = fill,
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        border = with(NorfoldChrome) { restingStroke(fill) },
                         modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f, surface = fill) { onSelectBoard(board.id) },
                     ) {
                         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2775,13 +2844,18 @@ private fun TaskRailRow(
     summary: String,
     onClick: () -> Unit,
 ) {
+    // Passed to both the edge and the ring, and left *translucent* on purpose: the substrate composites a
+    // declared fill over `LocalChromeContainer`, which [TaskRailPanel] publishes as its own elevated fill, so
+    // handing over the 40%-alpha colour is what makes both measurements land on the drawn pixel. Compositing
+    // it here by hand would work too and would duplicate arithmetic that already exists once.
+    val fill = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        color = fill,
         shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+        border = with(NorfoldChrome) { restingStroke(fill) },
         modifier = Modifier.fillMaxWidth().focusableChrome(
             corner = ChromeGeometry.Corner.Card,
-            surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            surface = fill,
             onClick = onClick,
         ),
     ) {
@@ -2836,7 +2910,7 @@ private fun TaskPropertyManagerSheet(
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
@@ -3129,6 +3203,13 @@ private fun AdaptiveTaskPage(
                 .navigationBarsPadding()
                 .imePadding(),
         ) {
+        // Announced as plain `surfaceVariant`, with the 10 dp above deliberately not folded in. Material applies
+        // tonal elevation only when a `Surface`'s colour **is** `colorScheme.surface` (`applyTonalElevation` gates
+        // on that equality), so this page's own fill is drawn untinted no matter what elevation it declares — the
+        // 10 dp only travels down `LocalAbsoluteTonalElevation` for the `surface` cards inside. Publishing the
+        // colour actually painted is what lets the page's chrome measure itself: without it the substrate falls
+        // back to `colorScheme.background`, which is the *scrimmed page behind this sheet* and is not drawn here.
+        CompositionLocalProvider(LocalChromeContainer provides MaterialTheme.colorScheme.surfaceVariant) {
             var showPicker by remember { mutableStateOf(false) }
             var showPropertyManager by remember { mutableStateOf(false) }
             var commentDraft by remember(task.id) { mutableStateOf("") }
@@ -3404,11 +3485,12 @@ private fun AdaptiveTaskPage(
                 }
             }
         }
+        }
     }
 }
 
 private fun Modifier.dashedOutline(color: Color, radius: Dp): Modifier = drawBehind {
-    val strokeWidth = 1.dp.toPx()
+    val strokeWidth = ChromeGeometry.RESTING_EDGE_WIDTH.dp.toPx()
     drawRoundRect(
         color = color,
         cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius.toPx(), radius.toPx()),
@@ -3421,7 +3503,12 @@ private fun Modifier.dashedOutline(color: Color, radius: Dp): Modifier = drawBeh
 
 @Composable
 private fun DashedActionButton(text: String, onClick: () -> Unit) {
-    val outline = MaterialTheme.colorScheme.outlineVariant
+    // No backdrop named, and that is the point: the one caller is [AdaptiveTaskPage], which publishes its own
+    // `surfaceVariant` fill as [LocalChromeContainer], so the ambient answer here is the correct one and
+    // restating it would be this helper asserting something about its parent. The dash pattern is why the
+    // measurement matters more than usual — a dashed stroke lays down roughly half the ink of a solid one over
+    // the same run, so an under-contrast colour that is merely faint when solid disappears entirely when broken.
+    val outline = with(NorfoldChrome) { restingEdge() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3444,18 +3531,22 @@ private fun DashedActionButton(text: String, onClick: () -> Unit) {
 @Composable
 private fun TaskFilesSection(files: List<WorkspaceFileItem>, onAttach: () -> Unit, onRemove: (WorkspaceFileItem) -> Unit) {
     val context = LocalContext.current
-    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+    // Read once at the top of the card and shared by the header chip and the empty-state dash below, because
+    // both are drawn on this card's fill and neither has a fill of its own: the chip names no `color`, so it
+    // takes `surface`, and the dashed row paints nothing at all.
+    val card = MaterialTheme.colorScheme.surface
+    Surface(color = card, shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.AttachFile, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Text("Files & media", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                Surface(shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                Surface(shape = RoundedCornerShape(12.dp), border = with(NorfoldChrome) { restingStroke(card) }) {
                     TextButton(onClick = onAttach) { Text("Attach") }
                 }
             }
             if (files.isEmpty()) {
-                val outline = MaterialTheme.colorScheme.outlineVariant
+                val outline = with(NorfoldChrome) { restingEdge(card) }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -3675,7 +3766,14 @@ private fun MainPropertyRow(
         Surface(
             color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(if (active) 2.dp else 1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+            // Kept, and measured. The chip's fill is `surface` and the card behind it is `surface` too, so the
+            // separation between them is exactly 1.0:1 — this edge is not one boundary cue among several, it is
+            // the only thing on screen saying where the editable value area begins. The `active` stroke stays on
+            // `primary` because it is not a resting boundary: it says "this row is the one being edited".
+            border = BorderStroke(
+                if (active) 2.dp else ChromeGeometry.RESTING_EDGE_WIDTH.dp,
+                if (active) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surface) },
+            ),
             modifier = Modifier.weight(1f),
         ) {
             Row(
@@ -3830,8 +3928,14 @@ private fun TaskNotesSection(
             }
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f) { viewModel.openTaskDocument(task) },
+                // Nested in the card above and it keeps its edge, because here the nesting is what *removes* the
+                // other cue rather than supplying one: this `Surface` names no `color`, so it is `surface` inside a
+                // `surface` card, and the substrate resolves both through the same 1 dp of ambient tonal elevation.
+                // The two fills are the same colour. Without this stroke there is nothing to distinguish a
+                // four-line note preview from the card's own body text.
+                border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
+                modifier = Modifier.fillMaxWidth()
+                    .focusableChrome(radiusDp = 12f, surface = MaterialTheme.colorScheme.surface) { viewModel.openTaskDocument(task) },
             ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(displayed.ifBlank { "Add notes" }, modifier = Modifier.weight(1f), color = if (displayed.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, maxLines = 4, overflow = TextOverflow.Ellipsis)

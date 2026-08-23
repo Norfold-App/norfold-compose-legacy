@@ -846,6 +846,15 @@ private fun GridHeader(
     Box(
         modifier
             .background(if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
+            // The header half of the sheet's mesh, and exempt for the same reason the cell half is: each of these
+            // boxes borders on all four sides, so the line a user sees is the seam between column D and column E,
+            // not the edge of a container. `ChromeGeometryTest` exempts it.
+            //
+            // Measured for the record, because two of these figures are worth having written down. The seam is
+            // 1.0199:1 light / 1.0810:1 dark on the header's own `surfaceVariant` — the faintest pairing in the
+            // palette. And the header *strip* separates from the grid body by only 1.1180:1 / 1.0775:1, so what is
+            // actually hard to see here is not the seam but which band is header and which is data. That is a fill
+            // decision, not an edge one, and it is recorded rather than changed here.
             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
             .clickable(onClick = onClick)
             .then(
@@ -916,6 +925,19 @@ private fun GridCell(
         modifier
             .background(cellFill)
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+            // The sheet's mesh, and the one population in the app where every box borders on all four sides — so
+            // a solved 2.2:1 line would not draw a boundary, it would draw a table of ~200 visible black boxes
+            // over the user's data. This is the box farm in its purest form, and it is exempt.
+            //
+            // Measured: 0.5 dp `outlineVariant` reads 1.1402:1 light / 1.1648:1 dark on the grid body's `surface`,
+            // and a 2.2:1 line would be #ACAEB7 / #474E5C. The grid's own extent is stated by the header strip and
+            // the host screen's chrome, not by any one cell. There is also a genuine determinant here beyond
+            // nesting: `cellFill` is whatever `format.fillColor` the *user* set, so the fill under this stroke is
+            // unknowable at composition and cannot be solved against — the mesh has to be one flat colour for
+            // every cell or the grid ripples. `ChromeGeometryTest` exempts it.
+            //
+            // The selected 2 dp edge stays `primary`, and that is the selection *indicator* rather than a resting
+            // boundary: at 2 dp on the accent it is the only thing saying which cell the formula bar is showing.
             .border(if (selected) 2.dp else 0.5.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
             .cellBorders(format)
             .clickable(enabled = !editing, onClick = onClick)

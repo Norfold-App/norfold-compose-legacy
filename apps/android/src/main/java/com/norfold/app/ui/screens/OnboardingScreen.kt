@@ -109,6 +109,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.focusableChrome
 import com.norfold.app.ui.toggleableChrome
 
@@ -428,7 +429,8 @@ private fun WelcomeStep(
     onPrivacy: () -> Unit,
 ) {
     NorfoldWordmark()
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .35f), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+    val welcomeFill = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .35f)
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = welcomeFill, border = with(NorfoldChrome) { restingStroke(welcomeFill) }) {
         Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Welcome to\nNorfold", fontSize = 34.sp, lineHeight = 38.sp, fontWeight = FontWeight.Black)
             Text("A private place for docs, tasks, calendar, chat, and focused work.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 17.sp, lineHeight = 24.sp)
@@ -489,7 +491,7 @@ private fun SignInStep(email: String, onEmail: (String) -> Unit, password: Strin
         Spacer(Modifier.size(10.dp))
         Text("Continue with Google")
     }
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Text("Apple sign-in will be available in a later release", Modifier.padding(15.dp), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) { Text("Apple sign-in will be available in a later release", Modifier.padding(15.dp), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     HorizontalDivider()
     OutlinedTextField(email, onEmail, Modifier.fillMaxWidth(), label = { Text("Email address") }, leadingIcon = { Icon(Icons.Outlined.Email, null) }, singleLine = true, enabled = !busy)
     OutlinedTextField(password, onPassword, Modifier.fillMaxWidth(), label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !busy)
@@ -553,7 +555,7 @@ private fun RestoreStep(secret: String, onSecret: (String) -> Unit, onRestore: (
     Text("Restore your data", fontSize = 30.sp, fontWeight = FontWeight.Black)
     Text("Enter the backup password, then choose an encrypted Norfold backup. When the restore finishes you'll land in your workspace.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     OutlinedTextField(secret, onSecret, Modifier.fillMaxWidth(), label = { Text("Backup password") }, visualTransformation = PasswordVisualTransformation())
-    listOf("Docs", "Tasks", "Calendar", "Files & media", "Settings").forEach { label -> Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Icon(Icons.Outlined.Restore, null, tint = MaterialTheme.colorScheme.primary) } } }
+    listOf("Docs", "Tasks", "Calendar", "Files & media", "Settings").forEach { label -> Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f)); Icon(Icons.Outlined.Restore, null, tint = MaterialTheme.colorScheme.primary) } } }
     OnboardingPrimaryButton("Choose backup", enabled = secret.isNotBlank(), onClick = onRestore)
 }
 
@@ -713,7 +715,7 @@ private fun BackupSetupStep(
                     modifier = Modifier.weight(1f).focusableChrome(radiusDp = 10f, surface = fill) { onFrequency(option) },
                     shape = RoundedCornerShape(10.dp),
                     color = fill,
-                    border = BorderStroke(1.dp, if (frequency == option) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                    border = BorderStroke(1.dp, if (frequency == option) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(fill) }),
                 ) { Text(option, Modifier.padding(vertical = 11.dp), textAlign = TextAlign.Center, fontWeight = if (frequency == option) FontWeight.Bold else FontWeight.Normal) }
             }
         }
@@ -746,7 +748,7 @@ private fun BackupSetupStep(
             ToggleCard("Conversations and files", "Chat messages, channels, attachments, and Files", conversations, onConversations)
             ToggleCard("Device settings", "Appearance, editor, and accessibility preferences", deviceSettings, onDeviceSettings)
             backups.forEach { manifest ->
-                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(manifest.deviceName, fontWeight = FontWeight.Bold)
                         Text(
@@ -832,7 +834,7 @@ private fun PreferencesStep(
 
 @Composable
 private fun OnboardingPreferenceGroup(title: String, content: @Composable () -> Unit) {
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp)
             content()
@@ -849,7 +851,13 @@ private fun <T> PreferenceChoices(label: String, values: List<T>, selected: T, o
             Modifier.fillMaxWidth().focusableChrome(radiusDp = 10f, surface = fill) { onSelect(value) },
             shape = RoundedCornerShape(10.dp),
             color = fill,
-            border = BorderStroke(1.dp, if (value == selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+            // Selection only. These rows are the one nested case in this file — they render inside
+            // [OnboardingPreferenceGroup]'s own bordered card — and the group's edge is now measured and
+            // visible, so a resting edge here would put a box inside a box for every choice in the list.
+            // Unselected rows state their extent by fill and by the group's 12 dp rhythm; the selected one
+            // keeps a border because that border is *selection*, not boundary, and it is joined by a fill
+            // change, a bold label and a check icon.
+            border = if (value == selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         ) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(name(value), Modifier.weight(1f), fontWeight = if (value == selected) FontWeight.Bold else FontWeight.Normal)
@@ -877,7 +885,7 @@ private fun CompletionStep(workspace: String) {
     Surface(Modifier.size(92.dp).popIn(), shape = CircleShape, color = MaterialTheme.colorScheme.primary) { Icon(Icons.Outlined.Check, null, Modifier.padding(24.dp), tint = Color.White) }
     Text("You're all set!", fontSize = 30.sp, fontWeight = FontWeight.Black)
     Text("Welcome to Norfold. Let's get things done.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { listOf("Workspace created: $workspace", "Profile set", "You're ready to go").forEach { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.CheckCircle, null, tint = com.norfold.app.ui.SemanticColors.signalGreen); Text(it, Modifier.padding(start = 10.dp)) } } }
     }
 }
@@ -895,8 +903,8 @@ private fun CompletionStep(workspace: String) {
     }
 }
 @Composable private fun StepIcon(icon: ImageVector) { Surface(Modifier.size(72.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)) { Icon(icon, null, Modifier.padding(20.dp), tint = MaterialTheme.colorScheme.primary) } }
-@Composable private fun FeatureCard(icon: ImageVector, title: String, detail: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Column { Text(title, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp) } } } }
-@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) { Surface(Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f, onClick = onClick), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(18.dp).background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)); Column(Modifier.padding(start = 14.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } } } }
+@Composable private fun FeatureCard(icon: ImageVector, title: String, detail: String, modifier: Modifier = Modifier) { Surface(modifier, shape = RoundedCornerShape(16.dp), border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) }) { Row(Modifier.padding(13.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Column { Text(title, fontWeight = FontWeight.Bold); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp) } } } }
+@Composable private fun ChoiceCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) { Surface(Modifier.fillMaxWidth().focusableChrome(radiusDp = 12f, onClick = onClick), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else with(NorfoldChrome) { restingEdge(MaterialTheme.colorScheme.surface) })) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(18.dp).background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)); Column(Modifier.padding(start = 14.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } } } }
 /**
  * One onboarding preference, as a single accessibility node.
  *
@@ -915,7 +923,7 @@ private fun CompletionStep(workspace: String) {
             .fillMaxWidth()
             .toggleableChrome(checked = checked, radiusDp = 12f, role = Role.Switch, onValueChange = onChecked),
         shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {

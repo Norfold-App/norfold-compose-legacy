@@ -109,6 +109,7 @@ import com.norfold.app.editor.flow.FlowInlineStyle
 import com.norfold.app.editor.flow.FlowInlineText
 import com.norfold.app.editor.flow.FlowTableLayout
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.screens.highlightColor
 import com.norfold.app.domain.style.Stylesheet
 import com.norfold.app.domain.style.ColorPaint
@@ -723,7 +724,27 @@ private fun SceneSpecialSource(
 ) {
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(renderScale.pointToDp(6f)))
-            .border(renderScale.pointToDp(1f), MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(renderScale.pointToDp(6f)))
+            // Measured. This is the equation/diagram frame, and it is the one block in the scene with no fill
+            // of its own — a bordered, clipped `Column` straight on the sheet — so the stroke is the *only*
+            // thing separating a rendered equation from the body text above and below it. `outlineVariant` on
+            // the default white page reads 1.1402:1, and on a cream sheet 1.0768:1.
+            //
+            // The backdrop cannot be a theme token here, because the page's colour is whatever the user chose
+            // and can be a gradient mid-Color-Studio. So the host publishes it: the page `Box` in
+            // `DocumentHostScreen` provides `LocalChromeContainer` from `EditorChromeColors.pageBackdrop`, and
+            // `restingEdge()` with no argument resolves ambiently to that. Solved, this lands #ACAEB7 (2.2123)
+            // on white and #A7A9B2 (2.2132) on cream; on a slate page it inverts to the light token at
+            // 10.6152 in light mode and #5D6472 (2.2228) in dark, which is the whole point of measuring
+            // against the sheet rather than against `colorScheme`.
+            //
+            // The width stays `renderScale.pointToDp(1f)` rather than `RESTING_EDGE_WIDTH`: page chrome scales
+            // with the page in this file, and a fixed-dp edge would thicken relative to the equation as the
+            // user zoomed out. At 100% the two figures are the same number.
+            .border(
+                renderScale.pointToDp(1f),
+                with(NorfoldChrome) { restingEdge() },
+                RoundedCornerShape(renderScale.pointToDp(6f)),
+            )
             .padding(renderScale.pointToDp(8f)),
     ) {
         Text(title, style = renderScale.pointTextStyle(MaterialTheme.typography.labelSmall), color = MaterialTheme.colorScheme.onSurfaceVariant)

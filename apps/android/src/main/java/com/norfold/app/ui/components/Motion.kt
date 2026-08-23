@@ -35,6 +35,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.norfold.app.branding.NorfoldPopEasing
+import com.norfold.app.domain.style.ChromeGeometry
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.chromeFocusRing
 
 /**
@@ -124,7 +126,14 @@ fun GlobalSearchBar(
             .chromeFocusRing(interaction, radiusDp = 16f, surface = fill),
         shape = RoundedCornerShape(16.dp),
         color = fill,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.30f)),
+        // Measured against the pill's own translucent fill, which is already hoisted above for the ring. This is
+        // a container edge with nothing else stating it: the pill is `surface` at 72% over the page, which is
+        // 1.0439:1 light and 1.0449:1 dark of separation — invisible — and as written the stroke was `outline`
+        // cut to 0.30 alpha, drawing 1.0610:1 and 1.0747:1 on top of that. A tappable pill that looks like flat
+        // page is a control nobody knows is a control, and this one is the entry to search on every page in the
+        // app. `fill` is passed translucent deliberately: the substrate composites a declared alpha fill over the
+        // resolved container, so the solve happens against the pixel that is actually painted.
+        border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(fill) }),
         onClick = onOpen,
         interactionSource = interaction,
     ) {

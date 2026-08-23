@@ -48,8 +48,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.EditorChromeColors
 import com.norfold.app.ui.LocalChromeContainer
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.rememberChromeFocus
 
 enum class NorfoldPopupPlacement { Auto, Below, Above }
@@ -177,6 +179,12 @@ fun NorfoldAnchoredPopup(
  * elevation correction applies only to a backdrop that *is* `colorScheme.surface`, matching Material's gate.
  * The row's fill is not — it is `secondaryContainer` at 55% alpha — so it takes the alpha path, and the colour
  * that path composites onto has to already carry the tint.
+ *
+ * **The card's edge is measured against that same composited colour**, and `container` is the reason it can be:
+ * the tint is applied by this very `Surface`, so at the moment the border colour is computed
+ * `LocalAbsoluteTonalElevation` is still the *parent's* elevation and the substrate's own correction would
+ * measure against untinted `surface`. Passing `container` states the pixel directly. Raw `outlineVariant` drew
+ * this boundary at 1.14:1 light — a floating card announced by a 14 dp shadow and a border that was not there.
  */
 @Composable
 fun NorfoldPopupCard(
@@ -195,7 +203,7 @@ fun NorfoldPopupCard(
         shape = RoundedCornerShape(tokens.cardRadius),
         color = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(container) }),
         shadowElevation = 14.dp,
         tonalElevation = CardTonalElevation,
     ) {
@@ -302,7 +310,7 @@ fun NorfoldDropdownMenu(
         properties = PopupProperties(focusable = focusable),
         shape = RoundedCornerShape(tokens.cardRadius),
         containerColor = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, with(NorfoldChrome) { restingEdge(container) }),
         tonalElevation = CardTonalElevation,
         shadowElevation = 14.dp,
     ) {
