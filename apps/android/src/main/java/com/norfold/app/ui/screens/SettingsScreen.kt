@@ -13,7 +13,6 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -188,7 +187,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.focusablePill
+import com.norfold.app.ui.selectableChrome
+import com.norfold.app.ui.MIN_TOUCH_TARGET_DP
 import com.norfold.app.ui.NorfoldChrome
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.rememberChromeFocus
 
@@ -714,6 +717,19 @@ private fun WorkspaceAdvancedSettings(state: DocsUiState, viewModel: DocsViewMod
     }
 }
 
+/**
+ * The profile banner: a cover image that edits the cover, and an avatar that edits the picture.
+ *
+ * **Both actions were unnamed.** `clickable` with no label publishes an action whose announcement is whatever
+ * text happens to be merged underneath it, so the cover said the user's own name and handle and the avatar said
+ * a single initial letter — neither said what activating it would do. `onClickLabel` is the whole fix for that,
+ * and it is the reason these do not simply become `focusableChrome(…) { }` with defaults.
+ *
+ * **Neither ring names a backdrop, and that is deliberate.** The ring is drawn over a photograph the user
+ * supplied or a three-stop gradient, so there is no single colour to measure against; the substrate's default
+ * measures against the host container instead of claiming a ratio against an unknown image. See
+ * `NorfoldChrome.resolvedBackdrop`.
+ */
 @Composable
 private fun ProfileBannerCard(
     username: String,
@@ -723,8 +739,13 @@ private fun ProfileBannerCard(
     onEditPicture: () -> Unit,
     onEditCover: () -> Unit,
 ) {
-    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1.95f).clickable(onClick = onEditCover)) {
+    Surface(shape = RoundedCornerShape(BannerRadius.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.95f)
+                .focusableChrome(radiusDp = BannerRadius, onClickLabel = "Change cover image", onClick = onEditCover),
+        ) {
             if (!coverUri.isNullOrBlank()) {
                 AsyncImage(coverUri, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
@@ -740,7 +761,24 @@ private fun ProfileBannerCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(Modifier.size(68.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)).clickable(onClick = onEditPicture), contentAlignment = Alignment.Center) {
+                // The ring is measured against the avatar's own accent tint rather than the page, because when
+                // no picture is set that tint is what it is drawn on — and an accent ring on an accent fill is
+                // the 1.00:1 case `ChromeFocus.ringOnCircle` exists for. Measuring against the tint is also the
+                // conservative answer for the picture case: it moves the ring away from the accent, and a
+                // photograph is not a colour the arithmetic can be given.
+                Box(
+                    Modifier
+                        .size(AvatarSize.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+                        .focusableChrome(
+                            radiusDp = AvatarSize / 2f,
+                            surface = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                            onClickLabel = "Change profile picture",
+                            onClick = onEditPicture,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
                     if (!profileImageUri.isNullOrBlank()) {
                         AsyncImage(profileImageUri, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     } else {
@@ -759,10 +797,22 @@ private fun ProfileBannerCard(
     }
 }
 
+/** The banner cards' shared radius, read by both the [Surface]'s shape and the ring drawn inside it. */
+private const val BannerRadius = 24f
+
+/** The profile avatar's diameter, read by its own `size` and by the ring, whose radius is half of it. */
+private const val AvatarSize = 68f
+
+/** The workspace banner: one action, which is "edit this workspace's name and visuals". */
 @Composable
 private fun WorkspaceBannerCard(name: String, icon: String, iconKind: WorkspaceIconKind, iconUri: String?, backgroundUri: String?, onEdit: () -> Unit) {
-    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
-        Box(Modifier.fillMaxWidth().aspectRatio(2.12f).clickable(onClick = onEdit)) {
+    Surface(shape = RoundedCornerShape(BannerRadius.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(2.12f)
+                .focusableChrome(radiusDp = BannerRadius, onClickLabel = "Edit workspace", onClick = onEdit),
+        ) {
             if (!backgroundUri.isNullOrBlank()) {
                 AsyncImage(backgroundUri, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
@@ -875,7 +925,10 @@ private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
         // Theme tiles
         Column {
             SettingsSectionLabel("Theme")
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // `selectableGroup` on the row that composes all three, so the announced position counts three
+            // and not the section heading above them. Each tile carries its own selected state — see
+            // [ThemeTile] — and this is what turns three independent states into "2 of 3".
+            Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ThemeTile("System", Icons.Outlined.Settings, state.settings.themeMode == ThemeMode.System, Modifier.weight(1f)) { viewModel.setTheme(ThemeMode.System) }
                 ThemeTile("Light", Icons.Outlined.LightMode, state.settings.themeMode == ThemeMode.Light, Modifier.weight(1f)) { viewModel.setTheme(ThemeMode.Light) }
                 ThemeTile("Dark", Icons.Outlined.DarkMode, state.settings.themeMode == ThemeMode.Dark, Modifier.weight(1f)) { viewModel.setTheme(ThemeMode.Dark) }
@@ -896,13 +949,28 @@ private fun AppearanceSettings(state: DocsUiState, viewModel: DocsViewModel) {
                             AccentDot(palette.accent, profile == state.settings.themeProfile, palette.displayName) { viewModel.setThemeProfile(profile) }
                         }
                         Spacer(Modifier.weight(1f))
-                        Text(
-                            if (showAllPalettes) "Less" else "More",
-                            color = MaterialTheme.colorScheme.primary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.clickable { showAllPalettes = !showAllPalettes },
-                        )
+                        // A bare 13 sp `Text` with `clickable` was three failures at once: a ~18 dp touch
+                        // target, no focus indication, and an announcement of "More" that says nothing about
+                        // what more there is. The `Box` is what carries the 48 dp — a `heightIn` on the `Text`
+                        // itself would grow the layout and leave the word at the top of it — and the pill is the
+                        // substrate's shape for chrome wider than it is tall.
+                        Box(
+                            Modifier
+                                .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
+                                .focusablePill(
+                                    onClickLabel = if (showAllPalettes) "Show six palettes" else "Show all palettes",
+                                    role = Role.Button,
+                                ) { showAllPalettes = !showAllPalettes }
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                if (showAllPalettes) "Less" else "More",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
                     }
                     if (showAllPalettes) {
                         Box(Modifier.padding(horizontal = 14.dp).padding(bottom = 14.dp)) {
@@ -1183,18 +1251,35 @@ private fun NotificationSettings(state: DocsUiState, viewModel: DocsViewModel) {
     }
 }
 
+/**
+ * One of the three theme modes.
+ *
+ * A radio button in everything but appearance: exactly one is chosen, and choosing another unchooses this
+ * one. So it reports `selected` rather than publishing three independent clickable nodes — before, a reader
+ * heard "System", "Light", "Dark" as three buttons with no indication that one of them was already in effect.
+ *
+ * The leading `clip` stays because the tinted `background` is drawn before the substrate's own clip arrives;
+ * see `EmojiPickerGrid`. The edge weight and the ring's stand-off read one local, so focusing the mode already
+ * in effect cannot be mistaken for the selection border thickening.
+ */
 @Composable
 private fun ThemeTile(label: String, icon: ImageVector, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val edgeWidth = if (selected) ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH else ChromeGeometry.RESTING_EDGE_WIDTH
     Column(
         modifier
-            .clip(RoundedCornerShape(16.dp))
+            .clip(NorfoldChrome.shape(Corner.Card))
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surface)
             .border(
-                width = if (selected) 2.dp else 1.dp,
+                width = edgeWidth.dp,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(16.dp),
+                shape = NorfoldChrome.shape(Corner.Card),
             )
-            .clickable(onClick = onClick)
+            .selectableChrome(
+                selected = selected,
+                corner = Corner.Card,
+                boundaryWidthDp = edgeWidth,
+                onClick = onClick,
+            )
             .padding(vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1409,6 +1494,16 @@ private fun EditorSettings(state: DocsUiState, viewModel: DocsViewModel) {
     }
 }
 
+/**
+ * The corner an icon-family row is clipped and ringed at.
+ *
+ * Not one of the [Corner] tokens: a row inside a dialog's own [Corner.Card] boundary sits a step tighter than
+ * the card containing it, and 12 dp is the radius this list already drew. Named rather than repeated because
+ * the substrate reads it twice — once to clip the ripple, once to place the focus ring concentrically inside
+ * that clip — and two literals cannot be kept equal by review.
+ */
+private const val IconFamilyRowRadius = 12f
+
 @Composable
 private fun IconFamilyPickerDialog(
     title: String,
@@ -1467,11 +1562,20 @@ private fun IconFamilyPickerDialog(
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).padding(top = 8.dp)) {
                     items(NorfoldIconFamilies.size) { index ->
                         val info = NorfoldIconFamilies[index]
+                        // No `selectableGroup` here, unlike the theme tiles: this is a lazy list, and
+                        // `CollectionInfo` derives the announced position from *composed* children, so the group
+                        // would say "3 of 6" out of however many families exist and renumber itself on scroll. The
+                        // lazy list already publishes the real total. Each row states its own `selected` — which is
+                        // what the tick below used to be the only evidence of, and that evidence was purely visual.
+                        // The substrate clips, so no leading `clip` is needed; nothing is painted before it.
                         Column(
                             Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable(enabled = info.family != AppIconFamily.Custom || mappedCount > 0) { onSelect(info.family) }
+                                .selectableChrome(
+                                    selected = selected == info.family,
+                                    radiusDp = IconFamilyRowRadius,
+                                    enabled = info.family != AppIconFamily.Custom || mappedCount > 0,
+                                ) { onSelect(info.family) }
                                 .padding(horizontal = 10.dp, vertical = 10.dp),
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1490,7 +1594,9 @@ private fun IconFamilyPickerDialog(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
-                                if (selected == info.family) Icon(Icons.Outlined.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
+                                // Decorative now that the row itself reports selection: a description here would make
+                                // a reader say "selected" twice for one fact.
+                                if (selected == info.family) Icon(Icons.Outlined.Check, null, tint = MaterialTheme.colorScheme.primary)
                             }
                             if (info.family == AppIconFamily.Custom) {
                                 TextButton(onClick = onImport, modifier = Modifier.align(Alignment.End)) {
@@ -2889,26 +2995,37 @@ private fun AppInfoSettings() {
     }
 }
 
+/**
+ * The app-cover choices, as a single-choice set. Same population as `BuiltInBackgroundStrip` in
+ * `WorkspaceVisualDialog`, which carries the reasoning: the border is the whole selection signal, so the
+ * choice has to be announced rather than only drawn, and one value has to drive both the drawn edge and how
+ * far the focus ring stands off it.
+ */
 @Composable
 private fun BuiltInSettingsCoverStrip(selectedUri: String, onSelect: (String) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .horizontalScroll(rememberScrollState())
+            .selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         BuiltInCovers.forEach { cover ->
             val selected = selectedUri == cover.uri
+            val edgeWidth = if (selected) ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH else ChromeGeometry.RESTING_EDGE_WIDTH
             Box(
                 Modifier
                     .size(width = 104.dp, height = 58.dp)
-                    .clip(RoundedCornerShape(14.dp))
                     .border(
-                        width = if (selected) 2.dp else 1.dp,
+                        width = edgeWidth.dp,
                         color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(Corner.Media.radiusDp.dp),
                     )
-                    .clickable { onSelect(cover.uri) },
+                    .selectableChrome(
+                        selected = selected,
+                        corner = Corner.Media,
+                        boundaryWidthDp = edgeWidth,
+                    ) { onSelect(cover.uri) },
             ) {
                 Image(painterResource(cover.drawableRes), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = 0.18f)))

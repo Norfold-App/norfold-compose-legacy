@@ -122,6 +122,22 @@ object ChromeGeometry {
     const val SELECTED_EDGE_WIDTH = 3f
 
     /**
+     * The selection edge for a **picker cell**, where the border is the entire selection signal.
+     *
+     * Lighter than [SELECTED_EDGE_WIDTH] because a picker cell is small and packed — a 52 dp emoji tile, a
+     * 58 dp cover thumbnail — and three dp on a 52 dp box reads as a frame rather than as a choice. Two dp is
+     * what all five picker populations already drew, so this records a number the tree had rather than
+     * imposing a new one on chrome that was consistent.
+     *
+     * **It exists as a constant because two things must agree on it.** A picker draws this at its own edge
+     * *and* has to tell its focus ring to stand off by exactly that much, or the ring merges into the
+     * selection border and focus becomes invisible on the one cell already selected. Two literals cannot be
+     * kept equal by review; one constant read twice cannot drift. See
+     * [com.norfold.app.ui.selectableChrome]'s `boundaryWidthDp`.
+     */
+    const val PICKER_SELECTED_EDGE_WIDTH = 2f
+
+    /**
      * What a resting edge has to measure against its own backdrop to be seen without shouting.
      *
      * **Neither theme outline token can do this job, on any surface, in either mode.** Measured on the

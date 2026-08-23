@@ -3,7 +3,6 @@ package com.norfold.app.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +24,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,7 +57,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -77,6 +76,8 @@ import com.norfold.app.ui.components.NorfoldMetric
 import com.norfold.app.ui.components.NorfoldPageHeader
 import com.norfold.app.ui.components.NorfoldSegmentedControl
 import com.norfold.app.ui.components.NorfoldStatusPill
+import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.selectableChrome
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -305,6 +306,38 @@ private fun ContinuousDayCalendar(
 private val WeekHourRailWidth = 46.dp
 
 /**
+ * The radius a week-header day cell is clipped and ringed at.
+ *
+ * Named rather than repeated because the substrate reads it twice — once to clip the ripple, once to place the
+ * focus ring concentrically inside that clip — and two literals cannot be kept equal by review.
+ */
+private const val WeekDayCellRadius = 10f
+
+/**
+ * The radius a month-grid day cell is filled, clipped and ringed at. Same reason as [WeekDayCellRadius], with
+ * one extra reader: the cell's own `background` draws the selected fill at this radius, so a third literal
+ * would have to agree too.
+ */
+private const val MonthDayCellRadius = 8f
+
+/**
+ * The radius a timeline event block is filled, clipped and ringed at — read by the block's own tinted
+ * `background` and by the substrate that rings inside it.
+ */
+private const val TimelineEventRadius = 7f
+
+/** A timeline event block's height. Its leading colour bar fills it rather than restating it. */
+private val TimelineEventHeight = 46.dp
+
+/**
+ * How far a timeline event's own colour is faded to become its block fill.
+ *
+ * Read twice — once to paint the fill, once to tell the focus ring what it is drawn on — so the ring's
+ * contrast is measured against the colour actually beneath it rather than the page the block covers.
+ */
+private const val TimelineEventTintAlpha = 0.16f
+
+/**
  * Week view pager: swipe between adjacent week panels.
  * Each panel = sticky 7-day header (tap selects) + sticky all-day/
  * multi-day capsule band + vertically scrolling adaptive timed grid whose
@@ -357,12 +390,21 @@ private fun WeekPanel(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
         Column {
-            Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            // `selectableGroup` on the header row: the seven days are all composed, so the announced position
+            // is true — and the hour-rail `Spacer` publishes no selection state, so it is not one of the seven.
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp).selectableGroup()) {
                 Spacer(Modifier.width(WeekHourRailWidth))
                 weekDays.forEach { date ->
                     val selected = date == selectedDate
+                    // The date was drawn as selected — a filled accent disc — and announced as an unlabelled
+                    // button with no state, so a reader heard seven days and not which one the panel is showing.
+                    // `selectableChrome` says it. The cell paints nothing at its own edge, so the ring's default
+                    // stand-off is the right one; the accent disc is inside the cell, not at its boundary.
                     Column(
-                        Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable { onSelect(date) }.padding(vertical = 5.dp),
+                        Modifier
+                            .weight(1f)
+                            .selectableChrome(selected = selected, radiusDp = WeekDayCellRadius) { onSelect(date) }
+                            .padding(vertical = 5.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
@@ -602,12 +644,35 @@ private fun MonthPanel(month: YearMonth, selected: LocalDate, events: List<Plann
             val offset = first.dayOfWeek.value - 1
             val cells = (0 until 42).map { first.minusDays(offset.toLong()).plusDays(it.toLong()) }
             cells.chunked(7).forEach { week ->
+                // No `selectableGroup` on these rows, and none is expressible: the grid is 42 cells chunked into
+                // six rows of seven, so a group here would announce "3 of 7" for a cell that is the 17th of 42,
+                // and there is no single parent that owns all 42. Each cell states its own `selected`, which is
+                // the fact a reader was missing; an unstated position beats a stated wrong one.
                 Row(Modifier.fillMaxWidth()) {
                     week.forEach { date ->
                         val count = events.count { it.date == date }
                         val active = date == selected
+                        // Selection here is a container fill, announced to nobody — a reader heard 42 day
+                        // numbers as buttons with no indication which day the month view is showing. The
+                        // `background` stays ahead of the substrate because it paints the fill; it draws at the
+                        // same radius the substrate clips and rings at, so the three cannot drift. The fill is
+                        // named as the ring's backdrop when it is drawn: an accent ring measured against the
+                        // page would be measuring against something this cell has covered up.
                         Column(
-                            Modifier.weight(1f).height(72.dp).padding(2.dp).background(if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, RoundedCornerShape(8.dp)).clickable { onSelect(date) }.padding(6.dp),
+                            Modifier
+                                .weight(1f)
+                                .height(72.dp)
+                                .padding(2.dp)
+                                .background(
+                                    if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                    RoundedCornerShape(MonthDayCellRadius.dp),
+                                )
+                                .selectableChrome(
+                                    selected = active,
+                                    radiusDp = MonthDayCellRadius,
+                                    surface = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Unspecified,
+                                ) { onSelect(date) }
+                                .padding(6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Text(date.dayOfMonth.toString(), color = when { active -> MaterialTheme.colorScheme.primary; date.month != month.month -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f); else -> MaterialTheme.colorScheme.onSurface }, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, fontSize = 12.sp)
@@ -659,13 +724,33 @@ private fun DayTimeline(date: LocalDate, events: List<PlanningEvent>, onEventCli
                                 Spacer(Modifier.height(66.dp))
                             } else {
                                 hourEvents.forEach { event ->
+                                    // The `background` moves ahead of the substrate, which is what clips the
+                                    // ripple: drawn after `clickable`, as it was, the tint was rounded but the
+                                    // ripple it sat under was a hard rectangle overhanging all four corners.
+                                    // The tint is also the ring's backdrop — an accent ring measured against the
+                                    // page would be measuring against something this block has covered up.
+                                    //
+                                    // The 46 dp height is two short of the 48 dp minimum and is left alone on
+                                    // purpose: the hour row above is a fixed 68/104 dp, so raising the block
+                                    // pushes a two-event hour past its container rather than growing it. The
+                                    // honest fix is to derive that row's height from its event count, which is a
+                                    // layout change and not this one.
                                     Row(
-                                        Modifier.fillMaxWidth().height(46.dp)
-                                            .clickable { onEventClick(event) }
-                                            .background(event.color.copy(alpha = 0.16f), RoundedCornerShape(7.dp)),
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .height(TimelineEventHeight)
+                                            .background(
+                                                event.color.copy(alpha = TimelineEventTintAlpha),
+                                                RoundedCornerShape(TimelineEventRadius.dp),
+                                            )
+                                            .focusableChrome(
+                                                radiusDp = TimelineEventRadius,
+                                                surface = event.color.copy(alpha = TimelineEventTintAlpha),
+                                                onClickLabel = "Open event",
+                                            ) { onEventClick(event) },
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        Box(Modifier.width(4.dp).height(46.dp).background(event.color, RoundedCornerShape(7.dp)))
+                                        Box(Modifier.width(4.dp).fillMaxHeight().background(event.color, RoundedCornerShape(TimelineEventRadius.dp)))
                                         Column(Modifier.padding(horizontal = 9.dp)) {
                                             Text(event.title, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                             Text(event.time?.format(DateTimeFormatter.ofPattern("h:mm a")) ?: "All day", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -702,9 +787,25 @@ private fun DayAgenda(date: LocalDate, events: List<PlanningEvent>, onEventClick
     NorfoldCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(date.format(DateTimeFormatter.ofPattern("EEEE, MMMM d")), fontWeight = FontWeight.Bold); if (events.isEmpty()) Text("Nothing scheduled", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp); events.forEach { EventRow(it, onEventClick) } } }
 }
 
+/**
+ * One agenda line: a colour bar, the event's title and detail, and its time.
+ *
+ * `radiusDp = 0f` rather than a `Corner` tier, which is what the four full-width `toggleableChrome`
+ * rows elsewhere already pass: a row spanning its card's inner width has no corner of its own, and a tier here
+ * would round a ring against square content. It draws no fill and no edge, so the default stand-off is correct.
+ *
+ * `onClickLabel` because a row announcing "Standup, 9:30 AM" said nothing about what activating it does — and
+ * what it does is open the event's document, not edit the event.
+ */
 @Composable
 private fun EventRow(event: PlanningEvent, onClick: (PlanningEvent) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onClick(event) }.padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .focusableChrome(radiusDp = 0f, onClickLabel = "Open event") { onClick(event) }
+            .padding(vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Box(Modifier.width(4.dp).height(38.dp).background(event.color, CircleShape))
         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(event.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp); Text(event.detail.ifBlank { event.source }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Text(event.time?.format(DateTimeFormatter.ofPattern("h:mm a")) ?: "All day", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

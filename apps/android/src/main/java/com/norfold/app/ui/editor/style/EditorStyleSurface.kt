@@ -4,7 +4,6 @@ package com.norfold.app.ui.editor.style
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
@@ -79,6 +78,7 @@ import com.norfold.app.ui.components.NorfoldColorDot
 import com.norfold.app.ui.components.NorfoldColorSwatch
 import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.fonts.OfflineFontLibrary
+import com.norfold.app.ui.selectableChrome
 
 /** Actions are host-funnelled; this shared surface never mutates a document directly. */
 class EditorStyleSurfaceActions(
@@ -609,11 +609,35 @@ private fun FontBrowserPanel(
                     com.norfold.app.domain.style.FontRequest(row.record.identity),
                     row.previewText,
                 ).family
+                // One of an exclusive set — the family this text is drawn in — so this is `selectableChrome`
+                // and its `Role.RadioButton` is what the row actually is. No `selectableGroup()` on the
+                // parent: it is a `LazyColumn`, and `CollectionInfo_android` derives a group's positions from
+                // the parent's *composed* children, so on a lazy list the group modifier would announce "4 of
+                // 9" out of hundreds of families and renumber on every scroll. The list already publishes its
+                // real count.
+                //
+                // Flush at `radiusDp = 0f` because the row spans the panel's full inner width and has a
+                // divider directly beneath it, so it has no corner of its own to be concentric with.
+                //
+                // The ring is measured against what it is drawn on, and that is two different colours here:
+                // the selected row's own `secondaryContainer` fill, or — when the fill is transparent — the
+                // panel's `Surface`, which is `colorScheme.surface` at 6 dp of tonal elevation. Passing the
+                // untinted token is deliberate: `resolvedBackdrop` applies the tint itself from
+                // `LocalAbsoluteTonalElevation`, which is the *accumulated* value, so a row inside this panel
+                // inside a `ModalBottomSheet` resolves at the real depth rather than at the 6 dp literal.
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(if (row.selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                        .clickable { actions.selectFont(row.record.identity) }
+                        .selectableChrome(
+                            selected = row.selected,
+                            radiusDp = 0f,
+                            surface = if (row.selected) {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                        ) { actions.selectFont(row.record.identity) }
                         .padding(vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

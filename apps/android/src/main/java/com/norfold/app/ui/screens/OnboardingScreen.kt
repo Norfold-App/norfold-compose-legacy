@@ -11,7 +11,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -558,17 +557,43 @@ private fun RestoreStep(secret: String, onSecret: (String) -> Unit, onRestore: (
     OnboardingPrimaryButton("Choose backup", enabled = secret.isNotBlank(), onClick = onRestore)
 }
 
+/**
+ * The onboarding avatar slot's diameter, read by its own `size` and by the focus ring, whose radius is half of
+ * it — two literals could not be kept in step, and a ring at the wrong radius on a circle is visibly an ellipse
+ * of rounded corners rather than a circle.
+ */
+private const val OnboardingAvatarSize = 72f
+
+/** How far the avatar slot's container tint is faded. Read twice: to paint the fill, and to measure the ring. */
+private const val OnboardingAvatarFillAlpha = 0.55f
+
 @Composable
 private fun ProfileStep(fullName: String, onFullName: (String) -> Unit, displayName: String, onDisplayName: (String) -> Unit, avatarUri: String, onPickAvatar: () -> Unit) {
+    // The avatar slot's announcement depended on whether a picture was set, and only the empty case worked:
+    // the placeholder icon happened to say "Choose profile image", while a chosen picture said "Profile image"
+    // and nothing about being tappable at all. The action's name belongs on the action, so the two children
+    // now describe the *slot* and `onClickLabel` describes what activating it does — in both states.
+    //
+    // The ring is measured against the avatar's own tint rather than the page, because that tint is what it is
+    // drawn on; see `ChromeFocus.ringOnCircle` for why an accent ring on an accent fill is the case worth
+    // naming a backdrop for.
+    val avatarFill = MaterialTheme.colorScheme.primaryContainer.copy(alpha = OnboardingAvatarFillAlpha)
     Surface(
-        Modifier.size(72.dp).clickable(onClick = onPickAvatar),
+        Modifier
+            .size(OnboardingAvatarSize.dp)
+            .focusableChrome(
+                radiusDp = OnboardingAvatarSize / 2f,
+                surface = avatarFill,
+                onClickLabel = "Choose profile picture",
+                onClick = onPickAvatar,
+            ),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f),
+        color = avatarFill,
     ) {
         if (avatarUri.isNotBlank()) {
-            AsyncImage(avatarUri, "Profile image", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            AsyncImage(avatarUri, "Profile picture", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } else {
-            Icon(Icons.Outlined.Person, "Choose profile image", Modifier.padding(20.dp), tint = MaterialTheme.colorScheme.primary)
+            Icon(Icons.Outlined.Person, "No profile picture", Modifier.padding(20.dp), tint = MaterialTheme.colorScheme.primary)
         }
     }
     Text("Tell us about you", fontSize = 28.sp, fontWeight = FontWeight.Black)

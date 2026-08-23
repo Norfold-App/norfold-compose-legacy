@@ -387,6 +387,140 @@ class ChromeGeometryTest {
     }
 
     /**
+     * **A derived radius that does not fit its own ring box is capped by the substrate, not by Skia.**
+     *
+     * The failure this pins is silent by construction. `innerFocusRing` draws with `drawRoundRect`, and
+     * `AndroidCanvas.drawRoundRect` forwards its two radii straight to `android.graphics.Canvas` with no
+     * validation — Skia then *scales an oversized radius down to fit* rather than rejecting it. So a ring asked
+     * for a radius larger than half its own shorter side is drawn at some other radius, the call site's stated
+     * number and the drawn number part company, and nothing reports it. Concentricity — the property
+     * [ChromeGeometry.focusRingRadius] exists to guarantee, and which the tests above assert arithmetically —
+     * quietly stops holding on exactly the chrome where it is hardest to eyeball.
+     *
+     * Short chrome is where this bites, and the app has it: `TaskChecklistSummaryCard`'s disclosure header
+     * carries no vertical padding, so its height floor is a 20 dp icon. The ring is inset by
+     * [ChromeGeometry.FOCUS_RING_INSET] plus half its own stroke on each side, leaving a 12 dp box whose
+     * largest honourable radius is 6 — while `focusRingRadius(10f)` returns 7.
+     *
+     * Asserted as the relationship rather than at that one height: for every chrome radius the app draws,
+     * across a sweep of heights from shorter than the inset to taller than any row, the drawn radius must be
+     * both the derived one *and* no more than half the shorter side. That is the pair of facts the cap has to
+     * reconcile, and pinning both is what stops a future edit from restoring the derived value alone.
+     *
+     * Why the cap lives in the draw scope and not in [ChromeGeometry]: the helper is pure arithmetic on a
+     * radius, and the height that decides whether the result fits is not known until layout. The draw scope is
+     * the first place that knows both numbers.
+     */
+    @Test
+    fun `a derived ring radius is capped to what its own box can hold`() {
+        val inset = ChromeGeometry.FOCUS_RING_INSET
+        val stroke = ChromeGeometry.FOCUS_RING_WIDTH
+        // The offset the draw scope applies per side: the gap to the ring's outer edge, plus the half stroke
+        // that straddles the path.
+        val offset = inset + stroke / 2f
+
+        // Every radius the substrate's own tiers and the app's ad-hoc chrome actually pass.
+        val radii = ChromeGeometry.Corner.entries.map { it.radiusDp } + listOf(0f, 6f, 8f, 10f, 12f, 16f, 99f)
+        // Heights from shorter than the ring can be drawn at all, through the app's short chrome (a 20 dp
+        // in-cell chip, a 20 dp icon-floored header, a 28 dp padded header), up past any real row.
+        val heights = listOf(4f, 8f, 12f, 20f, 24f, 28f, 38f, 48f, 76f, 188f)
+
+        var capped = 0
+        for (radiusDp in radii) {
+            val derived = ChromeGeometry.focusRingRadius(radiusDp)
+            for (height in heights) {
+                val box = (height - offset * 2f).coerceAtLeast(0f)
+                // The width of real chrome always exceeds its height here, so the shorter side is the box.
+                val drawn = minOf(derived, box / 2f)
+
+                assertTrue(
+                    "radius %.1f in a %.1f dp row draws at %.2f, wider than the %.2f dp box can hold — Skia would rescale it"
+                        .format(radiusDp, height, drawn, box),
+                    drawn <= box / 2f + 1e-6f,
+                )
+                assertTrue("a ring radius can never be negative", drawn >= 0f)
+                assertTrue(
+                    "radius %.1f in a %.1f dp row draws at %.2f, above the derived %.2f — the cap must only ever reduce"
+                        .format(radiusDp, height, drawn, derived),
+                    drawn <= derived + 1e-6f,
+                )
+                if (drawn < derived - 1e-6f) capped++ else {
+                    assertEquals(
+                        "radius %.1f fits a %.1f dp row, so it must be drawn at exactly the derived value".format(radiusDp, height),
+                        derived.toDouble(),
+                        drawn.toDouble(),
+                        1e-6,
+                    )
+                }
+            }
+        }
+
+        assertTrue(
+            "no case in the sweep was capped, so this test is asserting nothing about the cap",
+            capped > 0,
+        )
+
+        // The header that prompted the cap, stated as its own case so the reasoning in that comment stays
+        // checkable: the 10 dp radius its sibling takes does not fit a 20 dp row, and 8 does.
+        val shortBox = 20f - offset * 2f
+        assertTrue("a 10 dp radius is expected to overflow a 20 dp row", ChromeGeometry.focusRingRadius(10f) > shortBox / 2f)
+        assertTrue("8f is expected to fit a 20 dp row outright", ChromeGeometry.focusRingRadius(8f) <= shortBox / 2f)
+        // And every tier the substrate itself owns overflows it, which is why short chrome passes a bare Float
+        // rather than a Corner in the first place.
+        for (corner in ChromeGeometry.Corner.entries) {
+            assertTrue(
+                "$corner is expected to be too round for a 20 dp row, so short chrome cannot take a tier",
+                ChromeGeometry.focusRingRadius(corner) > shortBox / 2f,
+            )
+        }
+    }
+
+    /**
+     * **A picker's selected edge is heavier than the substrate's, so the ring has to clear that instead.**
+     *
+     * [ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH] is the weight four picker call sites draw when selected — two
+     * in `WorkspaceVisualDialog`, two in `SettingsScreen` — and it is double [ChromeGeometry.RESTING_EDGE_WIDTH].
+     * A ring taking the default inset inside one of those would sit 1 dp from the selected border's inner edge,
+     * and 1 dp is not a gap at any density: the two read as a single heavier stroke.
+     *
+     * That merge costs more on a picker than anywhere else, for the same reason it does on the accent swatch:
+     * the border *is* the selection signal. Thickening it says "more selected", which is not a state, while the
+     * thing the user needed to know — where the keyboard is — goes unsaid.
+     *
+     * Pinned separately from the swatch's 2.5 dp case because this is a *named constant* rather than a literal
+     * at one call site: the swatch test proves the rule scales, and this proves the app's own second-heaviest
+     * boundary is inside the range where it has to be applied.
+     */
+    @Test
+    fun `the ring clears a picker's selected edge rather than the substrate's`() {
+        val picker = ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH
+        assertTrue(
+            "a picker's selected edge is expected to be heavier than a resting one, or it would need no override",
+            picker > ChromeGeometry.RESTING_EDGE_WIDTH,
+        )
+
+        val over = ChromeGeometry.focusRingInsetOver(picker)
+        assertEquals(picker + ChromeGeometry.FOCUS_RING_GAP, over, 1e-6f)
+        assertTrue(
+            "the default inset leaves only %.1f dp between the ring and a picker's selected border, which reads as one stroke"
+                .format(ChromeGeometry.FOCUS_RING_INSET - picker),
+            ChromeGeometry.FOCUS_RING_INSET - picker < ChromeGeometry.FOCUS_RING_GAP,
+        )
+        assertTrue(
+            "the override must actually move the ring inward, not merely differ",
+            over > ChromeGeometry.FOCUS_RING_INSET,
+        )
+
+        // A table cell states selection at the same weight, and takes the same override for the same reason.
+        assertEquals(
+            "the same weight must resolve to the same inset wherever it is drawn",
+            over,
+            ChromeGeometry.focusRingInsetOver(2f),
+            1e-6f,
+        )
+    }
+
+    /**
      * A ring on a swatch still leaves the swatch reading as a colour.
      *
      * The accent picker is the tightest genuine ring site in the app: a 30 dp disc whose entire job is to
@@ -1734,6 +1868,71 @@ class ChromeGeometryTest {
         assertEquals(
             "a chrome modifier that does not clip ahead of its own interaction lets the ripple square off the " +
                 "corners of every row routed through it",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    /**
+     * **Both inward ring draw scopes bound their radius by their own box, and the pill derives its from it.**
+     *
+     * The arithmetic pinned by `a derived ring radius is capped to what its own box can hold` is only worth
+     * anything if the drawing code performs it, and a unit source set cannot run a draw scope. So this reads the
+     * source: each of the two `drawRoundRect` calls must take its `cornerRadius` from an expression bounded by
+     * `minOf(w, h) / 2f`, the half-shorter-side that Skia would otherwise silently impose.
+     *
+     * The two arrive at it from opposite directions, which is the reason to check them together rather than
+     * assume one covers the other:
+     *
+     *  - [NorfoldChrome.innerFocusRing] starts from the caller's stated radius and has to be *capped* — the
+     *    caller can ask for more than fits, and on short chrome does.
+     *  - [NorfoldChrome.innerFocusRingPill] has no stated radius at all, because a pill's is half a height only
+     *    layout knows, so it *is* the half-shorter-side. Its correctness is that it derives from the ring's own
+     *    box and not from the pill's outer bounds: measuring the outer height would put the arc centre a full
+     *    offset outside the ring's own, and the curve would bulge past the pill it marks.
+     *
+     * Asserted from source because the alternative is asserting nothing. A future edit restoring the uncapped
+     * `(containerRadiusDp - inset)` compiles, runs, and looks right on every row tall enough — which is most of
+     * them — while quietly rescaling the ring on the short ones.
+     */
+    @Test
+    fun `both inward ring draw scopes bound the radius by their own box`() {
+        val source = chromeSource()
+        val offenders = mutableListOf<String>()
+        val bound = "minOf(w, h) / 2f"
+
+        // The free-radius overload is the one that draws; the Corner overload delegates to it.
+        val ring = source
+            .substringAfter("fun Modifier.innerFocusRing(\n        focused: Boolean,\n        containerRadiusDp: Float,")
+            .substringBefore("fun Modifier.innerFocusRingPill(")
+        val radiusLine = ring.lineSequence().firstOrNull { it.contains("val radius =") }
+        when {
+            radiusLine == null -> offenders += "innerFocusRing: no `val radius =`, so the cap cannot be located"
+            !radiusLine.contains(bound) ->
+                offenders += "innerFocusRing: radius is not bounded by $bound — Skia will rescale it on short chrome"
+            !radiusLine.contains("containerRadiusDp - inset") ->
+                offenders += "innerFocusRing: radius no longer derives from the container, so it is not concentric"
+        }
+
+        val pill = source.substringAfter("fun Modifier.innerFocusRingPill(")
+        val pillRadius = pill.lineSequence().firstOrNull { it.contains("cornerRadius = CornerRadius(") }
+        when {
+            pillRadius == null -> offenders += "innerFocusRingPill: no cornerRadius to check"
+            !pillRadius.contains(bound) ->
+                offenders += "innerFocusRingPill: a pill's radius must be half its own inset box, not a stated number"
+        }
+
+        // Both must measure the box, not the outer bounds. `size.height / 2f` in either would put the ring's arc
+        // centre outside its own path.
+        for ((name, body) in listOf("innerFocusRing" to ring, "innerFocusRingPill" to pill)) {
+            if (body.contains("CornerRadius(size.")) {
+                offenders += "$name: derives its radius from the outer bounds, so the curve bulges past the shape"
+            }
+        }
+
+        assertEquals(
+            "an inward ring whose radius is not bounded by its own box is drawn at whatever radius Skia scales " +
+                "it to, which is not the radius the call site asked for and not concentric with anything",
             emptyList<String>(),
             offenders,
         )

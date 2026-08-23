@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.BasicTextField
@@ -100,6 +101,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -132,6 +134,14 @@ import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.focusableChrome
 import androidx.compose.ui.semantics.Role
+
+/**
+ * How far the sidebar scrim dims what is behind the panel.
+ *
+ * Named because it is the one number that decides whether the scrim reads as "the thing behind is out of reach";
+ * the value itself is what this overlay already drew.
+ */
+private const val ScrimAlpha = 0.44f
 
 @Composable
 fun SectionSidebarOverlay(state: DocsUiState, viewModel: DocsViewModel) {
@@ -167,11 +177,24 @@ fun SectionSidebarOverlay(state: DocsUiState, viewModel: DocsViewModel) {
         exit = fadeOut(tween(if (state.settings.reduceMotion) 120 else 250)),
     ) {
         Box(Modifier.fillMaxSize()) {
+            // **No focus ring here, and no `clickable` either.** A scrim is the one population the chrome
+            // substrate must not touch: a ring around the entire screen indicates nothing, a ripple that fills
+            // the screen on every dismiss is worse than none, and as a focus stop it is a node a keyboard user
+            // must traverse to reach the panel it exists to dim. It was also announced, before this, as an
+            // unlabelled button occupying the whole display and appearing *before* the drawer in traversal
+            // order — so the first thing a reader met on opening the sidebar was an anonymous button.
+            //
+            // `detectTapGestures` keeps the tap-to-dismiss; `clearAndSetSemantics {}` withdraws the node so a
+            // reader goes straight to the panel. The tap is a convenience and not the only exit — the sidebar is
+            // one of the states `PredictiveBackHandler` in `NorfoldAppRoot` handles, so back closes it, and every
+            // navigation row inside calls `closeSidebar` on activation. This is the standard "scrim is decoration
+            // over a modal surface, back is the exit" arrangement.
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.44f))
-                    .clickable(onClick = viewModel::closeSidebar),
+                    .background(Color.Black.copy(alpha = ScrimAlpha))
+                    .pointerInput(Unit) { detectTapGestures { viewModel.closeSidebar() } }
+                    .clearAndSetSemantics { },
             )
             AnimatedVisibility(
                 visible = state.sidebarOpen,

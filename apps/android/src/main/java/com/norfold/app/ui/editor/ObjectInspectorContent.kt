@@ -1,6 +1,5 @@
 package com.norfold.app.ui.editor
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import com.norfold.app.editor.inspector.InspectorAction
 import com.norfold.app.editor.inspector.InspectorModel
 import com.norfold.app.editor.inspector.InspectorSlot
+import com.norfold.app.ui.MIN_TOUCH_TARGET_DP
+import com.norfold.app.ui.focusableChrome
 
 /**
  * The one object inspector, drawn.
@@ -118,6 +119,36 @@ private fun InspectorSlotHeading(slot: InspectorSlot) {
  *
  * Disabled wins over destructive: a delete the user cannot perform should read as unavailable rather than as
  * dangerous, since the danger is not currently on offer.
+ *
+ * ## Why the ring is flush, and measured against `surfaceContainerLow`
+ *
+ * `radiusDp = 0f` — the idiom the four flush `toggleableChrome` rows elsewhere already pass — because a row
+ * spanning its host's full inner width has no corner of its own, and a tier here would round a ring against
+ * square content and against the divider directly above it.
+ *
+ * The backdrop is named rather than defaulted because this composable does not own its surface, and the two
+ * hosts that provide it are `ModalBottomSheet` (phone) and `ElevatedCard` (tablet pane) used **raw** —
+ * `DocumentObjectInspectorSheet` and Flow's `FlowObjectInspector` reach for Material's own composables, not
+ * for `NorfoldBottomSheet`, so neither publishes `LocalChromeContainer` and the substrate's default would
+ * resolve to `colorScheme.background`: the page behind a sheet that covers it. One colour is right for both
+ * hosts and it is not a guess at either — `SheetBottomTokens.DockedContainerColor` and
+ * `ElevatedCardTokens.ContainerColor` both resolve to `SurfaceContainerLow`, verified in the material3
+ * bytecode this module compiles against. `FlowPaletteList`, the sibling list in the same two hosts, measures
+ * against the same token for the same reason.
+ *
+ * ## The touch target, which this row did not have
+ *
+ * [MIN_TOUCH_TARGET_DP] is restated because nothing else here supplies it. `focusableChrome` deliberately does
+ * not — unlike [com.norfold.app.ui.selectableChrome], which restates the floor only because passing a Material
+ * control's handler `null` takes Material's own minimum away with it — and this row has never been inside a
+ * Material interactive component to inherit one from. It is a bare `Column` with a click.
+ *
+ * Which leaves it short: the theme redefines `bodyLarge` at 15 sp and names no `lineHeight`, so the line box is
+ * the font's own — near 18 dp — and 12 dp of padding either side brings an enabled row to roughly 42 dp, on every
+ * row of the sheet that carries a delete. That clears WCAG 2.5.8 AA, which asks 24×24, and even 2.5.5 AAA at 44
+ * is a CSS-pixel figure rather than a dp one — so the criterion this misses is Android's own 48 dp convention,
+ * which every Material control in the app holds and which the thumb is calibrated to. A disabled row already
+ * clears it, since its reason sits underneath, so the floor only moves the ones that were short.
  */
 @Composable
 private fun InspectorActionRow(action: InspectorAction, onAction: (InspectorAction) -> Unit) {
@@ -129,8 +160,14 @@ private fun InspectorActionRow(action: InspectorAction, onAction: (InspectorActi
     Column(
         Modifier
             .fillMaxWidth()
-            .clickable(enabled = action.enabled) { onAction(action) }
+            .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
+            .focusableChrome(
+                radiusDp = 0f,
+                surface = MaterialTheme.colorScheme.surfaceContainerLow,
+                enabled = action.enabled,
+            ) { onAction(action) }
             .padding(horizontal = INSPECTOR_GUTTER, vertical = 12.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(

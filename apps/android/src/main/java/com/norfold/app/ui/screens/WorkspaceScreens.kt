@@ -183,6 +183,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -208,6 +211,7 @@ import com.norfold.app.domain.Destination
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.ChatAudioState
 import com.norfold.app.ui.focusableChrome
+import com.norfold.app.ui.focusablePill
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.ChatUploadItem
 import com.norfold.app.ui.ChatUploadStatus
@@ -216,6 +220,7 @@ import com.norfold.app.ui.VoiceRecordingState
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.SemanticColors
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.EditorChromeColors
 import com.norfold.app.ui.SecureRelayConnection
 import com.norfold.app.ui.PrivateChatArchiveUiState
 import com.norfold.app.ui.toggleableChrome
@@ -928,16 +933,50 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                     val cur = selectedIds ?: emptySet()
                     selectedIds = if (groupSelected) cur - groupIds else cur + groupIds
                 }
+                // `toggleableChrome` rather than `focusableChrome`, because while a selection is active this row
+                // *is* a checkbox: it reports `Role.Checkbox` and its own checked state on one node, where before
+                // the state lived only in a decorative `Icon` swap that a screen reader met as a second,
+                // separate node with a name and no action.
+                //
+                // The row states its own name, and has to: the bubble inside it is a `combinedClickable`, which
+                // merges its own descendants, and `SemanticsNode`'s merge walk stops at a merging child. So the
+                // message text does not travel up into this node and a nameless row would announce as a bare
+                // "checkbox, not ticked". The icon's description is dropped for the mirror-image reason — it was
+                // a second named node for the state this node now carries.
+                //
+                // Only while selecting: outside selection mode the row is inert and takes no chrome at all, so it
+                // neither rings nor claims a role it does not have.
+                //
+                // The wash moves *after* the substrate deliberately, against the usual order: `toggleableChrome`
+                // clips the ripple itself, so a fill chained before it would be clipped too and the flat
+                // 0.08-alpha tint would then be re-clipped to the same bounds for nothing. The ripple stays
+                // bounded either way because the clip is inside the modifier, not at the call site.
                 Row(
                     Modifier.fillMaxWidth()
-                        .then(if (selecting) Modifier.clickable { toggleGroup() } else Modifier)
+                        .then(
+                            if (selecting) {
+                                Modifier
+                                    .semantics {
+                                        contentDescription = "Message from ${chat.authorDisplayName}"
+                                    }
+                                    .toggleableChrome(
+                                        checked = groupSelected,
+                                        radiusDp = 0f,
+                                        role = androidx.compose.ui.semantics.Role.Checkbox,
+                                        surface = MaterialTheme.colorScheme.background,
+                                        onValueChange = { toggleGroup() },
+                                    )
+                            } else {
+                                Modifier
+                            },
+                        )
                         .then(if (groupSelected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)) else Modifier),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (selecting) {
                         Icon(
                             if (groupSelected) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
-                            if (groupSelected) "Selected" else "Not selected",
+                            contentDescription = null,
                             tint = if (groupSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                             modifier = Modifier.padding(start = 8.dp).size(22.dp),
                         )
@@ -1635,8 +1674,19 @@ private fun ChatAttachmentTray(
             modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
         ) {
             gridItems(tools) { tool ->
+                // The tile is the focus stop, not the 56 dp tinted square inside it: the label is part of the
+                // target and a ring around the square alone would exclude the word the user is reading. No
+                // `surface` argument, uniquely among this file's conversions — `NorfoldBottomSheet` publishes
+                // `LocalChromeContainer`, so the substrate's default already resolves to the sheet's own colour,
+                // and naming a token here would be a second, staler opinion about it.
                 Column(
-                    Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = tool.onClick).padding(vertical = 4.dp),
+                    Modifier
+                        .focusableChrome(
+                            corner = Corner.Card,
+                            onClickLabel = tool.label,
+                            onClick = tool.onClick,
+                        )
+                        .padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -1644,7 +1694,7 @@ private fun ChatAttachmentTray(
                         Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(tool.tint.copy(alpha = 0.18f)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(tool.icon, tool.label, tint = tool.tint, modifier = Modifier.size(24.dp))
+                        Icon(tool.icon, contentDescription = null, tint = tool.tint, modifier = Modifier.size(24.dp))
                     }
                     Text(tool.label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                 }
@@ -1712,6 +1762,21 @@ private fun ChatStickerPicker(onDismiss: () -> Unit, onPick: (Sticker) -> Unit) 
 /** Expanding voice composer with a live microphone waveform and explicit pause control. */
 // Premium voice recorder (WhatsApp/Telegram grade):
 // red circular trash · big elapsed timer · live scrolling waveform · pause pill · accent send FAB.
+//
+// All three controls take `focusablePill` rather than `focusableChrome`, because each is a fixed-size circle
+// and `focusablePill` resolves its own radius from the measured box — half the smaller dimension, which for a
+// square box *is* the circle's radius. Passing a number instead would mean restating 23f, 20f and 25f as
+// literals that have to stay half of three sizes stated a line above.
+//
+// Each ring is drawn *inside* the circle it decorates, so the pixel under it is the control's own fill rather
+// than the page — and that matters most on the send button, which is filled `primary`, the ring's own colour:
+// a page-measured ring would land at 1.00:1 on the one control the user reaches for first. The two opaque fills
+// go straight through; the discard fill is translucent, so it is composited here instead. The substrate would
+// composite it too — `EditorChromeColors.opaque` is exactly that hop — but against `LocalChromeContainer` or the
+// page, and neither is what this circle sits on: the composer is a `Surface` painted `surface.copy(alpha = 0.98f)`
+// and publishes no container. It also takes no tonal tint at 3 dp, because Material applies that only to a fill
+// `== colorScheme.surface` and this one carries an alpha. So `opaque` twice, page-upward, is the whole stack —
+// the "caller that knows its real stack should pass the resolved backdrop" case that function names.
 @Composable
 private fun ChatRecordingRow(
     state: VoiceRecordingState,
@@ -1719,18 +1784,26 @@ private fun ChatRecordingRow(
     onTogglePause: () -> Unit,
     onFinish: () -> Unit,
 ) {
+    val composer = EditorChromeColors.opaque(
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        MaterialTheme.colorScheme.background,
+    )
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // Red circular trash — cancel
+        val discardFill = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
         Box(
             Modifier
                 .size(46.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f))
-                .clickable(onClick = onCancel),
+                .background(discardFill, CircleShape)
+                .focusablePill(
+                    surface = EditorChromeColors.opaque(discardFill, composer),
+                    role = androidx.compose.ui.semantics.Role.Button,
+                    onClick = onCancel,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.Outlined.Delete, "Discard recording", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(22.dp))
@@ -1763,9 +1836,12 @@ private fun ChatRecordingRow(
         Box(
             Modifier
                 .size(40.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(onClick = onTogglePause),
+                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                .focusablePill(
+                    surface = MaterialTheme.colorScheme.surfaceVariant,
+                    role = androidx.compose.ui.semantics.Role.Button,
+                    onClick = onTogglePause,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1779,9 +1855,12 @@ private fun ChatRecordingRow(
         Box(
             Modifier
                 .size(50.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary)
-                .clickable(onClick = onFinish),
+                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                .focusablePill(
+                    surface = MaterialTheme.colorScheme.primary,
+                    role = androidx.compose.ui.semantics.Role.Button,
+                    onClick = onFinish,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.AutoMirrored.Outlined.Send, "Send voice message", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(22.dp))
@@ -1911,10 +1990,36 @@ private fun ChatPersonaBar(
             Box(Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
                 Text(title.take(1).uppercase().ifBlank { "W" }, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
-            Column(Modifier.weight(1f).clickable(onClick = onTitleClick)) {
+            // Two rings, not one, and they are genuinely two controls: the title opens conversation details,
+            // the status line under it re-syncs the chat. `clickable` merges its descendants, but
+            // `SemanticsNode.mergeConfig` stops at a child that merges too, so the inner row is *not* swallowed
+            // into the outer one — it stays a separate named node with its own action, which is what makes both
+            // reachable and both worth ringing. Nesting them is still the weaker arrangement: the whole title
+            // block is the outer target, so the status row sits inside its own parent's tap area. That is a
+            // layout question for the header's redesign, not something a focus ring should paper over.
+            //
+            // `Card` for the outer block because the ring wraps a two-line region, `Capsule` for the status row
+            // because it is one short line and a card radius on a 16 dp-high strip would read as a lozenge with
+            // flat sides. Both are measured against `background`: this `Surface` paints exactly that, and it
+            // publishes no `LocalChromeContainer`, so nothing else would resolve it.
+            Column(
+                Modifier
+                    .weight(1f)
+                    .focusableChrome(
+                        corner = Corner.Card,
+                        surface = MaterialTheme.colorScheme.background,
+                        onClickLabel = "Open conversation details",
+                        onClick = onTitleClick,
+                    ),
+            ) {
                 Text(title, fontWeight = FontWeight.Black, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(
-                    modifier = Modifier.clickable(onClick = onStatusClick),
+                    modifier = Modifier.focusableChrome(
+                        corner = Corner.Capsule,
+                        surface = MaterialTheme.colorScheme.background,
+                        onClickLabel = "Refresh conversation",
+                        onClick = onStatusClick,
+                    ),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
@@ -2546,16 +2651,33 @@ private fun GroupRulesSheet(
 }
 
 /** Small presence line ("● Active now" / "Away" / "Offline") shown under a DM header. */
+/**
+ * The presence hue. Green for online, amber for away, the theme's own outline for everything else.
+ *
+ * Literal rather than a theme token because these are status colours in the traffic-light sense — the same two
+ * hues every chat app uses — not roles in Norfold's palette, and re-tinting "online" per accent would make the
+ * dot mean something different in each theme. Held as a function so [PresenceLine] and [MemberRosterRow] cannot
+ * end up drawing different greens, which they did.
+ */
+@Composable
+private fun presenceDot(status: String?): Color = when (status) {
+    "online" -> Color(0xFF2ECC71)
+    "away" -> Color(0xFFF1C40F)
+    else -> MaterialTheme.colorScheme.outline
+}
+
+/** What the dot means, in words. The non-visual half of [presenceDot], and paired with it for that reason. */
+private fun presenceLabel(status: String?): String = when (status) {
+    "online" -> "Active now"
+    "away" -> "Away"
+    else -> "Offline"
+}
+
 @Composable
 private fun PresenceLine(status: String?) {
-    val (dot, label) = when (status) {
-        "online" -> Color(0xFF2ECC71) to "Active now"
-        "away" -> Color(0xFFF1C40F) to "Away"
-        else -> MaterialTheme.colorScheme.outline to "Offline"
-    }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Box(Modifier.size(8.dp).clip(CircleShape).background(presenceDot(status)))
+        Text(presenceLabel(status), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
     }
 }
 
@@ -2614,11 +2736,39 @@ private fun SharedStatCard(
     }
 }
 
-/** One tappable roster entry: avatar + presence dot, display name, @username. */
+/**
+ * One tappable roster entry: avatar + presence dot, display name, @username.
+ *
+ * Flush — `radiusDp = 0f` — because the row spans the sheet's full inner width and has no corner of its own; a
+ * tier here would round a ring against square content. No `surface` argument, because both callers are inside
+ * [com.norfold.app.ui.components.NorfoldContentDialog], which publishes `LocalChromeContainer` as
+ * `colorScheme.surface` and whose host `Surface` provides its own 3 dp as `LocalAbsoluteTonalElevation` — so the
+ * substrate resolves the tinted colour this row is actually drawn on, which a named token here could not.
+ *
+ * The two `Text` children are plain and do not merge, so the display name and `@username` travel up into the
+ * clickable's node and the row needs no name of its own.
+ *
+ * ## The presence dot said nothing
+ *
+ * The dot is 9 dp of green or amber and no text — availability by hue alone, which WCAG 1.4.1 excludes at
+ * Level A and which a screen reader could not reach at all: it is a `Box` with a `background` and no semantics.
+ * [PresenceLine] already carries the same three states *with* their words, so the labels exist; they were simply
+ * not on this row. `stateDescription` puts them on the merged node — the idiom `RecoverySurface` and the task
+ * checklist row already use — so the row announces "Ada Lovelace, @ada, Active now" rather than leaving the one
+ * fact the dot was drawn to convey available only to someone who can see 9 dp of colour.
+ */
 @Composable
 private fun MemberRosterRow(display: String, username: String, status: String?, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 9.dp),
+        Modifier
+            .fillMaxWidth()
+            .semantics { stateDescription = presenceLabel(status) }
+            .focusableChrome(
+                radiusDp = 0f,
+                onClickLabel = "Open profile",
+                onClick = onClick,
+            )
+            .padding(horizontal = 20.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -2631,7 +2781,7 @@ private fun MemberRosterRow(display: String, username: String, status: String?, 
             }
             if (status == "online" || status == "away") {
                 Box(Modifier.size(12.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(9.dp).clip(CircleShape).background(if (status == "online") Color(0xFF2ECC71) else Color(0xFFF1C40F)))
+                    Box(Modifier.size(9.dp).clip(CircleShape).background(presenceDot(status)))
                 }
             }
         }
@@ -3064,8 +3214,21 @@ private fun NotePickerSheet(notes: List<Note>, onPick: (Note) -> Unit, onDismiss
                 }
                 androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
                     items(filtered, key = { it.id }) { note ->
+                        // Flush and unnamed, like the two sibling picker rows in this file: the row spans the
+                        // dialog's full inner width, and its two plain `Text` children merge upward so the title
+                        // and the body preview are the announcement. `onClickLabel` names the *action*, which the
+                        // content cannot — "Untitled note, Empty" says nothing about what a tap does. No `surface`
+                        // argument: `NorfoldContentDialog` publishes `colorScheme.surface` as the container and the
+                        // host `Surface` publishes its own 3 dp, so the substrate resolves the tinted pixel.
                         Row(
-                            Modifier.fillMaxWidth().clickable { onPick(note) }.padding(horizontal = 20.dp, vertical = 11.dp),
+                            Modifier
+                                .fillMaxWidth()
+                                .focusableChrome(
+                                    radiusDp = 0f,
+                                    onClickLabel = "Share this note",
+                                    onClick = { onPick(note) },
+                                )
+                                .padding(horizontal = 20.dp, vertical = 11.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
@@ -3202,9 +3365,24 @@ private fun ChatBubble(
         // Avatar gutter (incoming only), rendered on the last message of a run
         if (!mine) {
             if (lastOfGroup) {
+                // A circle, so `focusablePill` — it takes the radius from the measured box rather than from a
+                // literal that has to stay half of 28. Measured against its own fill, which is
+                // `Color(chat.color)`: a per-author hue drawn from outside the theme, so it is the one backdrop
+                // nothing else could resolve, and the ring is drawn inside the circle it decorates.
+                //
+                // It states a name because the initial inside it is one letter. `contentDescription` and the
+                // merged `Text` populate different fields of the node — `setContentDescription` reads the
+                // config's own key while `setText` reads `getInfoText`, and the merge policy for
+                // `ContentDescription` prepends rather than replaces — so this reads as the author's name, not
+                // as "A".
                 Box(
                     Modifier.size(28.dp).clip(CircleShape).background(Color(chat.color))
-                        .clickable { onTapAuthor(chat) },
+                        .focusablePill(
+                            surface = Color(chat.color),
+                            role = androidx.compose.ui.semantics.Role.Button,
+                            onClick = { onTapAuthor(chat) },
+                        )
+                        .semantics { contentDescription = "${chat.authorDisplayName}, open profile" },
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(chat.authorDisplayName.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -3216,14 +3394,23 @@ private fun ChatBubble(
         }
         Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
             if (firstOfGroup && !mine) {
+                // The same action as the avatar above, reached from the name instead of the initial. Both rings
+                // exist because both controls do — a run of messages shows the name once at the top and the
+                // avatar once at the bottom, so on a single-message run they are the only two ways in, and on a
+                // long run they are at opposite ends of it. 6f matches the `clip` this already had; the ring is
+                // measured against the row's own backdrop, which is the page unless the reply-jump highlight is
+                // painting over it, and that is a 400 ms animation rather than a state to solve against.
                 Text(
                     chat.authorDisplayName,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp,
                     color = Color(chat.color),
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable { onTapAuthor(chat) }
+                        .focusableChrome(
+                            radiusDp = 6f,
+                            onClickLabel = "Open profile",
+                            onClick = { onTapAuthor(chat) },
+                        )
                         .padding(start = 10.dp, bottom = 2.dp),
                 )
             }
@@ -3273,12 +3460,32 @@ private fun ChatBubble(
                         chat.replyPreview?.let { reply ->
                             // Accent left-bar quote strip (WhatsApp/Telegram style). Tapping it
                             // jumps to the quoted source message (best-effort match by preview text).
+                            //
+                            // Its fill is 8% of the *text* colour over the bubble, so the ring's real backdrop is
+                            // two translucent layers deep and neither of them is anything the substrate could
+                            // resolve on its own: the bubble is a `Surface` painted `primaryContainer`,
+                            // `surfaceVariant` at 72%, or fully transparent when the message is chromeless, and it
+                            // publishes no `LocalChromeContainer`. So the stack is composited here, page upward —
+                            // `opaque` returns its input untouched when already opaque, which is what makes the
+                            // nesting safe for the `primaryContainer` case as well as the translucent ones.
+                            //
+                            // 6f matches the `clip` that was already here. The `background` stays ahead of the
+                            // substrate: a fill chained after it would be a rounded tint over a square ripple.
+                            val quoteFill = textColor.copy(alpha = 0.08f)
+                            val onBubble = EditorChromeColors.opaque(
+                                quoteFill,
+                                EditorChromeColors.opaque(bubbleColor, MaterialTheme.colorScheme.background),
+                            )
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable { onTapReplyPreview(reply) }
-                                    .background(textColor.copy(alpha = 0.08f)),
+                                    .background(quoteFill, RoundedCornerShape(6.dp))
+                                    .focusableChrome(
+                                        radiusDp = 6f,
+                                        surface = onBubble,
+                                        onClickLabel = "Jump to quoted message",
+                                        onClick = { onTapReplyPreview(reply) },
+                                    ),
                             ) {
                                 Box(Modifier.width(3.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
                                 Text(
@@ -3723,10 +3930,22 @@ private fun MentionSuggestions(candidates: List<WorkspaceMember>, onPick: (Works
     ) {
         Column(Modifier.heightIn(max = 196.dp).verticalScroll(rememberScrollState())) {
             candidates.forEach { member ->
+                // The third flush picker row in this file, and the one whose backdrop is *not* published by a
+                // dialog: this `Surface` paints `colorScheme.surface` at 2 dp and provides no
+                // `LocalChromeContainer`, so the substrate's fallback would resolve the page instead. Naming the
+                // colour is what puts the tonal-tint gate back in play — it fires on
+                // `declared == colorScheme.surface`, which `background` is not in dark mode — and `Surface` already
+                // hands its own accumulated 2 dp down as `LocalAbsoluteTonalElevation`, so only the colour has to
+                // be stated here.
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable { onPick(member) }
+                        .focusableChrome(
+                            radiusDp = 0f,
+                            surface = MaterialTheme.colorScheme.surface,
+                            onClickLabel = "Mention ${member.displayName}",
+                            onClick = { onPick(member) },
+                        )
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -4076,8 +4295,18 @@ private fun ForwardTargetSheet(
                     Text("No other conversations yet", Modifier.padding(horizontal = 20.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                 }
                 channels.forEach { channel ->
+                    // Same flush picker row as `NotePickerSheet`, same host, same reasoning — see there. The
+                    // label names the destination because "Forward" alone, repeated down a list of six, does not
+                    // say *where*, and the channel name arrives separately in the merged content.
                     Row(
-                        Modifier.fillMaxWidth().clickable { onForward(channel) }.padding(horizontal = 20.dp, vertical = 12.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .focusableChrome(
+                                radiusDp = 0f,
+                                onClickLabel = "Forward to ${channel.name}",
+                                onClick = { onForward(channel) },
+                            )
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
@@ -4265,12 +4494,38 @@ private fun ChatAttachmentCard(
                             modifier = Modifier.weight(1f),
                         )
                         if (active != null) {
+                            // The last hand-rolled clickable in this file, and the smallest: two glyphs of 10 sp
+                            // text, near 18 dp tall with its padding.
+                            //
+                            // It gets the ring and **not** a touch-target floor, which is the opposite of what the
+                            // inspector's rows needed. `minimumInteractiveComponentSize` is the idiom for a small
+                            // control here, but its node measures `max(placeable.height, minSize)` — it grows the
+                            // *layout* box, and this chip sits in a `Row` under the waveform inside every voice
+                            // bubble, so a 48 dp floor would add 30 dp to each one. That is a layout decision about
+                            // the player, not a focus fix, and it belongs with the rest of the visual pass.
+                            //
+                            // Nothing is lost on touch in the meantime: `NodeCoordinator.hit` falls through to
+                            // `distanceInMinimumTouchTarget` for a `PointerType.Touch` miss and records the hit
+                            // anyway when no closer target claims it, using the platform's own
+                            // `ViewConfiguration.minimumTouchTargetSize`. The thumb already reaches this; only the
+                            // layout box is small.
+                            //
+                            // 99f is the pill radius that was already here. Measured against `bg`, which for
+                            // `mine` is 13% `onPrimary` over the bubble — composited page-upward for the same
+                            // reason the quote strip above is.
                             Text(
                                 "${active.speed}×",
                                 color = fg,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.clip(RoundedCornerShape(99.dp)).clickable { onCycleAudioSpeed(chat) }.padding(horizontal = 6.dp, vertical = 3.dp),
+                                modifier = Modifier
+                                    .focusableChrome(
+                                        radiusDp = 99f,
+                                        surface = EditorChromeColors.opaque(bg, MaterialTheme.colorScheme.background),
+                                        onClickLabel = "Change playback speed",
+                                        onClick = { onCycleAudioSpeed(chat) },
+                                    )
+                                    .padding(horizontal = 6.dp, vertical = 3.dp),
                             )
                         }
                     }

@@ -2,7 +2,6 @@ package com.norfold.app.ui.editor.flow
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -49,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -63,9 +63,39 @@ import com.norfold.app.editor.motion.MotionLevel
 import com.norfold.app.editor.motion.MotionProperty
 import com.norfold.app.editor.motion.MotionSurfaceClass
 import com.norfold.app.ui.components.NorfoldMotion
+import com.norfold.app.ui.focusableChrome
 
 /** The rail's height. One thumb-sized row, so the line being written stays visible above the IME. */
 private val RailHeight = 56.dp
+
+/**
+ * The radius a rail slot is filled, clipped and ringed at.
+ *
+ * Named rather than repeated because three things read it: [FlowRailButton]'s own `background`, which draws the
+ * focused wash, the substrate's ripple clip, and the ring the substrate places concentrically inside that clip.
+ * Three literals cannot be kept equal by review.
+ */
+private const val RailSlotRadius = 12f
+
+/**
+ * How far a rail slot's accent wash is faded when the rail's own cursor is on it.
+ *
+ * Read twice — to paint the wash, and to tell the ring what colour it is drawn on — so a ring on a washed slot
+ * is measured against the wash rather than against the bar behind it.
+ */
+private const val RailSlotWashAlpha = 0.12f
+
+/**
+ * A rail slot's target. 48 dp rather than Material's icon-button default, because this strip is the primary
+ * command surface on a phone and the reference material's icon-only precision controls were too small to hit.
+ *
+ * One constant for the two composables that draw a slot, so the command slots and the trailing chevron cannot
+ * end up different sizes in the same row.
+ */
+private val RailSlotSize = 48.dp
+
+/** The glyph inside a [RailSlotSize] target, shared for the same reason. */
+private val RailSlotIconSize = 22.dp
 
 /**
  * The Flow command rail: what a bare `/` opens on a touch device.
@@ -175,16 +205,40 @@ internal fun FlowCommandRailBar(
             }
             // The trailing chevron is the rail's escape hatch to names. It is always present, so a command
             // the icons cannot express is never unreachable from here.
-            FlowRailIconButton(
-                icon = Icons.Filled.ExpandLess,
-                description = "Show all commands",
-                onClick = onOpenList,
-            )
+            FlowRailOpenListButton(onOpenList)
         }
     }
 }
 
-/** One rail slot. Icons only: a label under a 40 dp target would be unreadable at this height. */
+/**
+ * One rail slot. Icons only: a label under a 40 dp target would be unreadable at this height.
+ *
+ * ## Two nodes became one, and the outer one was the wrong shape
+ *
+ * This drew as one control and announced as two. The outer `Box` carried the name and the selection state and
+ * nothing to activate; the inner `Box` carried the click and no name, so a screen reader read the slot's
+ * description and then met an unnamed, unlabelled button inside it — WCAG 4.1.2 at Level A, the same defect
+ * [com.norfold.app.ui.toggleableChrome] documents for a row wrapping a live `Switch`, arrived at from the other
+ * direction. One node now carries the name, the role, the state, the tap and the ring.
+ *
+ * ## Why `focusableChrome` and not `selectableChrome`, when the state *is* a selection
+ *
+ * [com.norfold.app.ui.selectableChrome] is the obvious reach — it reports `selected` and this slot has a
+ * selection state. But it asserts [Role.RadioButton] unconditionally, and a rail slot is not one: activating it
+ * runs a command, opens a group or leaves one. Announcing "radio button" on a control that inserts a table would
+ * trade the two-node defect for a mislabelled-role defect. So the role is [Role.Button], which is what the slot
+ * draws and does, and the cursor state is added alongside it — both land on this one node, because every
+ * `semantics` modifier on a layout node collapses into that node's single configuration.
+ *
+ * The state is [FlowRailState.focusedIndex] — the rail's *own* arrow cursor, which is a position within the strip
+ * and independent of Compose focus. `selected` was already the semantic in use here and it stays; the ring is
+ * what the strip did not have, and the two are not the same thing. A hardware arrow moves the cursor and repaints
+ * the wash; a Tab into the strip draws the ring. Both can be true of one slot.
+ *
+ * `radiusDp` and the wash alpha are shared constants because the `background` that paints the wash and the
+ * substrate that rings inside it must agree; the background stays **ahead** of the substrate in the chain, since
+ * a fill drawn after `clickable` is a rounded tint over a hard-rectangle ripple.
+ */
 @Composable
 private fun FlowRailButton(slot: FlowRailSlot, focused: Boolean, onClick: () -> Unit) {
     val tint = when {
@@ -192,43 +246,59 @@ private fun FlowRailButton(slot: FlowRailSlot, focused: Boolean, onClick: () -> 
         focused -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val wash = MaterialTheme.colorScheme.primary.copy(alpha = RailSlotWashAlpha)
     Box(
         Modifier
+            .size(RailSlotSize)
+            .background(
+                if (focused) wash else Color.Transparent,
+                RoundedCornerShape(RailSlotRadius.dp),
+            )
+            .focusableChrome(
+                radiusDp = RailSlotRadius,
+                surface = if (focused) wash else MaterialTheme.colorScheme.surfaceContainerHigh,
+                enabled = slot.enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
             .semantics {
                 selected = focused
                 contentDescription = slotDescription(slot)
-            }
-            .background(
-                if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
-                RoundedCornerShape(12.dp),
-            ),
+            },
         contentAlignment = Alignment.Center,
     ) {
-        FlowRailIconButton(
-            icon = railIcon(slot),
-            description = null,
-            enabled = slot.enabled,
-            tint = tint,
-            onClick = onClick,
-        )
+        Icon(railIcon(slot), contentDescription = null, tint = tint, modifier = Modifier.size(RailSlotIconSize))
     }
 }
 
+/**
+ * The rail's trailing chevron — the one slot that is outside the arrow cursor's set, so it reports no `selected`
+ * state at all rather than reporting a permanent `false`.
+ *
+ * Measured against `surfaceContainerHigh`, which is the colour the rail's own [Surface] paints and therefore
+ * the pixel this ring is drawn on. That `Surface` publishes no `LocalChromeContainer`, so the substrate's
+ * default would resolve to the page behind the bar.
+ */
 @Composable
-private fun FlowRailIconButton(
-    icon: ImageVector,
-    description: String?,
-    enabled: Boolean = true,
-    tint: Color = LocalContentColor.current,
-    onClick: () -> Unit,
-) {
-    // A 48 dp target rather than Material's icon-button default, because this strip is the primary command
-    // surface on a phone and the reference material's icon-only precision controls were too small to hit.
+private fun FlowRailOpenListButton(onClick: () -> Unit) {
     Box(
-        Modifier.size(48.dp).clickable(enabled = enabled, onClick = onClick),
+        Modifier
+            .size(RailSlotSize)
+            .focusableChrome(
+                radiusDp = RailSlotRadius,
+                surface = MaterialTheme.colorScheme.surfaceContainerHigh,
+                onClickLabel = "Show all commands",
+                role = Role.Button,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(22.dp))
+        Icon(
+            Icons.Filled.ExpandLess,
+            contentDescription = "All commands",
+            tint = LocalContentColor.current,
+            modifier = Modifier.size(RailSlotIconSize),
+        )
     }
 }
 

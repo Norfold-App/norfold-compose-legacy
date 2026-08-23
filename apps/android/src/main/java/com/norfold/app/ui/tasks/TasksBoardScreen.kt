@@ -108,6 +108,7 @@ import androidx.compose.material3.MaterialTheme
 import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ripple
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -192,7 +193,9 @@ import com.norfold.app.domain.WorkspaceFileItem
 import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.EditorChromeColors
 import com.norfold.app.ui.NorfoldChrome
+import com.norfold.app.ui.chromeFocusRing
 import com.norfold.app.ui.focusableChrome
 import com.norfold.app.ui.rememberChromeFocus
 import com.norfold.app.ui.feedback.NorfoldHaptic
@@ -1089,13 +1092,30 @@ private fun TaskKanbanCard(
     enableCardDrag: Boolean = false,
 ) {
     var bounds by remember { mutableStateOf(Rect.Zero) }
+    // `chromeFocusRing` rather than `focusableChrome`, and the reason is the elevation: `focusableChrome` clips
+    // to its own radius before the interaction, and a clip discards a shadow, so routing an `ElevatedCard`
+    // through it would trade the card's lift for a ring. The substrate's own KDoc names this case. So the ring
+    // is taken alone, on the source the `clickable` below is already reporting on.
+    //
+    // Measured against the card's own container, because that is the pixel the ring is drawn on and it is not
+    // the page: this card fills `surface`, or `primaryContainer` while it is being dragged. The dragging case
+    // matters less than it looks — a card under the thumb is not also keyboard-focused — but the colour is one
+    // expression either way and reading it once keeps the ring and the fill from disagreeing.
+    val focus = rememberChromeFocus()
+    val container = if (dragging) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     ElevatedCard(
         modifier = modifier
             .onGloballyPositioned {
                 bounds = it.boundsInRoot()
                 if (!dragging) onBoundsChanged(bounds)
             }
-            .clickable(enabled = !dragging, onClick = onClick)
+            .clickable(
+                interactionSource = focus.source,
+                indication = ripple(),
+                enabled = !dragging,
+                onClick = onClick,
+            )
+            .chromeFocusRing(focus.source, radiusDp = 10f, surface = container)
             .then(
                 if (!dragging && enableCardDrag) {
                     Modifier.pointerInput(task.id) {
@@ -1112,9 +1132,7 @@ private fun TaskKanbanCard(
                 } else Modifier
             )
             .animateContentSize(),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = if (dragging) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-        ),
+        colors = CardDefaults.elevatedCardColors(containerColor = container),
         shape = RoundedCornerShape(10.dp),
     ) {
         Column(
@@ -1492,6 +1510,17 @@ private fun TaskTableDataCell(
     val cellBorder = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     val cellWidth = column.width(compact)
     var bounds by remember(task.id, column) { mutableStateOf(Rect.Zero) }
+    // Square — `radiusDp = 0f` — because a table cell is a rectangle sharing edges with its neighbours in both
+    // axes, and a rounded ring inside a square grid reads as a misdrawn cell rather than as focus.
+    //
+    // `boundaryWidthDp = 2f` is the parameter earning its keep. A selected cell already draws a 2 dp accent
+    // border, and the ring's default inset is derived from the substrate's 1 dp edge — so on the one cell that is
+    // *both* selected and focused, which is the common case here since clicking a cell selects it, the ring's
+    // outer edge would land inside that border and thicken the stroke that means "selected" instead of adding a
+    // second signal. Clearing the heavier weight is what keeps the two readable apart.
+    //
+    // Measured against `surface`, which this cell paints itself a line below.
+    val focus = rememberChromeFocus()
     Column(
         modifier = Modifier
             .width(cellWidth)
@@ -1499,7 +1528,13 @@ private fun TaskTableDataCell(
             .background(MaterialTheme.colorScheme.surface)
             .border(if (selected) 2.dp else 0.5.dp, cellBorder)
             .onGloballyPositioned { bounds = it.boundsInRoot() }
-            .clickable { onSelect(bounds) }
+            .clickable(interactionSource = focus.source, indication = ripple()) { onSelect(bounds) }
+            .chromeFocusRing(
+                focus.source,
+                radiusDp = 0f,
+                surface = MaterialTheme.colorScheme.surface,
+                boundaryWidthDp = 2f,
+            )
             .padding(horizontal = if (compact) 6.dp else 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.Center,
     ) {
@@ -1525,18 +1560,51 @@ private fun TaskTableDataCell(
                             Surface(
                                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
                                 shape = RoundedCornerShape(6.dp),
-                                // No ring: this is one of three in-cell triggers for `onAlternateSelect`, all
-                                // ~20 dp tall inside a cell that is itself the focus stop. A 6 dp radius has no
-                                // room for an inward ring — same unsolved short-chrome case as the disclosure
-                                // headers. The cell keeps the ring; these keep the tap.
-                                modifier = Modifier.clickable { onAlternateSelect(bounds) },
+                                // One of three in-cell triggers for `onAlternateSelect` — the *second* property a
+                                // cell holds, so it is a different action from the cell's own click and needs its
+                                // own stop. An earlier pass left all three ringless on the reasoning that a 6 dp
+                                // radius has no room for an inward ring. That reasoning was wrong twice over.
+                                //
+                                // It has room: this chip is 12 sp of text plus 3 dp either side, near 20 dp, so the
+                                // ring's box is 12 and its derived radius 3 — half of 12, the largest the geometry
+                                // accepts without scaling, so it lands exactly concentric.
+                                //
+                                // And ringless was never the safe default here. `AbstractClickableNode` delegates a
+                                // `FocusableNode` whenever it is enabled, so a bare `clickable` is *already* a
+                                // keyboard stop; leaving it unringed did not keep focus out of the chip, it only
+                                // stopped the chip from saying so. Focus went somewhere invisible inside a cell
+                                // that was itself drawing a ring, which reads as focus having got stuck.
+                                //
+                                // Measured against the chip's own 72% `secondaryContainer` over the cell's fill —
+                                // translucent, so composited rather than named.
+                                modifier = Modifier.focusableChrome(
+                                    radiusDp = 6f,
+                                    surface = EditorChromeColors.opaque(
+                                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                                        MaterialTheme.colorScheme.surface,
+                                    ),
+                                    onClickLabel = "Edit tags",
+                                ) { onAlternateSelect(bounds) },
                             ) { Text("#$label", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSecondaryContainer) }
                         }
                     }
                 } else if (alternateProperty != null) {
+                    // The empty-state twin of the chip above: same action, same cell, shown when there is no tag
+                    // to draw one for. Square, because bare 10 sp text draws no shape for a curve to echo, and the
+                    // ring's own box is only 12 dp tall — a radius here would read as an ellipse, not a rectangle.
+                    //
+                    // The `padding(top = 6.dp)` stays **ahead** of the substrate so it separates this from the
+                    // status line above rather than being swallowed into the ring's own box, which would put the
+                    // stroke 6 dp off-centre from the text it marks.
                     Text(
                         "+ tag",
-                        modifier = Modifier.padding(top = 6.dp).clickable { onAlternateSelect(bounds) },
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .focusableChrome(
+                                radiusDp = 0f,
+                                surface = MaterialTheme.colorScheme.surface,
+                                onClickLabel = "Add tags",
+                            ) { onAlternateSelect(bounds) },
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -1598,8 +1666,18 @@ private fun TaskTableDataCell(
             TaskTableColumn.PriorityAssignee -> {
                 PriorityPill(task.priority)
                 Spacer(Modifier.height(6.dp))
+                // The third `onAlternateSelect` trigger — the assignee line under the priority pill, opening the
+                // assignee property while the cell's own click opens priority. Its floor is the 24 dp avatar, so
+                // the ring's box is 16 and 8f derives 5, under the 8 dp ceiling; the avatar's own circle is
+                // clipped well inside the row's corners, so nothing of it meets the stroke.
+                //
+                // Measured against `surface`, the cell's own fill, which this row does not paint over.
                 Row(
-                    modifier = Modifier.clickable { onAlternateSelect(bounds) },
+                    modifier = Modifier.focusableChrome(
+                        radiusDp = 8f,
+                        surface = MaterialTheme.colorScheme.surface,
+                        onClickLabel = "Change assignee",
+                    ) { onAlternateSelect(bounds) },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -1681,7 +1759,28 @@ private fun CompactGroupedTaskTable(
                                         VerticalReorderHandle(enabled = columnTasks.size > 1, rowHeight = 76.dp) { delta ->
                                             viewModel.moveTaskToColumnAtIndex(task.id, column.id, (index + delta).coerceIn(0, columnTasks.lastIndex))
                                         }
-                                        Column(Modifier.weight(1f).clickable { expandedTaskId = if (expandedTaskId == task.id) null else task.id }) {
+                                        // The disclosure toggle for this row, and it is a *partial-width* one:
+                                        // the handle and the two trailing controls beside it are their own focus
+                                        // stops, so the ring marks the column that actually expands rather than
+                                        // the whole row. 8f is a tier below the card's own 12 — the target is
+                                        // inset from that corner on both sides, so echoing 12 would put a curve
+                                        // where the shape has none.
+                                        //
+                                        // Measured against the card's translucent fill composited over the page,
+                                        // since 24% `surfaceVariant` is not a colour the substrate could resolve
+                                        // from a token and it is what these pixels actually are.
+                                        Column(
+                                            Modifier
+                                                .weight(1f)
+                                                .focusableChrome(
+                                                    radiusDp = 8f,
+                                                    surface = EditorChromeColors.opaque(
+                                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
+                                                        MaterialTheme.colorScheme.surface,
+                                                    ),
+                                                    onClickLabel = if (expandedTaskId == task.id) "Collapse task" else "Expand task",
+                                                ) { expandedTaskId = if (expandedTaskId == task.id) null else task.id },
+                                        ) {
                                             Text(task.title.ifBlank { "Untitled task" }, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                 TinyMeta(column.name)
@@ -1979,14 +2078,45 @@ private fun TaskTimelineView(tasks: List<TaskItem>, columns: List<TaskColumnItem
                     val offsetDays = ((start - origin) / 86_400_000L).coerceAtLeast(0).toInt()
                     val spanDays = (((end - start) / 86_400_000L).toInt() + 1).coerceAtLeast(1)
                     val column = columns.firstOrNull { it.id == task.taskColumnId }
+                    val bar = task.resolveAccent(column?.resolvedColor() ?: MaterialTheme.colorScheme.primary).copy(alpha = .22f)
                     Row(Modifier.height(IntrinsicSize.Min)) {
-                        Text(task.title, Modifier.width(190.dp).fillMaxHeight().border(1.dp, MaterialTheme.colorScheme.outlineVariant).clickable { onTaskClick(task) }.padding(12.dp), maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                        // Two ways into one task, like the chat bubble's avatar and author name: the frozen label
+                        // column on the left and the bar out on the schedule. Both get a ring because both are
+                        // real entries — the bar can be scrolled clean off the viewport while its label stays, so
+                        // a keyboard walk that only ringed the bar would sometimes ring nothing visible.
+                        //
+                        // Square, and measured against the page: the label is a grid cell flush against its
+                        // neighbours in both axes, painting no fill of its own.
+                        Text(
+                            task.title,
+                            Modifier
+                                .width(190.dp)
+                                .fillMaxHeight()
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                .focusableChrome(radiusDp = 0f, onClickLabel = "Open task") { onTaskClick(task) }
+                                .padding(12.dp),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.Bold,
+                        )
                         Box(Modifier.width(dayWidth * 14).heightIn(min = 58.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                            // The bar's own fill is 22% of the task's accent, which is a per-task colour and so
+                            // the one backdrop no token could name — and it is translucent, which the arithmetic
+                            // cannot measure at all. Composited over the page here for both reasons.
                             Surface(
-                                color = task.resolveAccent(column?.resolvedColor() ?: MaterialTheme.colorScheme.primary).copy(alpha = .22f),
+                                color = bar,
                                 contentColor = MaterialTheme.colorScheme.onSurface,
                                 shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.padding(top = 10.dp).width(dayWidth * spanDays).height(38.dp).offset(x = dayWidth * offsetDays).clickable { onTaskClick(task) },
+                                modifier = Modifier
+                                    .padding(top = 10.dp)
+                                    .width(dayWidth * spanDays)
+                                    .height(38.dp)
+                                    .offset(x = dayWidth * offsetDays)
+                                    .focusableChrome(
+                                        radiusDp = 10f,
+                                        surface = EditorChromeColors.opaque(bar, MaterialTheme.colorScheme.background),
+                                        onClickLabel = "Open task",
+                                    ) { onTaskClick(task) },
                             ) { Text(task.title, Modifier.padding(horizontal = 10.dp, vertical = 9.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                         }
                     }
@@ -2718,8 +2848,21 @@ private fun TaskPropertyManagerSheet(
                         viewModel.reorderTaskPropertyToIndex(property, (index + delta).coerceIn(0, ordered.lastIndex))
                     }
                     Icon(property.type.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    // Partial width, like the timeline row's disclosure column: the drag handle before it and the
+                    // overflow button after it are their own stops, so the ring marks the part that opens the
+                    // editor. The `clip` this already carried is now the substrate's, derived from the same 8f.
+                    //
+                    // Measured against `surface`, which the enclosing `Surface` paints and which the substrate
+                    // will tint by that `Surface`'s own accumulated elevation without being told it.
                     Column(
-                        Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { editing = property }.padding(vertical = 8.dp),
+                        Modifier
+                            .weight(1f)
+                            .focusableChrome(
+                                radiusDp = 8f,
+                                surface = MaterialTheme.colorScheme.surface,
+                                onClickLabel = "Rename or change type",
+                            ) { editing = property }
+                            .padding(vertical = 8.dp),
                     ) {
                         Text(property.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
@@ -3054,13 +3197,24 @@ private fun AdaptiveTaskPage(
                                     ) { Text("Save") }
                                 }
                             } else {
+                                // Tap-to-edit on the page's own title. It is the one control here that draws no
+                                // chrome at all — headline text on the page — so 6f is the smallest tier that
+                                // still reads as a shape around two lines of 28 sp rather than as an underline.
+                                //
+                                // No `surface`: this sits on the task page inside whatever host presented it, so
+                                // the ambient container is the right answer and naming one here would be an
+                                // assertion about an ancestor this composable has two of (a full page and a side
+                                // panel).
                                 Text(
                                     task.title.ifBlank { "Untitled task" },
                                     style = MaterialTheme.typography.headlineMedium,
                                     fontWeight = FontWeight.Black,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.clickable { editingTitle = true },
+                                    modifier = Modifier.focusableChrome(
+                                        radiusDp = 6f,
+                                        onClickLabel = "Rename task",
+                                    ) { editingTitle = true },
                                 )
                                 Row {
                                     Text("From ", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
@@ -3175,11 +3329,19 @@ private fun AdaptiveTaskPage(
                     item {
                         // Properties belong to the board, so managing them is the board's surface;
                         // this is the door to it from where a property is actually noticed.
+                        //
+                        // Full width, a clip, one click, interior padding — which is `ChoiceRow`'s geometry, and
+                        // it is deliberately not a caller of it. `ChoiceRow` exists for rows *stacked inside a
+                        // clipped card*, and this one stands alone on the page between two cards with the list's
+                        // own 14 dp of spacing around it; taking the row would also take `Corner.Media`, moving a
+                        // corner that already agrees with the cards above and below it.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { showPropertyManager = true }
+                                .focusableChrome(
+                                    radiusDp = 12f,
+                                    onClickLabel = "Manage board properties",
+                                ) { showPropertyManager = true }
                                 .padding(vertical = 10.dp),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically,
@@ -3263,9 +3425,12 @@ private fun DashedActionButton(text: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // The dashed outline stays **ahead** of the substrate, for the reason the substrate's own clip does:
+            // `dashedOutline` is a `drawBehind`, so chaining it after would put it behind the ripple's own layer
+            // instead of behind the content. Its 1 dp is exactly the weight the ring's default inset clears, so no
+            // `boundaryWidthDp` is needed here — unlike the table cell, whose selected border is 2 dp.
             .dashedOutline(outline, 16.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .focusableChrome(radiusDp = 16f, onClickLabel = text) { onClick() }
             .padding(vertical = 15.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -3405,10 +3570,26 @@ private fun MainPropertiesCard(
     var expanded by remember(task.id) { mutableStateOf(true) }
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 1.dp, shadowElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            // Disclosure header. One of the four this file and `SidebarScreen` share, and the population the
+            // earlier sweep left unsolved as "short chrome" — the objection being that a ring inset into a shallow
+            // row has no room to stay concentric. It has room here, and the arithmetic is worth stating because
+            // the sibling below it does not: the trailing `Icon` carries Material's default 24 dp and the 4 dp of
+            // bottom padding brings the row to 28, so the ring's own box is 20 dp with a derived radius of 7 —
+            // under half of 20, so `drawRoundRect` does not clamp it and the two curves stay concentric.
+            //
+            // Measured against `surface`, which the card paints; the substrate adds the card's own 1 dp of tonal
+            // elevation from `LocalAbsoluteTonalElevation` without being told about it.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { expanded = !expanded }.padding(bottom = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusableChrome(
+                        radiusDp = 10f,
+                        surface = MaterialTheme.colorScheme.surface,
+                        onClickLabel = if (expanded) "Collapse main properties" else "Expand main properties",
+                    ) { expanded = !expanded }
+                    .padding(bottom = 4.dp),
             ) {
                 Icon(Icons.Outlined.Tune, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Text("Main properties", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -3461,12 +3642,24 @@ private fun MainPropertyRow(
     onClick: () -> Unit,
 ) {
     var bounds by remember { mutableStateOf(Rect.Zero) }
+    // `boundaryWidthDp = 2f` for a border this row does not itself draw. The value chip below is a separate
+    // `Surface` carrying 2 dp of accent while `active`, and it takes `weight(1f)` inside a row with no
+    // horizontal padding — so its right-hand border is *flush with this row's own right edge*, which is where
+    // the ring runs. At the default inset the ring would sit 1 dp off that accent stroke, and 1 dp is not a gap;
+    // it is the two merging into one heavier line on exactly the row whose border means "being edited".
+    //
+    // Measured against `surface`. Both the card behind the row and the chip the ring's right segment crosses
+    // resolve to it under the card's 1 dp of tonal elevation, so one colour is right across the whole stroke.
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { bounds = it.boundsInWindow() }
-            .clip(RoundedCornerShape(10.dp))
-            .clickable { onBoundsChanged(bounds); onClick() }
+            .focusableChrome(
+                radiusDp = 10f,
+                surface = MaterialTheme.colorScheme.surface,
+                onClickLabel = "Edit $label",
+                boundaryWidthDp = 2f,
+            ) { onBoundsChanged(bounds); onClick() }
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -3537,8 +3730,24 @@ private fun TaskChecklistSummaryCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // The fourth disclosure header, and the one whose radius is **not** its sibling's 10, because this
+            // row is shorter and the difference is load-bearing. It carries no vertical padding, so its height
+            // floor is the tallest fixed child — the 20 dp leading icon — and the ring is drawn inset by 3 dp
+            // plus half its own 2 dp stroke on each side, leaving a 12 dp box, whose largest honourable radius
+            // is 6. 10f would derive 7, which the substrate now caps to 6 rather than letting Skia scale it
+            // silently; 8f derives 5 and fits outright, so the shape drawn is the shape asked for. Only the text
+            // can grow with font scale, and growing only adds room.
+            //
+            // What it costs: the ripple's own corner moves from 10 to 8, on a full-width row that draws no edge
+            // of its own for that corner to disagree with.
             Row(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { expanded = !expanded },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusableChrome(
+                        radiusDp = 8f,
+                        surface = MaterialTheme.colorScheme.surface,
+                        onClickLabel = if (expanded) "Collapse ${property.name}" else "Expand ${property.name}",
+                    ) { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {

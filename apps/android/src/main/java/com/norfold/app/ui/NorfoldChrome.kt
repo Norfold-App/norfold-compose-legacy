@@ -407,15 +407,26 @@ object NorfoldChrome {
             // The stroke straddles the path, so the path itself sits half a stroke further in than the
             // gap: inset is the distance to the ring's *outer* edge, which is what the eye measures.
             val offset = insetPx + stroke / 2f
-            // Concentric with the container: radius shrinks by exactly what the ring moved inward.
-            val radius = (containerRadiusDp - inset).coerceAtLeast(0f).dp.toPx()
+            val w = (size.width - offset * 2f).coerceAtLeast(0f)
+            val h = (size.height - offset * 2f).coerceAtLeast(0f)
+            // Concentric with the container: radius shrinks by exactly what the ring moved inward — then
+            // capped at half the ring's own shorter side.
+            //
+            // The cap is not defensive tidying; without it the concentricity this function exists to
+            // guarantee silently stops holding on short chrome. `drawRoundRect` reaches Skia unmodified
+            // (`AndroidCanvas.drawRoundRect` forwards straight to `android.graphics.Canvas`), and Skia
+            // scales an oversized radius down to fit rather than rejecting it — so a 20 dp row asking for
+            // a 7 dp ring radius inside a 12 dp box is quietly drawn at 6, and the caller's stated radius
+            // and the drawn one part company with nothing reporting it.
+            //
+            // Capping here rather than at the call site is the point: [ChromeGeometry.focusRingRadius] is
+            // pure arithmetic on a radius, and the height that decides whether that radius fits is not
+            // known until layout. This is the first scope that knows both.
+            val radius = minOf((containerRadiusDp - inset).coerceAtLeast(0f).dp.toPx(), minOf(w, h) / 2f)
             drawRoundRect(
                 color = ringColor,
                 topLeft = Offset(offset, offset),
-                size = Size(
-                    (size.width - offset * 2f).coerceAtLeast(0f),
-                    (size.height - offset * 2f).coerceAtLeast(0f),
-                ),
+                size = Size(w, h),
                 cornerRadius = CornerRadius(radius),
                 style = Stroke(width = stroke),
             )
@@ -704,6 +715,11 @@ fun Modifier.chromeFocusRing(
  *   an accent must pass that fill, or an accent-coloured ring lands at 1.00:1 against it. See
  *   [ChromeFocus.ringOnCircle] for the case that made this necessary.
  * @param enabled false leaves the chrome inert and unfocusable, matching `clickable`'s own contract.
+ * @param boundaryWidthDp what this chrome already draws at its own edge, so the ring can clear it. The
+ *   default is the substrate's one edge weight. Chrome whose *selected* state is a heavier border must pass
+ *   that heavier weight, or focusing an already-selected item merely thickens the stroke that means
+ *   "selected" — see [ChromeFocus.ringOnShape]. This is the same parameter [chromeFocusRing] takes, and it
+ *   is here for the same reason: the picker population's whole selection signal is a 2 dp accent border.
  * @param onClick last, like `Modifier.clickable`'s own, so a site whose action is a block of statements can
  *   write it as a trailing lambda instead of a named argument holding a multi-line body.
  */
@@ -714,10 +730,11 @@ fun Modifier.focusableChrome(
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
+    boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
     onClick: () -> Unit,
 ): Modifier {
     val focus = rememberChromeFocus()
-    val ring = focus.ringOnShape(radiusDp, surface)
+    val ring = focus.ringOnShape(radiusDp, surface, boundaryWidthDp)
     return this
         .clipToChrome(radiusDp)
         .clickable(
@@ -744,8 +761,9 @@ fun Modifier.focusableChrome(
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
+    boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
     onClick: () -> Unit,
-): Modifier = focusableChrome(corner.radiusDp, surface, enabled, onClickLabel, role, onClick)
+): Modifier = focusableChrome(corner.radiusDp, surface, enabled, onClickLabel, role, boundaryWidthDp, onClick)
 
 /**
  * The same wiring for a **pill** — chrome shaped `CircleShape` but wider than it is tall.
@@ -826,9 +844,16 @@ private fun Modifier.clipToChrome(radiusDp: Float): Modifier =
  * its control to hold the line collapses below 48 dp the moment it is fixed, which is the failure mode this
  * constant exists to make hard to forget.
  *
- * 48 dp is WCAG 2.5.8 Level AA and Android's own `minimumTouchTargetSize` default; it is stated here rather
- * than read from `LocalMinimumInteractiveComponentSize` because that local is Material's and is being read at
- * the moment the caller has deliberately stepped outside Material's wiring.
+ * **Where 48 comes from, stated precisely because it was cited wrongly here.** It is Android's own floor —
+ * Material's `LocalMinimumInteractiveComponentSize` defaults to 48 dp, and the platform's
+ * `android:minimumTouchTargetSize` agrees — and it is *above* what WCAG asks at any level, not equal to it.
+ * WCAG 2.5.8 Target Size (Minimum) is Level **AA** at **24×24** CSS px; 44×44 is 2.5.5 Target Size (Enhanced),
+ * Level **AAA**. So a 24 dp control is not a WCAG AA failure on its own, and the reason to hold 48 anyway is the
+ * platform convention and the thumb, not the success criterion. A row measured against the wrong criterion gets
+ * "fixed" to the wrong number, which is why the source of each figure is named.
+ *
+ * It is stated here rather than read from `LocalMinimumInteractiveComponentSize` because that local is
+ * Material's, and it is being read at the moment the caller has deliberately stepped outside Material's wiring.
  */
 const val MIN_TOUCH_TARGET_DP = 48
 
@@ -924,6 +949,18 @@ fun Modifier.toggleableChrome(
  * @param radiusDp the radius the row's own shape draws, which this also clips the ripple to. See
  *   [clipToChrome]; the caller does not clip first.
  * @param surface what the ring is drawn on. Unspecified resolves to [LocalChromeContainer].
+ * @param boundaryWidthDp what this chrome draws at its own edge when selected, so the ring can clear it.
+ *
+ *   **The default is wrong for a whole population, which is why this is a parameter.** A settings row states
+ *   its selection with a `RadioButton` and draws no border, so the substrate's one edge weight is right. The
+ *   app's *pickers* — a cover, an emoji, a theme, an icon family, a folder icon — state it with a **2 dp
+ *   accent border and nothing else**: no indicator, no tick. Inside a 2 dp border the default 3 dp inset puts
+ *   the ring's outer edge half a dp from the border's inner edge, and at that distance the two strokes merge
+ *   into a single heavier accent edge. On chrome whose border *is* the selection signal, that reads as
+ *   "selected", not as "focused" — so on the one item a keyboard user is most likely to land on first, the
+ *   focus indication says the thing that was already true. Pass the selected border's own weight and
+ *   [ChromeGeometry.focusRingInsetOver] clears it before leaving the gap.
+ * @param onClick the selection, last, matching `Modifier.selectable`'s own parameter order.
  */
 @Composable
 fun Modifier.selectableChrome(
@@ -931,10 +968,11 @@ fun Modifier.selectableChrome(
     radiusDp: Float,
     surface: Color = Color.Unspecified,
     enabled: Boolean = true,
+    boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
     onClick: () -> Unit,
 ): Modifier {
     val focus = rememberChromeFocus()
-    val ring = focus.ringOnShape(radiusDp, surface)
+    val ring = focus.ringOnShape(radiusDp, surface, boundaryWidthDp)
     return this
         .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
         .clipToChrome(radiusDp)
@@ -958,8 +996,9 @@ fun Modifier.selectableChrome(
     corner: Corner,
     surface: Color = Color.Unspecified,
     enabled: Boolean = true,
+    boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
     onClick: () -> Unit,
-): Modifier = selectableChrome(selected, corner.radiusDp, surface, enabled, onClick)
+): Modifier = selectableChrome(selected, corner.radiusDp, surface, enabled, boundaryWidthDp, onClick)
 
 /**
  * A piece of floating interaction chrome: the substrate's single surface.

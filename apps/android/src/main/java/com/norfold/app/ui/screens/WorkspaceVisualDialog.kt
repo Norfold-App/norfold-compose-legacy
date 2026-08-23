@@ -4,10 +4,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,8 +54,10 @@ import com.norfold.app.branding.BuiltInCovers
 import com.norfold.app.domain.WorkspaceIconKind
 import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.ui.components.RowSwitch
+import com.norfold.app.ui.selectableChrome
 import com.norfold.app.ui.toggleableChrome
 
 enum class WorkspaceVisualTab { Identity, CoverPermissions }
@@ -281,6 +283,27 @@ private fun VisualMediaSummary(label: String, value: String, empty: String, onCl
     }
 }
 
+/**
+ * The built-in cover choices, as a single-choice set.
+ *
+ * **The border is the only thing that says "selected".** There is no tick and no indicator — a chosen cover
+ * is a cover with a heavier accent edge and a lighter scrim. That makes this one of the picker population's
+ * clearest cases for two decisions:
+ *
+ * - `selectableChrome` rather than `clickable`, so the choice is *announced*. `clickable` publishes a node
+ *   with a name and an action and nothing about state, so a screen-reader user heard eight covers and no
+ *   indication of which one their workspace is wearing. Selection drawn and never said is selection only
+ *   sighted users have.
+ * - The edge weight is read from **one** local, and that same local is what tells the ring how far to stand
+ *   off. Inside a 2 dp accent edge the substrate's default 3 dp inset would land the ring half a dp away, and
+ *   two accent strokes half a dp apart are one thicker accent stroke — which on this chrome already means
+ *   "selected". Focusing the cover you had already chosen would then change nothing visible. Deriving both
+ *   from the same value is what makes that impossible to reintroduce by editing one of them.
+ *
+ * `selectableGroup()` is correct on this `Row` rather than harmful: the strip scrolls but composes every
+ * cover, so the announced position counts all of them. See [com.norfold.app.ui.selectableChrome] for the lazy
+ * exception that does *not* get the group.
+ */
 @Composable
 private fun BuiltInBackgroundStrip(selectedUri: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -288,21 +311,26 @@ private fun BuiltInBackgroundStrip(selectedUri: String, onSelect: (String) -> Un
         Row(
             Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+                .horizontalScroll(rememberScrollState())
+                .selectableGroup(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             BuiltInCovers.forEach { cover ->
                 val selected = selectedUri == cover.uri
+                val edgeWidth = if (selected) ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH else ChromeGeometry.RESTING_EDGE_WIDTH
                 Box(
                     Modifier
                         .size(width = 112.dp, height = 64.dp)
-                        .clip(RoundedCornerShape(14.dp))
                         .border(
-                            width = if (selected) 2.dp else 1.dp,
+                            width = edgeWidth.dp,
                             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.24f),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(Corner.Media.radiusDp.dp),
                         )
-                        .clickable { onSelect(cover.uri) },
+                        .selectableChrome(
+                            selected = selected,
+                            corner = Corner.Media,
+                            boundaryWidthDp = edgeWidth,
+                        ) { onSelect(cover.uri) },
                 ) {
                     Image(painterResource(cover.drawableRes), null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
                     Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.background.copy(alpha = if (selected) 0.08f else 0.24f)))
@@ -356,6 +384,24 @@ private val WorkspaceEmojis = listOf(
     "🧠", "🎨", "🔥", "🌍", "📊", "💎", "🌸", "🙂",
 )
 
+/**
+ * The workspace emoji choices, as a single-choice set.
+ *
+ * Same population and same two reasons as [BuiltInBackgroundStrip] — announce the selection, and let one
+ * value drive both the drawn edge and the ring's stand-off — with two differences worth stating.
+ *
+ * **The leading `clip` stays.** These cells paint a fill of their own, and a `background` earlier in the chain
+ * than a clip is not clipped by it: `selectableChrome`'s own clip arrives after this modifier, so without the
+ * explicit one the tinted fill would keep four square corners outside a rounded border. The substrate's clip
+ * covers the ripple and the content; it cannot retroactively clip something drawn before it.
+ *
+ * **No `selectableGroup()`, because this grid cannot be described by one.** The cells are laid out as four
+ * `Row`s of four, so the group's direct children are rows rather than cells — a group here announces "4
+ * items" against a set of sixteen, and one placed on the outer `Column` announces five, counting the heading.
+ * `CollectionInfo` reads composed children, and no single node in this tree has all sixteen. So the position
+ * is left unstated rather than stated wrongly; each cell still carries its own selected state, which is the
+ * half that was missing.
+ */
 @Composable
 private fun EmojiPickerGrid(selected: String, onPick: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -364,18 +410,23 @@ private fun EmojiPickerGrid(selected: String, onPick: (String) -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { emoji ->
                     val isSel = selected == emoji
+                    val edgeWidth = if (isSel) ChromeGeometry.PICKER_SELECTED_EDGE_WIDTH else ChromeGeometry.RESTING_EDGE_WIDTH
                     Box(
                         Modifier
                             .weight(1f)
                             .height(52.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(Corner.Media.radiusDp.dp))
                             .background(if (isSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                             .border(
-                                width = if (isSel) 2.dp else 1.dp,
+                                width = edgeWidth.dp,
                                 color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(Corner.Media.radiusDp.dp),
                             )
-                            .clickable { onPick(emoji) },
+                            .selectableChrome(
+                                selected = isSel,
+                                corner = Corner.Media,
+                                boundaryWidthDp = edgeWidth,
+                            ) { onPick(emoji) },
                         contentAlignment = Alignment.Center,
                     ) { Text(emoji, fontSize = 22.sp, fontWeight = FontWeight.Bold) }
                 }
