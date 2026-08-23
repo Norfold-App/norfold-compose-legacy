@@ -107,7 +107,12 @@ private fun ReadyChart(
     var inspectedMark by remember(document.id) { mutableStateOf<ChartMark?>(null) }
     val scheme = MaterialTheme.colorScheme
     val background = document.style.background?.let { Color(it.toArgb()) } ?: scheme.surface
-    val foregroundColor = document.style.foreground?.let { Color(it.toArgb()) } ?: scheme.onSurface
+    // Solved for the same reason and against the same fill as the card's `Text`s below. This one paints the axis
+    // tick labels through a native `Paint`, which is why it cannot lean on `LocalContentColor` even in principle:
+    // a `nativeCanvas.drawText` reads no composition local at all, so whatever colour is resolved here is final.
+    val foregroundColor = with(NorfoldChrome) {
+        legibleInk(document.style.foreground?.let { Color(it.toArgb()) } ?: scheme.onSurface, background)
+    }
     val gridBase = document.style.grid?.let { Color(it.toArgb()) } ?: scheme.outlineVariant
     // One declared colour, two populations, two weights — so two derived colours. The `grid` local was drawing
     // both the gridlines at 1 px and the x/y/y2 axis rules at 1.5 px, which under the Document host's own
@@ -157,8 +162,20 @@ private fun ReadyChart(
             },
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        if (document.title.isNotBlank()) Text(document.title, style = MaterialTheme.typography.titleLarge)
-        if (document.subtitle.isNotBlank()) Text(document.subtitle, style = MaterialTheme.typography.bodySmall)
+        // Every text in this card is measured against `background` — the fill the card actually paints — rather
+        // than left to inherit whatever `LocalContentColor` the surrounding surface happens to carry. The card is
+        // a colour the *user* can set, so on the theme fallback these resolve to the token itself and on a
+        // user-painted fill they move; either way the ink is solved against the pixel it lands on rather than
+        // against the page the card sits on. 1.4.3 rather than 1.4.11 here, hence `legibleInk` at 4.5:1 and not
+        // the 3:1 the axis rules and the card edge above use.
+        val titleInk = with(NorfoldChrome) { legibleInk(scheme.onSurface, background) }
+        val supportInk = with(NorfoldChrome) { legibleInk(scheme.onSurfaceVariant, background) }
+        if (document.title.isNotBlank()) {
+            Text(document.title, style = MaterialTheme.typography.titleLarge, color = titleInk)
+        }
+        if (document.subtitle.isNotBlank()) {
+            Text(document.subtitle, style = MaterialTheme.typography.bodySmall, color = supportInk)
+        }
         if (document.legend.visible && document.legend.position == ChartLegendPosition.TOP) {
             ChartLegendRow(data, Alignment.Start)
         }
@@ -379,15 +396,25 @@ private fun ReadyChart(
             }
         }
         if (!compactChrome) {
+            // The accent at 14 sp on the card's own fill, and on the light default **7 of the 10 shipped accents
+            // fall below AA**: Gold 2.688, Sunset 3.103, Forest 3.360, Midnight 3.762, Candy 3.778, Ocean 4.142,
+            // Fire 4.305. Only Norfold, Neon and Graphite passed, so the one affordance that reaches the chart's
+            // underlying numbers was unreadable on the majority of themes a user can pick. Dark mode failed 0 of
+            // 10 and is returned untouched, which is exactly what a floor does.
             TextButton(
                 onClick = { showData = true },
                 modifier = Modifier.align(Alignment.End),
-            ) { Text("View data") }
+            ) { Text("View data", color = with(NorfoldChrome) { legibleInk(scheme.primary, background) }) }
             if (document.axes.x.visible && document.axes.x.title.isNotBlank()) {
-                Text(document.axes.x.title, Modifier.align(Alignment.CenterHorizontally), style = MaterialTheme.typography.labelMedium)
+                Text(
+                    document.axes.x.title,
+                    Modifier.align(Alignment.CenterHorizontally),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = supportInk,
+                )
             }
             if (document.axes.y.visible && document.axes.y.title.isNotBlank()) {
-                Text(document.axes.y.title, style = MaterialTheme.typography.labelMedium)
+                Text(document.axes.y.title, style = MaterialTheme.typography.labelMedium, color = supportInk)
             }
         }
         if (document.legend.visible && document.legend.position != ChartLegendPosition.TOP) {
@@ -396,13 +423,15 @@ private fun ReadyChart(
                 if (document.legend.position == ChartLegendPosition.END) Alignment.End else Alignment.Start,
             )
         }
-        data.warnings.forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        data.warnings.forEach { Text(it, style = MaterialTheme.typography.labelSmall, color = supportInk) }
         inspectedMark?.let { mark ->
             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
                 Text(markSummary(mark, data), Modifier.padding(horizontal = 10.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
             }
         }
-        if (document.caption.isNotBlank()) Text(document.caption, style = MaterialTheme.typography.bodySmall)
+        if (document.caption.isNotBlank()) {
+            Text(document.caption, style = MaterialTheme.typography.bodySmall, color = supportInk)
+        }
     }
     if (showData) ChartDataSheet(table) { showData = false }
 }

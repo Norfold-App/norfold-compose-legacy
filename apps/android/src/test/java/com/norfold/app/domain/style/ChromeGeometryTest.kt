@@ -3,6 +3,7 @@ package com.norfold.app.domain.style
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -747,6 +748,170 @@ class ChromeGeometryTest {
         }
 
         assertEquals("every surface in the scheme", 15, compared)
+    }
+
+    /**
+     * The derived glyph clears 3:1 on every app surface — the measurement
+     * [com.norfold.app.ui.NorfoldChrome.legibleGlyph] exists to make true.
+     *
+     * The substrate had three colour primitives and a hole between two of them. `restingEdge` answers 2.2:1 and
+     * `legibleInk` answers 4.5:1, so a *meaningful non-text mark* — a status dot, an unticked box, a chevron —
+     * had no member to call and six of them reached for `outline` instead. That token measures **1.1734:1 on the
+     * light page and 1.4135:1 on the dark one** (the test above pins all thirty combinations), so those six
+     * shipped as marks that exist in the source and not on the screen.
+     *
+     * Seeded from `outline` the answer lands between **3.0142:1** (light `surfaceDim` `#F1F2F6` → `#818AB4`) and
+     * **3.1114:1** (dark `surfaceContainer` `#1B253B` → `#5F7194`): 15 of 15, both ends pinned. The tightest is
+     * the light end, which is where the search has least headroom — a light backdrop can only be cleared by
+     * going darker, and `outline` starts almost at the backdrop.
+     *
+     * Both ends rather than just the floor, for the same reason
+     * [`no theme outline token reaches visibility on any app surface`] pins its ceiling: "all 15 clear 3:1"
+     * stays green if a palette edit sends one of them to 6:1, and that would be a mark shouting where a mark
+     * should speak. 3.11 is the whole spread this population is allowed.
+     */
+    @Test
+    fun `the derived glyph reaches the non-text minimum on every app surface`() {
+        var solved = 0
+        var tightest = Double.MAX_VALUE
+        var loudest = 0.0
+
+        for ((outline, surfaces) in listOf(0xE4E6EF to lightSurfaces, 0x252C3A to darkSurfaces)) {
+            for (surface in surfaces) {
+                val backdrop = hex(surface)
+                val glyph = ContrastAnalysis.legibleChrome(hex(outline), backdrop, ChromeGeometry.FOCUS_RING_RATIO)
+                val measured = ContrastAnalysis.ratio(glyph, backdrop)
+                assertTrue(
+                    "glyph on %06X measures %.4f:1, below the %.1f:1 a non-text mark needs".format(
+                        surface,
+                        measured,
+                        ChromeGeometry.FOCUS_RING_RATIO,
+                    ),
+                    measured >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
+                )
+                solved++
+                tightest = minOf(tightest, measured)
+                loudest = maxOf(loudest, measured)
+            }
+        }
+
+        assertEquals("seven light surfaces and eight dark ones", 15, solved)
+        assertEquals("the tightest, on light surfaceDim", 3.0142, tightest, 0.0001)
+        assertEquals("and the loudest any mark gets, on dark surfaceContainer", 3.1114, loudest, 0.0001)
+    }
+
+    /**
+     * Why the glyph solver is the floor and not the target — the one population where the two disagree, and
+     * disagree in a direction that would do visible damage.
+     *
+     * [`the floor and the target agree on every derived resting edge`] proves they are interchangeable when the
+     * seed is `outline`, because `outline` starts far below any target and the nearest passing lightness *is* the
+     * quietest passing one. That agreement is why `restingEdge` never had to choose. It does not survive a seed
+     * that is already loud enough.
+     *
+     * A presence row's own colours are exactly that seed. On the dark page `online` measures 9.4157:1, `away`
+     * 11.9141:1 and `SemanticColors.signalGreen` 7.2013:1 — all three comfortably past 3:1 — and
+     * [ContrastAnalysis.settledChrome] would search *downward* to `#186C3C`, `#705B07` and `#146D41`, quietening
+     * three clear status colours into mud to satisfy a number they had already cleared.
+     * [ContrastAnalysis.legibleChrome] returns them untouched.
+     *
+     * So the assertion is in two halves, and the second is the one that would catch a well-meaning edit: dark
+     * mode must come back **bit-identical**, and light mode must actually move. On the light page the same three
+     * measure 1.9804:1, 1.5651:1 and 2.5893:1 — two thirds of a presence row failing 1.4.11 — and solve to
+     * `#25A25A` (3.0945), `#AA8A0A` (3.1166) and `#1DA161` (3.1295). `error` `#EF4D5D` already passes there at
+     * 3.3596 and is returned untouched on both pages, which is what lets one call wrap the whole `when` rather
+     * than the caller having to know which branch is in trouble.
+     *
+     * The hue bound is asserted for the reason
+     * [`deriving the ink clears AA everywhere and changes nothing that already passed`] states: only lightness
+     * is searched, but reading hue back out of an 8-bit result is lossy, so "still the colour it was" needs a
+     * measured ceiling. Across all fifteen surfaces the worst is **0.33°**.
+     */
+    @Test
+    fun `the glyph solver leaves an already-loud status colour alone and fixes only the quiet one`() {
+        val statuses = listOf(
+            "online" to 0x2ECC71,
+            "away" to 0xF1C40F,
+            "signalGreen" to 0x20B26B,
+        )
+        var quietened = 0
+        var worstHueShift = 0.0
+
+        for ((label, status) in statuses) {
+            val seed = hex(status)
+            for ((page, mode) in listOf(0xF7F8FC to "light", 0x070A12 to "dark")) {
+                val backdrop = hex(page)
+                val before = ContrastAnalysis.ratio(seed, backdrop)
+                val floor = ContrastAnalysis.legibleChrome(seed, backdrop, ChromeGeometry.FOCUS_RING_RATIO)
+                val target = ContrastAnalysis.settledChrome(seed, backdrop, ChromeGeometry.FOCUS_RING_RATIO)
+
+                assertTrue(
+                    "$label on the $mode page measures %.4f:1 after the floor, short of the minimum".format(
+                        ContrastAnalysis.ratio(floor, backdrop),
+                    ),
+                    ContrastAnalysis.ratio(floor, backdrop) >= ChromeGeometry.FOCUS_RING_RATIO - 0.01,
+                )
+
+                if (before >= ChromeGeometry.FOCUS_RING_RATIO) {
+                    assertEquals(
+                        (
+                            "$label already cleared the minimum at %.4f:1 on the $mode page, so the floor must " +
+                                "return it untouched — a status colour that passes is not the solver's business"
+                            ).format(before),
+                        seed,
+                        floor,
+                    )
+                    assertNotEquals(
+                        (
+                            "the target would quieten $label from %.4f:1 down to %s — if this ever stops being " +
+                                "true the argument for legibleChrome over settledChrome has gone, and the choice " +
+                                "should be revisited rather than the assertion relaxed"
+                            ).format(before, target.toHexRgb()),
+                        seed,
+                        target,
+                    )
+                    quietened++
+                } else {
+                    assertNotEquals(
+                        "$label failed at %.4f:1 on the $mode page and the floor returned the same colour".format(
+                            before,
+                        ),
+                        seed,
+                        floor,
+                    )
+                }
+            }
+        }
+
+        for ((_, status) in statuses) {
+            for (surface in lightSurfaces + darkSurfaces) {
+                val seed = hex(status)
+                val glyph = ContrastAnalysis.legibleChrome(seed, hex(surface), ChromeGeometry.FOCUS_RING_RATIO)
+                if (glyph == seed) continue
+                val from = seed.toHsl()
+                val to = glyph.toHsl()
+                worstHueShift = maxOf(
+                    worstHueShift,
+                    abs(to.hue - from.hue).let { minOf(it, 360f - it) }.toDouble(),
+                )
+            }
+        }
+
+        assertEquals("three status colours, one page each, that the target would have quietened", 3, quietened)
+        assertEquals(
+            "the light page's three failures solve to #25A25A, #AA8A0A and #1DA161",
+            listOf("#25A25A", "#AA8A0A", "#1DA161"),
+            statuses.map {
+                ContrastAnalysis.legibleChrome(hex(it.second), hex(0xF7F8FC), ChromeGeometry.FOCUS_RING_RATIO)
+                    .toHexRgb()
+            },
+        )
+        assertEquals(
+            "error already passes on the light page, so one call can wrap every branch of the when",
+            hex(0xEF4D5D),
+            ContrastAnalysis.legibleChrome(hex(0xEF4D5D), hex(0xF7F8FC), ChromeGeometry.FOCUS_RING_RATIO),
+        )
+        assertEquals("the worst hue shift across all fifteen surfaces", 0.33, worstHueShift, 0.01)
     }
 
     /**
@@ -2143,6 +2308,103 @@ class ChromeGeometryTest {
     }
 
     /**
+     * No chrome site paints a meaningful mark in an outline token — the sibling of the scan above, and the
+     * population that scan deliberately hands over.
+     *
+     * [edgeSites] treats a `.background(...)` as a *line* only when its modifier chain is 2 dp or less across,
+     * and its documentation says why the wider ones are somebody else's problem: `outline` filling a 6 dp dot is
+     * not a faint edge, it is ink standing in for a glyph, and a glyph is held to
+     * [ChromeGeometry.FOCUS_RING_RATIO] rather than [ChromeGeometry.RESTING_EDGE_RATIO]. Widening that gate
+     * would have merged two populations with different targets and different remedies. This is the other half.
+     *
+     * **What it looks for, and why three shapes rather than one.** A mark reaches the screen three ways in this
+     * tree — `Icon(tint = …)`, a filled `Modifier.background(…)` wider than a hairline, and a `DrawScope`
+     * `drawRoundRect`/`drawCircle`/`drawPath` in the editor, where the to-do marker lives. Matching only the
+     * first two would have missed `DocumentTodoMarker`, whose unticked box is drawn rather than composed and
+     * measured 1.2453:1 light.
+     *
+     * **The `tint` argument is balanced, not read to end-of-line.** `ChatScreen`'s multi-select radio spells its
+     * tint as a three-line `if (groupSelected) { primary } else { … }`, and a line-bounded read saw only
+     * `tint = if (groupSelected) {` — no token, no site, silently clean. That is the same correction
+     * [argumentList] documents for `legibleInk`, arrived at again from the other direction.
+     *
+     * **Aliases are tracked through functions as well as `val`s, which the edge scan did not need.** `presenceDot`
+     * is a `@Composable fun … : Color` that routes the whole `when` through one
+     * [com.norfold.app.ui.NorfoldChrome.legibleGlyph] call, so its two call sites name *a function*. Tracking
+     * only `val`s reported both of them as raw — the fix was invisible to the scan that was supposed to prove it.
+     * Following the indirection is what makes "route it once, call it twice" an expressible fix rather than a
+     * pattern this test punishes.
+     *
+     * **The exemption map is empty, and that is a claim.** All eight sites the scan found were fixed: five routed
+     * through the substrate — the paused recorder dot, the relay dot, and `presenceDot` with its two call sites —
+     * and three moved to `onSurfaceVariant` because they read as iconography rather than as status: the
+     * multi-select radio, the roster chevron and the to-do box, each of which now matches a pairing the app
+     * already had. Nothing here needed an argument for staying faint, unlike the twelve grid rulings and hairlines
+     * above. If a future site does, this is where the measurement goes.
+     */
+    @Test
+    fun `no chrome site paints a meaningful mark in an outline token`() {
+        val offenders = mutableListOf<String>()
+        val silent = mutableListOf<String>()
+        val counted = mutableMapOf<String, Int>()
+        var routed = 0
+        var files = 0
+
+        for ((leaf, text) in uiSources()) {
+            files++
+            val code = blankComments(text)
+            val declarations = functionDeclarations(code)
+            val aliases = glyphAliases(code, declarations)
+
+            for (site in glyphSites(code, aliases)) {
+                if (site.derived) {
+                    routed++
+                    continue
+                }
+                val region = regionOf(declarations, site.index, code.length)
+                val key = "$leaf#${region.name}"
+                counted[key] = (counted[key] ?: 0) + 1
+                if (glyphExemptions[key] == null) {
+                    val line = code.substring(0, site.index).count { it == '\n' } + 1
+                    offenders += "$leaf:$line ${region.name} paints a mark in ${site.token}"
+                } else if (!text.substring(documentedFrom(text, region.start), region.end).contains(TEST_NAME)) {
+                    silent += key
+                }
+            }
+        }
+
+        assertEquals(
+            "an outline token measures 1.17:1 on the light page and 1.41:1 on the dark one, so a mark painted " +
+                "in one is a mark the user cannot see — route it through NorfoldChrome.legibleGlyph, or move it " +
+                "to onSurfaceVariant if it reads as iconography rather than as state",
+            emptyList<String>(),
+            offenders,
+        )
+        assertEquals(
+            "an exemption has to argue for itself where the mark is drawn, not only in this test's list — the " +
+                "prose beside it must name $TEST_NAME with the figure that says why invisibility is correct here",
+            emptyList<String>(),
+            silent,
+        )
+        assertEquals(
+            "every exemption must still be a live site: a stale entry silently licenses an invisible mark " +
+                "elsewhere in the same function",
+            glyphExemptions,
+            counted.toSortedMap(),
+        )
+        // Two floors, for the reason the scan above needs three: with an empty map, all three assertions are
+        // vacuously green on a scan that finds nothing at all.
+        assertTrue("only $files files scanned under ui/ — the walk has stopped finding them", files >= 80)
+        assertEquals(
+            "the five routed marks — the paused recorder dot, the relay dot, presenceDot and its two call " +
+                "sites, and StepDots' unselected dots. If this drops, legibleGlyph has stopped being " +
+                "recognised and every routed site would now read as raw",
+            5,
+            routed,
+        )
+    }
+
+    /**
      * Every hand-rolled `clickable` in the tree either draws a focus ring or is named here as not needing one.
      *
      * This is the invariant #61 was missing. The work itself is done — 38 sites across 34 functions now watch a
@@ -2320,6 +2582,21 @@ class ChromeGeometryTest {
         "screens/WorkspaceHubScreens.kt#ActivityTimelineRow" to 1,
         "screens/WorkspaceHubScreens.kt#DatabaseTimelineRow" to 1,
     )
+
+    /**
+     * The functions that paint a meaningful mark in an outline token deliberately, and how many each owns.
+     *
+     * Empty, unlike [rawEdgeExemptions], and the emptiness is the finding rather than an omission. All eight
+     * sites the scan above found were fixed — a mark either carries meaning, in which case it has to be visible,
+     * or it does not, in which case it should not be drawn. Neither branch produces an exemption, which is the
+     * difference between this population and the grid rulings: a rule between two cells genuinely is not a
+     * boundary, but there is no equivalent argument for a status dot nobody can see.
+     *
+     * Kept as a declared empty map rather than dropped so that the third assertion in the test above still has
+     * something to compare against, and so the next site that wants an exemption has an obvious place to state
+     * its measurement.
+     */
+    private val glyphExemptions = sortedMapOf<String, Int>()
 
     private val TEST_NAME = "ChromeGeometryTest"
 
@@ -2543,6 +2820,146 @@ class ChromeGeometryTest {
     private val THIN_DIMENSION = Regex(
         """\.(?:width|height)\(\s*(\d+(?:\.\d+)?)\.dp\s*\)|\b(?:width|height)\s*=\s*(\d+(?:\.\d+)?)\.dp""",
     )
+
+    /**
+     * The local names that stand in for a glyph colour, split by whether they derive one.
+     *
+     * The same two-direction problem [edgeAliases] solves, plus one it does not have. A `val` alias hides sites
+     * or fakes them, exactly as it does for an edge, and the initialiser is read the same way. But a glyph fix
+     * has a second shape available to it: `presenceDot` is a `@Composable fun status: String?, backdrop: Color):
+     * Color` that solves once and is called twice, so the *sites* name a function rather than a `val`. Tracking
+     * only `val`s reported both of its call sites as raw while the routing sat one hop away.
+     *
+     * A function qualifies by returning `Color` and by what its body names, and its body is taken as the span up
+     * to the next declaration — which is [regionOf]'s definition of a function's extent, reused rather than
+     * restated. Only a helper whose whole job is producing a colour is followed; a large composable that happens
+     * to mention `legibleGlyph` somewhere inside it does not become an alias for its own name.
+     *
+     * A helper that derives an *edge* is neither kind, and has to be skipped explicitly rather than falling
+     * through to raw. `NorfoldChrome.restingEdge` names `outlineVariant` as its own default seed, so on the
+     * `colorScheme.outline` test alone it classed as a raw alias — and then every `.background(restingEdge(…))`
+     * in the tree read as an invisible mark. It is the other scan's primitive, and [DERIVED_EDGE] is already the
+     * name for that population.
+     */
+    private fun glyphAliases(
+        code: String,
+        declarations: List<Pair<Int, String>>,
+    ): Pair<Set<String>, Set<String>> {
+        val derived = mutableSetOf<String>()
+        val raw = mutableSetOf<String>()
+
+        for (match in Regex("""\bval\s+(\w+)(?:\s*:\s*\w+)?\s*=""").findAll(code)) {
+            val initialiser = initialiserOf(code, match.range.first, match.range.last + 1)
+            when {
+                DERIVED_GLYPH.containsMatchIn(initialiser) -> derived += match.groupValues[1]
+                DERIVED_EDGE.containsMatchIn(initialiser) -> Unit
+                initialiser.contains("colorScheme.outline") -> raw += match.groupValues[1]
+            }
+        }
+
+        for ((at, name) in declarations) {
+            val body = code.substring(at, regionOf(declarations, at, code.length).end)
+            if (COLOR_RETURNING.find(body)?.range?.first != 0) continue
+            when {
+                DERIVED_GLYPH.containsMatchIn(body) -> derived += name
+                DERIVED_EDGE.containsMatchIn(body) -> Unit
+                body.contains("colorScheme.outline") -> raw += name
+            }
+        }
+
+        return derived to raw
+    }
+
+    /**
+     * Every site in the file that paints a mark, classified.
+     *
+     * Three shapes, because a mark reaches the screen three ways: an `Icon`'s `tint`, a `background` on a chain
+     * *wider* than a hairline, and a `DrawScope` primitive. The `background` test is [edgeSites]'s inverted — it
+     * skips anything 2 dp or less, because that is the other scan's population, and the two together cover a
+     * `.background(outline)` exactly once whatever its size.
+     *
+     * `size` is read alongside `width`/`height`, which [THIN_DIMENSION] does not do. It does not need to: a
+     * divider is stated as a `height`, so a `size` never appears on an edge. It appears on almost every mark, and
+     * a 2 dp `.size(...)` would be a hairline dot rather than a glyph.
+     */
+    private fun glyphSites(code: String, aliases: Pair<Set<String>, Set<String>>): List<EdgeSite> {
+        val (derivedAliases, rawAliases) = aliases
+        fun names(candidates: Set<String>, arguments: String) =
+            candidates.any { Regex("""\b$it\b""").containsMatchIn(arguments) }
+
+        fun tokenOf(arguments: String) =
+            if (arguments.contains("outlineVariant")) "outlineVariant" else "outline"
+
+        val sites = mutableListOf<EdgeSite>()
+
+        fun classify(index: Int, arguments: String, thinIsMine: Boolean) {
+            val derived = DERIVED_GLYPH.containsMatchIn(arguments) || names(derivedAliases, arguments)
+            val rawToken = arguments.contains("colorScheme.outline") || names(rawAliases, arguments)
+            if (!derived && !rawToken) return
+            if (!thinIsMine) {
+                val anchor = code.lastIndexOf("Modifier", index)
+                val window = code.substring(if (anchor >= 0) anchor else maxOf(0, index - 320), index)
+                val measured = THIN_DIMENSION.findAll(window)
+                    .mapNotNull { (it.groupValues[1] + it.groupValues[2]).toFloatOrNull() }
+                    .toList() +
+                    GLYPH_SIZE.findAll(window).mapNotNull { it.groupValues[1].toFloatOrNull() }.toList()
+                if (measured.isNotEmpty() && measured.min() <= 2f) return
+            }
+            sites += EdgeSite(index, tokenOf(arguments), derived)
+        }
+
+        for (match in Regex("""\btint\s*=""").findAll(code)) {
+            classify(match.range.first, boundedArgument(code, match.range.last + 1), thinIsMine = true)
+        }
+        for (match in Regex("""\.background\s*\(""").findAll(code)) {
+            val open = code.lastIndexOf('(', match.range.last)
+            classify(match.range.first, code.substring(open + 1, closingParen(code, open)), thinIsMine = false)
+        }
+        for (match in DRAW_PRIMITIVE.findAll(code)) {
+            val open = code.lastIndexOf('(', match.range.last)
+            classify(match.range.first, code.substring(open + 1, closingParen(code, open)), thinIsMine = true)
+        }
+
+        return sites
+    }
+
+    /**
+     * One named argument's value: from [from] to the comma or closing bracket that ends it at depth zero.
+     *
+     * Needed because `tint = …` has no parentheses of its own to balance. Reading to end-of-line instead saw
+     * `tint = if (groupSelected) {` and stopped, missing the token two lines down — the multi-line correction
+     * [argumentList] documents, met again in a different shape. All three bracket kinds are counted, not just
+     * parentheses, because the value that has to be read past is a `when` block.
+     */
+    private fun boundedArgument(code: String, from: Int): String {
+        var depth = 0
+        var index = from
+        while (index < code.length) {
+            when (code[index]) {
+                '(', '{', '[' -> depth++
+                ')', '}', ']' -> {
+                    if (depth == 0) return code.substring(from, index)
+                    depth--
+                }
+                ',' -> if (depth == 0) return code.substring(from, index)
+            }
+            index++
+        }
+        return code.substring(from)
+    }
+
+    private val DERIVED_GLYPH = Regex("""\blegibleGlyph\b""")
+
+    /** A function that exists to produce a colour, and is therefore worth following as an alias. */
+    private val COLOR_RETURNING =
+        Regex("""\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?\w+\s*\([^)]*\)\s*:\s*Color\b""")
+
+    /** The `DrawScope` primitives the editor paints marks with. */
+    private val DRAW_PRIMITIVE =
+        Regex("""\bdraw(?:RoundRect|Rect|Circle|Line|Path|Arc|Points|Oval)\s*\(""")
+
+    /** A `.size(...)`, which states a mark's extent where an edge would state a `height`. */
+    private val GLYPH_SIZE = Regex("""\.size\(\s*(?:\w+\s*=\s*)?(\d+(?:\.\d+)?)\.dp""")
 
     /**
      * Every row that hands its indicator a null handler puts the semantics on the row.

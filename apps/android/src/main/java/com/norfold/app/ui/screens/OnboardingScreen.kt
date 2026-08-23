@@ -91,6 +91,7 @@ import com.norfold.app.ui.DocsUiState
 import com.norfold.app.ui.DocsViewModel
 import com.norfold.app.ui.EmailAuthPhase
 import com.norfold.app.ui.EmailAuthOperation
+import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.OnboardingSetupPreferences
 import com.norfold.app.ui.AccountCoordinatorState
 import com.norfold.app.ui.CloudAuthProvider
@@ -109,7 +110,6 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
-import com.norfold.app.ui.NorfoldChrome
 import com.norfold.app.ui.focusableChrome
 import com.norfold.app.ui.toggleableChrome
 
@@ -948,10 +948,36 @@ private fun OnboardingPrimaryButton(label: String, loading: Boolean = false, ena
     }
 }
 
+/**
+ * The ten-step progress dots.
+ *
+ * The unselected dots are the only thing stating how far through onboarding the user is and how much is left, so
+ * they are a component under WCAG 1.4.11 and go through [NorfoldChrome.legibleGlyph]. `outlineVariant` drew them
+ * at **1.0744:1** on the light page and **1.2421:1** on the dark one — nine invisible dots beside one accent —
+ * and solves to #8190B5 (3.0027) and #4B5E85 (3.0522). The selected dot is `primary` and untouched: a user accent
+ * that already contrasts is returned as chosen, and it is also the one dot carrying a size difference as a second
+ * cue.
+ *
+ * Backdrop named rather than defaulted because this row sits on the onboarding host's `Surface`, which paints
+ * `colorScheme.background` — the same colour the substrate would have fallen back to, but stated so the
+ * measurement does not silently change if that host is ever re-tinted.
+ */
 @Composable
 private fun StepDots(step: Int) {
+    val backdrop = MaterialTheme.colorScheme.background
     Row(Modifier.padding(bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        repeat(10) { index -> Box(Modifier.size(if (index == step) 9.dp else 7.dp).background(if (index == step) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, CircleShape)) }
+        repeat(10) { index ->
+            val fill = if (index == step) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            }
+            Box(
+                Modifier
+                    .size(if (index == step) 9.dp else 7.dp)
+                    .background(with(NorfoldChrome) { legibleGlyph(fill, backdrop) }, CircleShape),
+            )
+        }
     }
 }
 

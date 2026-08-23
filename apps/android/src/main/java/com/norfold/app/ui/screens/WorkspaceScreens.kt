@@ -976,10 +976,21 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (selecting) {
+                        // `onSurfaceVariant`, not `outline`, and the same pairing TasksBoardScreen already uses
+                        // for a checkbox glyph — consistency rather than a new decision. `outline` drew the
+                        // *unticked* state at 1.1734:1 light and 1.4135:1 dark, dropping to 1.0612 / 1.3406 on
+                        // the 8% accent wash a selected row paints, so the one state that says "not chosen" was
+                        // the least visible thing in the row and got worse the moment the row was chosen. On that
+                        // same wash `onSurfaceVariant` measures 4.1655–4.4290 light and 6.6253–6.9002 dark across
+                        // all ten accents, so it clears the 3:1 a component needs on every theme.
                         Icon(
                             if (groupSelected) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
                             contentDescription = null,
-                            tint = if (groupSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            tint = if (groupSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             modifier = Modifier.padding(start = 8.dp).size(22.dp),
                         )
                     }
@@ -1849,7 +1860,23 @@ private fun ChatRecordingRow(
                 Modifier
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(if (state.paused) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.error),
+                    // An 8 dp dot is the only thing distinguishing "recording" from "paused", so it is a
+                    // component under WCAG 1.4.11 and needs 3:1. Backdrop named because this pill is
+                    // `surfaceVariant`, not the page: `outline` on it measures 1.1139:1 light and 1.2302:1
+                    // dark and solves to #818AB4 / #576788. `error` already passes at 3.1893 / 4.8304 and is
+                    // returned untouched, which is what makes one call correct for both branches.
+                    .background(
+                        with(NorfoldChrome) {
+                            legibleGlyph(
+                                if (state.paused) {
+                                    MaterialTheme.colorScheme.outline
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                                MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                        },
+                    ),
             )
             Text(
                 formatVoiceTime(state.elapsedMs),
@@ -2050,7 +2077,19 @@ private fun ChatPersonaBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) SemanticColors.signalGreen else MaterialTheme.colorScheme.outline))
+                    // Both branches, not just the grey one: on the light page `signalGreen` #20B26B measures
+                    // 2.5893:1 and solves to #1DA161 (3.1295), while `outline` measures 1.1734:1 and solves to
+                    // #848DB6. In dark mode the green already passes at 7.2013:1 and is returned untouched.
+                    Box(
+                        Modifier.size(8.dp).clip(CircleShape).background(
+                            with(NorfoldChrome) {
+                                legibleGlyph(
+                                    if (connected) SemanticColors.signalGreen else MaterialTheme.colorScheme.outline,
+                                    MaterialTheme.colorScheme.background,
+                                )
+                            },
+                        ),
+                    )
                     Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -2679,18 +2718,36 @@ private fun GroupRulesSheet(
 
 /** Small presence line ("● Active now" / "Away" / "Offline") shown under a DM header. */
 /**
- * The presence hue. Green for online, amber for away, the theme's own outline for everything else.
+ * The presence hue, raised to 3:1 on the fill it is drawn on. Green for online, amber for away, the theme's own
+ * outline for everything else.
  *
  * Literal rather than a theme token because these are status colours in the traffic-light sense — the same two
  * hues every chat app uses — not roles in Norfold's palette, and re-tinting "online" per accent would make the
  * dot mean something different in each theme. Held as a function so [PresenceLine] and [MemberRosterRow] cannot
  * end up drawing different greens, which they did.
+ *
+ * **All three branches go through [NorfoldChrome.legibleGlyph], not only the grey one.** An 8–9 dp dot is the
+ * entire affordance, so WCAG 1.4.11 asks 3:1 of it, and on the light page all three failed: `online` #2ECC71 at
+ * **1.9804:1**, `away` #F1C40F at **1.5651:1** and `outline` at **1.1734:1**. Only lightness moves, so each
+ * stays the hue it was — the greatest hue shift across both fills and both branches is 0.33°, and the greatest
+ * lightness move is 15.9 points on the amber, which had furthest to go. Dark mode is untouched: there the two
+ * literals already measure 8.19–11.91:1 and a floor returns its input.
+ *
+ * [backdrop] is the fill the dot lands on, and the two callers differ — [PresenceLine] sits on the page, while
+ * [MemberRosterRow] draws the dot inside a 12 dp `surface` halo so its avatar can overlap the row beneath.
+ * Passing it is what keeps a single function correct at both: on the page the green solves to #25A25A (3.0945)
+ * and the amber to #AA8A0A (3.1166), on the halo #26A75C (3.1045) and #AE8E0A (3.1469).
  */
 @Composable
-private fun presenceDot(status: String?): Color = when (status) {
-    "online" -> Color(0xFF2ECC71)
-    "away" -> Color(0xFFF1C40F)
-    else -> MaterialTheme.colorScheme.outline
+private fun presenceDot(status: String?, backdrop: Color): Color = with(NorfoldChrome) {
+    legibleGlyph(
+        when (status) {
+            "online" -> Color(0xFF2ECC71)
+            "away" -> Color(0xFFF1C40F)
+            else -> MaterialTheme.colorScheme.outline
+        },
+        backdrop,
+    )
 }
 
 /** What the dot means, in words. The non-visual half of [presenceDot], and paired with it for that reason. */
@@ -2703,7 +2760,10 @@ private fun presenceLabel(status: String?): String = when (status) {
 @Composable
 private fun PresenceLine(status: String?) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(presenceDot(status)))
+        Box(
+            Modifier.size(8.dp).clip(CircleShape)
+                .background(presenceDot(status, MaterialTheme.colorScheme.background)),
+        )
         Text(presenceLabel(status), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
     }
 }
@@ -2808,7 +2868,12 @@ private fun MemberRosterRow(display: String, username: String, status: String?, 
             }
             if (status == "online" || status == "away") {
                 Box(Modifier.size(12.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(9.dp).clip(CircleShape).background(presenceDot(status)))
+                    // The halo, not the page: this dot is drawn on `surface`, and naming it is what lets the
+                    // shared `presenceDot` solve against the pixel it actually lands on.
+                    Box(
+                        Modifier.size(9.dp).clip(CircleShape)
+                            .background(presenceDot(status, MaterialTheme.colorScheme.surface)),
+                    )
                 }
             }
         }
@@ -2816,7 +2881,15 @@ private fun MemberRosterRow(display: String, username: String, status: String?, 
             Text(display, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("@$username", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(20.dp))
+        // `onSurfaceVariant`, not `outline`: a disclosure chevron is iconography rather than status, so it takes
+        // the pairing the app already uses for a glyph of this weight instead of a solved neutral. `outline` drew
+        // it at 1.1734:1 light and 1.4135:1 dark — an affordance the user could not see.
+        Icon(
+            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+            null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 

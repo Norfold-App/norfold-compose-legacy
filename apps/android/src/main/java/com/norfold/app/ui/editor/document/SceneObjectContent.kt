@@ -503,7 +503,13 @@ private fun DocumentTodoMarker(
 ) {
     val metrics = renderScale.todoMetrics()
     val primary = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
+    // `onSurfaceVariant`, not `outline`. This stroke is the entire unticked state of a checkbox, so WCAG 1.4.11
+    // asks 3:1 of it, and `outline` measured 1.2453:1 on the light page and 1.3256:1 on the dark one — an
+    // unticked to-do that is not there. Unlike the app's other glyphs this one also scales with page zoom: the
+    // stroke is `edge * 0.09` with a 1 px floor, so at small zoom it is a hairline, and a hairline is the worst
+    // place to be spending an invisible colour. `onSurfaceVariant` is what TasksBoardScreen already pairs with a
+    // checkbox glyph, so this is consistency rather than a second answer.
+    val unchecked = MaterialTheme.colorScheme.onSurfaceVariant
     val onPrimary = MaterialTheme.colorScheme.onPrimary
     val interaction = if (editing) {
         Modifier.toggleable(
@@ -537,7 +543,7 @@ private fun DocumentTodoMarker(
                 style = Stroke(width = border * 1.35f, cap = StrokeCap.Round, join = StrokeJoin.Round),
             )
         } else {
-            drawRoundRect(outline, cornerRadius = radius, style = Stroke(width = border))
+            drawRoundRect(unchecked, cornerRadius = radius, style = Stroke(width = border))
         }
     }
 }

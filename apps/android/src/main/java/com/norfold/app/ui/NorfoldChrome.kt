@@ -172,6 +172,54 @@ object NorfoldChrome {
     )
 
     /**
+     * [glyph] raised until it clears 3:1 on [backdrop] — for a small non-text mark that carries meaning.
+     *
+     * The third colour primitive, and the one the substrate was missing. [restingEdge] answers 2.2:1 and
+     * [legibleInk] answers 4.5:1, so a status dot, a tick or a chevron — a *component*, which 1.4.11 holds to
+     * [ChromeGeometry.FOCUS_RING_RATIO] — had no member to call and reached for `outline` instead. On this
+     * palette `outline` measures **1.17:1 on the light page and 1.41:1 on the dark one**, so six such marks
+     * shipped invisible: an unticked multi-select radio, a disclosure chevron, an unticked document to-do, and
+     * three status dots.
+     *
+     * **Why not [legibleInk], which already exists and is stricter.** Because loudness is the whole question
+     * for a dot. On the light page a presence dot's own peers measure `online` 1.98:1, `away` 1.57:1 and
+     * `error` 3.36:1; `onSurfaceVariant` measures 4.7586:1. Routing "offline" through the text ratio would
+     * make the *absent* state the loudest mark in the row — louder than a live recording's red. 3:1 puts it
+     * inside the band its peers occupy while still clearing the standard. The glyphs that are read as
+     * iconography rather than as status — the radio, the chevron, the to-do tick — do take `onSurfaceVariant`,
+     * because there the app already has a pairing to be consistent with.
+     *
+     * **Why the caller passes the coloured branch too, not just the grey one.** The `outline` branch is not the
+     * only one failing. Measured on the light page: `online` #2ECC71 at **1.9804:1**, `away` #F1C40F at
+     * **1.5651:1**, `SemanticColors.signalGreen` #20B26B at **2.5893:1** — so two thirds of a presence row's
+     * states fail 1.4.11, and a fix applied only to "offline" would have left them. Wrapping the whole `when`
+     * fixes every branch at one call: green solves to #25A25A (3.0945), amber to #AA8A0A (3.1166), signal green
+     * to #1DA161 (3.1295), with hue moving at most 0.33° so each stays the colour it was. `error` #EF4D5D
+     * already passes at 3.3596 and is returned untouched.
+     *
+     * **[EditorChromeColors.legible] rather than [EditorChromeColors.settled], and this is the case that
+     * proves the difference.** A floor returns its input when the input already passes; a target searches for
+     * the quietest passing value. In dark mode every one of these colours already passes comfortably —
+     * `online` 9.4157:1, `away` 11.9141:1, `signalGreen` 7.2013:1 — and `settled` would *quieten* them to
+     * #186C3C, #705B07 and #146D41, turning three clear status colours into mud to satisfy a number they had
+     * already cleared. `legible` leaves dark mode entirely alone and acts only where light mode fails. Seeding
+     * from `outline` the two agree exactly, on all fifteen app surfaces, because `outline` starts far below
+     * target — which is why [restingEdge] can use the same solver without the distinction ever showing.
+     *
+     * Solved over every surface the app paints, the derived neutral lands between **3.0142:1** (light
+     * `surfaceDim` #F1F2F6 → #818AB4) and **3.1114:1** (dark #1B253B → #5F7194): 15 of 15, no surface left
+     * needing a second look. `ChromeGeometryTest` pins both ends.
+     */
+    @Composable
+    @ReadOnlyComposable
+    fun legibleGlyph(glyph: Color, backdrop: Color = Color.Unspecified): Color =
+        EditorChromeColors.legible(
+            glyph,
+            resolvedBackdrop(backdrop),
+            ChromeGeometry.FOCUS_RING_RATIO,
+        )
+
+    /**
      * [ink] raised until it clears AA on [backdrop] — for text, not for chrome.
      *
      * The text sibling of [restingEdge] and [focusRing], and it exists because the theme's `on*` tokens are

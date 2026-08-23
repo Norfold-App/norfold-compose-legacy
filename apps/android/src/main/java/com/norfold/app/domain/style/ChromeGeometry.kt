@@ -203,6 +203,15 @@ object ChromeGeometry {
      * `collectIsFocusedAsState` outside text-commit bookkeeping, and 58 hand-rolled `.clickable` chrome
      * sites that therefore show nothing at all when focused. The 559 Material buttons get a ring from the
      * library; the 58 do not.
+     *
+     * **It has a second caller, and deliberately not a second name.** A meaningful non-text *mark* — a status
+     * dot, an unticked box, a disclosure chevron — is held to 3:1 by the same clause of the same standard, so
+     * [com.norfold.app.ui.NorfoldChrome.legibleGlyph] reads this constant rather than declaring its own. That
+     * is the opposite call to the one [GUIDE_RATIO] makes against [RESTING_EDGE_RATIO], and for a reason worth
+     * stating: those two share a number by *coincidence of judgement* and would move apart if either judgement
+     * moved, so they are named separately. These two share a number because they cite the same sentence of WCAG
+     * 1.4.11. If that sentence ever changes they move together, and a second constant would let one of them be
+     * missed.
      */
     const val FOCUS_RING_RATIO = ContrastAnalysis.UI_COMPONENT
 
