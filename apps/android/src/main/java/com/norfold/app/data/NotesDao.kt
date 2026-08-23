@@ -370,6 +370,20 @@ interface NotesDao {
     @Query("SELECT * FROM calendar_events ORDER BY startAt ASC")
     suspend fun allCalendarEvents(): List<CalendarEventEntity>
 
+    /**
+     * Every event this workspace holds from one provider.
+     *
+     * The whole set rather than a lookup per incoming event, because a round has to be reconciled
+     * against it as a whole: a full sync deletes by absence, which no per-event query can see.
+     *
+     * Scoped by source as well as by workspace because the two providers mint external ids
+     * independently and nothing stops them colliding — a set matched on externalId alone would let a
+     * Google round overwrite an Outlook event. Scoped by workspace because an event imported into one
+     * workspace is not the same row as the same event imported into another.
+     */
+    @Query("SELECT * FROM calendar_events WHERE workspaceId = :ws AND source = :source")
+    suspend fun calendarEventsBySource(ws: Long, source: String): List<CalendarEventEntity>
+
     @Query("SELECT COUNT(*) FROM sync_outbox WHERE workspaceId = :ws AND state IN ('Pending', 'Failed')")
     fun observePendingSyncCount(ws: Long): Flow<Int>
 

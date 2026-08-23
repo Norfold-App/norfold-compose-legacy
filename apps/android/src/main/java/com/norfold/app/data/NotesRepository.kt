@@ -1,6 +1,8 @@
 package com.norfold.app.data
 
 import android.os.Build
+import com.norfold.app.cloud.CalendarProvider
+import com.norfold.app.cloud.CalendarSyncResult
 import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.cloud.RemoteWorkspaceObject
 import com.norfold.app.domain.AppSettings
@@ -55,6 +57,8 @@ import com.norfold.app.domain.HeadingBlock
 import com.norfold.app.domain.InlineText
 import com.norfold.app.domain.CalendarEventItem
 import com.norfold.app.domain.CalendarEventSource
+import com.norfold.app.domain.CalendarImportOutcome
+import com.norfold.app.domain.CalendarImportPlan
 import com.norfold.app.domain.Tag
 import com.norfold.app.domain.TaskBoardItem
 import com.norfold.app.domain.TaskColumnItem
@@ -2676,7 +2680,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         val entity = CalendarEventEntity(
                 workspaceId = activeWs(),
                 syncId = UUID.randomUUID().toString(),
-                title = title.trim().ifBlank { "Untitled event" },
+                title = CalendarImportPlan.storedTitle(title),
                 description = summary,
                 startAt = startAt,
                 endAt = endAt,
@@ -2781,6 +2785,103 @@ class DocsRepository(private val database: NorfoldDatabase) {
             dao.deleteCalendarEvent(event.id)
         }
         recordActivity(WorkspaceActivityType.Updated, "You", "Deleted calendar event", event.title)
+    }
+
+    /**
+     * Applies one round of imported calendar changes to the active workspace.
+     *
+     * All this does is execute — [CalendarImportPlan.plan] decides, and it is tested without a
+     * device because the decision is what goes wrong. Two properties of that split are load-bearing
+     * here:
+     *
+     * - the stored set is read narrowed to *this* provider's imports, because the planner deletes by
+     *   absence on a full round and cannot tell it was handed a wider set. A round from Google given
+     *   every event in the workspace would delete the owner's own appointments;
+     * - the existing single-event writes are reused rather than a bulk upsert added. Each of them
+     *   maintains a document row, a workspace-object graph entry and an activity record, and a
+     *   calendar row written without those is an event that exists in the calendar and nowhere else
+     *   in the app — invisible to search, to the object graph and to the sidebar.
+     *
+     * The activity log gets one line for the round rather than one per event, because a first import
+     * of a year's calendar would otherwise bury every other thing the owner did that day.
+     */
+    suspend fun importCalendarEvents(result: CalendarSyncResult): CalendarImportOutcome {
+        val source = when (result.provider) {
+            CalendarProvider.Google -> CalendarEventSource.Google
+            CalendarProvider.Outlook -> CalendarEventSource.Outlook
+        }
+        val ws = activeWs()
+        val stored = dao.calendarEventsBySource(ws, source.name)
+        val plan = CalendarImportPlan.plan(
+            incoming = result.events,
+            // A row with no external id cannot be matched by a later round, so it is excluded from
+            // reconciliation rather than offered as a deletion candidate: a locally created event that
+            // somehow carries this source is not the provider's to remove.
+            stored = stored.mapNotNull { row ->
+                val externalId = row.externalId?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                CalendarImportPlan.StoredCalendarEvent(
+                    localId = row.id,
+                    externalId = externalId,
+                    title = row.title,
+                    description = row.description,
+                    startAt = row.startAt,
+                    endAt = row.endAt,
+                    allDay = row.allDay,
+                )
+            },
+            fullSync = result.fullSync,
+            // How a description becomes the string the row holds. createCalendarEvent stores the
+            // codec's projection rather than the provider's text, so comparing the text itself would
+            // report an update on every round for any description markdown touches at all.
+            summarise = { description -> MarkdownBlockCodec.import(description).plainText() },
+        )
+        if (plan.isEmpty) return CalendarImportOutcome(0, 0, 0, plan.unchanged)
+
+        val byId = stored.associateBy { it.id }
+        plan.insertions.forEach { insertion ->
+            createCalendarEvent(
+                title = insertion.title,
+                startAt = insertion.startAt,
+                endAt = insertion.endAt,
+                description = insertion.description,
+                allDay = insertion.allDay,
+                source = source,
+                externalId = insertion.externalId,
+            )
+        }
+        plan.updates.forEach { update ->
+            // The stored row supplies colour, syncId and createdAt: the provider has no opinion on
+            // any of them, and rebuilding the item from the change alone would reset a colour the
+            // owner chose on every round that touched the event. The title arrives already
+            // normalised — updateCalendarEvent does not substitute a placeholder of its own, which is
+            // why the planner owns that decision.
+            val existing = byId[update.localId] ?: return@forEach
+            updateCalendarEvent(
+                existing.toDomain().copy(
+                    title = update.title,
+                    description = update.description,
+                    startAt = update.startAt,
+                    endAt = update.endAt,
+                    allDay = update.allDay,
+                ),
+            )
+        }
+        plan.deletions.forEach { localId ->
+            byId[localId]?.let { deleteCalendarEvent(it.toDomain()) }
+        }
+        val outcome = CalendarImportOutcome(
+            inserted = plan.insertions.size,
+            updated = plan.updates.size,
+            deleted = plan.deletions.size,
+            unchanged = plan.unchanged,
+        )
+        recordActivity(
+            WorkspaceActivityType.Updated,
+            "You",
+            "Synced ${result.provider.label}",
+            outcome.describe(),
+        )
+        return outcome
     }
 
     suspend fun setPinned(note: Note) = dao.setPinned(note.id, !note.pinned, System.currentTimeMillis())

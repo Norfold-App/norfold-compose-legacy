@@ -24,6 +24,7 @@ class MainActivity : FragmentActivity() {
         docsViewModel = ViewModelProvider(this)[DocsViewModel::class.java]
         handleAuthDeepLink(intent)
         docsViewModel.handleTelegramReturn(intent)
+        docsViewModel.handleCalendarReturn(intent)
         docsViewModel.handleNotificationIntent(intent)
         setContent { NorfoldRoot(docsViewModel) }
     }
@@ -59,6 +60,7 @@ class MainActivity : FragmentActivity() {
         handleAuthDeepLink(intent)
         if (::docsViewModel.isInitialized) {
             docsViewModel.handleTelegramReturn(intent)
+            docsViewModel.handleCalendarReturn(intent)
             docsViewModel.handleNotificationIntent(intent)
         }
     }

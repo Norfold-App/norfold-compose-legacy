@@ -114,6 +114,9 @@ import com.norfold.app.editor.EditorRoute
 import com.norfold.app.editor.flow.FlowSessionRegistry
 import com.norfold.app.editor.document.DocumentSessionRegistry
 import com.norfold.app.branding.palette
+import com.norfold.app.cloud.CalendarAccessRevokedException
+import com.norfold.app.cloud.CalendarConnection
+import com.norfold.app.cloud.CalendarProvider
 import com.norfold.app.cloud.MutualChatContacts
 import com.norfold.app.cloud.NorfoldPresence
 import com.norfold.app.cloud.NorfoldSocial
@@ -516,6 +519,15 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val _phoneVerificationInProgress = MutableStateFlow(false)
     val phoneVerificationInProgress: StateFlow<Boolean> = _phoneVerificationInProgress.asStateFlow()
     private var pendingVerificationId: String? = null
+    // Calendar integration. connectedCalendars is the authoritative server list; the return deep link
+    // never marks anything connected, only prompts a fresh read — same rule as the phone above.
+    // calendarBusy names the provider a round is running for, so its own row can show progress
+    // without disabling the other one.
+    private val _connectedCalendars = MutableStateFlow<List<CalendarConnection>>(emptyList())
+    val connectedCalendars: StateFlow<List<CalendarConnection>> = _connectedCalendars.asStateFlow()
+    private val _calendarBusy = MutableStateFlow<CalendarProvider?>(null)
+    val calendarBusy: StateFlow<CalendarProvider?> = _calendarBusy.asStateFlow()
+    private var calendarAuthorizationPending: CalendarProvider? = null
     private val _accountCoordinatorState = MutableStateFlow<AccountCoordinatorState>(AccountCoordinatorState.LocalInitializing)
     val accountCoordinatorState: StateFlow<AccountCoordinatorState> = _accountCoordinatorState.asStateFlow()
     private val _driveBackups = MutableStateFlow<List<GoogleDriveBackupManifest>>(emptyList())
@@ -7154,6 +7166,128 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     fun handleTelegramReturn(intent: Intent) {
         val data = intent.data ?: return
         if (data.host == "verify" && data.path == "/telegram") refreshPhoneVerification()
+    }
+
+    /**
+     * Start connecting a calendar: ask the server for the provider URL and open it.
+     *
+     * The URL is built and signed server-side, not here — an app able to sign its own OAuth `state`
+     * could name any account as the one to attach the calendar to. So this only opens what it is
+     * given, and learns the outcome later from [refreshCalendarConnections].
+     */
+    fun connectCalendar(provider: CalendarProvider) {
+        if (!NorfoldSupabase.isSignedIn()) {
+            emitError("Sign in to Norfold Cloud before connecting a calendar.")
+            return
+        }
+        viewModelScope.launch {
+            _calendarBusy.value = provider
+            runCatching { NorfoldSupabase.startCalendarAuthorization(provider) }
+                .onSuccess { url ->
+                    // Remembered so the return read can say whether the connection took, rather than
+                    // silently refreshing a list that looks the same as before.
+                    calendarAuthorizationPending = provider
+                    runCatching {
+                        app.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }.onFailure {
+                        calendarAuthorizationPending = null
+                        emitError("Couldn't open the sign-in page. Check that a browser is installed.")
+                    }
+                }
+                .onFailure { emitError("Couldn't start the ${provider.label} connection. Please try again.") }
+            _calendarBusy.value = null
+        }
+    }
+
+    /**
+     * Re-read which calendars the server considers connected.
+     *
+     * This — not the deep link — is what flips a row to connected, for the same reason
+     * [refreshPhoneVerification] exists: the link is an untrusted string anything on the device can
+     * send, while the row is behind RLS.
+     */
+    fun refreshCalendarConnections() {
+        if (!NorfoldSupabase.isSignedIn()) {
+            _connectedCalendars.value = emptyList()
+            return
+        }
+        viewModelScope.launch {
+            runCatching { NorfoldSupabase.calendarConnections() }.onSuccess { connections ->
+                _connectedCalendars.value = connections
+                val pending = calendarAuthorizationPending ?: return@onSuccess
+                calendarAuthorizationPending = null
+                if (connections.any { it.provider == pending }) {
+                    showMessage("${pending.label} connected")
+                    // Straight into the first round: a connection that shows as connected but imports
+                    // nothing until the owner finds a Sync button reads as a failure.
+                    syncCalendar(pending)
+                } else {
+                    // The owner may simply have declined at the provider, so this is not an error —
+                    // but saying nothing would leave a row that never changed and no reason why.
+                    showMessage("${pending.label} was not connected")
+                }
+            }
+        }
+    }
+
+    /** Pull one round for a connected calendar and apply it to the active workspace. */
+    fun syncCalendar(provider: CalendarProvider) {
+        if (!NorfoldSupabase.isSignedIn()) return
+        viewModelScope.launch {
+            _calendarBusy.value = provider
+            runCatching {
+                val result = NorfoldSupabase.syncCalendar(provider)
+                repository.importCalendarEvents(result)
+            }
+                .onSuccess { outcome -> showMessage("${provider.label}: ${outcome.describe()}") }
+                .onFailure { error ->
+                    if (error is CalendarAccessRevokedException) {
+                        // The token will never work again, so the connection is dropped rather than
+                        // left to retry forever. Imported events stay — they are the owner's copy.
+                        runCatching { NorfoldSupabase.disconnectCalendar(provider) }
+                        _connectedCalendars.value = _connectedCalendars.value.filterNot { it.provider == provider }
+                        emitError("${provider.label} access was revoked. Reconnect to keep importing.")
+                    } else {
+                        emitError("Couldn't sync ${provider.label}. Please try again.")
+                    }
+                }
+            _calendarBusy.value = null
+            // The cursor moved, so the row's "last synced" is stale even on a failure that wrote one.
+            runCatching { NorfoldSupabase.calendarConnections() }.onSuccess { _connectedCalendars.value = it }
+        }
+    }
+
+    /**
+     * Disconnect a calendar, leaving everything it already imported in place.
+     *
+     * Deliberate: the events are the owner's copy of their own appointments, and deleting them on
+     * disconnect would turn "stop importing" into "erase my calendar". Removing them is a separate
+     * act the owner can take per event.
+     */
+    fun disconnectCalendar(provider: CalendarProvider) {
+        if (!NorfoldSupabase.isSignedIn()) return
+        viewModelScope.launch {
+            _calendarBusy.value = provider
+            runCatching { NorfoldSupabase.disconnectCalendar(provider) }
+                .onSuccess {
+                    _connectedCalendars.value = _connectedCalendars.value.filterNot { it.provider == provider }
+                    showMessage("${provider.label} disconnected. Imported events were kept.")
+                }
+                .onFailure { emitError("Couldn't disconnect ${provider.label}. Please try again.") }
+            _calendarBusy.value = null
+        }
+    }
+
+    /**
+     * Handle the calendar return deep link (norfold://integrations/calendar). Untrusted in exactly the
+     * way [handleTelegramReturn] is: it carries a status the app does not read, and only prompts the
+     * server read that decides.
+     */
+    fun handleCalendarReturn(intent: Intent) {
+        val data = intent.data ?: return
+        if (data.host == "integrations" && data.path == "/calendar") refreshCalendarConnections()
     }
 
 

@@ -36,15 +36,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Registered but not yet handled. supabase/functions/calendar-callback redirects
-                 here with ?status=connected or ?status=error once a provider grants offline
-                 access, and it stores the encrypted refresh token before it does. What does not
-                 exist is the other half: no function issues the signed `state` that callback
-                 verifies, and no screen in the app starts the authorization. So this filter
-                 opens the app to its launch state and drops the result. It stays because the
-                 deployed function already redirects to exactly this URI — removing it would
-                 hand the user a "no app can open this link" dialog instead of a silent
-                 no-op — and because the filter is the record of the contract the app owes. -->
+            <!-- The calendar OAuth return. supabase/functions/calendar-callback redirects here with
+                 ?status=connected or ?status=error once a provider grants offline access, having
+                 stored the encrypted refresh token first. MainActivity hands the intent to
+                 DocsViewModel.handleCalendarReturn, which reads neither the status nor anything else
+                 in the URI: a deep link is a string any app on the device can send, so the only
+                 trustworthy answer comes from re-reading integration_accounts through RLS. The URI
+                 is therefore a prompt to go and look, not a statement of what happened. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

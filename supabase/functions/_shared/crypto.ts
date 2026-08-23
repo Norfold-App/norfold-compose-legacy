@@ -18,6 +18,30 @@ function bytesToBase64(value: Uint8Array): string {
   return btoa(binary);
 }
 
+function bytesToBase64Url(value: Uint8Array): string {
+  return bytesToBase64(value).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+/**
+ * Signs an OAuth `state` for [verifySignedState] to read back.
+ *
+ * The two halves have to agree on one detail that is easy to get wrong and impossible to notice
+ * from either side alone: the signature covers the base64url *text* of the payload, not the JSON
+ * bytes it encodes. Signing the JSON instead produces a state that looks well-formed, travels
+ * through the provider intact, and fails verification on the way back — where the only symptom is
+ * a redirect to `status=error`, because the callback deliberately keeps its reason in the log.
+ *
+ * `expiresAt` is not added here. It belongs to the payload type the caller owns, and
+ * [verifySignedState] rejects on it only if it is present, so inventing a default would silently
+ * mint a state with a lifetime the caller never asked for.
+ */
+export async function signState<T>(payload: T, secret: string): Promise<string> {
+  const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(encoded));
+  return `${encoded}.${bytesToBase64Url(new Uint8Array(signature))}`;
+}
+
 export async function verifySignedState<T>(state: string, secret: string): Promise<T> {
   const [payload, signature] = state.split(".");
   if (!payload || !signature) throw new Error("Invalid authorization state");

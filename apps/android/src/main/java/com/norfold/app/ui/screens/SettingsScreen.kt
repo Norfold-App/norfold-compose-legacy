@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.CloudOff
@@ -150,6 +151,7 @@ import com.norfold.app.domain.SyncFolderRequest
 import com.norfold.app.domain.SyncProvider
 import com.norfold.app.domain.ThemeMode
 import com.norfold.app.domain.ThemeProfile
+import com.norfold.app.cloud.CalendarProvider
 import com.norfold.app.cloud.ExternalServiceConfig
 import com.norfold.app.data.BiometricVaultKeyStore
 import com.norfold.app.data.TaskReminderScheduler
@@ -199,6 +201,7 @@ private enum class SettingsSection(val title: String, val subtitle: String, val 
     Editor("Editor & Markdown", "Line width, syntax and writing behavior", Icons.Outlined.Code),
     Security("Security & Vault", "Vault, biometrics and screenshots", Icons.Outlined.Security),
     Sync("Account & Sync", "Norfold Cloud account and sync status", Icons.Outlined.CloudSync),
+    Calendars("Connected Calendars", "Import events from Google or Outlook", Icons.Outlined.CalendarMonth),
     Backup("Backup & Import", "Encrypted exports, restore and Markdown import", Icons.Outlined.Backup),
     App("App Info", "Version, identity and build details", Icons.Outlined.Settings),
     SyncEngine("Sync Settings", "Provider status, Sync now and background behavior", Icons.Outlined.CloudSync),
@@ -218,6 +221,7 @@ private val RootSettingsSections = setOf(
     SettingsSection.Editor,
     SettingsSection.Security,
     SettingsSection.Sync,
+    SettingsSection.Calendars,
     SettingsSection.Backup,
     SettingsSection.App,
     SettingsSection.Diagnostics,
@@ -327,6 +331,7 @@ fun SettingsScreen(
                     SettingsSection.Editor -> EditorSettings(renderedState, viewModel)
                     SettingsSection.Security -> SecuritySettings(state, viewModel)
                     SettingsSection.Sync -> SyncSettings(state, viewModel, onPickSyncFolder, onConnectGoogleDrive, onDisconnectGoogleDrive, onCloudGoogleSignIn) { section = it }
+                    SettingsSection.Calendars -> CalendarSettings(viewModel)
                     SettingsSection.Backup -> BackupImportSettings(state, viewModel, onPickMarkdown, onPickBackupFolder, onPickBackupFile)
                     SettingsSection.SyncEngine -> SyncEngineSettings(state, viewModel) { section = SettingsSection.Sync }
                     SettingsSection.Conflicts -> ConflictSettings(state, viewModel)
@@ -359,7 +364,7 @@ private fun SettingsIndex(onOpen: (SettingsSection) -> Unit) {
                 SettingsSectionGroup("Account & Workspace", account, onOpen)
                 SettingsSectionGroup("Privacy & Security", privacy, onOpen)
             }
-            SettingsSectionGroup("Backup & Data", listOf(SettingsSection.Sync, SettingsSection.Backup), onOpen)
+            SettingsSectionGroup("Backup & Data", listOf(SettingsSection.Sync, SettingsSection.Calendars, SettingsSection.Backup), onOpen)
             SettingsSectionGroup("About", listOf(SettingsSection.App, SettingsSection.Diagnostics), onOpen)
         }
     }
@@ -2229,6 +2234,126 @@ private fun ManualSyncCard(
         ElevatedButton(modifier = Modifier.fillMaxWidth(), enabled = syncSecret.isNotBlank() && !state.syncing, onClick = { onPickSyncFolder(SyncFolderRequest(syncProvider, SyncFolderAction.RestoreChain, syncSecret, syncUsername, syncPublicName, syncDeviceName)) }) { SyncButtonContent("Restore manual chain", state.syncing) }
     }
     ElevatedButton(modifier = Modifier.fillMaxWidth(), onClick = { viewModel.go(Destination.ConflictReview) }) { Icon(Icons.Outlined.Difference, null); Text("Open conflicts") }
+}
+
+/**
+ * Connected calendars: connect, sync, disconnect.
+ *
+ * Everything shown here comes from [DocsViewModel.connectedCalendars], which is a read of
+ * `integration_accounts` through RLS — never from the OAuth return link. That is deliberate and it is
+ * the same rule the phone-verification row follows: a `norfold://` link is a string any app on the
+ * device can send, so it can only ever be a prompt to go and look.
+ *
+ * A provider with no row is offered a connect action; a provider with one is offered sync and
+ * disconnect. There is no third state to show, because the server drops a revoked row from the read.
+ *
+ * Disconnecting keeps the events already imported. It is stated on the row rather than only in a
+ * dialog, because the opposite guess — that disconnecting erases the calendar — is the one that would
+ * stop someone from disconnecting at all.
+ */
+@Composable
+private fun CalendarSettings(viewModel: DocsViewModel) {
+    val connections by viewModel.connectedCalendars.collectAsState()
+    val busy by viewModel.calendarBusy.collectAsState()
+    val accountEmail by viewModel.cloudAccountEmail.collectAsState()
+    var confirmDisconnect by remember { mutableStateOf<CalendarProvider?>(null) }
+    // Asked on entry, not cached from the last visit: the owner can connect a calendar on the web, or
+    // revoke Norfold's access at the provider, and neither tells the app anything.
+    LaunchedEffect(accountEmail) { viewModel.refreshCalendarConnections() }
+
+    confirmDisconnect?.let { provider ->
+        NorfoldDialog(
+            onDismissRequest = { confirmDisconnect = null },
+            title = { Text("Disconnect ${provider.label}?") },
+            text = {
+                Text(
+                    "Norfold stops importing new events and forgets the stored access. Events already " +
+                        "imported stay in your calendar — they are your copy, and removing them is a " +
+                        "separate choice you can make per event.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.disconnectCalendar(provider); confirmDisconnect = null }) {
+                    Text("Disconnect", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDisconnect = null }) { Text("Keep connected") } },
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        SettingsGroup(header = "Calendars") {
+            CalendarProvider.entries.forEachIndexed { index, provider ->
+                val connection = connections.firstOrNull { it.provider == provider }
+                val working = busy == provider
+                SettingsRow(
+                    provider.label,
+                    subtitle = when {
+                        accountEmail == null -> "Sign in to Norfold Cloud first"
+                        working -> "Working…"
+                        connection == null -> "Import your events into this workspace"
+                        connection.hasCursor -> "Connected · last synced ${calendarSyncedAgo(connection.updatedAt)}"
+                        // A row exists but no round has completed, so there is no time to report and
+                        // saying "synced" would be wrong.
+                        else -> "Connected · not synced yet"
+                    },
+                    icon = Icons.Outlined.CalendarMonth,
+                    trailing = {
+                        if (working) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        else RowValue(if (connection != null) "Connected" else "Connect", accent = connection != null)
+                    },
+                    onClick = when {
+                        accountEmail == null || working -> null
+                        connection == null -> ({ viewModel.connectCalendar(provider) })
+                        else -> ({ viewModel.syncCalendar(provider) })
+                    },
+                )
+                if (connection != null) {
+                    RowDivider()
+                    SettingsRow(
+                        "Disconnect ${provider.label}",
+                        subtitle = "Stops importing. Imported events are kept.",
+                        icon = Icons.Outlined.CloudOff,
+                        iconTint = MaterialTheme.colorScheme.error,
+                        titleColor = MaterialTheme.colorScheme.error,
+                        onClick = if (working) null else ({ confirmDisconnect = provider }),
+                    )
+                }
+                if (index < CalendarProvider.entries.lastIndex) RowDivider()
+            }
+        }
+        SettingsGroup(header = "What is imported") {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Read-only, one way.", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Norfold reads your events and writes nothing back to the provider. Events you " +
+                        "create in Norfold stay in Norfold. An imported event that is later changed or " +
+                        "deleted at the provider is changed or removed here on the next sync — which is " +
+                        "why edits to an imported event are best made where it came from.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * How long ago the server last touched a calendar's row, for the connected subtitle.
+ *
+ * Parsed rather than passed as millis because the value is a Postgres `timestamptz` the app never
+ * needs in any other form. An unparseable value reads as "recently" rather than showing the raw
+ * string: the row's existence is the fact worth stating, and its exact age is not.
+ */
+private fun calendarSyncedAgo(iso: String): String {
+    val instant = runCatching { java.time.Instant.parse(iso) }
+        .recoverCatching { java.time.OffsetDateTime.parse(iso).toInstant() }
+        .getOrNull() ?: return "recently"
+    // "just now" is already a complete phrase; the other forms are bare durations.
+    return relativeSettingsTime(instant.toEpochMilli()).let { if (it == "just now") it else "$it ago" }
 }
 
 // ---------- Mockup 13: Sync Settings ----------

@@ -40,6 +40,32 @@ jobs:
           name: norfold-web-preview
           path: apps/web/dist
 
+  functions:
+    name: Supabase edge functions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # The functions are the half of several features that no Gradle task sees. A broken import or a
+      # type error here fails at request time, in production, with the caller getting the deliberate
+      # generic error every function returns — so the reason is in a log nobody is watching.
+      - name: Type-check edge functions
+        run: deno check supabase/functions/*/index.ts supabase/functions/_shared/*.ts
+
+      # The OAuth `state` signing convention is the one contract neither end can observe: the
+      # signature covers the base64url text, not the JSON bytes, and a signer that got that wrong
+      # produces a state that survives the provider round trip and fails only on return. These tests
+      # are the whole check on it. No --permit-no-files: a run that matched nothing has to fail here,
+      # because the failure it would otherwise hide is this step silently testing nothing at all.
+      - name: Test shared function helpers
+        run: deno test supabase/functions/_shared/
+
   android:
     name: Android debug APK
     runs-on: ubuntu-latest

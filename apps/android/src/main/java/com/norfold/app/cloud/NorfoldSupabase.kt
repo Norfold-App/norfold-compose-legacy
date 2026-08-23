@@ -2,6 +2,7 @@ package com.norfold.app.cloud
 
 import io.github.jan.supabase.SupabaseClient
 import com.norfold.app.domain.RemoteEditorResetOutcome
+import com.norfold.app.domain.SyncedCalendarChange
 import com.norfold.app.domain.classifyRemoteEditorResetFailure
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.OtpType
@@ -40,6 +41,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
@@ -50,6 +52,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.security.MessageDigest
 import java.util.UUID
@@ -133,6 +136,53 @@ data class TelegramVerificationStart(
     val telegramUrl: String,
     val expiresAt: String,
 )
+
+/**
+ * A calendar provider Norfold can import from. The wire names match the `integration_provider`
+ * Postgres enum exactly, because they are the primary key component the server upserts on.
+ */
+enum class CalendarProvider(val wireName: String, val label: String) {
+    Google("google_calendar", "Google Calendar"),
+    Outlook("outlook_calendar", "Outlook Calendar"),
+    ;
+
+    companion object {
+        fun fromWireName(value: String?): CalendarProvider? = entries.firstOrNull { it.wireName == value }
+    }
+}
+
+/** What a connected calendar looks like to the app: which provider, and whether it has ever synced. */
+data class CalendarConnection(
+    val provider: CalendarProvider,
+    val hasCursor: Boolean,
+    val updatedAt: String,
+)
+
+/**
+ * The result of one sync round.
+ *
+ * [fullSync] matters to the caller rather than being diagnostic: on an incremental round the app
+ * only hears about events that changed, so an event missing from [events] means "unchanged". On a
+ * full round the same absence means "no longer exists", and the app has to reconcile deletions it
+ * will never be told about explicitly.
+ *
+ * [events] carries the domain's own [SyncedCalendarChange] rather than a cloud-layer twin, so the
+ * shape the parser fills and the shape the planner reads cannot drift apart.
+ */
+data class CalendarSyncResult(
+    val provider: CalendarProvider,
+    val fullSync: Boolean,
+    val events: List<SyncedCalendarChange>,
+)
+
+/**
+ * Raised when the provider has revoked Norfold's access — the owner disconnected it on their side,
+ * or changed their password. Distinguished from every other failure because it is the one the app
+ * must act on by dropping the connection: a refresh token rejected with `invalid_grant` will never
+ * work again, so retrying is a loop that cannot recover.
+ */
+class CalendarAccessRevokedException(provider: CalendarProvider) :
+    IllegalStateException("${provider.label} access was revoked")
 
 @Serializable
 data class DocumentPresenceState(
@@ -874,6 +924,139 @@ object NorfoldSupabase {
             .decodeList<JsonObject>()
             .firstOrNull()
             ?.get("phone_e164")?.jsonPrimitive?.contentOrNull
+    }
+
+    /**
+     * Starts a calendar connection and returns the provider URL to open in a browser.
+     *
+     * The URL is built server-side rather than here, and the reason is the `state` parameter: it is
+     * signed with a function secret so that the user id the callback stores the token against comes
+     * from a validated JWT. An app that could sign its own state could name any account.
+     *
+     * The returned URL is opened, the provider redirects to `calendar-callback`, and that stores the
+     * encrypted refresh token and redirects to `norfold://integrations/calendar`. The app is not
+     * told the outcome by the link — it re-reads [calendarConnections], for the same reason
+     * [telegramVerificationStatus] exists.
+     */
+    suspend fun startCalendarAuthorization(provider: CalendarProvider): String {
+        ExternalServiceConfig.requireSupabase()
+        require(isSignedIn()) { "Sign in to Norfold Cloud before connecting a calendar." }
+        val response = client.functions.invoke(
+            function = "calendar-authorize",
+            body = buildJsonObject { put("provider", provider.wireName) },
+        )
+        val payload = responseJson.parseToJsonElement(response.bodyAsText()).jsonObject
+        return payload["authorizationUrl"]?.jsonPrimitive?.contentOrNull
+            ?: error(payload["error"]?.jsonPrimitive?.contentOrNull ?: "Could not start the calendar connection.")
+    }
+
+    /**
+     * The calendars currently connected to this account.
+     *
+     * Read directly through RLS (`integrations_self_all` is self-only) rather than through a
+     * function, because there is nothing to decide: the row either exists or it does not. Revoked
+     * rows are dropped so a disconnected calendar stops reporting as connected.
+     */
+    suspend fun calendarConnections(): List<CalendarConnection> {
+        ExternalServiceConfig.requireSupabase()
+        if (!isSignedIn()) return emptyList()
+        return client.postgrest["integration_accounts"]
+            .select(Columns.raw("provider, cursor, revoked_at, updated_at"))
+            .decodeList<JsonObject>()
+            // Revoked rows are excluded here rather than in the query, matching how the roster read
+            // handles soft deletion: it avoids depending on a server-side IS NULL filter signature.
+            // An unset column arrives as JsonNull, whose `contentOrNull` is null — reading it as a
+            // primitive is safe, unwrapping it with `!!` would not be.
+            .filter { (it["revoked_at"] as? JsonPrimitive)?.contentOrNull.isNullOrBlank() }
+            .mapNotNull { row ->
+                val provider = CalendarProvider.fromWireName(row["provider"]?.jsonPrimitive?.contentOrNull)
+                    ?: return@mapNotNull null
+                CalendarConnection(
+                    provider = provider,
+                    // A cursor exists only after a completed round, so this is "has synced at least
+                    // once" without needing a second column to track it.
+                    hasCursor = !(row["cursor"] as? JsonPrimitive)?.contentOrNull.isNullOrBlank(),
+                    updatedAt = row["updated_at"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                )
+            }
+    }
+
+    /**
+     * Pulls one round of changes for a connected calendar.
+     *
+     * The provider conversation happens in the function, not here, and not for tidiness: the refresh
+     * token is encrypted with a key that exists only in the function environment. A device that
+     * could decrypt it would be a device holding standing access to the owner's entire calendar.
+     *
+     * Throws [CalendarAccessRevokedException] when the provider has rejected the stored token for
+     * good, so the caller can drop the connection instead of retrying forever.
+     */
+    suspend fun syncCalendar(provider: CalendarProvider): CalendarSyncResult {
+        ExternalServiceConfig.requireSupabase()
+        require(isSignedIn()) { "Sign in to Norfold Cloud before syncing a calendar." }
+        val response = client.functions.invoke(
+            function = "calendar-sync",
+            body = buildJsonObject { put("provider", provider.wireName) },
+        )
+        val payload = responseJson.parseToJsonElement(response.bodyAsText()).jsonObject
+        val events = payload["events"]?.jsonArray
+        if (events == null) {
+            if (payload["error"]?.jsonPrimitive?.contentOrNull == "revoked") throw CalendarAccessRevokedException(provider)
+            error(payload["error"]?.jsonPrimitive?.contentOrNull ?: "Could not sync ${provider.label}.")
+        }
+        return CalendarSyncResult(
+            provider = provider,
+            fullSync = payload["fullSync"]?.jsonPrimitive?.booleanOrNull ?: false,
+            events = events.mapNotNull { element ->
+                val event = element.jsonObject
+                val externalId = event["externalId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val deleted = event["deleted"]?.jsonPrimitive?.booleanOrNull ?: false
+                val startAt = event["startAt"]?.jsonPrimitive?.longOrNull ?: 0L
+                val endAt = event["endAt"]?.jsonPrimitive?.longOrNull ?: startAt
+                // A live event with no start is not importable — it would land at the epoch and
+                // appear in January 1970. A deletion legitimately has no times at all.
+                if (!deleted && startAt <= 0L) return@mapNotNull null
+                SyncedCalendarChange(
+                    externalId = externalId,
+                    title = event["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    description = event["description"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    startAt = startAt,
+                    // The server already clamps an exclusive all-day end; this only guards against a
+                    // reversed pair, which createCalendarEvent rejects outright.
+                    endAt = if (endAt < startAt) startAt else endAt,
+                    allDay = event["allDay"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    deleted = deleted,
+                )
+            },
+        )
+    }
+
+    /**
+     * Marks a calendar connection revoked.
+     *
+     * A soft revoke rather than a delete: `integration_accounts` is the row the callback upserts on
+     * `(user_id, provider, provider_subject)`, and `revoked_at` is the column both this and the
+     * server already read. Deleting instead would lose the provider_subject, so reconnecting the
+     * same calendar would create a second row rather than reusing the first. The cursor is cleared
+     * so a later reconnect starts from a full sync instead of resuming a token the provider has
+     * already forgotten.
+     */
+    suspend fun disconnectCalendar(provider: CalendarProvider) {
+        ExternalServiceConfig.requireSupabase()
+        require(isSignedIn()) { "Sign in to Norfold Cloud first." }
+        // One reading of the clock, so the two timestamps cannot land a millisecond apart and make
+        // the row look as though it was touched after it was revoked.
+        val now = java.time.Instant.now().toString()
+        client.postgrest["integration_accounts"].update(
+            buildJsonObject {
+                put("revoked_at", now)
+                put("cursor", JsonNull)
+                put("updated_at", now)
+            },
+        ) {
+            filter { eq("provider", provider.wireName) }
+        }
     }
 
     private fun sha256(value: String): String = sha256Bytes(value.toByteArray(Charsets.UTF_8))
