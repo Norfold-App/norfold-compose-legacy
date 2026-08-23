@@ -161,6 +161,38 @@ object ChromeGeometry {
     const val RESTING_EDGE_RATIO = 2.2
 
     /**
+     * What a *margin guide, column divider or axis rule* has to measure. The same number as
+     * [RESTING_EDGE_RATIO], and deliberately a separate name.
+     *
+     * A resting edge and a guide are asking for the same loudness for different reasons, and the reasons are
+     * what a future change will act on. An edge states where an object ends; a guide states where a *rule*
+     * lies — a margin, a column boundary, a chart's value axis. If one of the two is ever re-tuned it will be
+     * because that argument moved, not because 2.2 stopped being a good number, and a single shared constant
+     * would force both to move together or force a caller to write a literal.
+     *
+     * The Document host held this privately as `GUIDE_RATIO` while the chart host had no name for it at all
+     * and drew its axis rules in the grid colour. Naming it here is what stops the third host from picking a
+     * fourth number, which is the same argument [RESTING_EDGE_RATIO] makes.
+     */
+    const val GUIDE_RATIO = 2.2
+
+    /**
+     * What a *grid* has to measure — the quietest of the ratios, and the only one below 2.
+     *
+     * A grid legible enough to read as content is a grid that has stopped being a background. 1.6:1 is
+     * roughly where a hairline lattice is findable when aligning against it and gone when reading over it,
+     * and it sits above the ~1.5:1 floor below which a non-text line is not visible at all — so this is a
+     * judgement bounded on both sides rather than a free choice.
+     *
+     * **This is the ratio that proves the difference between the two derivations.** It is far enough below
+     * every ink token that [ContrastAnalysis.legibleChrome] — a floor — returns its input untouched at almost
+     * every call: `onSurface` on a white page measures 17.7110:1, so a grid asking for 1.6 got 17.7110 and
+     * the constant described nothing. Grid callers must use [ContrastAnalysis.settledChrome], which is what
+     * this being a *target* means.
+     */
+    const val GRID_RATIO = 1.6
+
+    /**
      * What a *focus* ring has to measure. Not the same question as a resting edge, and not the same answer.
      *
      * A resting edge may be quiet because the user is not looking for it. A focus ring is the only thing

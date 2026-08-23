@@ -187,6 +187,93 @@ object ContrastAnalysis {
         suggestAccessible(base, backdrop, targetRatio) ?: inkFor(backdrop)
 
     /**
+     * [base] moved to where it measures [targetRatio] against [backdrop] **as closely as possible from
+     * above** — the two-sided counterpart to [legibleChrome], for chrome that can be too loud as well as
+     * too quiet.
+     *
+     * [legibleChrome] is a floor. Its first act is `if (ratio(...) >= targetRatio) return foreground`, so it
+     * only ever raises contrast and returns anything already past the target untouched. That is exactly
+     * right for the two populations it was written for: a focus ring and a selection outline have a *minimum*
+     * and no maximum, because there is no such thing as a selection outline the user can see too well.
+     *
+     * A structure aid is the other kind. A grid, a margin guide, a column divider and an axis rule all have a
+     * target the design *means*, not a bar to clear, and the shipped consequence of routing them through a
+     * floor was measured rather than theorised. `DocumentHostScreen` asks for its grid at 1.6:1 by passing
+     * `GRID_RATIO` to [legibleChrome] — and on the white page that `PageGeometry.effectiveBackgroundPaint`
+     * defaults to, `onSurface` already measures **17.71:1**, so the call returns full-strength ink `#171725`
+     * and the grid is drawn at eleven times the contrast the constant asks for. The margin guide and the
+     * column divider, both at 2.2:1, come back the same colour. Three constants naming three different
+     * weights produced one weight, and the number in the source described nothing on screen. In dark mode on
+     * the near-black page the same three land at 15.04:1.
+     *
+     * So this searches the same candidate lattice — [suggestAccessible]'s hue- and saturation-preserving
+     * lightness steps — and keeps the candidate with the *lowest* passing ratio instead of the nearest
+     * lightness. The guarantee is unchanged in the direction that matters: the result still always clears
+     * [targetRatio]. What changes is that it no longer overshoots when it does not have to. Across the ten
+     * shipped accents on the seven fixture pages the overshoot is at most 0.06 at 1.6:1, 0.10 at 2.2:1 and
+     * 0.17 at 3:1, and no case in any of the 210 falls below target.
+     *
+     * **Where the two agree, and where they do not.** Nearest-in-lightness and lowest-in-ratio are different
+     * questions, so this is not simply "[legibleChrome] plus a downward case" — they can also differ on an
+     * input that *fails* the target, when the nearer passing step overshoots more than a farther one in the
+     * other direction. On the fixture at 2.2:1 they differ in 59 of the 70 accent/page cases, 13 of them on
+     * inputs the floor had to search rather than pass through. They do agree on all fifteen
+     * `outline`-on-surface derivations the chrome substrate makes across both themes and every container
+     * token, which is the population that matters for [ChromeGeometry.RESTING_EDGE_RATIO] not silently
+     * re-tuning: `ChromeGeometryTest` pins that derivation with [legibleChrome], and
+     * `ContrastAnalysisTest` records the difference as a count so nobody unifies the two. Anything that
+     * reaches for a *floor* — a focus ring, a selection outline — must keep calling [legibleChrome], and the
+     * reason is not compatibility but meaning.
+     *
+     * Ties are broken toward [base]'s own lightness, for the same reason [suggestAccessible] takes the
+     * nearest passing step: two adjacent lightness steps can quantise to the same 8-bit colour and therefore
+     * to a bit-identical ratio, and preferring the one closer to the colour the theme actually chose keeps
+     * the answer from depending on which direction the loop happened to visit first.
+     *
+     * Hue and saturation survive exactly as in [legibleChrome], subject to the same 8-bit round-trip caveat:
+     * every output is reproducible from [base]'s own hue and saturation at some lightness, asserted over the
+     * full 210-case fixture.
+     *
+     * There is deliberately **no default target**. The whole premise is that the number is a design
+     * judgement about how loud a hint should be, so a caller that has not named one has not yet made the
+     * decision this function exists to carry out.
+     *
+     * The fallback is [legibleChrome], which cannot itself fail — so this cannot either.
+     */
+    fun settledChrome(
+        base: ColorValue,
+        backdrop: ColorValue,
+        targetRatio: Double,
+    ): ColorValue {
+        if (!backdrop.isOpaque) return legibleChrome(base, backdrop, targetRatio)
+        val hsl = base.toHsl()
+        var best: ColorValue? = null
+        var bestRatio = Double.MAX_VALUE
+        var bestDelta = Float.MAX_VALUE
+        var step = 0
+        while (step <= 100) {
+            for (direction in intArrayOf(-1, 1)) {
+                val lightness = hsl.lightness + direction * step / 100f
+                if (lightness < 0f || lightness > 1f) continue
+                val candidate = ColorValue.fromHsl(hsl.hue, hsl.saturation, lightness, hsl.alpha)
+                val achieved = ratio(candidate, backdrop)
+                if (achieved < targetRatio) continue
+                val delta = abs(lightness - hsl.lightness)
+                // Lowest passing ratio wins; the nearer lightness breaks a tie. Both comparisons are needed:
+                // a pure ratio comparison would pick arbitrarily between the two directions when they
+                // measure identically, which is how a light-mode answer and a dark-mode answer drift apart.
+                if (achieved < bestRatio || (achieved == bestRatio && delta < bestDelta)) {
+                    best = candidate
+                    bestRatio = achieved
+                    bestDelta = delta
+                }
+            }
+            step++
+        }
+        return best ?: legibleChrome(base, backdrop, targetRatio)
+    }
+
+    /**
      * Black or white, whichever is more legible on [backdrop].
      *
      * Chosen by measured ratio rather than by a luminance threshold, because the two genuinely disagree.

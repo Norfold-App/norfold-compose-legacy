@@ -294,6 +294,30 @@ object NorfoldChrome {
     ): Modifier = border(ChromeGeometry.RESTING_EDGE_WIDTH.dp, restingEdge(backdrop), shape(corner))
 
     /**
+     * The resting edge as a [BorderStroke], for chrome that takes one as a parameter.
+     *
+     * The `border =` sibling of [chromeEdge], and it exists because the app's outlined chrome is overwhelmingly
+     * `Surface(border = …)` and `Card(border = …)` rather than `Modifier.border`. Those callers cannot use the
+     * modifier form: the parameter wants a stroke, and a `Surface` given both its own `shape` and a separately
+     * bordered modifier draws the two on different geometry — a rounded fill inside a square edge.
+     *
+     * The weight is [ChromeGeometry.RESTING_EDGE_WIDTH], one figure for every resting boundary in the app,
+     * which is what keeps a resting edge legible as *not* a focus ring: the ring is twice as wide, sits at a
+     * higher ratio, and is separated by [ChromeGeometry.FOCUS_RING_GAP]. Three differences, so a keyboard user
+     * never has to judge whether a border got slightly darker.
+     *
+     * **[backdrop] is the fill this stroke is drawn against, and passing it is not optional in practice.** The
+     * default resolves to [LocalChromeContainer] or the page, which is right only for chrome whose fill *is*
+     * the page. Most of these sites paint something else — a translucent card, an accent container, a
+     * selection tint — and a stroke solved against the page while drawn on a 16%-alpha accent is measured
+     * against a colour that is not there. Pass the same expression the `color =` argument gets.
+     */
+    @Composable
+    @ReadOnlyComposable
+    fun restingStroke(backdrop: Color = Color.Unspecified): BorderStroke =
+        BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, restingEdge(backdrop))
+
+    /**
      * A focus ring outside the shape it decorates, concentric with it, reserving its own space whether or
      * not [focused].
      *

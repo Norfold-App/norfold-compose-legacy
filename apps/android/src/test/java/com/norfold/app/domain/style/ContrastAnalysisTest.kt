@@ -272,12 +272,205 @@ class ContrastAnalysisTest {
         assertNull(ContrastAnalysis.suggestAccessible(ColorValue.BLACK, ColorValue.of(255, 255, 255, alpha = 128)))
         // legibleChrome must still return something drawable, because chrome cannot skip a frame.
         assertNotNull(ContrastAnalysis.legibleChrome(ColorValue.BLACK, ColorValue.of(255, 255, 255, alpha = 128)))
+        // And so must settledChrome, which delegates to it for exactly that reason.
+        assertNotNull(ContrastAnalysis.settledChrome(ColorValue.BLACK, ColorValue.of(255, 255, 255, alpha = 128), 1.6))
+    }
+
+    // ── settledChrome ────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The defect this function exists for, asserted as a defect: a *floor* cannot express a quiet target.
+     *
+     * This is the shipped `DocumentHostScreen` call, verbatim in arithmetic — `onSurface` on the white page
+     * `PageGeometry.effectiveBackgroundPaint` defaults to, asking for a grid at 1.6:1. The first act of
+     * [ContrastAnalysis.legibleChrome] is to return anything that already clears the target, and light-mode
+     * ink clears 1.6:1 by a factor of eleven, so the call returned full-strength ink and the grid drew at
+     * 17.71:1. The margin guide and column divider at 2.2:1 came back the same colour, so three constants
+     * naming three weights produced one.
+     *
+     * Asserting the old number rather than deleting it is deliberate: if [ContrastAnalysis.settledChrome] is
+     * ever "simplified" back into the floor, this test states precisely what returns.
+     */
+    @Test
+    fun `a floor cannot express a quiet target and settledChrome can`() {
+        val lightInk = hex(0x171725)
+        val white = ColorValue.WHITE
+
+        // What the floor does with a 1.6 request on a colour that already measures 17.71.
+        val floored = ContrastAnalysis.legibleChrome(lightInk, white, GRID)
+        assertEquals("legibleChrome returns the input untouched", lightInk, floored)
+        assertEquals(17.7110, ratio(floored, white), 0.0001)
+
+        // What a target does with the same request.
+        val settled = ContrastAnalysis.settledChrome(lightInk, white, GRID)
+        assertEquals(1.6301, ratio(settled, white), 0.0001)
+        assertEquals("#C9C9DD", settled.toHexRgb())
+
+        // Dark mode is the mirror image: dark ink on a near-black page measures 15.04 and asks for 1.6.
+        val darkInk = hex(0xF6F7FB)
+        val nearBlack = hex(0x202124)
+        assertEquals(darkInk, ContrastAnalysis.legibleChrome(darkInk, nearBlack, GRID))
+        assertEquals(15.0379, ratio(darkInk, nearBlack), 0.0001)
+        val settledDark = ContrastAnalysis.settledChrome(darkInk, nearBlack, GRID)
+        assertEquals(1.6265, ratio(settledDark, nearBlack), 0.0001)
+        assertEquals("#334073", settledDark.toHexRgb())
+    }
+
+    /**
+     * The guarantee is not weakened: settled chrome still always clears its target.
+     *
+     * "Quieter" is the whole point of this function and also its only real hazard — a downward search that
+     * overshoots downward produces exactly the invisible chrome the substrate was built to eliminate. So the
+     * floor property is asserted over the full fixture, 210 cases, and the overshoot is bounded in the same
+     * pass so that "as close as possible from above" is a measured claim rather than a description.
+     */
+    @Test
+    fun `settled chrome clears its target everywhere and never by much`() {
+        // The allowed bound rises with the target because one lightness step buys more ratio the further
+        // from the backdrop you are, so the lattice cannot land as finely at 3:1 as it does at 1.6:1.
+        listOf(GRID to 0.07, RESTING_EDGE to 0.11, ContrastAnalysis.UI_COMPONENT to 0.17).forEach { (target, allowed) ->
+            var worstOvershoot = 0.0
+            var cases = 0
+            ACCENTS.forEach { accent ->
+                PAGES.forEach { page ->
+                    val settled = ContrastAnalysis.settledChrome(accent, page, target)
+                    val achieved = ratio(settled, page)
+                    assertTrue(
+                        "${accent.toHexRgb()} on ${page.toHexRgb()} at $target only reached $achieved",
+                        achieved >= target - 1e-9,
+                    )
+                    worstOvershoot = maxOf(worstOvershoot, achieved - target)
+                    cases++
+                }
+            }
+            assertEquals("ten accents on seven pages", 70, cases)
+            assertTrue("at $target the worst overshoot was $worstOvershoot", worstOvershoot <= allowed)
+        }
+    }
+
+    /**
+     * Only lightness moves here too — the property that makes this a *derivation* rather than a substitution.
+     *
+     * Same assertion as `adjustment moves lightness and nothing else` makes for [ContrastAnalysis.legibleChrome],
+     * and it has to be made separately because the two functions choose differently from the same candidate
+     * set. A downward search has more room to go wrong: mixing toward the backdrop would reach any target
+     * more cheaply than a lightness step and would destroy the user's hue while doing it, which is precisely
+     * the shortcut this forbids.
+     */
+    @Test
+    fun `settled chrome moves lightness and nothing else`() {
+        listOf(GRID, RESTING_EDGE, ContrastAnalysis.UI_COMPONENT).forEach { target ->
+            ACCENTS.forEach { accent ->
+                PAGES.forEach { page ->
+                    val hsl = accent.toHsl()
+                    val actual = ContrastAnalysis.settledChrome(accent, page, target)
+                    val reachable = buildList {
+                        (0..100).forEach { step ->
+                            listOf(-1, 1).forEach { direction ->
+                                val lightness = hsl.lightness + direction * step / 100f
+                                if (lightness in 0f..1f) {
+                                    add(ColorValue.fromHsl(hsl.hue, hsl.saturation, lightness, hsl.alpha))
+                                }
+                            }
+                        }
+                    }
+                    assertTrue(
+                        "${accent.toHexRgb()} on ${page.toHexRgb()} at $target produced ${actual.toHexRgb()}, " +
+                            "which is not this hue at any lightness",
+                        reachable.any { it.red == actual.red && it.green == actual.green && it.blue == actual.blue },
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * The two functions are **not** interchangeable, stated as a count so nobody assumes they are.
+     *
+     * It would be easy to read [ContrastAnalysis.settledChrome] as the floor "with a downward case bolted
+     * on" and then unify them. They ask different questions — nearest lightness versus lowest passing ratio —
+     * and those disagree even on inputs that *fail* the target, whenever the nearer passing step in one
+     * direction overshoots more than a farther step in the other. On this fixture at 2.2:1 they differ in 59
+     * of 70 cases, and 13 of those differences are on inputs [ContrastAnalysis.legibleChrome] had to search
+     * rather than pass through. A unification would silently re-tune all of them.
+     *
+     * Which is why the substrate's own resting-edge population is pinned in `ChromeGeometryTest` instead: on
+     * the fifteen `outline`-on-surface derivations the chrome substrate actually makes, the two agree exactly,
+     * and that agreement is what lets `NorfoldChrome.restingEdge` keep [ContrastAnalysis.legibleChrome] with
+     * no visual change.
+     */
+    @Test
+    fun `settled and legible are different questions with different answers`() {
+        var identical = 0
+        var differing = 0
+        var differingOnFailingInput = 0
+        ACCENTS.forEach { accent ->
+            PAGES.forEach { page ->
+                val legible = ContrastAnalysis.legibleChrome(accent, page, RESTING_EDGE)
+                val settled = ContrastAnalysis.settledChrome(accent, page, RESTING_EDGE)
+                if (legible == settled) {
+                    identical++
+                } else {
+                    differing++
+                    if (ratio(accent, page) < RESTING_EDGE) differingOnFailingInput++
+                }
+            }
+        }
+        assertEquals("cases where the two agree", 11, identical)
+        assertEquals("cases where they do not", 59, differing)
+        assertEquals("of those, ones the floor still had to search", 13, differingOnFailingInput)
+    }
+
+    /**
+     * The two shipped structure-aid weights, on the pages a document can actually be.
+     *
+     * `DocumentHostScreen` derives its grid, margin guide, column divider and resting object edge from
+     * `onSurface` against the page's own paint, so what a reader sees is a function of two values no
+     * screenshot review can inspect. Four representative page paints in both modes gives eight pairs, and the
+     * assertion that matters is the *separation*: a grid and a guide have to be different weights. Under a
+     * floor they were the same colour, so a test that only checked each one cleared its own target would have
+     * passed the defect this pair of functions exists to fix.
+     */
+    @Test
+    fun `the document structure aids land where their constants say`() {
+        val lightInk = hex(0x171725)
+        val darkInk = hex(0xF6F7FB)
+        val pages = listOf(0xFFFFFF, 0xFFF8E1, 0x546E7A, 0x202124).map(::hex)
+
+        var tightest = Double.MAX_VALUE
+        var loosest = 0.0
+        var narrowest = Double.MAX_VALUE
+        var pairs = 0
+        listOf(lightInk to "light", darkInk to "dark").forEach { (ink, mode) ->
+            pages.forEach { page ->
+                val guide = ratio(ContrastAnalysis.settledChrome(ink, page, RESTING_EDGE), page)
+                val grid = ratio(ContrastAnalysis.settledChrome(ink, page, GRID), page)
+                // A guide and a grid must be distinguishable, which under a floor they were not.
+                assertTrue(
+                    "$mode ink on ${page.toHexRgb()}: guide $guide is not louder than grid $grid",
+                    guide > grid,
+                )
+                tightest = minOf(tightest, guide - RESTING_EDGE, grid - GRID)
+                loosest = maxOf(loosest, guide - RESTING_EDGE, grid - GRID)
+                narrowest = minOf(narrowest, guide - grid)
+                pairs++
+            }
+        }
+        assertEquals("four page paints in each mode", 8, pairs)
+        // Tight on both sides: nothing below target, nothing meaningfully above it.
+        assertEquals("the closest any aid lands to its target", 0.0028, tightest, 0.0001)
+        assertEquals("the furthest any aid lands from its target", 0.0755, loosest, 0.0001)
+        // And the separation is the target difference itself, not an accident of the search.
+        assertEquals("the narrowest guide-over-grid separation", 0.5624, narrowest, 0.0001)
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────────
 
     /** The resting-edge target both editors use. Mirrors `FlowFrameMetrics.RESTING_EDGE_RATIO`. */
     private val RESTING_EDGE = 2.2
+
+    /** The grid target. Mirrors [ChromeGeometry.GRID_RATIO], the one ratio below 2. */
+    private val GRID = 1.6
 
     /** The ten accents `BrandPalettes` actually ships. */
     private val ACCENTS = listOf(

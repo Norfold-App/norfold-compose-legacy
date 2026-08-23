@@ -139,6 +139,25 @@ object EditorChromeColors {
     }
 
     /**
+     * [base] adjusted in lightness until it measures [target] against [backdrop] **as closely as it can from
+     * above** — [legible] for chrome that has a target rather than a floor.
+     *
+     * The two differ in one way and it is the whole point: [legible] returns [base] untouched whenever it
+     * already clears [target], because a focus ring cannot be too visible. A structure aid can. A grid, a
+     * margin guide, a column divider and a chart axis rule each name a weight the design *means*, and routing
+     * those through a floor is why the Document page grid drew at 17.71:1 on a white sheet while its constant
+     * asked for 1.6:1 — see [ContrastAnalysis.settledChrome], which carries the measurements.
+     *
+     * Where [legible] already returns a minimal answer the two agree exactly, so this is only a change at the
+     * sites that were overshooting.
+     */
+    fun settled(
+        base: Color,
+        backdrop: Color,
+        target: Double,
+    ): Color = ContrastAnalysis.settledChrome(base.asColorValue(), backdrop.asColorValue(), target).asColor()
+
+    /**
      * Chrome drawn *over* content rather than on bare page — a lock badge, a marker dot.
      *
      * Uses the page's own best ink at full opacity. A translucent badge over unknown content is the
