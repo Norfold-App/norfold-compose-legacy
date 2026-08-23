@@ -1950,6 +1950,15 @@ class ChromeGeometryTest {
      * Scoped to a clip that directly precedes the chrome modifier. A clip elsewhere in a chain is ordinary
      * layout: [com.norfold.app.ui.screens.WorkspaceVisualDialog]'s covers, avatars and tiles all clip and none of
      * them are chrome.
+     *
+     * "Directly" has to be decided by balancing the clip's own parentheses rather than by a regex, and the reason
+     * is a real site this test flagged wrongly. The chat avatar chains
+     * `.size(28.dp).clip(CircleShape).background(Color(chat.color)).focusablePill(...)`, where the clip is
+     * load-bearing — it is what makes the `background` a circle rather than a square — and a `\.clip\([^\n]*\)`
+     * pattern matches from `.clip(` all the way to the *last* `)` on the line, swallowing the `background` that
+     * sits between and reporting the two as adjacent. A test that cannot tell a redundant clip from a
+     * shape-defining one would be answered by deleting the clip, which draws a square avatar: the fix is worse
+     * than the finding, which is the signature of a wrong check rather than a wrong call site.
      */
     @Test
     fun `no chrome call site clips ahead of the modifier that clips for it`() {
@@ -1960,8 +1969,7 @@ class ChromeGeometryTest {
             for (match in chrome.findAll(source)) {
                 // Whitespace and a newline are all that may sit between a clip and the chrome modifier for the
                 // clip to be the redundant one. Anything else in between is a different modifier doing real work.
-                val before = source.substring(maxOf(0, match.range.first - 120), match.range.first)
-                if (Regex("""\.clip\([^\n]*\)\s*$""").containsMatchIn(before)) {
+                if (clipEndsAt(source, match.range.first)) {
                     val line = source.substring(0, match.range.first).count { it == '\n' } + 1
                     offenders += "$path:$line clips immediately before ${match.groupValues[1]}"
                 }
@@ -2678,6 +2686,33 @@ class ChromeGeometryTest {
             index++
         }
         error("unbalanced parentheses from $openParenIndex")
+    }
+
+    /**
+     * Whether the modifier immediately before [chromeIndex], ignoring whitespace, is a `.clip(...)`.
+     *
+     * Walks the parentheses backward from the `)` that precedes the chrome call rather than pattern-matching,
+     * because a clip's argument can itself contain parentheses — `Color(chat.color)`, `RoundedCornerShape(r)` —
+     * and a regex reading to the last `)` on the line cannot tell which call that `)` closes. Depth-counting can:
+     * the `(` that brings depth back to zero is the one this `)` belongs to, and only then is it fair to ask
+     * whether `.clip` sits in front of it.
+     */
+    private fun clipEndsAt(source: String, chromeIndex: Int): Boolean {
+        var index = chromeIndex - 1
+        while (index >= 0 && source[index].isWhitespace()) index--
+        if (index < 0 || source[index] != ')') return false
+        var depth = 0
+        while (index >= 0) {
+            when (source[index]) {
+                ')' -> depth++
+                '(' -> {
+                    depth--
+                    if (depth == 0) return source.startsWith(".clip(", index - ".clip".length)
+                }
+            }
+            index--
+        }
+        return false
     }
 
     private fun hex(rgb: Int) = ColorValue.of((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF)

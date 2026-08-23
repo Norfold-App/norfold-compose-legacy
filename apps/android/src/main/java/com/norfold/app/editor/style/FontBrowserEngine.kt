@@ -327,8 +327,19 @@ data class FontRowState(
     val previewRenderable: Boolean,
     val substitutionLabel: String? = null,
 ) {
-    /** The state text — always textual, never colour or icon alone (§19, §31). */
-    fun stateLabel(): String = substitutionLabel ?: when (availability) {
+    /**
+     * The state text — always textual, never colour or icon alone (§19, §31).
+     *
+     * Availability, and only availability. A substitution is a *different* fact — "this family is here, and it
+     * cannot draw your text" — and it has its own line in the row, so returning it from here made the row say it
+     * twice while saying nothing about whether the font was downloaded. The two are not alternatives: the case
+     * that most needs both is a family that is offline-ready and still cannot render Bangla, where the old
+     * `substitutionLabel ?:` reported the substitution and silently dropped "Offline ✓".
+     *
+     * [accessibleLabel] reads this and then appends the substitution separately, so the duplication was in the
+     * announcement as well as on screen.
+     */
+    fun stateLabel(): String = when (availability) {
         FontAvailability.OFFLINE_READY -> "Offline ✓"
         FontAvailability.DOWNLOADABLE -> "Download"
         FontAvailability.DOWNLOADING -> "Downloading…"

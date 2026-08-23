@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
@@ -625,6 +626,51 @@ private fun FontBrowserPanel(
                 // untinted token is deliberate: `resolvedBackdrop` applies the tint itself from
                 // `LocalAbsoluteTonalElevation`, which is the *accumulated* value, so a row inside this panel
                 // inside a `ModalBottomSheet` resolves at the real depth rather than at the 6 dp literal.
+                //
+                // ## Why the text column names itself
+                //
+                // `selectable` merges its descendants, so without this the row announced its four `Text`
+                // children in visual order — and the third of them is the preview, which is the 42-character
+                // pangram `Sphinx of black quartz, judge my vow — 0123`. A screen-reader user arrowing through
+                // a list of hundreds of families heard that same sentence read out on every single row, between
+                // the family's name and its substitution notice. The pangram is there to be *looked* at: it
+                // shows what the letterforms do, which is precisely the information that does not survive being
+                // spoken.
+                //
+                // [FontRowState.accessibleLabel] is the domain's own answer and was already written and pinned
+                // by `AccessibilityContractTest` — it had simply never been read by the UI. It drops the
+                // preview, and it carries three facts the visible line has no room for: whether the family is
+                // variable, whether it packages Bangla, and whether it is a favourite. That last one mattered
+                // most: the favourite state was reachable only as a `★` glyph, and a star character is not a
+                // state a screen reader reports.
+                //
+                // Two choices below are load-bearing and neither is a style preference.
+                //
+                // **`clearAndSetSemantics`, not `semantics`.** The two write different fields of the platform
+                // node: `ContentDescription` reaches `AccessibilityNodeInfoCompat.setContentDescription`, while
+                // descendant `Text`s reach `setText` via `getInfoText` — and the delegate's `setText` is
+                // unconditional, with no check for a content description already being present. A plain
+                // `semantics` would therefore leave the node carrying *both*: this label and the pangram it
+                // exists to suppress. Only clearing empties the text field.
+                //
+                // **On the `Column`, not on the `Row`.** This is the part that is easy to get backwards. A
+                // clearing node reports *no children at all* to the accessibility tree: the delegate reads
+                // children only through `getReplacedChildren$ui_release()`, which calls
+                // `getChildren$ui_release(false, true, false)`, and that returns `emptyList()` for any node
+                // whose config `isClearingSemantics()`. Clearing the `Row` would therefore not merely rename
+                // the row — it would delete the favourite star and the "Remove" button from TalkBack outright,
+                // trading a verbose row for two unreachable controls. Clearing the `Column` instead scopes the
+                // erasure to the four `Text`s, which are the only things being spoken twice.
+                //
+                // The `Row` still merges, and the two walks it runs land differently on each child, which is what
+                // makes this work. `mergeConfig`, which builds the name, merges a non-merging child's config and
+                // then recurses into it — so the `Column`'s description is folded in, and the recursion is turned
+                // back at the `Column`'s own clearing flag before it ever reaches the four `Text`s. Meanwhile
+                // `findOneLayerOfMergingSemanticsNodes`, which builds the child list, *collects* a child that
+                // merges its own descendants and *skips* one that clears. So the row is named by the `Column` and
+                // parented to the two `TextButton`s — each of which reaches `AbstractClickableNode`, whose
+                // `shouldMergeDescendantSemantics` is constant true — leaving the star and "Remove" separately
+                // focusable with their own names.
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -641,7 +687,11 @@ private fun FontBrowserPanel(
                         .padding(vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f)) {
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .clearAndSetSemantics { contentDescription = row.accessibleLabel() },
+                    ) {
                         Text(row.record.name, fontFamily = family, style = MaterialTheme.typography.titleMedium)
                         Text(
                             "${row.stateLabel()}${if (row.selected) " · Selected" else ""} · ${row.record.category.label} · ${row.record.license.spdx}",
