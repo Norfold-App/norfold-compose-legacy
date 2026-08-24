@@ -212,7 +212,7 @@ private enum class SettingsSection(val title: String, val subtitle: String, val 
     WorkspaceMembers("Members", "Local workspace membership", Icons.Outlined.Groups),
     WorkspaceAdvanced("Advanced", "Export or delete this workspace", Icons.Outlined.Tune),
     Permissions("Permissions", "Workspace roles and access control", Icons.Outlined.Security),
-    Diagnostics("Diagnostics", "Crash logs and local reports", Icons.Outlined.Settings),
+    Diagnostics("Diagnostics", "Crash reporting and local logs", Icons.Outlined.Settings),
 }
 
 private val RootSettingsSections = setOf(
@@ -2926,14 +2926,34 @@ private fun BackupAdvancedCard(
 @Composable
 private fun DiagnosticsSettings(state: DocsUiState, viewModel: DocsViewModel) = SettingsCard {
     val diagnostics = state.diagnostics
-    Text("Local diagnostics", fontWeight = FontWeight.Black, fontSize = 18.sp)
+    Text("Diagnostics", fontWeight = FontWeight.Black, fontSize = 18.sp)
+    // This copy is load-bearing and was previously false-by-omission: it read "No remote analytics
+    // service is used" while the switch below now also governs automatic crash upload. A settings
+    // screen that understates what a switch does is worse than one that says nothing, because the user
+    // reads it and stops looking. Say what leaves the device, and say what does not.
+    //
+    // The device-info list is Google's, checked against the Firebase privacy documentation rather than
+    // guessed: Crashlytics collects model, OS version, CPU architecture, free memory and disk, rotation
+    // and rooted state. It deliberately does not claim locale, which belongs to Performance Monitoring
+    // and is not collected here. Understating the list would be the same defect in a smaller font.
     Text(
-        "Logs stay on this device unless you share them. No remote analytics service is used, and repeated prompts are suppressed after a crash is handled.",
+        "Logs stay on this device unless you share them. While this is on, crash reports are also sent " +
+            "automatically to Google Firebase Crashlytics so problems can be fixed without waiting for " +
+            "a report. Those reports contain the error and where it happened, the app version, and " +
+            "device details Google collects for every report — model, Android version, free memory and " +
+            "storage, and whether the device is rooted — never your notes, titles, task names, " +
+            "messages, file names or workspace names. Turning this off stops the sending and discards " +
+            "anything not yet sent. No advertising or usage analytics is collected either way.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp,
     )
-    SettingSwitch("Enable local logging", diagnostics.enabled) { viewModel.setDiagnosticsOptions(enabled = it) }
-    SettingSwitch("Include device model and Android version", diagnostics.includeDeviceInfo) { viewModel.setDiagnosticsOptions(includeDeviceInfo = it) }
+    SettingSwitch("Enable diagnostics and crash reporting", diagnostics.enabled) { viewModel.setDiagnosticsOptions(enabled = it) }
+    // Named for the log it actually governs. This flag gates two lines in DiagnosticsStore.shareText()
+    // and nothing else; it has never had any bearing on an automatic crash report, and Crashlytics
+    // collects device details whether it is on or off. Sitting unqualified beneath crash-reporting copy,
+    // the old label "Include device model and Android version" implied a control over the upload that
+    // does not exist — which is the same false-by-omission defect as the paragraph above, one switch down.
+    SettingSwitch("Include device model in logs you share", diagnostics.includeDeviceInfo) { viewModel.setDiagnosticsOptions(includeDeviceInfo = it) }
     SettingSwitch("Ask before sharing after a crash", diagnostics.askBeforeSharing) { viewModel.setDiagnosticsOptions(askBeforeSharing = it) }
     HorizontalDivider()
     Text("Last crash", fontWeight = FontWeight.Bold)
@@ -3194,7 +3214,7 @@ private fun CategoryIncludeRow(label: String, checked: Boolean, onChange: (Boole
  *
  * The three diagnostics switches this serves had the same split every `SettingsRow(trailing = { RowSwitch(…) })`
  * had: a `Text` carrying the label and a `Switch` carrying the state, with nothing joining them, so a reader
- * heard "Enable local logging" and then an unnamed switch. The row carries the toggle now, the switch is
+ * heard the label and then an unnamed switch. The row carries the toggle now, the switch is
  * decorative, and the label is the node's name — see [SettingsToggleRow], which does the same for the grouped
  * rows and documents why Material's null-handler gate is what makes it work.
  *

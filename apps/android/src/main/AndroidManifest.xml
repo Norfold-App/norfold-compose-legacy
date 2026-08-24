@@ -72,6 +72,23 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <!-- Crash reporting starts OFF and stays off until the user turns diagnostics on.
+
+             This flag is the only thing standing between a first launch and a report, and it has to be
+             here rather than only in code. Crashlytics installs its uncaught-exception handler from a
+             ContentProvider that the manifest merger injects, which runs before Application.onCreate —
+             so a crash during startup on a first launch would be collected and uploaded before any
+             Kotlin of ours had the chance to say no. Setting this to false makes the SDK read its
+             enabled state from persisted storage instead of defaulting to on, and NorfoldApplication
+             writes that storage from the DiagnosticsStore preference on every start.
+
+             The value is not a suggestion to the SDK; it is what `isCrashlyticsCollectionEnabled`
+             returns until something calls the setter. Do not "tidy" it to true to make testing easier —
+             this app declares allowBackup="false" and excludes everything from both backup rule sets,
+             and shipping opt-out crash upload would contradict that posture on the user's behalf. -->
+        <meta-data
+            android:name="firebase_crashlytics_collection_enabled"
+            android:value="false" />
         <receiver
             android:name=".cloud.NorfoldNotificationActionReceiver"
             android:exported="false" />

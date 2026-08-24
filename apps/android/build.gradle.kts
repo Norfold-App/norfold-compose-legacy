@@ -43,8 +43,22 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+// Both Google plugins are conditional on the same file, and the condition is not a convenience.
+// `google-services.json` is gitignored — it carries this project's Firebase identifiers — so a fresh
+// clone does not have one, and an unconditional `apply` fails such a clone at configuration time with
+// "File google-services.json is missing". The Crashlytics plugin has the same shape of dependency: it
+// uploads a mapping file to a Firebase project, and with no project configured there is nothing for it
+// to upload to. Keeping both behind one `isFile` check means the open-source build path stays green and
+// the two plugins can never disagree about whether Firebase is configured.
+//
+// What the Crashlytics plugin does, and why it is not optional once the dependency is present: a release
+// build is minified, so every stack frame Crashlytics reports arrives obfuscated. The plugin uploads R8's
+// mapping file so the console can deobfuscate. Without it the crash reports still arrive and are close to
+// useless. It is a build-time uploader only — it adds no runtime collection of its own, and it cannot
+// switch collection on. That is the consent gate's job, in NorfoldApplication.
 if (file("google-services.json").isFile) {
     apply(plugin = "com.google.gms.google-services")
+    apply(plugin = "com.google.firebase.crashlytics")
 }
 
 android {
@@ -227,6 +241,13 @@ dependencies {
     implementation("com.google.crypto.tink:tink:1.23.0")
     implementation(platform("com.google.firebase:firebase-bom:34.16.0"))
     implementation("com.google.firebase:firebase-messaging")
+    // Version comes from the BOM above (34.16.0 pins crashlytics 20.1.0). Automatic upload is OFF until
+    // the user turns diagnostics on: NorfoldApplication calls setCrashlyticsCollectionEnabled from the
+    // DiagnosticsStore preference before Crashlytics can initialise, and the manifest carries
+    // firebase_crashlytics_collection_enabled=false so a first launch cannot report before being asked.
+    // Deliberately not added: firebase-crashlytics-ndk. Norfold ships no native code of its own, so it
+    // would only symbolise crashes inside third-party .so files — reports nobody here can act on.
+    implementation("com.google.firebase:firebase-crashlytics")
     ksp("androidx.room:room-compiler:2.8.4")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

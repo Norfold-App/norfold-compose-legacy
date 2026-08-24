@@ -11,18 +11,20 @@
     <a class="back" href="index.html">Norfold legal</a>
     <h1>Privacy Policy</h1>
     <p class="warning">Alpha notice: Norfold is in heavy testing. Back up your data before using sync, import, export, vault, or attachment features.</p>
-    <p>Norfold stores notes, tasks, chats, canvas items, files metadata, settings, and sync-chain metadata locally on your device unless you explicitly choose backup, import, export, or sync features.</p>
+    <p>Norfold stores notes, tasks, chats, canvas items, files metadata, settings, and sync-chain metadata locally on your device unless you explicitly choose backup, import, export, sync, or crash reporting features. Crash reporting is the only one of those that sends anything on its own once enabled; it is described under Diagnostics And Crash Reporting below.</p>
     <h2>Data You Choose To Store</h2>
     <p>The app may store note text, Markdown, task fields, workspace names, profile names, cover image URIs, attachment metadata, sync folder references, diagnostic logs, and encrypted backup payloads.</p>
     <h2>Google Drive Sync</h2>
     <p>When you connect Google Drive, Norfold requests Drive access only for app sync data needed to upload, download, and compare sync-chain snapshots. Google account authorization is handled by Google's OAuth flow.</p>
-    <h2>Diagnostics</h2>
-    <p>If diagnostics are enabled, crash and error details are stored locally so you can review or share them manually. Norfold does not automatically email or upload diagnostics in this alpha build.</p>
+    <h2>Diagnostics And Crash Reporting</h2>
+    <p>The setting <em>Enable diagnostics and crash reporting</em>, in Settings under Diagnostics, governs two things at once. Locally, crash and error details are recorded on the device so you can review them or attach them to a report yourself. Remotely, while the setting is on, crash reports are also sent automatically to Google Firebase Crashlytics, a Google service, so defects can be fixed without waiting for a report.</p>
+    <p>A crash report contains the error, the stack trace and the place in the app's code where it happened, the app identifier and version, whether the app was in the background, and information about the device: model, operating system version, CPU architecture, available memory and disk space, screen rotation, and whether the device is rooted. It also carries randomly generated identifiers Crashlytics uses to group crashes and to count how many devices a defect affects. It does not contain your note text, titles, task names, chat messages, workspace or profile names, file names, attachment contents, Google account identity, or the contents of a vault or backup. Norfold attaches no custom keys and no user identifier of its own, so a report is not tied to your account or to anything you have written.</p>
+    <p>Reporting is off until you turn it on. A newly installed build collects nothing before the setting has been read, and turning the setting off stops sending immediately and discards any report already recorded but not yet sent. No advertising identifiers and no usage or behavioural analytics are collected in either state, and nothing else in the app uploads diagnostics on its own. Google states that crash data is retained for 90 days; its handling of what it receives is described in the <a href="https://firebase.google.com/support/privacy">Firebase privacy documentation</a>.</p>
     <h2>Security</h2>
     <p>Vault and backup encryption are designed to protect local and exported data, but this alpha build is not yet independently audited. Keep independent backups of important information.</p>
     <h2>Contact</h2>
     <p>For testing feedback, use the project repository issue tracker or the support channel linked from the app build you installed.</p>
-    <p class="updated">Last updated: July 8, 2026</p>
+    <p class="updated">Last updated: August 24, 2026</p>
   </main>
 </body>
 </html>

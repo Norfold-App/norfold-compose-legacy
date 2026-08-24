@@ -8,6 +8,7 @@ import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
 import coil.decode.SvgDecoder
 import coil.decode.VideoFrameDecoder
+import com.norfold.app.data.CrashReportingGate
 import com.norfold.app.data.DiagnosticsStore
 import com.norfold.app.ui.fonts.OfflineFontLibrary
 import com.norfold.app.data.FontImportStore
@@ -16,6 +17,13 @@ class NorfoldApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         DiagnosticsStore.install(this)
+        // Before anything else that could fail. The manifest holds Crashlytics off by default, so this
+        // is the call that opens the gate for a user who has already said yes — and equally the call
+        // that keeps it shut for one who said no, on every single start rather than only at the moment
+        // they answered. It reads a SharedPreferences value and makes one setter call, so it is not
+        // worth moving off the main thread; doing so would open a window where a startup crash raced
+        // the gate.
+        CrashReportingGate.apply(this)
         // Reads the packaged font manifest (a single small asset, no font binaries) so the first paragraph
         // rendered already has the bundled catalogue available and does not fall back to a generic.
         OfflineFontLibrary.initialize(this)

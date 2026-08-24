@@ -21,6 +21,7 @@ import com.norfold.app.data.BackupFolderStore
 import com.norfold.app.data.BiometricVaultKeyStore
 import com.norfold.app.data.ChatForegroundState
 import com.norfold.app.data.CloudFolderSyncStore
+import com.norfold.app.data.CrashReportingGate
 import com.norfold.app.data.DiagnosticsState
 import com.norfold.app.data.DiagnosticsStore
 import com.norfold.app.data.GoogleDriveApiSyncStore
@@ -4078,6 +4079,11 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDiagnosticsOptions(enabled: Boolean? = null, includeDeviceInfo: Boolean? = null, askBeforeSharing: Boolean? = null) {
         diagnostics.value = diagnosticsStore.update(enabled, includeDeviceInfo, askBeforeSharing)
+        // Answering the switch has to take effect now, not at the next launch. Turning it off also
+        // discards reports already queued — see CrashReportingGate. Driven from the stored state rather
+        // than the `enabled` argument so it stays correct when this is called for one of the other two
+        // options and `enabled` is null.
+        CrashReportingGate.setEnabled(diagnostics.value.enabled)
     }
 
     fun acknowledgeCrashPrompt() {
