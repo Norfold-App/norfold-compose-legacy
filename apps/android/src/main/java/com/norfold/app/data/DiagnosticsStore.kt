@@ -11,7 +11,7 @@ import java.util.Date
 import java.util.Locale
 
 data class DiagnosticsState(
-    val enabled: Boolean = true,
+    val enabled: Boolean = false,
     val includeDeviceInfo: Boolean = true,
     val askBeforeSharing: Boolean = true,
     val lastCrashAt: Long? = null,
@@ -25,7 +25,7 @@ class DiagnosticsStore(private val context: Context) {
     private val logFile: File = File(context.filesDir, "norfold-diagnostics.log")
 
     fun state(): DiagnosticsState = DiagnosticsState(
-        enabled = prefs.getBoolean(KeyEnabled, true),
+        enabled = prefs.getBoolean(KeyEnabled, false),
         includeDeviceInfo = prefs.getBoolean(KeyDeviceInfo, true),
         askBeforeSharing = prefs.getBoolean(KeyAskBeforeSharing, true),
         lastCrashAt = prefs.getLong(KeyLastCrashAt, 0L).takeIf { it > 0L },
@@ -45,7 +45,7 @@ class DiagnosticsStore(private val context: Context) {
     }
 
     fun log(message: String, throwable: Throwable? = null) {
-        if (!prefs.getBoolean(KeyEnabled, true)) return
+        if (!prefs.getBoolean(KeyEnabled, false)) return
         val line = buildString {
             append(timestamp())
             append("  ")
@@ -93,7 +93,7 @@ class DiagnosticsStore(private val context: Context) {
         appendLine("Norfold diagnostics")
         appendLine("Generated: ${timestamp()}")
         appendLine(appVersionLine())
-        appendLine("Logging enabled: ${prefs.getBoolean(KeyEnabled, true)}")
+        appendLine("Logging enabled: ${prefs.getBoolean(KeyEnabled, false)}")
         if (prefs.getBoolean(KeyDeviceInfo, true)) {
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")

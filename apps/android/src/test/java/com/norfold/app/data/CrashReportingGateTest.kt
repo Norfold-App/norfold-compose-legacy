@@ -34,9 +34,16 @@ class CrashReportingGateTest {
     private val manifest: String by lazy { read("src/main/AndroidManifest.xml") }
     private val proguard: String by lazy { read("proguard-rules.pro") }
     private val gate: String by lazy { read("src/main/java/com/norfold/app/data/CrashReportingGate.kt") }
+    private val diagnosticsStore: String by lazy {
+        read("src/main/java/com/norfold/app/data/DiagnosticsStore.kt")
+    }
     private val application: String by lazy { read("src/main/java/com/norfold/app/NorfoldApplication.kt") }
     private val buildFile: String by lazy { read("build.gradle.kts") }
     private val settings: String by lazy { read("src/main/java/com/norfold/app/ui/screens/SettingsScreen.kt") }
+    private val debugManifest: String by lazy { read("src/debug/AndroidManifest.xml") }
+    private val controlledCrashActivity: String by lazy {
+        read("src/debug/java/com/norfold/app/qa/CrashlyticsTestActivity.kt")
+    }
 
     @Test
     fun manifestHoldsCollectionOffByDefault() {
@@ -56,6 +63,55 @@ class CrashReportingGateTest {
                 "reading the stored preference",
             "false",
             declaration.groupValues[1],
+        )
+    }
+
+    @Test
+    fun storedConsentAlsoDefaultsOff() {
+        // The manifest protects only the interval before Application.onCreate. Immediately afterwards,
+        // CrashReportingGate.apply reads DiagnosticsStore, so a true SharedPreferences fallback silently
+        // turns collection back on during a fresh install even though no answer has ever been stored.
+        // Pin both the state model and every read fallback: changing only one leaves another startup or
+        // logging path behaving as if consent existed.
+        assertTrue(
+            "DiagnosticsState.enabled must default to false; a freshly constructed state cannot represent consent",
+            diagnosticsStore.contains("val enabled: Boolean = false"),
+        )
+        assertFalse(
+            "Every KeyEnabled SharedPreferences fallback must be false; a missing key means no consent",
+            diagnosticsStore.contains("getBoolean(KeyEnabled, true)"),
+        )
+        assertTrue(
+            "DiagnosticsStore must read the persisted preference with a false fallback",
+            diagnosticsStore.contains("enabled = prefs.getBoolean(KeyEnabled, false)"),
+        )
+    }
+
+    @Test
+    fun controlledCrashIsDebugOnlyArmedAndConsentGated() {
+        assertFalse(
+            "The controlled crash activity must never be declared in the production manifest",
+            manifest.contains("CrashlyticsTestActivity"),
+        )
+        assertTrue(
+            "The controlled crash activity must be reachable by ADB in debug builds",
+            debugManifest.contains(".qa.CrashlyticsTestActivity") &&
+                debugManifest.contains("android:exported=\"true\""),
+        )
+        assertTrue(
+            "The trigger must re-read the production consent preference immediately before throwing",
+            controlledCrashActivity.contains("refreshConsent()") &&
+                controlledCrashActivity.contains("if (consentEnabled && armed)"),
+        )
+        assertTrue(
+            "A controlled crash must require a separate arming action",
+            controlledCrashActivity.contains("onArm") &&
+                controlledCrashActivity.contains("enabled = consentEnabled && armed"),
+        )
+        assertEquals(
+            "The controlled trigger must contain exactly one deliberate throw",
+            1,
+            Regex("throw RuntimeException").findAll(controlledCrashActivity).count(),
         )
     }
 
