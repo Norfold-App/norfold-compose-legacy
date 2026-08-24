@@ -150,8 +150,11 @@ jobs:
       - name: Run Android lint
         run: ./gradlew :apps:android:lintDebug
 
-      - name: Build Android debug APK
-        run: ./gradlew :apps:android:assembleDebug :apps:android:bundleRelease
+      # The benchmark APK inherits the release build type, including R8, resource shrinking and
+      # ALLOW_DESTRUCTIVE_SCHEMA_RESET=false, but uses the development signing identity so it can be
+      # installed for release-configuration runtime certification. It is not a production release.
+      - name: Build Android debug, benchmark, and release artifacts
+        run: ./gradlew :apps:android:assembleDebug :apps:android:assembleBenchmark :apps:android:bundleRelease
 
       - name: Certify stable Android signing identity
         if: steps.ci-signing.outputs.configured == 'true'
@@ -205,6 +208,12 @@ jobs:
         with:
           name: norfold-android-debug-${{ steps.ci-signing.outputs.configured == 'true' && 'stable-development' || 'ephemeral-preview' }}
           path: apps/android/build/outputs/apk/debug/*.apk
+
+      - name: Upload minified Android benchmark APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: norfold-android-benchmark-${{ steps.ci-signing.outputs.configured == 'true' && 'stable-development' || 'ephemeral-preview' }}
+          path: apps/android/build/outputs/apk/benchmark/*.apk
 
       - name: Upload unsigned Android release bundle
         uses: actions/upload-artifact@v6
