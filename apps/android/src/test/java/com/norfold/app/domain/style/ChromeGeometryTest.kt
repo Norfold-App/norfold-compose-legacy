@@ -2422,7 +2422,7 @@ class ChromeGeometryTest {
      * and emits `FocusInteraction.Focus` into the interaction source. So every enabled site here is already
      * tab-reachable and already *emits* focus. What none of them did was draw anything when it arrived.
      *
-     * **What is exempt, and why it is a short list.** Nine sites in eight functions, and every one of them is
+     * **What is exempt, and why it is a short list.** Eight sites in seven functions, and every one of them is
      * authored content rather than app chrome — a spreadsheet cell, a table cell in either host, a diagram
      * node, a placed image or chart. Each already has a focus vocabulary of its own that a ring would fight:
      * a selection edge at [ChromeGeometry.SELECTED_EDGE_WIDTH], a text caret, a drag frame with handles, and a
@@ -2435,12 +2435,21 @@ class ChromeGeometryTest {
      * also has to name this test in the prose beside it, so the reasoning lives where the next reader of that
      * function will be standing.
      *
-     * **`ChatHomeScreen.ContactRow` is the one exemption that is not content**, and it is here as a marker for
-     * #74 rather than as a design decision. Its `onClick` is `{}` — a no-op — so ringing it would advertise a
-     * focusable control that does nothing on activation. Its real action is long-press only. The row does carry
-     * `onLongClickLabel`, which puts the action in TalkBack's actions menu, but keyboard and switch access
-     * still cannot reach it. That is a defect with a task of its own; what this list records is that the
-     * missing ring here is a *symptom* of it and must not be closed by drawing one.
+     * **The count is authoritative, not the search, and that correction is #74's.** The first version of this
+     * test asked whether a ring appears *anywhere* in the enclosing function and passed the site if one did.
+     * The function-wide window is deliberate and stays — several of these hoist `rememberChromeFocus()` to the
+     * top of a composable and apply the ring twenty lines below the gesture, and one applies it to a child
+     * rather than to the same modifier chain, so a line window would report them all as bare. What the boolean
+     * form could not see is a function with *more gestures than rings*: `WorkspaceScreens.ChatBubble` had three
+     * clickable things in it and rings on two of them, and the bubble itself — the largest tap target in the
+     * chat — passed on its own author name's ring. So each function now covers `min(gestures, rings)` of its
+     * sites and must name the excess here.
+     *
+     * **Only the state-taking spellings count as coverage** ([STATE_RING]). The substrate's self-wiring
+     * modifiers — `focusableChrome`, `focusablePill`, `toggleableChrome` — are deliberately absent from that
+     * list even though each draws a ring, because each *is* a gesture: a site using one has no separate
+     * `combinedClickable` to cover, so its appearance in a function that also hand-rolls a gesture is evidence
+     * of two controls, not of one ringed one. Counting them would re-open exactly the hole above.
      *
      * The scan reuses [uiSources], [blankComments], [functionDeclarations], [regionOf] and [documentedFrom]
      * from the raw-edge check above, so the four scanner corrections documented there apply unchanged — in
@@ -2454,26 +2463,42 @@ class ChromeGeometryTest {
         val counted = mutableMapOf<String, Int>()
         var ringed = 0
         var files = 0
+        var gestures = 0
 
         for ((leaf, text) in uiSources()) {
             files++
             val code = blankComments(text)
             val declarations = functionDeclarations(code)
 
+            // Grouped by owning function before anything is judged, because the question is no longer "does a
+            // ring exist near this site" but "does this function have as many rings as it has gestures".
+            val sites = linkedMapOf<Region, MutableList<Int>>()
             for (match in Regex("""\.(?:combinedClickable|clickable)\s*\(""").findAll(code)) {
+                gestures++
                 val region = regionOf(declarations, match.range.first, code.length)
-                // A ring anywhere in the enclosing function, not in a line window: several of these hoist
-                // `rememberChromeFocus()` to the top of the composable and apply the ring twenty lines below
-                // the gesture, and one applies it to a child rather than to the same modifier chain.
-                if (FOCUS_RING.containsMatchIn(code.substring(region.start, region.end))) {
-                    ringed++
-                    continue
-                }
+                sites.getOrPut(region) { mutableListOf() } +=
+                    code.substring(0, match.range.first).count { it == '\n' } + 1
+            }
+
+            for ((region, lines) in sites) {
+                val rings = STATE_RING.findAll(code.substring(region.start, region.end)).count()
+                val covered = minOf(lines.size, rings)
+                ringed += covered
+                if (covered == lines.size) continue
+
                 val key = "$leaf#${region.name}"
-                counted[key] = (counted[key] ?: 0) + 1
+                counted[key] = lines.size - covered
                 if (ringExemptions[key] == null) {
-                    val line = code.substring(0, match.range.first).count { it == '\n' } + 1
-                    bare += "$leaf:$line ${region.name} is clickable with no focus indication"
+                    bare += if (rings == 0) {
+                        // Nothing in the function rings anything, so every one of its sites can be named.
+                        lines.joinToString("; ") { "$leaf:$it ${region.name} is clickable with no focus indication" }
+                    } else {
+                        // Some ring and some do not, and a function-wide search cannot say which is which — so
+                        // the report is the two counts and every candidate line, rather than a guessed one.
+                        "$leaf ${region.name} has ${lines.size} gesture sites but ${rings} focus-ring " +
+                            "spellings, so ${lines.size - covered} of ${lines.joinToString(", ") { ":$it" }} " +
+                            "draws nothing when focused"
+                    }
                 } else if (!text.substring(documentedFrom(text, region.start), region.end).contains(TEST_NAME)) {
                     silent += key
                 }
@@ -2503,6 +2528,11 @@ class ChromeGeometryTest {
         // scan, so a renamed package or a regex that stops matching would read as green.
         assertTrue("only $files files scanned under ui/ — the walk has stopped finding them", files >= 80)
         assertTrue(
+            "only $gestures hand-rolled gesture sites found under ui/ — the clickable regex has stopped " +
+                "matching, so every unringed control in the tree would now be invisible to this test",
+            gestures >= 45,
+        )
+        assertTrue(
             "only $ringed ringed sites found — the focus-ring entry points have stopped being recognised, so " +
                 "every already-ringed site would now be reported as bare",
             ringed >= 30,
@@ -2510,7 +2540,7 @@ class ChromeGeometryTest {
         assertEquals(
             "the exempt sites are counted individually, so a third bare gesture inside an already-exempt " +
                 "function is still visible here",
-            9,
+            8,
             counted.values.sum(),
         )
     }
@@ -2518,9 +2548,9 @@ class ChromeGeometryTest {
     /**
      * The clickable functions that deliberately draw no focus ring, and how many sites each owns.
      *
-     * Eight functions, nine sites. Seven are authored content with their own focus vocabulary; the eighth,
-     * `ContactRow`, is #74's marker. The reasoning for each is in the test above and in the prose beside the
-     * gesture itself, which the second assertion there enforces.
+     * Seven functions, eight sites, all of them authored content with a focus vocabulary of its own. The
+     * reasoning for each is in the test above and in the prose beside the gesture itself, which the second
+     * assertion there enforces.
      */
     private val ringExemptions = sortedMapOf(
         // Editor content: a selection edge, a caret or a drag frame already answers "where am I".
@@ -2531,23 +2561,242 @@ class ChromeGeometryTest {
         "editor/flow/FlowBlockContent.kt#FlowTableCell" to 1,
         "editor/spreadsheet/SpreadsheetHostScreen.kt#GridCell" to 1,
         "editor/spreadsheet/SpreadsheetHostScreen.kt#GridHeader" to 1,
-        // Not content, and not settled: a no-op onClick standing in for a long-press-only action. See #74.
-        "screens/ChatHomeScreen.kt#ContactRow" to 1,
     )
 
     /**
-     * Every way a site can draw the focus ring.
+     * The long-press sites whose untimed route is real but lands somewhere this scan cannot follow.
      *
-     * Five spellings rather than one, because the substrate offers a modifier that takes the gesture
-     * ([com.norfold.app.ui.focusableChrome]) and a family that takes only the state, for callers whose gesture
-     * has to stay `combinedClickable` or `Surface(onClick =)`. Matching only the first reported thirty-two
-     * already-ringed sites as bare; matching a bare `.ring(` alone matches unrelated shape code, so the
-     * receiver-qualified spellings are listed explicitly.
+     * All three fail route 3 for the same structural reason rather than three different ones: the tap and the
+     * hold both arrive as hoisted lambda *parameters* — `onTap` and `onLongPress`, `onClick` and
+     * `onLongPress`, `onTapReaction` and `onLongPressReactions` — so at the gesture site the two are simply
+     * two different names. Where each one goes is decided by the caller, one file or one hoist away, and a
+     * regex cannot follow a function value to its argument. The subset rule is right to refuse them; it is
+     * refusing on absence of evidence, so the evidence goes here and beside the code.
+     *
+     * - **`ImageFocusSheet.ImageTransformAction`** — its long-press reveals the button's *name* and nothing
+     *   else. There is no action to route to, so an untimed route would be a control that shows a label. A
+     *   screen reader has already read that name from the icon's `contentDescription`, which is documented at
+     *   the site as the reason there is deliberately no `onLongClickLabel`.
+     * - **`WorkspaceScreens.ChatBubble`, the bubble itself** — its two routes open one sheet at two depths, by
+     *   design: tap gives the emoji row, hold adds the action list. The tap's `onTap` and the hold's
+     *   `onLongPress` therefore call different things while reaching the same composable, which is exactly the
+     *   shape the subset rule cannot verify. The tap depth ends in a "More actions" row, so tap-then-tap
+     *   reaches everything the hold does with no timing anywhere.
+     * - **`WorkspaceScreens.ChatBubble`, the reaction pill** — the one site whose hand-read found a genuine
+     *   gap, and the exemption records the fix rather than the excuse. Its tap toggles *my* reaction and its
+     *   hold shows who else reacted, so the tap is not a subset of anything and the roster had no untimed
+     *   route at all. A 20 dp pill in a horizontally scrolling row cannot carry its own control, so the route
+     *   is a "See who reacted" row in `MessageActionsSheet` reaching the same `WhoReactedSheet`.
      */
-    private val FOCUS_RING = Regex(
-        """\bfocusableChrome\s*\(|\bfocusablePill\s*\(|\bchromeFocusRing\s*\(|\bfocusRing\s*\(""" +
-            """|\.ring\s*\(|\.ringOnShape\s*\(|\.ringOnCircle\s*\(|\.ringOnPill\s*\(""",
+    private val timedExemptions = sortedMapOf(
+        "editor/image/ImageFocusSheet.kt#ImageTransformAction" to 1,
+        "screens/WorkspaceScreens.kt#ChatBubble" to 2,
     )
+
+    /**
+     * Every way a site can draw a focus ring **for a gesture it does not own**.
+     *
+     * Six spellings, all from the state-taking half of the substrate: they take a `MutableInteractionSource`
+     * and draw from it, leaving the gesture to the caller — which is what a site whose gesture has to stay
+     * `combinedClickable` or `Surface(onClick =)` needs. Matching only [com.norfold.app.ui.focusableChrome]
+     * reported thirty-two already-ringed sites as bare; matching a bare `.ring(` alone matches unrelated shape
+     * code, so the receiver-qualified spellings are listed explicitly.
+     *
+     * The self-wiring modifiers `focusableChrome`, `focusablePill` and `toggleableChrome` are **deliberately
+     * not here**, and the ring test's KDoc gives the reason: each supplies the gesture as well as the ring, so
+     * one appearing in a function that also hand-rolls a `combinedClickable` means two controls, of which only
+     * one is covered.
+     */
+    private val STATE_RING = Regex(
+        """\bchromeFocusRing\s*\(|\bfocusRing\s*\(""" +
+            """|\.ring\s*\(|\.ringOnShape\s*\(|\.ringOnCircle\s*\(|\.ringOnPill\s*\(|\.ringOnCorners\s*\(""",
+    )
+
+    /**
+     * Every long-press action in the tree is also reachable without holding anything down.
+     *
+     * This is #74's invariant, and its scope is narrower than the task's title because most of what the title
+     * asks for the framework already does. Read from the resolved `androidx.compose.foundation` 1.9.4 rather
+     * than from documentation: `CombinedClickableNode.applyAdditionalSemantics` publishes
+     * `SemanticsActions.OnLongClick`, which `AndroidComposeViewAccessibilityDelegateCompat` turns into
+     * `AccessibilityNodeInfo.ACTION_LONG_CLICK` — so TalkBack, Switch Access and Voice Access already list
+     * every one of these in their actions menu, and always did. `CombinedClickableNode.onClickKeyDownEvent`
+     * even reaches them from a hardware keyboard: it launches a coroutine, awaits
+     * `LocalViewConfiguration.longPressTimeoutMillis`, and fires `onLongClick` if the key is still down.
+     *
+     * That last route is the defect. It is a *timed* keystroke, and WCAG 2.1.1 requires keyboard operation
+     * "without requiring specific timings for individual keystrokes" — a user with a tremor, or on a keyboard
+     * with sticky-keys enabled, has no reliable way to hold Enter for exactly long enough. So what this test
+     * demands is that every long-press destination also has an **untimed** route.
+     *
+     * **Three routes qualify, and any one of them is enough.** The test accepts whichever the site chose,
+     * because each genuinely solves the problem and forcing one would be this test dictating an implementation:
+     *
+     * - **an `IconButton` in the same composable** — the Android-native answer, and the one four rows here use.
+     *   Material's own button is tab-reachable and carries its own focus indication, which is why the ring test
+     *   above does not look at them.
+     * - **a `customActions` block** — a `CustomAccessibilityAction` list, for a site whose action has no
+     *   standard-action equivalent. `FlowHostScreen.FlowBlockRow` publishes a whole command registry this way.
+     * - **a distinct `onClick` whose work is a subset of the long-press's** — where the tap already does the
+     *   thing, or a cheaper version of it. "Non-empty" alone was the first draft of this and it was nearly
+     *   vacuous: almost every row in this app is tappable, so it passed a conversation row whose tap opens the
+     *   conversation while its long-press held the only route to Pin and Delete. Comparing the two handlers'
+     *   *calls* is the strongest statement a regex can make about where a tap goes — if everything the tap
+     *   calls is also called by the hold, the tap cannot be going somewhere the hold does not.
+     *
+     * **What this cannot see is a route that leaves through a lambda parameter**, and that limit is worth
+     * stating rather than implying. Where a site's tap and hold both arrive hoisted — `onTap` and
+     * `onLongPress` — the two are just two names at the gesture, and where they go is the caller's business
+     * one hoist away. Three sites are like that, so all eight were read by hand as well, and one of them had a
+     * real gap: a reaction pill's tap toggles *my* reaction while its long-press shows the roster of who else
+     * reacted, so the roster had no untimed route at all. The pill cannot carry its own control — a 20 dp
+     * target inside a horizontally scrolling row — and the "+N" overflow pill beside it, which does open the
+     * full list, appears only past twenty *distinct* emoji, so on any real message it is not there. The answer
+     * was a "See who reacted" row in `MessageActionsSheet`, present when the message has reactions, reaching
+     * the same `WhoReactedSheet`. What the test buys is narrower than that reading: it guarantees a *bare*
+     * long-press, with no untimed anything, cannot be added silently.
+     *
+     * **What is deliberately not accepted is a second `customActions` entry duplicating `ACTION_LONG_CLICK`.**
+     * Google's guidance reserves custom actions for gestures not mappable to a standard tap — its own example
+     * is swipe-to-dismiss — and two identical entries in TalkBack's menu is a defect rather than coverage.
+     * That is why the four rows grew a visible control instead.
+     *
+     * **There are three exemptions and they are all one shape**, listed in [timedExemptions] with what each
+     * site's untimed route actually is. Every one routes through a hoisted lambda, which is a limit of the scan
+     * rather than a defect in the site — so each names this test in a comment beside the code, and the map is
+     * asserted to still match the tree so an entry cannot outlive what it describes.
+     */
+    @Test
+    fun `every long-press action has an untimed route as well`() {
+        val timedOnly = mutableListOf<String>()
+        val silent = mutableListOf<String>()
+        val claimed = mutableMapOf<String, Int>()
+        var sites = 0
+
+        for ((leaf, text) in uiSources()) {
+            val code = blankComments(text)
+            val declarations = functionDeclarations(code)
+
+            for (match in Regex("""\.combinedClickable\s*\(""").findAll(code)) {
+                val open = code.indexOf('(', match.range.first)
+                val arguments = code.substring(open, closingParen(code, open) + 1)
+                // A `combinedClickable` with no long-press, or an explicitly disabled one, has nothing to
+                // reach. `blankComments` erases string literals too, so this can see that `onLongClick` is
+                // present and whether it is `null` or empty — never what any label says.
+                if (!Regex("""\bonLongClick\s*=""").containsMatchIn(arguments)) continue
+                if (Regex("""\bonLongClick\s*=\s*(?:null|\{\s*})""").containsMatchIn(arguments)) continue
+                sites++
+
+                val region = regionOf(declarations, match.range.first, code.length)
+                val body = code.substring(region.start, region.end)
+                val tap = callsWithin(argumentValue(arguments, "onClick"))
+                val hold = callsWithin(argumentValue(arguments, "onLongClick"))
+                val untimed = when {
+                    body.contains("IconButton(") -> true
+                    body.contains("customActions") -> true
+                    // Route 3, and the subset is the whole point of it. A non-empty `onClick` alone proves
+                    // nothing: nearly every row in this app is tappable, so "has an onClick" would pass a row
+                    // whose tap opens a document while its long-press holds the only route to Delete. Demanding
+                    // that every call the tap makes is also one the hold makes is the strongest statement a
+                    // regex can make about *destination* — the tap does a subset of the hold, so anything the
+                    // tap reaches, the hold reaches too, and the tap is the cheap untimed front door to it.
+                    tap.isNotEmpty() && hold.containsAll(tap) -> true
+                    else -> false
+                }
+                if (!untimed) {
+                    val line = code.substring(0, match.range.first).count { it == '\n' } + 1
+                    val key = "$leaf#${region.name}"
+                    if (timedExemptions[key] == null) {
+                        timedOnly += "$leaf:$line ${region.name} is reachable only by holding a key or a " +
+                            "finger down: its tap calls ${tap.sorted()} and its hold calls ${hold.sorted()}, " +
+                            "so the tap cannot be reaching the same place"
+                    } else if (!text.substring(documentedFrom(text, region.start), region.end)
+                            .contains(TEST_NAME)
+                    ) {
+                        silent += key
+                    } else {
+                        claimed[key] = (claimed[key] ?: 0) + 1
+                    }
+                }
+            }
+        }
+
+        assertEquals(
+            "a long-press-only action is reachable from a hardware keyboard only by holding Enter for " +
+                "longPressTimeoutMillis, and WCAG 2.1.1 rules out requiring a specific keystroke timing — give " +
+                "the site a visible IconButton, a customActions entry, or a real onClick whose work is a " +
+                "subset of the long-press's (see this test's prose for which fits what)",
+            emptyList<String>(),
+            timedOnly,
+        )
+        assertEquals(
+            "a site exempted here routes to its untimed action somewhere this scan cannot follow, so the " +
+                "reason has to be readable at the site — put a comment naming $TEST_NAME beside it saying " +
+                "where the untimed route actually is",
+            emptyList<String>(),
+            silent.sorted(),
+        )
+        // An exemption that no longer describes anything is worse than none: it is a licence, sitting in a map,
+        // for the next long-press added to that same function. So each must still be earning its keep.
+        assertEquals(
+            "a timedExemptions entry no longer matches the tree — if the site grew a visible control or the " +
+                "gesture went away, delete the entry rather than leaving it to cover the next one",
+            timedExemptions,
+            claimed.toSortedMap().toMap(),
+        )
+        // A floor, because the assertion above passes on an empty scan: if the regex stops matching, or a
+        // refactor moves the gestures to a package this walk does not reach, the loop finds nothing and the
+        // whole invariant reads green while every long-press in the app is timed-only again.
+        assertTrue(
+            "only $sites long-press sites found under ui/ — the combinedClickable scan has stopped matching, " +
+                "so this test is now asserting over nothing",
+            sites >= 8,
+        )
+    }
+
+    /**
+     * No gesture in the tree activates to nothing.
+     *
+     * `onClick = {}` inside a `clickable` is a control that is tab-reachable, that reports itself to TalkBack
+     * as clickable, that draws a ripple when tapped — and that does nothing at all. Two sites had it, both as
+     * placeholders for an action that only long-press could reach: `ChatHomeScreen.ContactRow` and the chat
+     * bubble in `WorkspaceScreens.kt`. #74 closed both, from opposite directions — the bubble's tap became a
+     * real action, and the contact row stopped being a control and became a row with a button on it.
+     *
+     * **The match is anchored inside the gesture's own argument list**, walked from the modifier call with
+     * [closingParen], and that anchor is the whole reason this asserts an empty list with no exemptions.
+     * Searching the file for `onClick = {}` finds one more site — `TasksBoardScreen`'s drag clone, which passes
+     * `onClick = {}` as a *parameter* to the row composable it renders under the user's finger, deliberately,
+     * because a floating copy of a card must not be tappable while the real one underneath it is. That is
+     * correct code, and a scanner that reported it would have had to be given an exemption to stay quiet —
+     * which would then have licensed a real no-op appearing in the same function.
+     */
+    @Test
+    fun `no gesture activates to nothing`() {
+        val inert = mutableListOf<String>()
+
+        for ((leaf, text) in uiSources()) {
+            val code = blankComments(text)
+            val declarations = functionDeclarations(code)
+
+            for (match in Regex("""\.(?:combinedClickable|clickable)\s*\(""").findAll(code)) {
+                val open = code.indexOf('(', match.range.first)
+                val arguments = code.substring(open, closingParen(code, open) + 1)
+                if (!Regex("""\bonClick\s*=\s*\{\s*}""").containsMatchIn(arguments)) continue
+                val region = regionOf(declarations, match.range.first, code.length)
+                val line = code.substring(0, match.range.first).count { it == '\n' } + 1
+                inert += "$leaf:$line ${region.name} is clickable with an empty onClick"
+            }
+        }
+
+        assertEquals(
+            "a clickable whose onClick is empty is a focus stop that does nothing when activated — either " +
+                "give it the action a tap should perform, or stop making it a control (detectTapGestures plus " +
+                "a semantics onLongClick keeps a touch shortcut without claiming to be clickable)",
+            emptyList<String>(),
+            inert,
+        )
+    }
 
     /**
      * The functions that draw a raw `outline` stroke deliberately, and how many each owns.
@@ -2603,7 +2852,7 @@ class ChromeGeometryTest {
     /** One `border`/`background` site: where it is, which token it names, and whether it derives. */
     private data class EdgeSite(val index: Int, val token: String, val derived: Boolean)
 
-    /** A function's name and the source range it owns, from its declaration to the next one. */
+    /** A function's name and the source range it spans, from its declaration to the end of its body. */
     private data class Region(val name: String, val start: Int, val end: Int)
 
     /**
@@ -2688,26 +2937,181 @@ class ChromeGeometryTest {
         return source.length - 1
     }
 
-    /** Every `fun` declaration in the file, as an offset-to-name pair in source order. */
-    private fun functionDeclarations(code: String): List<Pair<Int, String>> =
-        Regex("""\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?(\w+)\s*[(<]""")
-            .findAll(code)
-            .map { it.range.first to it.groupValues[1] }
-            .toList()
-
-    /** Which function owns [position], and the range that function spans. */
-    private fun regionOf(declarations: List<Pair<Int, String>>, position: Int, length: Int): Region {
-        var start = 0
-        var name = "<top-level>"
-        for ((at, declared) in declarations) {
-            if (at <= position) {
-                start = at
-                name = declared
-            } else {
-                return Region(name, start, at)
+    /**
+     * The text of one named argument's value, stopping at the comma that ends it rather than at the first
+     * comma it contains.
+     *
+     * A lambda argument is full of commas — `onClick = { a(x, y); b() },` — so a naive split at the first one
+     * truncates the value halfway through. Depth tracking is what makes the difference, and the depth starts
+     * at zero *inside* the value, so the closing paren of the enclosing argument list also ends it.
+     */
+    private fun argumentValue(arguments: String, name: String): String {
+        val match = Regex("""\b$name\s*=\s*""").find(arguments) ?: return ""
+        var index = match.range.last + 1
+        val start = index
+        var depth = 0
+        while (index < arguments.length) {
+            val character = arguments[index]
+            when {
+                character == '(' || character == '{' || character == '[' -> depth++
+                character == ')' || character == '}' || character == ']' -> {
+                    if (depth == 0) return arguments.substring(start, index)
+                    depth--
+                }
+                character == ',' && depth == 0 -> return arguments.substring(start, index)
             }
+            index++
         }
-        return Region(name, start, length)
+        return arguments.substring(start, index)
+    }
+
+    /**
+     * The function calls one handler makes, which stands in for what it *does*.
+     *
+     * Only lowercase-initial names, so a `Composable` invocation or a constructor is not mistaken for work —
+     * and `performHapticFeedback` is excluded because it is the long-press's own confirmation buzz. Counting
+     * it would mean no tap could ever be a subset of a hold, since taps do not buzz.
+     */
+    private fun callsWithin(handler: String): Set<String> =
+        Regex("""\b([a-z]\w*)\s*\(""").findAll(handler)
+            .map { it.groupValues[1] }
+            .filterNot { it == "performHapticFeedback" }
+            .toSet()
+
+    /**
+     * Every `fun` declaration in the file, with the range it actually spans.
+     *
+     * Structural rather than positional, and that is the correction. This used to be a flat list of offsets
+     * walked linearly, so a function's region ran from its own `fun` to the *next* `fun` anywhere in the file —
+     * which is right for top-level declarations and wrong the moment one nests. `NotesHomeScreen.NoteCard`
+     * declares a local `fun gestureLabel`, and under the linear rule every site after it in the 250-line
+     * composable was attributed to `gestureLabel`: a seven-line `when` was reported as owning a
+     * `combinedClickable` it does not contain. `WorkspaceScreens.ChatBubble` had the mirror-image problem and
+     * three of its sites landed on `<top-level>`.
+     *
+     * The spans are found in three steps, and each exists because a simpler version failed on this tree:
+     *
+     * 1. **The parameter list is matched first.** Searching for the first `{` after `fun name` finds a lambda
+     *    *default* — `onLongPress: (ChatMessageItem) -> Unit = {}` — and brace-matches a two-character empty
+     *    body. Three `WorkspaceScreens.kt` composables have such a default before their body opens.
+     * 2. **After the parameter list, the first structural token decides the body.** `{` opens a block; `=`
+     *    opens an expression body; a following `fun`, or the end of file, means there is no body at all
+     *    (an `expect`/interface declaration). A return type may itself carry parens or angle brackets —
+     *    `): Pair<Set<String>, Set<String>> {` — so those are skipped as groups rather than scanned through.
+     * 3. **An expression body ends by depth *and* indentation.** `= with(NorfoldChrome) { … }` spans lines, so
+     *    a newline only ends it at paren/brace depth zero and when the next non-blank line is indented no
+     *    deeper than the declaration. Without the depth test, `NorfoldChrome.focusableChrome`'s single-line
+     *    delegating overload swallowed the whole of `focusablePill` below it.
+     *
+     * [regionOf] then picks the *innermost* span containing a site, so a nested declaration owns only itself
+     * and its enclosing composable keeps everything else. Measured on this tree: the ring scan reproduces its
+     * eight functions and nine sites exactly, and all nine long-press sites attribute to the composable a
+     * reader would name.
+     */
+    private fun functionDeclarations(code: String): List<Region> {
+        val spans = mutableListOf<Region>()
+        for (match in Regex("""\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?(\w+)\s*[(<]""").findAll(code)) {
+            val name = match.groupValues[1]
+            val declaration = match.range.first
+            val lineStart = code.lastIndexOf('\n', declaration) + 1
+            val indent = code.substring(lineStart).takeWhile { it == ' ' }.length
+            // The regex ends on `(` or on a generic's `<`; only the former is the parameter list.
+            var at = match.range.last
+            if (code[at] == '<') {
+                at = matchingGroup(code, at, '<', '>') + 1
+                while (at < code.length && code[at] != '(') at++
+            }
+            if (at >= code.length || code[at] != '(') {
+                spans += Region(name, declaration, declaration)
+                continue
+            }
+            at = matchingGroup(code, at, '(', ')') + 1
+            var end: Int? = null
+            while (at < code.length) {
+                when {
+                    code[at] == '(' -> at = matchingGroup(code, at, '(', ')') + 1
+                    code[at] == '<' -> at = matchingGroup(code, at, '<', '>') + 1
+                    code[at] == '{' -> {
+                        end = matchingGroup(code, at, '{', '}') + 1
+                        break
+                    }
+                    code[at] == '=' && code.getOrNull(at + 1) != '=' -> {
+                        end = expressionBodyEnd(code, at, indent)
+                        break
+                    }
+                    code.startsWith("fun", at) && (at == 0 || !code[at - 1].isLetterOrDigit()) -> break
+                    else -> at++
+                }
+            }
+            spans += Region(name, declaration, end ?: declaration)
+        }
+        return spans
+    }
+
+    /** The index of the [closer] that closes the [opener] at [open]. */
+    private fun matchingGroup(code: String, open: Int, opener: Char, closer: Char): Int {
+        var depth = 0
+        var index = open
+        while (index < code.length) {
+            when (code[index]) {
+                opener -> depth++
+                closer -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+            index++
+        }
+        return code.length - 1
+    }
+
+    /**
+     * Where an expression body (`fun f() = …`) ends, given the declaration's own [indent].
+     *
+     * Both tests matter. Depth alone would end `= with(X) {` at the first newline inside the lambda;
+     * indentation alone would run a one-line body on into every deeper-indented line that follows it, which is
+     * the whole of the next declaration when that declaration is itself indented inside a class.
+     */
+    private fun expressionBodyEnd(code: String, equals: Int, indent: Int): Int {
+        var depth = 0
+        var index = equals
+        while (index < code.length) {
+            when (code[index]) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> depth--
+                '\n' -> if (depth <= 0) {
+                    var scan = index + 1
+                    var ended = true
+                    while (scan < code.length) {
+                        val lineEnd = code.indexOf('\n', scan).let { if (it < 0) code.length else it }
+                        val line = code.substring(scan, lineEnd)
+                        if (line.isNotBlank()) {
+                            ended = line.takeWhile { it == ' ' }.length <= indent
+                            break
+                        }
+                        scan = lineEnd + 1
+                    }
+                    if (ended) return index
+                }
+            }
+            index++
+        }
+        return code.length
+    }
+
+    /**
+     * Which function owns [position]: the **innermost** declared span containing it.
+     *
+     * Innermost rather than nearest-preceding, so a local `fun` owns only its own body — see
+     * [functionDeclarations] for the two mis-attributions the nearest-preceding rule produced on this tree.
+     */
+    private fun regionOf(declarations: List<Region>, position: Int, length: Int): Region {
+        var best: Region? = null
+        for (span in declarations) {
+            if (position < span.start || position >= span.end) continue
+            if (best == null || (span.end - span.start) < (best.end - best.start)) best = span
+        }
+        return best ?: Region("<top-level>", 0, length)
     }
 
     /**
@@ -2830,10 +3234,10 @@ class ChromeGeometryTest {
      * Color` that solves once and is called twice, so the *sites* name a function rather than a `val`. Tracking
      * only `val`s reported both of its call sites as raw while the routing sat one hop away.
      *
-     * A function qualifies by returning `Color` and by what its body names, and its body is taken as the span up
-     * to the next declaration — which is [regionOf]'s definition of a function's extent, reused rather than
-     * restated. Only a helper whose whole job is producing a colour is followed; a large composable that happens
-     * to mention `legibleGlyph` somewhere inside it does not become an alias for its own name.
+     * A function qualifies by returning `Color` and by what its body names, and its body is the span
+     * [functionDeclarations] measured for it — reused rather than restated. Only a helper whose whole job is
+     * producing a colour is followed; a large composable that happens to mention `legibleGlyph` somewhere inside
+     * it does not become an alias for its own name.
      *
      * A helper that derives an *edge* is neither kind, and has to be skipped explicitly rather than falling
      * through to raw. `NorfoldChrome.restingEdge` names `outlineVariant` as its own default seed, so on the
@@ -2843,7 +3247,7 @@ class ChromeGeometryTest {
      */
     private fun glyphAliases(
         code: String,
-        declarations: List<Pair<Int, String>>,
+        declarations: List<Region>,
     ): Pair<Set<String>, Set<String>> {
         val derived = mutableSetOf<String>()
         val raw = mutableSetOf<String>()
@@ -2857,13 +3261,13 @@ class ChromeGeometryTest {
             }
         }
 
-        for ((at, name) in declarations) {
-            val body = code.substring(at, regionOf(declarations, at, code.length).end)
+        for (span in declarations) {
+            val body = code.substring(span.start, span.end.coerceAtLeast(span.start))
             if (COLOR_RETURNING.find(body)?.range?.first != 0) continue
             when {
-                DERIVED_GLYPH.containsMatchIn(body) -> derived += name
+                DERIVED_GLYPH.containsMatchIn(body) -> derived += span.name
                 DERIVED_EDGE.containsMatchIn(body) -> Unit
-                body.contains("colorScheme.outline") -> raw += name
+                body.contains("colorScheme.outline") -> raw += span.name
             }
         }
 

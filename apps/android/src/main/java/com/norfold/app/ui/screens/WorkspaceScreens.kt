@@ -116,7 +116,6 @@ import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.GifBox
 import androidx.compose.material.icons.outlined.Tag
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
@@ -240,6 +239,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
@@ -271,6 +271,16 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 
+/**
+ * Which depth of [MessageActionsSheet] a bubble asked for, and for which message.
+ *
+ * The bubble has two routes into one sheet and they open different amounts of it, so the target alone is not
+ * enough state — a bare `ChatMessageItem?` cannot say whether a tap or a long-press set it. Carrying the depth
+ * beside the message keeps the two in one atomic write, which is what stops the sheet from ever rendering the
+ * previous gesture's depth for a newly-opened message.
+ */
+private data class MessageActionsTarget(val message: ChatMessageItem, val showActions: Boolean)
+
 @Composable
 fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (ChatComposerAction) -> Unit = {}) {
     // TextFieldValue instead of String: mention detection needs the cursor position.
@@ -286,7 +296,7 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
     var notePickerOpen by remember { mutableStateOf(false) }
     var gifPickerOpen by remember { mutableStateOf(false) }
     var stickerPickerOpen by remember { mutableStateOf(false) }
-    var messageActions by remember { mutableStateOf<ChatMessageItem?>(null) }
+    var messageActions by remember { mutableStateOf<MessageActionsTarget?>(null) }
     var reportTarget by remember { mutableStateOf<ChatMessageItem?>(null) }
     var whoReacted by remember { mutableStateOf<ChatMessageItem?>(null) }
     var forwardTarget by remember { mutableStateOf<ChatMessageItem?>(null) }
@@ -659,17 +669,27 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
             )
         }
         val sheetClipboard = LocalClipboardManager.current
-        messageActions?.let { target ->
+        messageActions?.let { opened ->
+            val target = opened.message
             MessageActionsSheet(
                 message = target,
                 canUnsend = viewModel.canUnsendChatMessage(target),
                 canEdit = target.authorUsername.equals(currentUsername, true) && target.body.isNotBlank(),
                 canReport = viewModel.canReportChatMessage(target),
+                showActions = opened.showActions,
+                // Re-opens this same sheet at full depth on the same message, so the tap route reaches the
+                // action list without a hold. Same target, so nothing is re-resolved and the emoji row does
+                // not flicker away and back.
+                onShowActions = { messageActions = opened.copy(showActions = true) },
                 onReply = { replyTarget = target; editingTarget = null; messageActions = null },
                 onEdit = { editingTarget = target; replyTarget = null; message = TextFieldValue(target.body, TextRange(target.body.length)); messageActions = null },
                 onTogglePin = { viewModel.setChatMessagePinned(target, !target.pinned); messageActions = null },
                 onToggleStar = { viewModel.setChatMessageStarred(target, !target.starred); messageActions = null },
                 onReact = { emoji -> viewModel.toggleChatReaction(target, emoji); messageActions = null },
+                // Hands off to the same sheet a reaction pill's long-press opens, and it is this sheet's job
+                // to offer it: the pill itself has no untimed way in. Closes this one first, so the roster
+                // does not open behind a dialog that is still up.
+                onWhoReacted = { messageActions = null; whoReacted = target },
                 onForward = { forwardTarget = target; messageActions = null },
                 onSelect = { selectedIds = setOf(target.id); messageActions = null },
                 onCopy = {
@@ -1009,7 +1029,13 @@ fun ChatScreen(state: DocsUiState, viewModel: DocsViewModel, onPickAttachment: (
                     richPreviewsEnabled = serviceCapabilities.richPreviewsEnabled,
                     onPlayOnlineVideo = { onlineVideoId = it },
                     onReply = { if (!selecting) { replyTarget = chat; editingTarget = null } },
-                    onLongPress = { if (!selecting) messageActions = it },
+                    // Two depths of one sheet. A tap opens the emoji row alone, a long-press opens it plus the
+                    // full action list — so the cheap frequent thing costs one tap while the heavier operations
+                    // stay behind the deliberate gesture. Both carry the same `!selecting` guard: during
+                    // selection the row wrapper above owns the gesture as a Role.Checkbox, and an unguarded tap
+                    // would raise a sheet over a live selection.
+                    onTap = { if (!selecting) messageActions = MessageActionsTarget(it, showActions = false) },
+                    onLongPress = { if (!selecting) messageActions = MessageActionsTarget(it, showActions = true) },
                     onTapReaction = { m, emoji -> if (!selecting) viewModel.toggleChatReaction(m, emoji) },
                     highlighted = highlightedMessageId != null && group.any { it.id == highlightedMessageId },
                     onTapReplyPreview = { preview ->
@@ -3368,6 +3394,7 @@ private fun ChatBubble(
     richPreviewsEnabled: Boolean,
     onPlayOnlineVideo: (String) -> Unit,
     onReply: (ChatMessageItem) -> Unit,
+    onTap: (ChatMessageItem) -> Unit = {},
     onLongPress: (ChatMessageItem) -> Unit = {},
     onTapReaction: (ChatMessageItem, String) -> Unit = { _, _ -> },
     highlighted: Boolean = false,
@@ -3423,6 +3450,15 @@ private fun ChatBubble(
     }
     val tailBottom = 8.dp
     val roundTop = if (firstOfGroup) 24.dp else 10.dp
+    // Declared once and read three times — clip, `shape`, and the focus ring. It was written out twice before
+    // the ring existed; a third copy of four conditionals is how a ring silently stops being concentric with
+    // the thing it rings, so the grouping rules now live in exactly one place.
+    val bubbleShape = RoundedCornerShape(
+        topStart = if (mine) 24.dp else roundTop,
+        topEnd = if (mine) roundTop else 24.dp,
+        bottomStart = if (mine || !lastOfGroup) 24.dp else tailBottom,
+        bottomEnd = if (!mine || !lastOfGroup) 24.dp else tailBottom,
+    )
     val haptics = LocalHapticFeedback.current
     val swipeState = rememberSwipeToDismissBoxState(
         confirmValueChange = { direction ->
@@ -3514,38 +3550,41 @@ private fun ChatBubble(
                         .padding(start = 10.dp, bottom = 2.dp),
                 )
             }
+            val bubbleFocus = rememberChromeFocus()
             Surface(
                 modifier = Modifier
                     .widthIn(max = 316.dp)
-                    .clip(
-                        RoundedCornerShape(
-                            topStart = if (mine) 24.dp else roundTop,
-                            topEnd = if (mine) roundTop else 24.dp,
-                            bottomStart = if (mine || !lastOfGroup) 24.dp else tailBottom,
-                            bottomEnd = if (!mine || !lastOfGroup) 24.dp else tailBottom,
-                        ),
-                    )
-                    // No focus ring, deliberately. Two reasons, both structural rather than stylistic: the
-                    // bubble's shape is four independent corner radii (a tail corner squares off to point at
-                    // its author), so there is no single radius a concentric ring could hold; and its `onClick`
-                    // is a no-op — the only real action is the long-press. Ringing it would advertise a
-                    // focusable control that does nothing on activation. The long-press is labelled, which
-                    // puts the message actions in TalkBack's actions menu; reaching them by keyboard or
-                    // switch access is still a product gap, not a ring to draw here.
+                    .clip(bubbleShape)
+                    // Derived from the bubble's own `bubbleShape`, which is why this ring can exist at all. The
+                    // four other wrappers take a radius and a bubble has four, three of them the group's and the
+                    // fourth squared off to point at its author — so the ring reads the same declaration the clip
+                    // and `shape` below read, and follows the corners when the grouping rules move them.
+                    //
+                    // Measured on `bubbleColor`, the fill it is drawn inside. On a chromeless bubble that fill is
+                    // `Color.Transparent`, and `resolvedBackdrop` composites it onto the container for exactly
+                    // this case, so a sticker's ring is solved against the page it actually sits on.
+                    .then(bubbleFocus.ringOnCorners(bubbleShape, bubbleColor))
+                    // Two depths, and the tap is the new one. Reacting is the frequent cheap thing, so it costs a
+                    // tap; the full action list stays behind the long-press. That is also what closes the older
+                    // defect recorded here: `onClick` was `{}`, so the bubble was a focusable control that did
+                    // nothing on activation, and the *only* hardware-keyboard route to the actions was holding
+                    // Enter for `longPressTimeoutMillis` — a timing WCAG 2.1.1 rules out. Tab now reaches a
+                    // control whose Enter does something, and the ring above makes that focus visible.
+                    // ChromeGeometryTest exempts the pair because both routes leave through hoisted lambdas
+                    // it cannot follow; they open one sheet at two depths, and the shallow one carries a
+                    // "More actions" row, so tap-then-tap reaches the full list with no hold anywhere.
                     .combinedClickable(
-                        onClick = {},
+                        interactionSource = bubbleFocus.source,
+                        indication = androidx.compose.material3.ripple(),
+                        onClickLabel = "React to message",
+                        onClick = { onTap(chat) },
                         onLongClickLabel = "Message actions",
                         onLongClick = {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             onLongPress(chat)
                         },
                     ),
-                shape = RoundedCornerShape(
-                    topStart = if (mine) 24.dp else roundTop,
-                    topEnd = if (mine) roundTop else 24.dp,
-                    bottomStart = if (mine || !lastOfGroup) 24.dp else tailBottom,
-                    bottomEnd = if (!mine || !lastOfGroup) 24.dp else tailBottom,
-                ),
+                shape = bubbleShape,
                 color = bubbleColor,
                 shadowElevation = if (chromeless) 0.dp else 1.dp,
             ) {
@@ -3738,6 +3777,10 @@ private fun ChatBubble(
                             // A pill, so the radius is resolved in the draw scope from the pill's own height
                             // rather than guessed here — `99.dp` is "fully round", not a measurement. The fill
                             // flips with whether I reacted, so the ring is measured on whichever one is painted.
+                            // The tap toggles *my* reaction while the hold shows who else reacted, so the two
+                            // are different destinations and the tap is no route to the roster. This pill is
+                            // too small to carry its own control, so the untimed route ChromeGeometryTest
+                            // exempts it from having is the "See who reacted" row in `MessageActionsSheet`.
                             modifier = Modifier
                                 .then(reactionFocus.ringOnPill(pillFill))
                                 .combinedClickable(
@@ -4100,18 +4143,34 @@ private fun MentionSuggestions(candidates: List<WorkspaceMember>, onPick: (Works
     }
 }
 
-/** Long-press actions for a chat message — compact spring-animated popup. */
+/**
+ * The actions for a chat message — compact spring-animated popup, in one of two depths.
+ *
+ * A bubble has two routes into this and they open different amounts of it. A **tap** opens the emoji row
+ * alone ([showActions] false): reacting is the cheap frequent thing, and it should cost one tap. A
+ * **long-press** opens the emoji row *and* the full action list, so the heavier operations sit behind the
+ * more deliberate gesture. Both are one composable rather than two sheets, because the tap sheet is
+ * exactly the long-press sheet's first block — a second sheet would be the same emoji row maintained twice.
+ *
+ * The tap depth ends in a "More actions" row ([onShowActions]) rather than in nothing. Depth is a default,
+ * not a wall: if holding were the only way to the action list, then on a keyboard the only way would be a
+ * *held* key, and a route that exists only while a key is held is the timed dependency WCAG 2.1.1 rules
+ * out. Tap, then tap again, reaches everything with no timing at all.
+ */
 @Composable
 private fun MessageActionsSheet(
     message: ChatMessageItem,
     canUnsend: Boolean,
     canEdit: Boolean,
     canReport: Boolean,
+    showActions: Boolean = true,
+    onShowActions: () -> Unit,
     onReply: () -> Unit,
     onEdit: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleStar: () -> Unit,
     onReact: (String) -> Unit,
+    onWhoReacted: () -> Unit,
     onForward: () -> Unit,
     onSelect: () -> Unit,
     onCopy: () -> Unit,
@@ -4174,22 +4233,42 @@ private fun MessageActionsSheet(
                         ) { Text(emoji, Modifier.padding(horizontal = 8.dp, vertical = 6.dp), fontSize = 20.sp) }
                     }
                 }
-                androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
-                // Action rows — compact vertical padding
-                MessageActionRow(Icons.AutoMirrored.Outlined.Reply, "Reply", onClick = onReply)
-                if (message.body.isNotBlank()) MessageActionRow(Icons.Outlined.ContentCopy, "Copy text", onClick = onCopy)
-                MessageActionRow(Icons.AutoMirrored.Outlined.Send, "Forward", onClick = onForward)
-                MessageActionRow(Icons.Outlined.Checklist, "Select", onClick = onSelect)
-                if (canEdit) MessageActionRow(Icons.Outlined.Edit, "Edit message", onClick = onEdit)
-                MessageActionRow(Icons.Outlined.PushPin, if (message.pinned) "Unpin" else "Pin message", onClick = onTogglePin)
-                MessageActionRow(
-                    if (message.starred) Icons.Outlined.Star else Icons.Outlined.StarBorder,
-                    if (message.starred) "Remove from Starred" else "Save to Starred",
-                    onClick = onToggleStar,
-                )
-                MessageActionRow(Icons.Outlined.Delete, "Delete for me", onClick = onDeleteForMe)
-                if (canReport) MessageActionRow(Icons.Outlined.Flag, "Report message", destructive = true, onClick = onReport)
-                if (canUnsend) MessageActionRow(Icons.AutoMirrored.Outlined.Undo, "Unsend for everyone", destructive = true, onClick = onUnsend)
+                // Action rows — compact vertical padding. Absent when a tap opened this, and the divider
+                // above them goes too: the reactions-only sheet ends at the emoji row rather than on a rule
+                // with nothing under it.
+                if (showActions) {
+                    androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                    MessageActionRow(Icons.AutoMirrored.Outlined.Reply, "Reply", onClick = onReply)
+                    if (message.body.isNotBlank()) MessageActionRow(Icons.Outlined.ContentCopy, "Copy text", onClick = onCopy)
+                    // Only when there is a roster to show, and it is here because there was nowhere else.
+                    // A reaction pill's long-press opens the roster and its tap toggles *my* reaction, so
+                    // the pill has no untimed route to it: a 20 dp pill inside a horizontally scrolling row
+                    // cannot carry its own ⋮, and the "+N" overflow pill beside it — which does open the
+                    // full list — appears only past twenty *distinct* emoji, so on any real message it is
+                    // not there. This row is the untimed route, and it reaches the same `WhoReactedSheet`.
+                    if (reactionCounts(message.reactionsJson).isNotEmpty()) {
+                        MessageActionRow(Icons.Outlined.Groups, "See who reacted", onClick = onWhoReacted)
+                    }
+                    MessageActionRow(Icons.AutoMirrored.Outlined.Send, "Forward", onClick = onForward)
+                    MessageActionRow(Icons.Outlined.Checklist, "Select", onClick = onSelect)
+                    if (canEdit) MessageActionRow(Icons.Outlined.Edit, "Edit message", onClick = onEdit)
+                    MessageActionRow(Icons.Outlined.PushPin, if (message.pinned) "Unpin" else "Pin message", onClick = onTogglePin)
+                    MessageActionRow(
+                        if (message.starred) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+                        if (message.starred) "Remove from Starred" else "Save to Starred",
+                        onClick = onToggleStar,
+                    )
+                    MessageActionRow(Icons.Outlined.Delete, "Delete for me", onClick = onDeleteForMe)
+                    if (canReport) MessageActionRow(Icons.Outlined.Flag, "Report message", destructive = true, onClick = onReport)
+                    if (canUnsend) MessageActionRow(Icons.AutoMirrored.Outlined.Undo, "Unsend for everyone", destructive = true, onClick = onUnsend)
+                } else {
+                    // The tap route's way through to everything else, and the reason a tap sheet is not a
+                    // dead end. Without it the action list would be reachable only by *holding* — the
+                    // bubble's long-press, or a held Enter on a keyboard — which is the timed-keystroke
+                    // dependency this whole change exists to remove. One more tap is the untimed route.
+                    androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                    MessageActionRow(Icons.Outlined.MoreHoriz, "More actions", onClick = onShowActions)
+                }
             }
         }
     }

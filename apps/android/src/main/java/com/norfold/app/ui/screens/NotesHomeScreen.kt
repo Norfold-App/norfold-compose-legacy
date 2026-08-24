@@ -39,10 +39,12 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
@@ -474,6 +476,23 @@ fun NoteCard(note: Note, selected: Boolean, settings: AppSettings, availableTags
                         Text(note.title, Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (note.starred) Icon(Icons.Outlined.Star, null, tint = accent, modifier = Modifier.size(18.dp))
                         if (note.locked) Icon(Icons.Outlined.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                        // The untimed route to whatever the long-press is configured to do. The card's tap
+                        // is already spoken for ("Open note"), so the configured gesture had exactly one
+                        // hardware-keyboard route: hold Enter for `longPressTimeoutMillis`, which WCAG 2.1.1
+                        // rules out. This button is Tab-reachable and needs no timing.
+                        //
+                        // It borrows `gestureLabel` rather than naming itself, so the button and TalkBack's
+                        // long-press entry can never describe different actions — and it is absent for
+                        // exactly the case that returns null: a card configured `None` has nothing to reach,
+                        // so it grows no control. A ⋮ that did nothing would be worse than none at all.
+                        gestureLabel(settings.noteLongPressAction)?.let { label ->
+                            IconButton(
+                                onClick = { runAction(settings.noteLongPressAction) },
+                                modifier = Modifier.size(28.dp),
+                            ) {
+                                Icon(Icons.Outlined.MoreVert, label, Modifier.size(16.dp))
+                            }
+                        }
                     }
                     Text(note.document.plainText().replace("\n", " ").trim().take(116), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {

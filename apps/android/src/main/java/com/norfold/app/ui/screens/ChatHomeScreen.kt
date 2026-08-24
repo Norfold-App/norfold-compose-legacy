@@ -9,6 +9,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAddAlt
 import androidx.compose.material.icons.outlined.PersonRemove
@@ -76,7 +78,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1116,6 +1121,16 @@ internal fun ConversationRow(
                 }
             }
         }
+        // The untimed route to the same menu the long-press opens. The long-press stays — it is a good
+        // touch shortcut and TalkBack's ACTION_LONG_CLICK rides on it — but a *held* Enter is the only
+        // hardware-keyboard route it offers, and WCAG 2.1.1 asks for one that needs no timing. This button
+        // is Tab-reachable, carries Material's own focus indication, and is guarded by the same
+        // `row.channel != null` as the long-press label: General has no menu, so it grows no button.
+        if (row.channel != null) {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Outlined.MoreVert, "Conversation actions", Modifier.size(16.dp))
+            }
+        }
       }
     }
     if (menuOpen && row.channel != null) {
@@ -1742,7 +1757,6 @@ private fun ContactsSheet(state: DocsUiState, viewModel: DocsViewModel, onDismis
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ContactRow(contact: NorfoldSocial.RemoteContact, onLongPress: () -> Unit) {
     val name = contact.displayName.ifBlank { contact.handle ?: "Unknown" }
@@ -1750,15 +1764,23 @@ private fun ContactRow(contact: NorfoldSocial.RemoteContact, onLongPress: () -> 
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            // No focus ring, and `ChromeGeometryTest` exempts it by name — but as a marker, not a decision.
-            // `onClick` is a no-op, so ringing this row would advertise a focusable control that does nothing
-            // on activation. The long-press *is* labelled, which puts the contact actions in TalkBack's
-            // actions menu — the one route to them that does not require holding a finger on the right pixel.
-            // Keyboard and switch access still cannot reach them, and that is the actual defect here: this is
-            // the only clickable in the tree with no focus indication, and it is bare *because* its activation
-            // does nothing. Give the row a real primary action and the ring follows from it; drawing one
-            // without that would only hide the gap. Do not close this by adding a ring alone.
-            .combinedClickable(onClick = {}, onLongClickLabel = "Contact actions", onLongClick = onLongPress)
+            // Not a control, deliberately — and this is the one gesture site in `ui/` where that is the fix
+            // rather than a gap. The row has no primary action: opening a contact is not a thing this screen
+            // does, so its `combinedClickable` carried `onClick = {}`, which put a keyboard focus stop on
+            // something whose Enter did nothing. The two actions behind the long-press are *both*
+            // destructive ("Remove from contacts", "Block"), so a plain tap must not reach them either.
+            //
+            // So the gesture is split from the semantics. `detectTapGestures` keeps the touch long-press
+            // without claiming to be a click, and the standalone `onLongClick` semantic keeps the entry in
+            // TalkBack's actions menu — `AndroidComposeViewAccessibilityDelegateCompat` reads
+            // `SemanticsActions.onLongClick` and publishes `ACTION_LONG_CLICK` from it whether the node came
+            // from `combinedClickable` or not. What is gone is the focus stop and the no-op.
+            //
+            // The untimed route is the ⋮ button at the end of the row, which is a real focusable control with
+            // Material's own focus indication. That is why there is no ring here and no exemption needed:
+            // this row is not clickable chrome any more.
+            .pointerInput(Unit) { detectTapGestures(onLongPress = { onLongPress() }) }
+            .semantics { onLongClick("Contact actions") { onLongPress(); true } }
             .padding(horizontal = 6.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1791,6 +1813,12 @@ private fun ContactRow(contact: NorfoldSocial.RemoteContact, onLongPress: () -> 
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
             )
+        }
+        // The only untimed route to a contact's two actions, and the reason the row above stops being a
+        // control. Both actions are destructive, so a named, deliberate control is exactly the right weight
+        // for them — heavier than a tap, lighter than a timed key hold.
+        IconButton(onClick = onLongPress, modifier = Modifier.size(28.dp)) {
+            Icon(Icons.Outlined.MoreVert, "Contact actions", Modifier.size(16.dp))
         }
     }
 }

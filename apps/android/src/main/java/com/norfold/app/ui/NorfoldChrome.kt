@@ -29,7 +29,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.inset
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
@@ -546,6 +548,68 @@ object NorfoldChrome {
             )
         }
     }
+
+    /**
+     * The inward ring for chrome whose four corners have **different** radii.
+     *
+     * **Why the single-radius [innerFocusRing] cannot serve this.** It takes one radius and draws one
+     * `CornerRadius`, which is right for the whole tiered population. A chat bubble is not in it: its shape is
+     * four independent radii, because the corner nearest its author and the corner at the end of a group are
+     * squared off to point at the sender. Handing that shape's *largest* radius to the single-radius ring bulges
+     * the ring past the two squared corners; handing it the smallest cuts the two round ones short. Either way
+     * the artefact lands on the corners that carry the bubble's meaning.
+     *
+     * The concentricity rule is unchanged, only applied four times: each corner's ring radius is that corner's
+     * container radius minus the inset, which is [ChromeGeometry.focusRingRadius]'s arithmetic per corner rather
+     * than once. Taking the container's own [RoundedCornerShape] rather than four floats is what keeps the two
+     * from drifting — the ring is derived from the same declaration the container is clipped by.
+     *
+     * Two details are deliberate and neither is obvious:
+     *
+     * - **The container radii are resolved against the full box, not the inset one.** A `CornerSize` may be a
+     *   percentage, and a percentage of the inset box is not the radius the container was actually drawn with.
+     *   Resolving first and subtracting second means the ring is concentric with what is on screen even when the
+     *   caller's shape is expressed in percent.
+     * - **The cap is `CornerBasedShape`'s own.** It resolves each corner against the size it is handed and scales
+     *   any pair whose sum exceeds that size's minimum dimension, so drawing into the inset box gets the same
+     *   protection [innerFocusRing] spells out by hand — and gets it per corner pair, which is the point here.
+     *   A squared corner stays squared, a round one stays concentric, and an over-large radius is scaled rather
+     *   than silently clamped by Skia.
+     *
+     * @param shape the container's own shape, so the ring follows the declaration instead of a guess at it.
+     * @param backdrop the colour the ring is drawn on, which is what its contrast must be solved against.
+     */
+    @Composable
+    fun Modifier.innerFocusRingShape(
+        focused: Boolean,
+        shape: RoundedCornerShape,
+        accent: Color = MaterialTheme.colorScheme.primary,
+        backdrop: Color = Color.Unspecified,
+        inset: Float = ChromeGeometry.FOCUS_RING_INSET,
+    ): Modifier {
+        val ringColor = focusRing(accent, backdrop)
+        if (!focused) return this
+        return drawWithContent {
+            drawContent()
+            val stroke = ChromeGeometry.FOCUS_RING_WIDTH.dp.toPx()
+            val insetPx = inset.dp.toPx()
+            val offset = insetPx + stroke / 2f
+            if (size.width - offset * 2f <= 0f || size.height - offset * 2f <= 0f) return@drawWithContent
+            val inner = RoundedCornerShape(
+                topStart = (shape.topStart.toPx(size, this) - insetPx).coerceAtLeast(0f),
+                topEnd = (shape.topEnd.toPx(size, this) - insetPx).coerceAtLeast(0f),
+                bottomEnd = (shape.bottomEnd.toPx(size, this) - insetPx).coerceAtLeast(0f),
+                bottomStart = (shape.bottomStart.toPx(size, this) - insetPx).coerceAtLeast(0f),
+            )
+            inset(offset) {
+                drawOutline(
+                    outline = inner.createOutline(size, layoutDirection, this),
+                    color = ringColor,
+                    style = Stroke(width = stroke),
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -685,6 +749,38 @@ class ChromeFocus internal constructor(
     @Composable
     fun ringOnPill(surface: Color): Modifier = with(NorfoldChrome) {
         Modifier.innerFocusRingPill(focused, backdrop = surface)
+    }
+
+    /**
+     * The inward ring for chrome whose four corners differ, derived from the container's own shape.
+     *
+     * The other four wrappers all take a radius, because the chrome they serve has one. A chat bubble does
+     * not: three of its corners are the group's radius and the fourth is squared off to point at the sender,
+     * which is the whole visual grammar of the thread. There is no single number to hand [ringOnShape] that
+     * is not wrong at two corners out of four — see [NorfoldChrome.innerFocusRingShape] for which two and why.
+     *
+     * Pass the *same* `RoundedCornerShape` value the container is clipped or drawn with, rather than
+     * reconstructing it here. That is what makes this safe to leave alone: when the bubble's grouping rules
+     * change its corners, the ring changes with them because both read one declaration.
+     *
+     * @param shape the container's own shape.
+     * @param surface the colour the ring is drawn on, which is what it must be measured against — a bubble is
+     *   filled with a colour of its own, so this is the fill and not the page, for the reason [ringOnCircle]
+     *   documents at length.
+     * @param boundaryWidthDp what this chrome already draws at its own edge, so the ring can clear it.
+     */
+    @Composable
+    fun ringOnCorners(
+        shape: RoundedCornerShape,
+        surface: Color,
+        boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+    ): Modifier = with(NorfoldChrome) {
+        Modifier.innerFocusRingShape(
+            focused = focused,
+            shape = shape,
+            backdrop = surface,
+            inset = ChromeGeometry.focusRingInsetOver(boundaryWidthDp),
+        )
     }
 }
 

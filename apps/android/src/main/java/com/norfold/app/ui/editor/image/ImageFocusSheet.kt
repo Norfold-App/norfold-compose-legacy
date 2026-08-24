@@ -906,7 +906,9 @@ private fun ImageTransformAction(
                 // No `onLongClickLabel`, deliberately: this long-press exists to *reveal the button's name*
                 // to a sighted user, and the icon below already carries that name as its content
                 // description. A screen reader has therefore already read what the gesture would show, so
-                // labelling it would announce a second route to information the user just heard.
+                // labelling it would announce a second route to information the user just heard. This is
+                // also why ChromeGeometryTest exempts the site from needing an untimed route: there is no
+                // action here to reach, only a name, and the name is already published.
                 onLongClick = { onLongPress(label) },
             ),
     ) {

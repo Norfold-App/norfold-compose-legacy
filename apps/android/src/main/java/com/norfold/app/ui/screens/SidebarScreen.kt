@@ -60,6 +60,7 @@ import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
@@ -1543,6 +1544,19 @@ private fun DocTableOfContents(documentKey: String, document: BlockDocument, loc
                                     },
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isDragged) 1f else 0.55f),
                             )
+                        }
+                        // The untimed route to the section menu. Dragging the handle beside this reorders,
+                        // but it is touch-only and reaches only one of the four actions — Duplicate and
+                        // Delete had no route at all that did not involve holding a key for
+                        // `longPressTimeoutMillis`, which WCAG 2.1.1 rules out. Guarded by the same
+                        // `isSection && !locked` as the long-press and its label, so a nested heading or a
+                        // locked document grows no control for a menu it cannot open. Unlike the drag
+                        // handle it is *not* also gated on `!filtering`: a filtered list can still reorder
+                        // and delete through the menu, and only the drag needs the unfiltered geometry.
+                        if (isSection && !locked) {
+                            IconButton(onClick = { menuFor = id }, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Outlined.MoreVert, "Section actions", Modifier.size(16.dp))
+                            }
                         }
                     }
                     NorfoldDropdownMenu(expanded = menuFor == id, onDismissRequest = { menuFor = null }) {
