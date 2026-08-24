@@ -121,6 +121,9 @@ object ChromeGeometry {
      */
     const val SELECTED_EDGE_WIDTH = 3f
 
+    /** Standard Material disabled-content opacity, shared instead of re-declared by individual controls. */
+    const val DISABLED_CONTENT_ALPHA = 0.38f
+
     /**
      * The selection edge for a **picker cell**, where the border is the entire selection signal.
      *

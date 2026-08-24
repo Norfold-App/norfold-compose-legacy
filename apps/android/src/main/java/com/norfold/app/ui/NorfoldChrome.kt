@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
@@ -12,11 +13,14 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalAbsoluteTonalElevation
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.contentColorFor
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -39,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import com.norfold.app.domain.style.ChromeGeometry
 import com.norfold.app.domain.style.ChromeGeometry.Corner
 import com.norfold.app.domain.style.ChromeGeometry.Lift
+import com.norfold.app.domain.style.ChromeInteractionSnapshot
+import com.norfold.app.domain.style.ChromeInteractionState
 
 /**
  * The colour of the container the chrome below this point is drawn inside.
@@ -368,6 +374,27 @@ object NorfoldChrome {
         BorderStroke(ChromeGeometry.RESTING_EDGE_WIDTH.dp, restingEdge(backdrop))
 
     /**
+     * The persistent boundary for a shared interaction snapshot.
+     *
+     * Focus never enters this decision: it remains the distinct ring rendered by [ChromeFocus]. Press is
+     * likewise left to the ripple/state layer. Selection and error alone may strengthen the boundary.
+     */
+    @Composable
+    @ReadOnlyComposable
+    fun interactionStroke(
+        interaction: ChromeInteractionSnapshot,
+        backdrop: Color = Color.Unspecified,
+    ): BorderStroke {
+        val spec = interaction.visualSpec()
+        val color = when (spec.edgeState) {
+            ChromeInteractionState.Selected -> focusRing(backdrop = backdrop)
+            ChromeInteractionState.Error -> focusRing(MaterialTheme.colorScheme.error, backdrop)
+            else -> restingEdge(backdrop)
+        }
+        return BorderStroke(spec.edgeWidthDp.dp, color)
+    }
+
+    /**
      * A focus ring outside the shape it decorates, concentric with it, reserving its own space whether or
      * not [focused].
      *
@@ -651,10 +678,13 @@ object NorfoldChrome {
  */
 class ChromeFocus internal constructor(
     val source: MutableInteractionSource,
-    private val focused: Boolean,
+    val state: ChromeInteractionSnapshot,
 ) {
     /** True while this chrome holds focus, for a caller that wants to change something other than the ring. */
-    val isFocused: Boolean get() = focused
+    val isFocused: Boolean get() = state.focusVisible
+
+    /** True during an enabled press, observed from the same source that owns focus and the click. */
+    val isPressed: Boolean get() = state.pressVisible
 
     /**
      * The inward ring for chrome with the given [corner] radius.
@@ -666,7 +696,7 @@ class ChromeFocus internal constructor(
      */
     @Composable
     fun ring(corner: Corner, backdrop: Color = Color.Unspecified): Modifier =
-        with(NorfoldChrome) { Modifier.innerFocusRing(focused, corner, backdrop = backdrop) }
+        with(NorfoldChrome) { Modifier.innerFocusRing(state.focusVisible, corner, backdrop = backdrop) }
 
     /**
      * The inward ring for chrome whose radius is not one of the three [Corner] tiers.
@@ -694,7 +724,7 @@ class ChromeFocus internal constructor(
         boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
     ): Modifier = with(NorfoldChrome) {
         Modifier.innerFocusRing(
-            focused = focused,
+            focused = state.focusVisible,
             containerRadiusDp = containerRadiusDp,
             backdrop = surface,
             inset = ChromeGeometry.focusRingInsetOver(boundaryWidthDp),
@@ -729,7 +759,7 @@ class ChromeFocus internal constructor(
         boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
     ): Modifier = with(NorfoldChrome) {
         Modifier.innerFocusRing(
-            focused = focused,
+            focused = state.focusVisible,
             containerRadiusDp = sizeDp / 2f,
             backdrop = surface,
             inset = ChromeGeometry.focusRingInsetOver(boundaryWidthDp),
@@ -748,7 +778,7 @@ class ChromeFocus internal constructor(
      */
     @Composable
     fun ringOnPill(surface: Color): Modifier = with(NorfoldChrome) {
-        Modifier.innerFocusRingPill(focused, backdrop = surface)
+        Modifier.innerFocusRingPill(state.focusVisible, backdrop = surface)
     }
 
     /**
@@ -776,7 +806,7 @@ class ChromeFocus internal constructor(
         boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
     ): Modifier = with(NorfoldChrome) {
         Modifier.innerFocusRingShape(
-            focused = focused,
+            focused = state.focusVisible,
             shape = shape,
             backdrop = surface,
             inset = ChromeGeometry.focusRingInsetOver(boundaryWidthDp),
@@ -796,10 +826,25 @@ class ChromeFocus internal constructor(
  *   a second source would observe focus that nothing reports. Omit it and one is remembered here.
  */
 @Composable
-fun rememberChromeFocus(source: MutableInteractionSource? = null): ChromeFocus {
+fun rememberChromeFocus(
+    source: MutableInteractionSource? = null,
+    enabled: Boolean = true,
+    selected: Boolean = false,
+    error: Boolean = false,
+): ChromeFocus {
     val resolved = source ?: remember { MutableInteractionSource() }
     val focused by resolved.collectIsFocusedAsState()
-    return ChromeFocus(resolved, focused)
+    val pressed by resolved.collectIsPressedAsState()
+    return ChromeFocus(
+        source = resolved,
+        state = ChromeInteractionSnapshot(
+            enabled = enabled,
+            focused = focused,
+            pressed = pressed,
+            selected = selected,
+            error = error,
+        ),
+    )
 }
 
 /**
@@ -899,9 +944,10 @@ fun Modifier.focusableChrome(
     onClickLabel: String? = null,
     role: Role? = null,
     boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+    error: Boolean = false,
     onClick: () -> Unit,
 ): Modifier {
-    val focus = rememberChromeFocus()
+    val focus = rememberChromeFocus(enabled = enabled, error = error)
     val ring = focus.ringOnShape(radiusDp, surface, boundaryWidthDp)
     return this
         .clipToChrome(radiusDp)
@@ -930,8 +976,18 @@ fun Modifier.focusableChrome(
     onClickLabel: String? = null,
     role: Role? = null,
     boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+    error: Boolean = false,
     onClick: () -> Unit,
-): Modifier = focusableChrome(corner.radiusDp, surface, enabled, onClickLabel, role, boundaryWidthDp, onClick)
+): Modifier = focusableChrome(
+    radiusDp = corner.radiusDp,
+    surface = surface,
+    enabled = enabled,
+    onClickLabel = onClickLabel,
+    role = role,
+    boundaryWidthDp = boundaryWidthDp,
+    error = error,
+    onClick = onClick,
+)
 
 /**
  * The same wiring for a **pill** — chrome shaped `CircleShape` but wider than it is tall.
@@ -953,9 +1009,10 @@ fun Modifier.focusablePill(
     enabled: Boolean = true,
     onClickLabel: String? = null,
     role: Role? = null,
+    error: Boolean = false,
     onClick: () -> Unit,
 ): Modifier {
-    val focus = rememberChromeFocus()
+    val focus = rememberChromeFocus(enabled = enabled, error = error)
     val ring = focus.ringOnPill(surface)
     return this
         .clip(CircleShape)
@@ -1067,9 +1124,10 @@ fun Modifier.toggleableChrome(
     role: Role,
     surface: Color = Color.Unspecified,
     enabled: Boolean = true,
+    error: Boolean = false,
     onValueChange: (Boolean) -> Unit,
 ): Modifier {
-    val focus = rememberChromeFocus()
+    val focus = rememberChromeFocus(enabled = enabled, selected = checked, error = error)
     val ring = focus.ringOnShape(radiusDp, surface)
     return this
         .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
@@ -1095,8 +1153,17 @@ fun Modifier.toggleableChrome(
     role: Role,
     surface: Color = Color.Unspecified,
     enabled: Boolean = true,
+    error: Boolean = false,
     onValueChange: (Boolean) -> Unit,
-): Modifier = toggleableChrome(checked, corner.radiusDp, role, surface, enabled, onValueChange)
+): Modifier = toggleableChrome(
+    checked = checked,
+    radiusDp = corner.radiusDp,
+    role = role,
+    surface = surface,
+    enabled = enabled,
+    error = error,
+    onValueChange = onValueChange,
+)
 
 /**
  * Make this chrome **selectable** and focus-visible in one call, as a single accessibility node.
@@ -1137,9 +1204,10 @@ fun Modifier.selectableChrome(
     surface: Color = Color.Unspecified,
     enabled: Boolean = true,
     boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+    error: Boolean = false,
     onClick: () -> Unit,
 ): Modifier {
-    val focus = rememberChromeFocus()
+    val focus = rememberChromeFocus(enabled = enabled, selected = selected, error = error)
     val ring = focus.ringOnShape(radiusDp, surface, boundaryWidthDp)
     return this
         .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
@@ -1165,8 +1233,17 @@ fun Modifier.selectableChrome(
     surface: Color = Color.Unspecified,
     enabled: Boolean = true,
     boundaryWidthDp: Float = ChromeGeometry.RESTING_EDGE_WIDTH,
+    error: Boolean = false,
     onClick: () -> Unit,
-): Modifier = selectableChrome(selected, corner.radiusDp, surface, enabled, boundaryWidthDp, onClick)
+): Modifier = selectableChrome(
+    selected = selected,
+    radiusDp = corner.radiusDp,
+    surface = surface,
+    enabled = enabled,
+    boundaryWidthDp = boundaryWidthDp,
+    error = error,
+    onClick = onClick,
+)
 
 /**
  * A piece of floating interaction chrome: the substrate's single surface.
@@ -1194,22 +1271,21 @@ fun NorfoldChromeSurface(
     edge: Boolean = true,
     color: Color = MaterialTheme.colorScheme.surface,
     backdrop: Color = Color.Unspecified,
+    interaction: ChromeInteractionSnapshot = ChromeInteractionSnapshot(),
     content: @Composable () -> Unit,
 ) {
+    val visualSpec = interaction.visualSpec()
     Surface(
         modifier = modifier,
         shape = NorfoldChrome.shape(corner),
         color = color,
         shadowElevation = lift.shadowDp.dp,
         tonalElevation = lift.tonalDp.dp,
-        border = if (edge) {
-            BorderStroke(
-                ChromeGeometry.RESTING_EDGE_WIDTH.dp,
-                NorfoldChrome.restingEdge(backdrop),
-            )
-        } else {
-            null
-        },
-        content = content,
-    )
+        border = if (edge) NorfoldChrome.interactionStroke(interaction, backdrop) else null,
+    ) {
+        CompositionLocalProvider(
+            LocalContentColor provides contentColorFor(color).copy(alpha = visualSpec.contentAlpha),
+            content = content,
+        )
+    }
 }
