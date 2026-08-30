@@ -11,6 +11,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
@@ -20,7 +21,11 @@ import android.util.TypedValue
 import android.util.Rational
 import android.widget.EditText
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +37,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import java.io.ByteArrayInputStream
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -3976,7 +3982,34 @@ private fun ChatOnlineVideoCard(videoId: String, onPlay: () -> Unit) {
     }
 }
 
-@Suppress("SetJavaScriptEnabled")
+internal fun isAllowedOnlineVideoNavigation(url: String, expectedVideoId: String): Boolean {
+    val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+    val allowedPort = uri.port == -1 || uri.port == 443
+    return uri.scheme.equals("https", ignoreCase = true) &&
+        uri.host.equals("www.youtube-nocookie.com", ignoreCase = true) &&
+        uri.rawUserInfo == null &&
+        allowedPort &&
+        uri.rawPath == "/embed/$expectedVideoId"
+}
+
+internal fun isAllowedOnlineVideoFallback(url: String): Boolean {
+    val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+    val allowedHosts = setOf("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be")
+    val allowedPort = uri.port == -1 || uri.port == 443
+    return uri.scheme.equals("https", ignoreCase = true) &&
+        uri.host?.lowercase() in allowedHosts &&
+        uri.rawUserInfo == null &&
+        allowedPort
+}
+
+internal fun isAllowedOnlineVideoMainFrameRequest(
+    method: String,
+    url: String,
+    expectedVideoId: String,
+): Boolean = method.equals("GET", ignoreCase = true) &&
+    isAllowedOnlineVideoNavigation(url, expectedVideoId)
+
+@Suppress("SetJavaScriptEnabled", "DEPRECATION")
 @Composable
 private fun ChatOnlineVideoViewer(videoId: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
@@ -3985,8 +4018,55 @@ private fun ChatOnlineVideoViewer(videoId: String, onDismiss: () -> Unit) {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.setSupportMultipleWindows(false)
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.allowFileAccessFromFileURLs = false
+            settings.allowUniversalAccessFromFileURLs = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.safeBrowsingEnabled = true
             webChromeClient = WebChromeClient()
-            loadUrl("https://www.youtube-nocookie.com/embed/$videoId?autoplay=1&playsinline=1")
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                ): Boolean {
+                    if (request?.isForMainFrame != true) return false
+                    val target = request.url.toString()
+                    if (isAllowedOnlineVideoNavigation(target, videoId)) return false
+                    if (isAllowedOnlineVideoFallback(target)) {
+                        val fallback = Uri.parse("https://www.youtube.com/watch?v=$videoId")
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, fallback)) }
+                    }
+                    return true
+                }
+
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                ): WebResourceResponse? {
+                    if (request?.isForMainFrame != true) return null
+                    if (isAllowedOnlineVideoMainFrameRequest(request.method, request.url.toString(), videoId)) {
+                        return null
+                    }
+                    return WebResourceResponse(
+                        "text/plain",
+                        "UTF-8",
+                        ByteArrayInputStream(ByteArray(0)),
+                    )
+                }
+
+                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                    if (url != null && url != "about:blank" && !isAllowedOnlineVideoNavigation(url, videoId)) {
+                        view?.stopLoading()
+                    }
+                }
+            }
+            loadUrl(
+                "https://www.youtube-nocookie.com/embed/$videoId?autoplay=1&playsinline=1",
+                mapOf("Referer" to "https://norfold-app.github.io/Norfold/"),
+            )
         }
     }
     DisposableEffect(webView) {
