@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { encryptSecret, verifySignedState } from "../_shared/crypto.ts";
 import { requiredEnv } from "../_shared/http.ts";
+import { providerAccountSubject } from "../_shared/oidc_userinfo.ts";
 
 type Provider = "google_calendar" | "outlook_calendar";
 type CallbackState = { userId: string; provider: Provider; redirectUri: string; expiresAt: number };
@@ -10,7 +11,6 @@ type TokenResponse = {
   refresh_token?: string;
   expires_in?: number;
   scope?: string;
-  id_token?: string;
 };
 
 async function exchangeCode(provider: Provider, code: string, redirectUri: string): Promise<TokenResponse> {
@@ -37,17 +37,6 @@ async function exchangeCode(provider: Provider, code: string, redirectUri: strin
   return result as TokenResponse;
 }
 
-// The payload is decoded without signature verification: the token arrives over TLS straight
-// from the provider's token endpoint, and the value is only an opaque dedup key for
-// integration_accounts (user_id,provider,provider_subject) — never an authentication input.
-function jwtSubject(idToken?: string): string {
-  if (!idToken) return "calendar-account";
-  const payload = idToken.split(".")[1];
-  if (!payload) return "calendar-account";
-  const decoded = payload.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
-  return String(JSON.parse(atob(decoded)).sub ?? "calendar-account");
-}
-
 Deno.serve(async (request) => {
   try {
     const url = new URL(request.url);
@@ -60,6 +49,7 @@ Deno.serve(async (request) => {
     const state = await verifySignedState<CallbackState>(signedState, requiredEnv("CALENDAR_STATE_SECRET"));
     const tokens = await exchangeCode(state.provider, code, state.redirectUri);
     if (!tokens.refresh_token) throw new Error("Provider did not issue an offline refresh token");
+    const providerSubject = await providerAccountSubject(state.provider, tokens.access_token);
     const encrypted = await encryptSecret(tokens.refresh_token, requiredEnv("INTEGRATION_TOKEN_KEY"));
     const supabase = createClient(requiredEnv("SUPABASE_URL"), requiredEnv("SUPABASE_SERVICE_ROLE_KEY"), {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -67,7 +57,7 @@ Deno.serve(async (request) => {
     const { error: databaseError } = await supabase.from("integration_accounts").upsert({
       user_id: state.userId,
       provider: state.provider,
-      provider_subject: jwtSubject(tokens.id_token),
+      provider_subject: providerSubject,
       encrypted_refresh_token: `\\x${Array.from(Uint8Array.from(atob(encrypted.ciphertext), (c) => c.charCodeAt(0))).map((b) => b.toString(16).padStart(2, "0")).join("")}`,
       token_nonce: `\\x${Array.from(Uint8Array.from(atob(encrypted.nonce), (c) => c.charCodeAt(0))).map((b) => b.toString(16).padStart(2, "0")).join("")}`,
       scopes: tokens.scope?.split(" ").filter(Boolean) ?? [],
