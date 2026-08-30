@@ -1,104 +1,94 @@
 # Norfold
 
-Norfold is an Android-first private workspace app with a Room-backed local core, encrypted backups, folder-provider sync, a structured block editor, workspace tools, shared objects, object history/comments, and adaptive Compose layouts.
+Norfold is an Android-first private workspace. Notes, documents, tasks, calendar events,
+files, and chat are stored as one local-first object model, with an encrypted vault,
+encrypted backups, and optional folder-provider or cloud sync.
 
-## Repository Layout
+**Release stage: pre-beta.** The current version is `0.1.0-alpha.3`. This is development
+software: it is not distributed through a store, its cloud and device behaviour is not yet
+certified, and no part of it should be treated as production-ready.
 
-- `apps/android` - Native Android app using Kotlin, Jetpack Compose, Room, Material 3, domain/data/ui/branding layers, vault crypto, backup/sync codecs, and adaptive layouts.
-- `apps/web` - Secondary Vite prototype kept for visual iteration.
-- `legacy/flutter-prototype` - Preserved Flutter prototype for reference only.
-- `assets/brand/icon.jpg` - Legacy temporary image; Android now uses vector/adaptive Norfold launcher resources.
+## Repository layout
 
-## Android Build
+| Path | Contents |
+| --- | --- |
+| `apps/android/` | The product. Kotlin, Jetpack Compose, Room, unit tests, instrumentation tests. |
+| `apps/web/` | Vite visual prototype. Not the product and not shipped. |
+| `supabase/` | Postgres migrations and Deno edge functions for the optional cloud layer. |
+| `infra/` | Transport and backend infrastructure configuration. |
+| `docs/` | Source of the project site and the legal pages. |
+| `brand/`, `assets/`, `website-v4/` | Brand assets and unpublished marketing site source. |
+| `legacy/flutter-prototype/` | Preserved Flutter prototype, reference only. |
+
+## Architecture
+
+- One Gradle module, `:apps:android`. Kotlin 2.3.21, AGP 8.13.2, Compose BOM 2025.11.00,
+  Material 3, `minSdk` 26, `targetSdk`/`compileSdk` 36, JVM target 17.
+- Room 2.8.4 is the local source of truth. Notes, task documents, and calendar events share
+  one generic owner-based document model, alongside workspace objects, object links,
+  activity, history, comments, and file records.
+- The canonical document is a versioned typed block tree with stable block IDs and unknown
+  block preservation. Markdown is an import, export, print, and clipboard boundary only —
+  it is neither an editor mode nor a persistence format.
+- The vault derives keys locally and encrypts exports; backup snapshots use the
+  `NORFOLD-VAULT-V1` and `NORFOLD-BACKUP-V3` container formats.
+- Sync is offline-first. A device can sync through Android's document-tree picker to any
+  folder provider, or through the Google Drive API `appDataFolder`.
+- Cloud features are optional and additive: Supabase Postgres with row-level security,
+  security-definer RPCs, and Deno edge functions for invitations, notifications, calendar
+  callbacks, collaboration tokens, and Play billing notifications.
+
+## Build
+
+Temurin/OpenJDK 17 is the canonical build JDK, with Android SDK platform 36 and the
+bundled Gradle 9.4.1 wrapper. A newer launcher JVM is not a supported configuration.
 
 ```bash
-./gradlew :apps:android:testDebugUnitTest
+export JAVA_HOME=/path/to/temurin-17
 ./gradlew :apps:android:assembleDebug
 ```
 
-If the repo wrapper is unavailable locally, use any compatible Gradle install/wrapper with the repo root as project directory.
+Cloud features read public client configuration from `norfold.properties`, which is
+gitignored. Copy `norfold.properties.example` and supply your own project values. No
+private key or secret belongs in that file or anywhere else in this repository.
 
-## Current Android Features
+## Verification
 
-- Package/application id: `com.norfold.app`.
-- Display name: `Norfold`.
-- Adaptive launcher icon generated from the Norfold HTML logo concept.
-- Animated in-app logo based on the same N path, gradient, and line animation.
-- Compact phone layout with top bar, Workspace Hub, note list, bottom navigation, and context-aware floating create button.
-- Compact phone layout now removes the global destination-title top bar so screens can use immersive in-page headers like the supplied references.
-- Medium/large layouts with two-pane and three-pane note workflows.
-- Workspace Hub is the default home, with stats, quick capture, today's tasks, continue writing, recent activity, and sync summary.
-- Workspace Hub includes a first-run create/restore/import card when no account/sync identity is configured.
-- Workspace sections now include Inbox, Files, Database, Graph, Activity, Templates, and Command Palette destinations.
-- Shared workspace object layer for docs, tasks, calendar events, files, chat messages, links, activity, history, comments, and file records.
-- Notes CRUD, pin, star, lock, archive, delete.
-- Notebooks and tags.
-- Native structured editor backed by versioned typed blocks with stable IDs and unknown-block preservation.
-- Spotlight-style search across workspace objects, tags, and command/settings destinations.
-- Room database for notes, notebooks, tags, attachments, settings, and note-tag relations.
-- Vault password hashing and lock/unlock.
-- Encrypted backup export/import using `NORFOLD-VAULT-V1` and exact structured-document `NORFOLD-BACKUP-V3` snapshots.
-- Dark, light, and system theme modes.
-- Custom theme palettes and UI scale.
-- Workspace visual editing with text/emoji/image/GIF icon modes, background URI, and team permission toggles.
-- Nested settings for profile, workspace, appearance, editor, security/vault, account restore, sync/backup/import, and app info.
-- Note cover media metadata with image/GIF rendering through Coil.
-- Link/file/image/video/audio embeds with metadata cards, image previews, and Android Open/Share actions.
-- Chat messages with direct file attachment metadata.
-- Notes support configurable long-press and swipe quick actions for open/actions, pin, star, lock, archive, and delete.
-- Editor toolbar includes View/Edit behavior, undo/redo, explicit save, checklist, table, divider, attachment, embed, cover actions, recent-note linking, and a draggable floating compact toolbar mode.
-- Notes, task Docs, and calendar-event Docs share one generic owner-based document model and the same full editor.
-- Markdown remains available at import/export, print, clipboard, and interoperability boundaries; it is not an editor mode or persistence source.
-- Tasks with Trello-style horizontal Kanban, list, table, calendar, timeline, and chart views, visible status-move controls, detail editing, description, assignee, status, priority, due metadata with date picker, labels, filters, and file attachment metadata.
-- Object Detail is a first-class destination with source preview, backlinks, comments, object history, comment creation, and open-source-object action.
-- Database has searchable Table, List, Board, Gallery, and Timeline views over shared workspace objects, with type filters and Object Detail navigation.
-- Database rows, Graph chips, Search results, and Command Palette object results open Object Detail.
-- Note attachments, embeds, and linked objects create workspace object links for graph/backlink views.
-- Folder-provider encrypted sync chain through Android's document tree picker for Google Drive folders, OneDrive folders, or local folders.
-- Google Drive API sync path using the current Android OAuth client ID, identity plus `drive.appdata` scopes, Android Keystore-backed encrypted auth-state storage, and Drive API `appDataFolder`.
-- Google Drive API sync writes the encrypted app snapshot to `norfold-sync.json` and uses `spaces=appDataFolder` when listing app-data files.
-- Biometric vault unlock guards prompt failures and avoids repeated automatic prompt loops.
-- Auto-sync when the app leaves the foreground if a sync chain and secret are available for the session.
-- Structured v2 conflict report generation for sync snapshot divergence with local/remote counts and changed object lists.
-- Conflict Review loads folder-provider or Google Drive conflict reports and shows local/remote snapshot counts, recent object labels, red/green changed lists, sync actions, and a "Use local next sync" path.
-- Built-in landscape cover/background images are bundled for workspace and profile visuals, alongside custom URI/image picking.
-- Profile and Workspace settings render banner cards using stored image/background URIs with gradient fallbacks.
-- Activity is a timeline-style My Activity feed over workspace activity and object history.
-- Local diagnostics records app starts, uncaught crashes, previous crash/ANR process exits on supported Android versions, and can share logs through Android's share sheet from Settings.
-- Encrypted backup/sync snapshots include workspace objects, object links, activity, history, comments, and file library records.
+The non-device gate is these five commands, run on JDK 17:
 
-## Structured-document architecture
+```bash
+./gradlew :apps:android:testDebugUnitTest
+./gradlew :apps:android:compileDebugKotlin
+./gradlew :apps:android:assembleDebug
+./gradlew :apps:android:lintDebug
+./gradlew :apps:android:compileDebugAndroidTestKotlin
+```
 
-Norfold grew from a simple note app into a note+task app and then a full
-workspace app — but the editor kept markdown as its main storage format the
-whole way. That was a mistake for a document editor: Markdown cannot preserve
-page layout, structured tables, object metadata, comments, or future document
-capabilities. Since 2026-07-16, the canonical document is a versioned typed
-block tree owned generically by notes, tasks, and calendar events. Markdown is
-an import/export boundary.
+`lintDebug` is part of the gate rather than an extra: unit tests run on the desktop JVM, so
+only lint catches a call to an API newer than `minSdk` 26.
 
-## Remaining Roadmap
+What that gate does **not** cover, and what therefore remains uncertified:
 
-- Real-device Google account restore validation with debug, release, and Play signing fingerprints. The checked-in client ID is public OAuth metadata; never embed the client secret in Android code.
-- Production Google auth should move from the interim AppAuth bridge toward Credential Manager sign-in plus Google AuthorizationClient Drive authorization.
-- OneDrive account/API restore after Google restore is stable.
-- GitHub-style per-object/per-field conflict review with merge, keep both, remote wins, local wins, and reject controls.
-- Deeper universal object editor so every task/file/database row can be edited through one object surface with permissions and rich history controls.
-- Database saved views, custom fields, sorting controls, and row editing.
-- Spotlight search needs fuzzy ranking, command shortcuts, file content indexing, and activity-result grouping.
-- AppFlowy/Trello-grade drag/drop on tasks, richer cards, linked notes, and richer multi-attachment handling.
-- Markleaf/AppFlowy/AFFiNE-grade editor comfort: richer block editing, slash commands, backlinks, local links, callouts, tables, footnotes, and richer inline media playback.
-- Real-device polish for keyboard-safe editor/chat bars and floating editor toolbar behavior.
-- Crop flows for profile images, workspace visuals, and note covers.
-- Compose UI/screenshot regression tests for compact phones, tablets, landscape, keyboard, and theme variants.
-- Release signing and CI APK artifact publishing.
+- Physical-device behaviour, TalkBack and accessibility-service certification, and
+  release-configuration performance.
+- Live backend behaviour. The cloud and edge-function code is implemented and unit- or
+  type-checked, but adversarial row-level-security, cross-identity, storage, and recovery
+  testing against isolated live identities has not been completed.
+- Backup and restore round trips are tested against the current schema only. Earlier
+  development schemas were allowed to reset destructively.
+
+## Legal
+
+The project site in `docs/` is not currently published, so read the legal documents from
+the repository directly: [privacy policy](docs/privacy.html), [terms of
+service](docs/terms.html), [support](docs/support.html).
 
 ## License
 
 **Source-available, view-only. Not open source.**
 
-This code is published so it can be read, not reused. You may browse and
-fork on GitHub for viewing; you may **not** use, copy, modify, redistribute,
-or build on this code or the Norfold brand assets in any project. See
-[LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for the full terms.
-External contributions are not accepted ([CONTRIBUTING.md](CONTRIBUTING.md)).
+This code is published so that it can be read, not reused. You may browse and fork it on
+GitHub for viewing; you may **not** use, copy, modify, redistribute, or build on this code
+or the Norfold brand assets in any project. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md)
+for the full terms. External contributions are not accepted — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
