@@ -37,7 +37,12 @@ type Provider = "google_calendar" | "outlook_calendar";
 // The shape calendar-callback verifies. Kept structurally identical on purpose: the callback
 // declares its own copy, and a field renamed on one side only would still sign, still verify, and
 // arrive as undefined.
-type CallbackState = { userId: string; provider: Provider; redirectUri: string; expiresAt: number };
+type CallbackState = {
+  userId: string;
+  provider: Provider;
+  redirectUri: string;
+  expiresAt: number;
+};
 
 const StateTtlMs = 10 * 60 * 1000; // Long enough to sign in and grant, short enough to be useless later.
 
@@ -49,8 +54,8 @@ const GoogleScopes = [
   "openid",
   "email",
 ];
-// offline_access is what yields the refresh token on the Microsoft identity platform, and openid +
-// email give the callback an id_token to derive provider_subject from.
+// offline_access is what yields the refresh token on the Microsoft identity platform. The openid
+// scope also authorizes the callback's userinfo request, which supplies the durable provider subject.
 const MicrosoftScopes = [
   "https://graph.microsoft.com/calendars.read",
   "offline_access",
@@ -75,10 +80,16 @@ function providerFrom(value: unknown): Provider {
 function callbackUrl(): string {
   const configured = Deno.env.get("CALENDAR_CALLBACK_URL")?.trim();
   if (configured) return configured.replace(/\/+$/, "");
-  return `${requiredEnv("SUPABASE_URL").replace(/\/+$/, "")}/functions/v1/calendar-callback`;
+  return `${
+    requiredEnv("SUPABASE_URL").replace(/\/+$/, "")
+  }/functions/v1/calendar-callback`;
 }
 
-function authorizationUrl(provider: Provider, state: string, redirectUri: string): string {
+function authorizationUrl(
+  provider: Provider,
+  state: string,
+  redirectUri: string,
+): string {
   const google = provider === "google_calendar";
   const url = new URL(
     google
@@ -87,10 +98,18 @@ function authorizationUrl(provider: Provider, state: string, redirectUri: string
       // mismatch between the two ends is rejected at exchange time, not here.
       : "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
   );
-  url.searchParams.set("client_id", requiredEnv(google ? "GOOGLE_CALENDAR_CLIENT_ID" : "MICROSOFT_CALENDAR_CLIENT_ID"));
+  url.searchParams.set(
+    "client_id",
+    requiredEnv(
+      google ? "GOOGLE_CALENDAR_CLIENT_ID" : "MICROSOFT_CALENDAR_CLIENT_ID",
+    ),
+  );
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("scope", (google ? GoogleScopes : MicrosoftScopes).join(" "));
+  url.searchParams.set(
+    "scope",
+    (google ? GoogleScopes : MicrosoftScopes).join(" "),
+  );
   url.searchParams.set("state", state);
   if (google) {
     url.searchParams.set("access_type", "offline");
@@ -107,7 +126,9 @@ function authorizationUrl(provider: Provider, state: string, redirectUri: string
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok");
   try {
-    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    if (request.method !== "POST") {
+      return json({ error: "method_not_allowed" }, 405);
+    }
 
     // Validates the JWT. The user id below is this, never anything the caller sent.
     const user = await requireUser(request);
@@ -115,7 +136,12 @@ Deno.serve(async (request) => {
     const provider = providerFrom(body?.provider);
     const redirectUri = callbackUrl();
     const state = await signState<CallbackState>(
-      { userId: user.id, provider, redirectUri, expiresAt: Date.now() + StateTtlMs },
+      {
+        userId: user.id,
+        provider,
+        redirectUri,
+        expiresAt: Date.now() + StateTtlMs,
+      },
       requiredEnv("CALENDAR_STATE_SECRET"),
     );
     return json({
@@ -127,7 +153,10 @@ Deno.serve(async (request) => {
     // Same posture as every other function here: the reason goes to the log, the caller gets a
     // generic code. A missing GOOGLE_CALENDAR_CLIENT_ID and an unsupported provider must not be
     // distinguishable from outside.
-    console.error("calendar-authorize failed:", error instanceof Error ? error.message : error);
+    console.error(
+      "calendar-authorize failed:",
+      error instanceof Error ? error.message : error,
+    );
     return json({ error: "authorization_start_failed" }, 400);
   }
 });

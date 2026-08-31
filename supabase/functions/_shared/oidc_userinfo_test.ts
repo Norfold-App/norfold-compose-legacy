@@ -36,7 +36,11 @@ Deno.test("no usable subject is rejected rather than defaulted", () => {
     "118273645",
   ];
   for (const body of unusable) {
-    assertThrows(() => parseUserinfoSubject(body), Error, "Provider identity is unavailable");
+    assertThrows(
+      () => parseUserinfoSubject(body),
+      Error,
+      "Provider identity is unavailable",
+    );
   }
 });
 
@@ -47,8 +51,14 @@ Deno.test("each provider is asked at its own OIDC userinfo endpoint", async () =
     return Promise.resolve(jsonResponse({ sub: "subject-1" }));
   };
 
-  assertEquals(await providerAccountSubject("google_calendar", "token-g", userinfo), "subject-1");
-  assertEquals(await providerAccountSubject("outlook_calendar", "token-m", userinfo), "subject-1");
+  assertEquals(
+    await providerAccountSubject("google_calendar", "token-g", userinfo),
+    "subject-1",
+  );
+  assertEquals(
+    await providerAccountSubject("outlook_calendar", "token-m", userinfo),
+    "subject-1",
+  );
 
   assertEquals(asked, [
     { endpoint: userinfoEndpoint("google_calendar"), accessToken: "token-g" },
@@ -59,7 +69,8 @@ Deno.test("each provider is asked at its own OIDC userinfo endpoint", async () =
 });
 
 Deno.test("a failed userinfo call establishes no identity", async () => {
-  const userinfo: UserinfoFetch = () => Promise.resolve(jsonResponse({ sub: "leaked" }, 401));
+  const userinfo: UserinfoFetch = () =>
+    Promise.resolve(jsonResponse({ sub: "leaked" }, 401));
   await assertRejects(
     () => providerAccountSubject("google_calendar", "token", userinfo),
     Error,

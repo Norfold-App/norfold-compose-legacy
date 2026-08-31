@@ -19,11 +19,17 @@ const USERINFO_ENDPOINTS: Record<CalendarProvider, string> = {
   outlook_calendar: "https://graph.microsoft.com/oidc/userinfo",
 };
 
-export type UserinfoFetch = (endpoint: string, accessToken: string) => Promise<Response>;
+export type UserinfoFetch = (
+  endpoint: string,
+  accessToken: string,
+) => Promise<Response>;
 
 const fetchUserinfo: UserinfoFetch = (endpoint, accessToken) =>
   fetch(endpoint, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/json",
+    },
   });
 
 export function userinfoEndpoint(provider: CalendarProvider): string {
