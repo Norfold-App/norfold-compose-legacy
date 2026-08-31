@@ -180,6 +180,10 @@ class KlipyResponseParserTest {
         assertTrue(screens.contains("placeholder = { Text(\"Search KLIPY\") }"))
         assertTrue(screens.contains("Powered by KLIPY"))
         assertTrue(screens.split("diskCachePolicy(CachePolicy.DISABLED)").size - 1 >= 3)
+        assertTrue(repositoryFile("apps/android/src/main/res/drawable-nodpi/klipy_logo.png").isFile)
+        assertTrue(repositoryFile("apps/android/src/main/res/drawable-nodpi/klipy_watermark.png").isFile)
+        assertTrue(screens.contains("R.drawable.klipy_logo"))
+        assertTrue(screens.contains("R.drawable.klipy_watermark"))
     }
 
     private fun repositoryFile(path: String): File {

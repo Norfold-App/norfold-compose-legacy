@@ -171,6 +171,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
@@ -187,6 +188,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -196,6 +198,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
+import com.norfold.app.R
 import com.norfold.app.ui.components.ChoiceRow
 import com.norfold.app.ui.components.EmbedMetadataResolver
 import com.norfold.app.ui.components.NorfoldContentDialog
@@ -1700,7 +1703,18 @@ private fun ChatGifPicker(
                     }
                 }
             }
-            Text("Powered by KLIPY", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.End).padding(bottom = 6.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.align(Alignment.End).padding(bottom = 6.dp),
+            ) {
+                Image(
+                    painterResource(R.drawable.klipy_logo),
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text("Powered by KLIPY", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
@@ -4761,17 +4775,27 @@ private fun MosaicTile(
                 onError = { providerLoadFailed = providerReference != null },
             )
             if (providerReference != null) {
-                Text(
-                    if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
-                    color = Color.White,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
                     modifier = Modifier.align(Alignment.BottomEnd)
                         .padding(5.dp)
                         .clip(RoundedCornerShape(5.dp))
                         .background(Color.Black.copy(alpha = 0.66f))
                         .padding(horizontal = 5.dp, vertical = 2.dp),
-                )
+                ) {
+                    Image(
+                        painterResource(R.drawable.klipy_logo),
+                        contentDescription = null,
+                        modifier = Modifier.size(10.dp),
+                    )
+                    Text(
+                        if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
         if (isVideo) {
@@ -4965,6 +4989,16 @@ private fun ChatAttachmentCard(
                             contentScale = ContentScale.Fit,
                             onError = { providerLoadFailed = providerReference != null },
                         )
+                        if (providerReference != null && isImage && !isVideo) {
+                            Image(
+                                painterResource(R.drawable.klipy_watermark),
+                                contentDescription = null,
+                                modifier = Modifier.align(Alignment.BottomCenter)
+                                    .padding(bottom = 8.dp)
+                                    .width(96.dp)
+                                    .alpha(0.85f),
+                            )
+                        }
                         if (isVideo) {
                             Icon(
                                 Icons.Outlined.PlayArrow,
@@ -4974,17 +5008,27 @@ private fun ChatAttachmentCard(
                             )
                         }
                         if (providerReference != null) {
-                            Text(
-                                if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 modifier = Modifier.align(Alignment.BottomEnd)
                                     .padding(7.dp)
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(Color.Black.copy(alpha = 0.62f))
                                     .padding(horizontal = 6.dp, vertical = 3.dp),
-                            )
+                            ) {
+                                Image(
+                                    painterResource(R.drawable.klipy_logo),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(11.dp),
+                                )
+                                Text(
+                                    if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
                         }
                     }
                 }
@@ -5164,17 +5208,27 @@ private fun ChatAttachmentViewer(
                                 onError = { providerLoadFailed = providerOwnedGif },
                             )
                             if (providerOwnedGif) {
-                                Text(
-                                    if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                                     modifier = Modifier.align(Alignment.BottomEnd)
                                         .padding(10.dp)
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(Color.Black.copy(alpha = 0.66f))
                                         .padding(horizontal = 7.dp, vertical = 4.dp),
-                                )
+                                ) {
+                                    Image(
+                                        painterResource(R.drawable.klipy_logo),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(12.dp),
+                                    )
+                                    Text(
+                                        if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
                             }
                         }
                         mime.startsWith("video/") -> ChatVideoPlayer(preview.source, onSave)
