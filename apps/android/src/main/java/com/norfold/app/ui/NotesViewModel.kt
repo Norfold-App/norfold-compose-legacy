@@ -5176,6 +5176,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         if (gif.originalUrl == lastGifSendUrl && now - lastGifSendAt < 2_000L) return
         lastGifSendUrl = gif.originalUrl
         lastGifSendAt = now
+        val reference = gif.reference ?: run {
+            emitError("This GIF can't be sent — its media URL isn't from the approved provider host.")
+            return
+        }
         viewModelScope.launch {
             val settings = state.value.settings
             val channelId = activeChatChannelId.value

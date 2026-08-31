@@ -1,6 +1,8 @@
 package com.norfold.app.cloud
 
 import com.norfold.app.BuildConfig
+import com.norfold.app.domain.chat.ExternalMediaReference
+import com.norfold.app.domain.chat.ExternalMediaReferenceV1
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.get
@@ -22,6 +24,8 @@ data class KlipyGif(
     val originalUrl: String,
     val width: Int,
     val height: Int,
+    /** Validated provider-media reference for the original rendition; null when validation fails. */
+    val reference: ExternalMediaReferenceV1? = null,
 )
 
 /**
@@ -48,6 +52,16 @@ object KlipyClient {
             val file = item["file"]?.jsonObject ?: return@mapNotNull null
             val preview = rendition(file, "sm") ?: rendition(file, "xs") ?: return@mapNotNull null
             val original = rendition(file, "md") ?: rendition(file, "hd") ?: preview
+            val reference = ExternalMediaReference.validate(
+                provider = ExternalMediaReference.KLIPY_PROVIDER,
+                kind = ExternalMediaReference.GIF_KIND,
+                url = original.first,
+                title = item["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                slug = item["slug"]?.jsonPrimitive?.contentOrNull,
+                width = original.second,
+                height = original.third,
+            )
+            if (reference !is ExternalMediaReference.Result.Valid) return@mapNotNull null
             KlipyGif(
                 slug = item["slug"]?.jsonPrimitive?.contentOrNull ?: original.first,
                 title = item["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
@@ -55,6 +69,7 @@ object KlipyClient {
                 originalUrl = original.first,
                 width = original.second,
                 height = original.third,
+                reference = reference.reference,
             )
         }
     }
