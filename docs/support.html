@@ -1,58 +1,93 @@
 <!doctype html>
-<html lang="en">
+<html data-theme="dark" lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Norfold Support</title>
-  <meta name="theme-color" content="#f7f6f2">
-  <link rel="icon" type="image/svg+xml" href="assets/norfold-icon.svg">
-  <link rel="icon" type="image/png" sizes="196x196" href="assets/favicon-196.png">
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="legal.css">
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold support boundaries — what support can and cannot do, and why."/>
+<title>Support — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
 </head>
 <body>
-  <header class="site-header wrap">
-    <a class="brand" href="index.html">
-      <img class="mark" src="assets/norfold-icon.svg" alt="">
-      <span class="word">Norfold<span class="dot">.</span></span>
-    </a>
-    <nav class="site-nav" aria-label="Primary">
-      <a href="index.html">Home</a>
-      <a href="changelog.html">Changelog</a>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
       <a href="privacy.html">Privacy</a>
-      <span class="badge">Pre-beta</span>
-    </nav>
-  </header>
-
-  <main class="page">
-    <a class="back" href="index.html">Norfold</a>
-    <h1>Support</h1>
-    <p>Norfold is not publicly distributed yet. If you received an alpha build directly, return feedback through the same private testing channel that supplied it.</p>
-
-    <h2>Before reporting</h2>
-    <p>Include the Android version, device model and window size, light or dark theme, exact steps to reproduce, and a diagnostics export when available. Remove personal workspace content before sharing a report.</p>
-
-    <div class="page-actions">
-      <a href="changelog.html">Read changelog</a>
-      <a href="privacy.html">Privacy policy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html">Development</a>
+      <a href="support.html" class="active">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
     </div>
-  </main>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Support</span>
+    <h1>What support can do.<br/>What it cannot.</h1>
+    <p>Norfold's support boundaries are defined by the architecture, not by policy choices. Some things are impossible by design — not by unwillingness.</p>
+  </div>
+</div>
 
-  <footer>
-    <div class="wrap footer-inner">
-      <div class="foot-brand">
-        <img class="mark" src="assets/norfold-icon.svg" alt="">
-        <span>© 2026 Norfold</span>
-      </div>
-      <nav class="foot-nav" aria-label="Legal">
-        <a href="privacy.html">Privacy</a>
-        <a href="terms.html">Terms</a>
-        <a href="license.html">License</a>
-        <a href="support.html">Support</a>
-        <a href="changelog.html">Changelog</a>
-      </nav>
-    </div>
-  </footer>
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Support can</span><h2>What support is able to help with.</h2></div>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Explain supported recovery paths</h4><p>Walk through what recovery options exist given your account and archive state.</p></div><span class="badge green">✓ CAN HELP</span></div>
+    <div class="status-row"><div><h4>Help with account procedures</h4><p>Account access, ownership transfers, and standard account operations.</p></div><span class="badge green">✓ CAN HELP</span></div>
+    <div class="status-row"><div><h4>Help with workspace ownership</h4><p>Ownership procedures where the architecture permits them.</p></div><span class="badge green">✓ CAN HELP</span></div>
+    <div class="status-row"><div><h4>Process explicit reports</h4><p>Handle abuse reports submitted deliberately by a reporter with their consent.</p></div><span class="badge green">✓ CAN HELP</span></div>
+    <div class="status-row"><div><h4>Explain what Norfold can and cannot see</h4><p>Clarify the privacy and security model honestly, including its current limitations.</p></div><span class="badge green">✓ CAN HELP</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Support cannot</span><h2>What support is unable to do — by design.</h2></div>
+    <p>These are not policy choices that could be overridden with enough escalation. They are architectural constraints.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Manufacture lost encrypted history</h4><p>If relay data is purged and no archive exists, the history is gone. It cannot be reconstructed.</p></div><span class="badge gold">✕ NOT POSSIBLE</span></div>
+    <div class="status-row"><div><h4>Silently bypass E2EE</h4><p>E2EE message content is encrypted before it reaches the server. Support cannot read it.</p></div><span class="badge gold">✕ NOT POSSIBLE</span></div>
+    <div class="status-row"><div><h4>Request your master key as normal procedure</h4><p>Norfold does not hold your private keys. A support request for your master key is not a legitimate procedure.</p></div><span class="badge gold">✕ NOT LEGITIMATE</span></div>
+    <div class="status-row"><div><h4>Secretly browse private chats</h4><p>E2EE personal conversations are opaque to the server. Support has no standing access to their content.</p></div><span class="badge gold">✕ NOT POSSIBLE</span></div>
+    <div class="status-row"><div><h4>Delete another person's independent copy</h4><p>Content another participant has independently received and stored on their device is outside Norfold's control.</p></div><span class="badge gold">✕ NOT POSSIBLE</span></div>
+    <div class="status-row"><div><h4>Guarantee recovery without an archive</h4><p>Recovery requires an archive. Without one, there is nothing to restore from.</p></div><span class="badge gold">✕ NOT POSSIBLE</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal" style="padding-bottom:100px">
+  <div class="callout warn">
+    <strong>Pre-release caveat</strong>
+    <p>Support procedures are still being defined during the pre-release period. Some procedures described here may not yet be fully operational. Do not rely on support availability as a safety net during beta testing.</p>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
 </body>
 </html>

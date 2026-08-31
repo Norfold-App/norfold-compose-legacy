@@ -1,0 +1,119 @@
+<!doctype html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold infrastructure — providers, dependencies, and the provider-independence design goal."/>
+<title>Infrastructure — Norfold</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
+</head>
+<body>
+<div aria-hidden="true" class="pointer-glow"></div>
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+<div class="nav-wrap">
+  <nav class="nav">
+    <a class="brand" href="index.html"><img src="brand/norfold-mark.svg" alt="" width="34" height="34"/><span class="brand-name">Norfold</span></a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html">Development</a>
+      <a href="support.html">Support</a>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
+    </div>
+  </nav>
+</div>
+<main>
+<div class="wrap">
+  <div class="page-hero">
+    <span class="eyebrow"><i></i> Infrastructure</span>
+    <h1>Built independently.<br/>Designed to stay replaceable.</h1>
+    <p>Norfold uses third-party providers for hosting, storage, and delivery. Provider independence is an architectural goal — the design should not trap the product in a single provider.</p>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Architecture</span><h2>The provider boundary.</h2></div>
+    <p>The Norfold contract sits above the provider layer. Providers are replaceable implementations — not permanent architectural dependencies.</p>
+  </div>
+  <div class="local-scene">
+    <div class="local-col">
+      <h4>Norfold contract</h4>
+      <div class="lc-step"><div class="lc-num">1</div><div><b>Privacy model</b>E2EE, security modes, deletion, and relay behavior are defined at this layer.</div></div>
+      <div class="lc-step"><div class="lc-num">2</div><div><b>User-facing behavior</b>What users see, control, and can rely on is specified here — not by the provider.</div></div>
+      <div class="lc-step"><div class="lc-num">3</div><div><b>Provider adapter</b>The interface between Norfold's contract and the current provider implementation.</div></div>
+    </div>
+    <div class="local-bridge">
+      <div class="lb-dot"></div>
+      <div class="lb-line"></div>
+      <div class="lb-dot"></div>
+    </div>
+    <div class="local-col">
+      <h4>Current providers</h4>
+      <div class="lc-step"><div class="lc-num">↓</div><div><b>Backend hosting</b>Cloud infrastructure for API, database, and relay services.</div></div>
+      <div class="lc-step"><div class="lc-num">↓</div><div><b>Push delivery</b>Mobile push notification delivery service.</div></div>
+      <div class="lc-step"><div class="lc-num">↓</div><div><b>Archive storage</b>Google Drive as the first supported archive provider.</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Current dependencies</span><h2>What Norfold currently depends on.</h2></div>
+    <p>These are the current provider dependencies. They are subject to change as the product evolves. Provider independence means these should be replaceable without redesigning the privacy model.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row"><div><h4>Backend infrastructure</h4><p>API hosting, database, and relay services. Cloud-hosted during pre-release.</p></div><span class="badge">CURRENT</span></div>
+    <div class="status-row"><div><h4>Push notifications</h4><p>Mobile push delivery via platform push services (APNs, FCM). Routing-only payloads — no message content in push.</p></div><span class="badge">CURRENT</span></div>
+    <div class="status-row"><div><h4>Archive: Google Drive</h4><p>First supported encrypted archive provider. Your archive data is subject to Google's terms.</p></div><span class="badge">CURRENT</span></div>
+    <div class="status-row"><div><h4>Archive: self-hosted</h4><p>Planned future option. The architecture is designed to support it without redesigning the privacy model.</p></div><span class="badge">PLANNED</span></div>
+    <div class="status-row"><div><h4>Authentication</h4><p>Email OTP and OAuth-based account authentication.</p></div><span class="badge">CURRENT</span></div>
+  </div>
+</div>
+
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div><span class="kicker">Capacity</span><h2>Beta infrastructure limits.</h2></div>
+    <p>The beta runs on limited infrastructure. Capacity limits protect the service while real behavior is being proven. They are not promises about final plans.</p>
+  </div>
+  <div class="callout">
+    <strong>Limits are temporary</strong>
+    <p>Current beta limits on members, devices, file sizes, and relay capacity reflect infrastructure constraints during validation — not the intended final product limits.</p>
+  </div>
+  <div style="margin-top:10px">
+    <a class="button ghost" href="development.html">View current limits →</a>
+  </div>
+</div>
+
+<div class="wrap section reveal" style="padding-bottom:100px">
+  <div class="callout warn">
+    <strong>Pre-release caveat</strong>
+    <p>Infrastructure details may change during the pre-release period. Provider choices, hosting regions, and dependency versions are subject to change without notice.</p>
+  </div>
+</div>
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand"><img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/><p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p></div>
+    <div class="footer-col"><strong>Understand</strong><a href="security.html">Security</a><a href="data.html">Data &amp; recovery</a><a href="controls.html">Privacy controls</a></div>
+    <div class="footer-col"><strong>Operate</strong><a href="development.html">Development status</a><a href="support.html">Support boundaries</a><a href="account-deletion.html">Account deletion</a></div>
+    <div class="footer-col"><strong>Build</strong><a href="infrastructure.html">Infrastructure</a><a href="https://github.com/Norfold-App/Norfold">GitHub repository</a><a href="brand.html">Brand system</a></div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+<div class="command" role="dialog" aria-label="Quick navigation"><div class="command-box"><input aria-label="Search pages" placeholder="Search Norfold pages…"/><div class="command-results"></div></div></div>
+<script src="assets/site.js"></script>
+</body>
+</html>

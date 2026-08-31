@@ -1,134 +1,403 @@
 <!doctype html>
-<html lang="en">
+<html data-theme="dark" lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Norfold is a private, local-first workspace for notes, documents, tasks, conversations, and files. Your data starts and stays on your device.">
-  <meta name="theme-color" content="#f7f6f2">
-  <title>Norfold — a private workspace that folds around you</title>
-  <link rel="icon" type="image/svg+xml" href="assets/norfold-icon.svg">
-  <link rel="icon" type="image/png" sizes="196x196" href="assets/favicon-196.png">
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="legal.css">
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#070A12"/>
+<meta name="description" content="Norfold is a private workspace for notes, documents, tasks, conversations, and shared work — designed around precise privacy boundaries and user-owned data."/>
+<title>Norfold — Your private workspace</title>
+<link rel="icon" type="image/svg+xml" href="brand/norfold-mark.svg"/>
+<link rel="stylesheet" href="assets/site.css"/>
 </head>
 <body>
-  <header class="site-header wrap">
+<div aria-hidden="true" class="pointer-glow"></div>
+
+<!-- Pre-release notice -->
+<div class="prerelease-bar">
+  <strong>PRE-RELEASE DEVELOPMENT</strong>
+  <span>Norfold is still being built. Features may change, fail, or remain incomplete before public release.</span>
+  <a href="development.html">What pre-release means →</a>
+</div>
+
+<!-- Nav -->
+<div class="nav-wrap">
+  <nav class="nav">
     <a class="brand" href="index.html">
-      <img class="mark" src="assets/norfold-icon.svg" alt="">
-      <span class="word">Norfold<span class="dot">.</span></span>
+      <img src="brand/norfold-mark.svg" alt="" width="34" height="34"/>
+      <span class="brand-name">Norfold</span>
     </a>
-    <nav class="site-nav" aria-label="Primary">
-      <a href="#workspace">Workspace</a>
-      <a href="#privacy">Privacy</a>
-      <a href="changelog.html">Changelog</a>
+    <div class="nav-links">
+      <a href="product.html">Product</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="security.html">Security</a>
+      <a href="development.html">Development</a>
       <a href="support.html">Support</a>
-      <span class="badge">Pre-beta</span>
-    </nav>
-  </header>
-
-  <main>
-    <section class="hero wrap">
-      <div class="hero-copy">
-        <img class="hero-logo" src="assets/norfold-logo-animated.svg" alt="Norfold logo" width="72" height="72">
-        <p class="eyebrow">A private, local-first workspace</p>
-        <h1>Everything folds into <span class="crest">one</span> calm place.</h1>
-        <p class="lede">Notes, documents, tasks, conversations, and files — arranged the way your mind already works, and held on your device. Norfold stays private because it stays put.</p>
-        <div class="actions">
-          <a class="button primary" href="changelog.html">See what's inside</a>
-          <a class="button ghost" href="#privacy">How privacy works</a>
-        </div>
-      </div>
-      <div class="fold-card" aria-label="Norfold workspace preview">
-        <div class="dot" aria-hidden="true"></div>
-        <div class="corner" aria-hidden="true"></div>
-        <p class="fold-label">The workspace, folded open</p>
-        <div class="fold-views">
-          <div class="fold-view g1"><span class="g" aria-hidden="true">N</span><div><b>Notes &amp; documents</b><span>Structured blocks, your own words</span></div></div>
-          <div class="fold-view g2"><span class="g" aria-hidden="true">✓</span><div><b>Tasks &amp; reminders</b><span>Views that fit the work</span></div></div>
-          <div class="fold-view g3"><span class="g" aria-hidden="true">◐</span><div><b>Chat &amp; calendar</b><span>Together, when you choose</span></div></div>
-        </div>
-        <p class="fold-note">Local-first by design. Sync only when you decide.</p>
-      </div>
-    </section>
-
-    <section id="workspace" class="band">
-      <div class="wrap">
-        <div class="band-head">
-          <h2>One workspace, many ways to see it.</h2>
-          <p>Norfold adapts to the work instead of forcing the work into a grid. The same task flows through lists, boards, calendars, and timelines — and your place in it is kept exactly as you left it.</p>
-        </div>
-        <div class="feature-grid">
-          <a class="feature" href="changelog.html">
-            <span class="k">Document</span>
-            <h3>Notes &amp; documents</h3>
-            <p>Structured blocks shared by notes, task docs, and calendar-event docs — with history and recovery held on the device.</p>
-          </a>
-          <a class="feature" href="changelog.html">
-            <span class="k">Task</span>
-            <h3>Tasks, your way</h3>
-            <p>Properties, checklists, files, comments, date ranges, and custom statuses — in table, board, feed, calendar, timeline, and matrix views.</p>
-          </a>
-          <a class="feature" href="changelog.html">
-            <span class="k">Storage</span>
-            <h3>Private storage</h3>
-            <p>Room is the immediate source of truth. Backup and sync stay optional, encrypted, and entirely under your control.</p>
-          </a>
-          <a class="feature" href="changelog.html">
-            <span class="k">Chat</span>
-            <h3>Conversations</h3>
-            <p>Encrypted messages and media, personal groups, workspace channels, disappearing messages, and privacy-safe reporting.</p>
-          </a>
-          <a class="feature" href="changelog.html">
-            <span class="k">Adaptive</span>
-            <h3>Fits the screen</h3>
-            <p>Compact phone, landscape, tablet, and expanded workspace layouts — the same data, in the view that fits.</p>
-          </a>
-          <a class="feature" href="changelog.html">
-            <span class="k">Accessible</span>
-            <h3>Built to be reached</h3>
-            <p>Keyboard-focusable chrome, screen-reader announcements, AA contrast, and directional icons that mirror in RTL.</p>
-          </a>
-        </div>
-      </div>
-    </section>
-
-    <section id="privacy" class="band">
-      <div class="wrap">
-        <div class="privacy-callout">
-          <div class="fold-dot" aria-hidden="true"></div>
-          <p class="eyebrow">Private by default</p>
-          <h2>Your work stays yours — until you say otherwise.</h2>
-          <p>Norfold keeps your notes, tasks, and conversations on your device. Backup and synchronization are things you choose, not things that happen to you. The cloud is an option you turn on, never the floor the app is built on.</p>
-          <div class="privacy-points">
-            <div class="privacy-point"><b>On-device</b><span>Room is the immediate source of truth for your workspace.</span></div>
-            <div class="privacy-point"><b>Optional sync</b><span>Encrypted sync and backup run only when you enable them.</span></div>
-            <div class="privacy-point"><b>No analytics</b><span>No advertising identifiers, no behavioural tracking, by default.</span></div>
-          </div>
-          <div class="actions" style="margin-top:30px">
-            <a class="button primary" href="privacy.html">Read the privacy policy</a>
-            <a class="button ghost" href="terms.html">Terms of service</a>
-          </div>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    <div class="wrap footer-inner">
-      <div class="foot-brand">
-        <img class="mark" src="assets/norfold-icon.svg" alt="">
-        <span>© 2026 Norfold</span>
-      </div>
-      <nav class="foot-nav" aria-label="Legal">
-        <a href="privacy.html">Privacy</a>
-        <a href="terms.html">Terms</a>
-        <a href="license.html">License</a>
-        <a href="support.html">Support</a>
-        <a href="changelog.html">Changelog</a>
-      </nav>
-      <p class="foot-meta">Pre-beta software · source-available · local-first</p>
+      <button class="theme-toggle" data-theme-toggle="" aria-label="Toggle theme">◐</button>
+      <button class="nav-search" data-command="" aria-label="Search pages">Search <kbd>⌘K</kbd></button>
     </div>
-  </footer>
+  </nav>
+</div>
+
+<main>
+
+<!-- Hero -->
+<div class="wrap">
+<section class="hero">
+  <div class="hero-copy">
+    <span class="eyebrow"><i></i> Private workspace · Pre-release</span>
+    <h1>
+      <span class="line"><span>Your private</span></span>
+      <span class="line"><span>workspace.</span></span>
+    </h1>
+    <p>Notes, documents, tasks, conversations, and shared work — without turning your workspace into someone else's data source.</p>
+    <div class="hero-actions">
+      <a class="button primary" href="product.html">Explore Norfold <span>→</span></a>
+      <a class="button ghost" href="security.html">How privacy works</a>
+      <a class="button ghost" href="development.html">Development status</a>
+    </div>
+    <div class="hero-note">
+      <span class="badge gold">PRE-RELEASE</span>
+      <span><b>Visible does not mean certified.</b> Features can change or fail before public release.</span>
+    </div>
+  </div>
+
+  <!-- Abstract structure scene — no fake UI -->
+  <div class="hero-scene" aria-label="Abstract representation of Norfold's connected workspace structure">
+    <div class="scene-orbit"></div>
+    <div class="scene-orbit"></div>
+    <div class="scene-stage">
+      <img class="scene-mark" src="brand/norfold-motion.svg" alt="Norfold mark"/>
+    </div>
+    <!-- Concept nodes expressing product primitives -->
+    <div class="scene-node n1">
+      <b>Note → Task</b>
+      <span>structure when needed</span>
+    </div>
+    <div class="scene-node n2">
+      <b>Local first</b>
+      <span>network second</span>
+    </div>
+    <div class="scene-node n3">
+      <span class="badge green">E2EE</span>
+    </div>
+    <!-- Subtle connection lines -->
+    <svg class="scene-lines" aria-hidden="true">
+      <line x1="50%" y1="50%" x2="78%" y2="22%"/>
+      <line x1="50%" y1="50%" x2="22%" y2="72%"/>
+    </svg>
+  </div>
+</section>
+
+<!-- Trust strip -->
+<div class="trust-strip reveal">
+  <div class="intro">
+    <span>At a glance</span>
+    <strong>What Norfold wants you to know before you trust it.</strong>
+  </div>
+  <div><span>Personal chat</span><b>Designed for E2EE</b></div>
+  <div><span>Workspace security</span><b>E2EE or clearly Managed</b></div>
+  <div><span>Old private history</span><b>Not a permanent central server archive</b></div>
+</div>
+</div>
+
+<!-- Marquee -->
+<div aria-hidden="true" class="marquee">
+  <div class="marquee-track">
+    <span><i></i>END-TO-END ENCRYPTED PERSONAL CHAT</span>
+    <span><i></i>MANAGED WORKSPACE DISCLOSURE</span>
+    <span><i></i>LOCAL-FIRST</span>
+    <span><i></i>TEMPORARY RELAY</span>
+    <span><i></i>PRIVATE ARCHIVES</span>
+    <span><i></i>NO SILENT DOWNGRADE</span>
+    <span><i></i>USER-CONTROLLED DELETION</span>
+    <span><i></i>REPLACEABLE PROVIDERS</span>
+    <span><i></i>END-TO-END ENCRYPTED PERSONAL CHAT</span>
+    <span><i></i>MANAGED WORKSPACE DISCLOSURE</span>
+    <span><i></i>LOCAL-FIRST</span>
+    <span><i></i>TEMPORARY RELAY</span>
+    <span><i></i>PRIVATE ARCHIVES</span>
+    <span><i></i>NO SILENT DOWNGRADE</span>
+    <span><i></i>USER-CONTROLLED DELETION</span>
+    <span><i></i>REPLACEABLE PROVIDERS</span>
+  </div>
+</div>
+
+<!-- Section 2: One place, different ways to think -->
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div>
+      <span class="kicker">Product</span>
+      <h2>One place. Different ways to think.</h2>
+    </div>
+    <p>Write freely. Structure when needed. Turn work into action. Keep the conversation beside the work.</p>
+  </div>
+  <div class="editorial">
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">✦</div>
+      <h3>Notes</h3>
+      <p>Flowing text, quick structure, links to tasks and data. The fastest path from thought to record.</p>
+      <div class="ei-status"><span class="badge green">IMPLEMENTED</span></div>
+    </div>
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">▣</div>
+      <h3>Documents</h3>
+      <p>Bounded pages, structured blocks, typography, and image placement. Major redesign in progress.</p>
+      <div class="ei-status"><span class="badge amber">IN PROGRESS</span></div>
+    </div>
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">◎</div>
+      <h3>Tasks</h3>
+      <p>List, board, calendar relationship, and status flow. Properties, checklists, and custom statuses.</p>
+      <div class="ei-status"><span class="badge green">IMPLEMENTED</span></div>
+    </div>
+    <div class="editorial-item" data-tilt="">
+      <div class="ei-icon">◈</div>
+      <h3>Chat</h3>
+      <p>Encrypted account messaging. Stage 1 backend deployed. Validation ongoing — not yet release-certified.</p>
+      <div class="ei-status"><span class="badge amber">VALIDATING</span></div>
+    </div>
+    <div class="editorial-item wide" data-tilt="">
+      <div class="ei-icon">⬡</div>
+      <h3>Shared work</h3>
+      <p>Collaborator trace, selected objects, comments, and workspace boundaries. Local-first by default. Shared when you choose.</p>
+      <div class="ei-status"><span class="badge">PLANNED</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Section 3: Relationships -->
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div>
+      <span class="kicker">Structure</span>
+      <h2>Work should keep its relationships.</h2>
+    </div>
+    <p>Norfold is more than separate app modules. Notes connect to tasks. Documents connect to comments. Messages connect to decisions.</p>
+  </div>
+  <div class="rel-scene">
+    <div class="rel-col">
+      <div class="rel-node">Note<span>quick capture</span></div>
+      <div class="rel-node">Document<span>structured page</span></div>
+      <div class="rel-node">Chart<span>data surface</span></div>
+    </div>
+    <div class="rel-arrows">
+      <div class="rel-arrow">──</div>
+      <div class="rel-arrow">──</div>
+      <div class="rel-arrow">──</div>
+    </div>
+    <div class="rel-col">
+      <div class="rel-node">Task<span>action item</span></div>
+      <div class="rel-node">Comment<span>review thread</span></div>
+      <div class="rel-node">Data<span>source record</span></div>
+    </div>
+    <div class="rel-arrows">
+      <div class="rel-arrow">──</div>
+      <div class="rel-arrow">──</div>
+      <div class="rel-arrow">──</div>
+    </div>
+    <div class="rel-col">
+      <div class="rel-node">Decision<span>resolved state</span></div>
+      <div class="rel-node">Message<span>conversation</span></div>
+      <div class="rel-node">Shared work<span>workspace</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Section 4: Local first -->
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div>
+      <span class="kicker">Local-first</span>
+      <h2>Local first. Network second.</h2>
+    </div>
+    <p>Work continues without a network. Changes queue locally. When the network returns, state reconciles — without losing what happened offline.</p>
+  </div>
+  <div class="local-scene">
+    <div class="local-col">
+      <h4>Your device</h4>
+      <div class="lc-step"><div class="lc-num">1</div><div><b>Work continues</b>No round-trip required to display what you just wrote.</div></div>
+      <div class="lc-step"><div class="lc-num">2</div><div><b>Change queued</b>Outbox holds mutations durably until the network is available.</div></div>
+      <div class="lc-step"><div class="lc-num">3</div><div><b>Local history</b>Your device and archive hold long-term history, not the relay.</div></div>
+    </div>
+    <div class="local-bridge">
+      <div class="lb-dot"></div>
+      <div class="lb-line"></div>
+      <div class="lb-dot"></div>
+    </div>
+    <div class="local-col">
+      <h4>Network</h4>
+      <div class="lc-step"><div class="lc-num">1</div><div><b>Relay moves, not stores</b>Temporary ciphertext delivery — not a permanent readable archive.</div></div>
+      <div class="lc-step"><div class="lc-num">2</div><div><b>Reconcile</b>Two temporarily different states settle into one shared state.</div></div>
+      <div class="lc-step"><div class="lc-num">3</div><div><b>Relay purges</b>Temporary relay data cleared according to policy after delivery.</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Section 5: Security modes -->
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div>
+      <span class="kicker">Security</span>
+      <h2>Two security modes. Zero silent downgrades.</h2>
+    </div>
+    <p>Personal DMs and groups are designed around end-to-end encryption. Workspaces may use E2EE or Managed mode — and members should see which mode they are in.</p>
+  </div>
+  <div class="mode-grid">
+    <div class="mode-card personal" data-tilt="">
+      <span class="badge green">PERSONAL CHAT</span>
+      <h3>Always E2EE</h3>
+      <p>DMs and personal groups are designed around end-to-end encryption. The server moves what it does not need to understand.</p>
+      <span class="mode-tag">END-TO-END ENCRYPTED</span>
+    </div>
+    <div class="mode-card" data-tilt="">
+      <span class="badge">WORKSPACE</span>
+      <h3>Owner-selected. Disclosed.</h3>
+      <p>Workspace owners choose E2EE or Managed mode. Members should be able to see which mode they are in before participating.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="mode-tag">E2EE</span>
+        <span class="mode-tag managed">MANAGED</span>
+      </div>
+    </div>
+  </div>
+  <div class="no-downgrade">
+    <div class="nd-mark">⊘</div>
+    <span>No silent downgrade. The security mode you see is the mode you are in.</span>
+    <a class="button ghost" href="security.html" style="margin-left:auto;white-space:nowrap">Read security model →</a>
+  </div>
+</div>
+
+<!-- Section 6: Data lifecycle -->
+<div class="wrap section reveal">
+  <div class="story">
+    <div class="story-sticky">
+      <span class="eyebrow"><i></i> Data lifecycle</span>
+      <h2>Messages move.<br/>Ownership stays clear.</h2>
+      <p>A secure messaging system is more than an encryption label. Norfold separates the live cryptographic session, temporary relay, local history, private archive, and destructive-state rules.</p>
+      <a class="button ghost" href="data.html" style="margin-top:20px;display:inline-flex">Explore data &amp; recovery →</a>
+    </div>
+    <div class="story-list">
+      <article class="story-step">
+        <span class="num">01 / CREATE</span>
+        <h3>Your device creates the content.</h3>
+        <p>Private message content is encrypted on an authorized device before normal E2EE relay. Local-first UI does not wait for a round-trip merely to display what you just sent.</p>
+      </article>
+      <article class="story-step">
+        <span class="num">02 / RELAY</span>
+        <h3>The server moves what it does not need to understand.</h3>
+        <p>Temporary ciphertext delivery, membership routing, push events and operational metadata remain different from keeping a permanent readable private message archive.</p>
+      </article>
+      <article class="story-step">
+        <span class="num">03 / KEEP</span>
+        <h3>Your devices and archive hold long-term history.</h3>
+        <p>The archive provider is a replaceable implementation. A future self-hosted provider should not force Norfold to redesign its privacy model.</p>
+      </article>
+      <article class="story-step">
+        <span class="num">04 / REMOVE</span>
+        <h3>Deletion and lifespan stop ordinary resurrection.</h3>
+        <p>Delete-for-everyone and explicitly destructive lifespans should block normal relay, recovery-relay, and routine archive restoration paths after destruction.</p>
+      </article>
+    </div>
+  </div>
+</div>
+
+<!-- Section 7: Development status -->
+<div class="wrap section reveal">
+  <div class="section-head">
+    <div>
+      <span class="kicker">Development</span>
+      <h2>What is actually built.</h2>
+    </div>
+    <p>No fake progress percentages. No fabricated roadmap dates. Explicit state labels only.</p>
+  </div>
+  <div class="status-list">
+    <div class="status-row">
+      <div><h4>Chat foundation</h4><p>Backend deployed. Stage 1 validation ongoing.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>E2EE personal messaging</h4><p>Implemented. Not yet release-certified.</p></div>
+      <span class="badge amber">VALIDATING</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Notes and tasks</h4><p>Implemented. Ongoing refinement.</p></div>
+      <span class="badge green">IMPLEMENTED</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Editor system</h4><p>Major redesign in progress. Not yet complete.</p></div>
+      <span class="badge amber">IN PROGRESS</span>
+    </div>
+    <div class="status-row">
+      <div><h4>Public release</h4><p>Not announced. No countdown.</p></div>
+      <span class="badge">NOT ANNOUNCED</span>
+    </div>
+  </div>
+  <div style="margin-top:10px">
+    <a class="button ghost" href="development.html">Full development status →</a>
+  </div>
+</div>
+
+<!-- Beta alert -->
+<div class="wrap section reveal">
+  <div class="alert-panel">
+    <span class="badge gold">PLEASE READ BEFORE TESTING</span>
+    <h2>Beta means "we are proving it," not "we already proved it."</h2>
+    <p>Features may be incomplete, unavailable, behave differently across releases, fail on some devices, or simply not meet your expectations yet. Security, recovery, moderation, reliability and support workflows continue to be validated before public release.</p>
+    <p class="fine">A feature appearing in Norfold does not automatically mean every edge case has been certified for public use. The public trust information must be reconciled with the actual shipped implementation as the product evolves.</p>
+    <a class="button ghost" href="development.html" style="margin-top:20px;display:inline-flex">Read the full development status →</a>
+  </div>
+</div>
+
+<!-- Closing -->
+<div class="wrap section reveal" style="text-align:center;padding-bottom:100px">
+  <p style="font-size:11px;color:var(--muted);letter-spacing:.09em;text-transform:uppercase;margin-bottom:20px">Built in public</p>
+  <h2 style="font-size:clamp(2.4rem,5vw,5rem);letter-spacing:-.06em;line-height:.95;max-width:820px;margin:0 auto 24px">Norfold is being built to become quieter, more capable, and more trustworthy as it grows.</h2>
+  <p style="color:var(--muted);font-size:14px;max-width:560px;margin:0 auto 32px;line-height:1.7">No fake launch countdown. No pretending unfinished work is finished.</p>
+  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+    <a class="button ghost" href="https://github.com/Norfold-App/Norfold">Follow development on GitHub</a>
+    <a class="button ghost" href="security.html">Read the trust model</a>
+  </div>
+</div>
+
+</main>
+
+<footer class="footer">
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <img src="brand/norfold-wordmark.svg" alt="Norfold" width="148"/>
+      <p>Your private workspace. Designed around precise privacy boundaries, user-owned data, and replaceable infrastructure.</p>
+    </div>
+    <div class="footer-col">
+      <strong>Understand</strong>
+      <a href="security.html">Security</a>
+      <a href="data.html">Data &amp; recovery</a>
+      <a href="controls.html">Privacy controls</a>
+    </div>
+    <div class="footer-col">
+      <strong>Operate</strong>
+      <a href="development.html">Development status</a>
+      <a href="support.html">Support boundaries</a>
+      <a href="account-deletion.html">Account deletion</a>
+    </div>
+    <div class="footer-col">
+      <strong>Build</strong>
+      <a href="infrastructure.html">Infrastructure</a>
+      <a href="https://github.com/Norfold-App/Norfold">GitHub repository</a>
+      <a href="brand.html">Brand system</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>Pre-release product information. Not a statement that every feature is production-certified.</span>
+    <span>© Norfold · Built in public, released when ready.</span>
+  </div>
+</footer>
+
+<div class="command" role="dialog" aria-label="Quick navigation">
+  <div class="command-box">
+    <input aria-label="Search pages" placeholder="Search Norfold pages…"/>
+    <div class="command-results"></div>
+  </div>
+</div>
+
+<script src="assets/site.js"></script>
 </body>
 </html>
