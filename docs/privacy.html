@@ -4,27 +4,66 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Norfold Privacy Policy</title>
-  <link rel="icon" type="image/svg+xml" href="assets/norfold-icon.svg"><link rel="icon" type="image/png" sizes="196x196" href="assets/favicon-196.png"><link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png"><link rel="apple-touch-icon" href="assets/apple-touch-icon.png"><meta name="theme-color" content="#1e2024"><link rel="stylesheet" href="legal.css">
+  <meta name="theme-color" content="#f7f6f2">
+  <link rel="icon" type="image/svg+xml" href="assets/norfold-icon.svg">
+  <link rel="icon" type="image/png" sizes="196x196" href="assets/favicon-196.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="legal.css">
 </head>
 <body>
+  <header class="site-header wrap">
+    <a class="brand" href="index.html">
+      <img class="mark" src="assets/norfold-icon.svg" alt="">
+      <span class="word">Norfold<span class="dot">.</span></span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="index.html">Home</a>
+      <a href="changelog.html">Changelog</a>
+      <a href="support.html">Support</a>
+      <span class="badge">Pre-beta</span>
+    </nav>
+  </header>
+
   <main class="page">
     <a class="back" href="index.html">Norfold legal</a>
     <h1>Privacy Policy</h1>
     <p class="warning">Alpha notice: Norfold is in heavy testing. Back up your data before using sync, import, export, vault, or attachment features.</p>
     <p>Norfold stores notes, tasks, chats, canvas items, files metadata, settings, and sync-chain metadata locally on your device unless you explicitly choose backup, import, export, sync, or crash reporting features. Crash reporting is the only one of those that sends anything on its own once enabled; it is described under Diagnostics And Crash Reporting below.</p>
+
     <h2>Data You Choose To Store</h2>
     <p>The app may store note text, Markdown, task fields, workspace names, profile names, cover image URIs, attachment metadata, sync folder references, diagnostic logs, and encrypted backup payloads.</p>
+
     <h2>Google Drive Sync</h2>
     <p>When you connect Google Drive, Norfold requests Drive access only for app sync data needed to upload, download, and compare sync-chain snapshots. Google account authorization is handled by Google's OAuth flow.</p>
+
     <h2>Diagnostics And Crash Reporting</h2>
     <p>The setting <em>Enable diagnostics and crash reporting</em>, in Settings under Diagnostics, governs two things at once. Locally, crash and error details are recorded on the device so you can review them or attach them to a report yourself. Remotely, while the setting is on, crash reports are also sent automatically to Google Firebase Crashlytics, a Google service, so defects can be fixed without waiting for a report.</p>
     <p>A crash report contains the error, the stack trace and the place in the app's code where it happened, the app identifier and version, whether the app was in the background, and information about the device: model, operating system version, CPU architecture, available memory and disk space, screen rotation, and whether the device is rooted. It also carries randomly generated identifiers Crashlytics uses to group crashes and to count how many devices a defect affects. It does not contain your note text, titles, task names, chat messages, workspace or profile names, file names, attachment contents, Google account identity, or the contents of a vault or backup. Norfold attaches no custom keys and no user identifier of its own, so a report is not tied to your account or to anything you have written.</p>
     <p>Reporting is off until you turn it on. A newly installed build collects nothing before the setting has been read, and turning the setting off stops sending immediately and discards any report already recorded but not yet sent. No advertising identifiers and no usage or behavioural analytics are collected in either state, and nothing else in the app uploads diagnostics on its own. Google states that crash data is retained for 90 days; its handling of what it receives is described in the <a href="https://firebase.google.com/support/privacy">Firebase privacy documentation</a>.</p>
+
     <h2>Security</h2>
     <p>Vault exports and backup containers are encrypted, but the live Room database is not encrypted at rest in this pre-beta build. The encryption design has not been independently audited. Keep independent backups of important information and use the device lock and storage protections supplied by Android.</p>
+
     <h2>Contact</h2>
     <p>If you received an alpha build directly, use the same private testing channel that supplied it. Norfold has no public support intake while public distribution is closed.</p>
     <p class="updated">Last updated: August 24, 2026</p>
   </main>
+
+  <footer>
+    <div class="wrap footer-inner">
+      <div class="foot-brand">
+        <img class="mark" src="assets/norfold-icon.svg" alt="">
+        <span>© 2026 Norfold</span>
+      </div>
+      <nav class="foot-nav" aria-label="Legal">
+        <a href="privacy.html">Privacy</a>
+        <a href="terms.html">Terms</a>
+        <a href="license.html">License</a>
+        <a href="support.html">Support</a>
+        <a href="changelog.html">Changelog</a>
+      </nav>
+    </div>
+  </footer>
 </body>
 </html>

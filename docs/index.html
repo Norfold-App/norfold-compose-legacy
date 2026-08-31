@@ -3,32 +3,132 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Norfold is a private, local-first workspace for notes, tasks, calendar, files, and chat.">
-  <title>Norfold - Your private workspace</title>
-  <link rel="icon" type="image/svg+xml" href="assets/norfold-icon.svg"><link rel="icon" type="image/png" sizes="196x196" href="assets/favicon-196.png"><link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png"><link rel="apple-touch-icon" href="assets/apple-touch-icon.png"><meta name="theme-color" content="#1e2024"><link rel="stylesheet" href="legal.css">
+  <meta name="description" content="Norfold is a private, local-first workspace for notes, documents, tasks, conversations, and files. Your data starts and stays on your device.">
+  <meta name="theme-color" content="#f7f6f2">
+  <title>Norfold — a private workspace that folds around you</title>
+  <link rel="icon" type="image/svg+xml" href="assets/norfold-icon.svg">
+  <link rel="icon" type="image/png" sizes="196x196" href="assets/favicon-196.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="legal.css">
 </head>
 <body>
-  <header class="site-header">
-    <a class="brand" href="index.html"><img class="mark" src="assets/norfold-icon.svg" alt=""><span>Norfold</span></a>
-    <nav><a href="#workspace">Workspace</a><a href="changelog.html">Changelog</a><a href="support.html">Support</a></nav>
+  <header class="site-header wrap">
+    <a class="brand" href="index.html">
+      <img class="mark" src="assets/norfold-icon.svg" alt="">
+      <span class="word">Norfold<span class="dot">.</span></span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="#workspace">Workspace</a>
+      <a href="#privacy">Privacy</a>
+      <a href="changelog.html">Changelog</a>
+      <a href="support.html">Support</a>
+      <span class="badge">Pre-beta</span>
+    </nav>
   </header>
+
   <main>
-    <section class="product-hero">
+    <section class="hero wrap">
       <div class="hero-copy">
-        <img class="hero-logo" src="assets/norfold-logo-animated.svg" alt="Norfold logo">
-        <p class="eyebrow">LOCAL-FIRST AND PRIVATE BY DEFAULT</p>
-        <h1>Your private workspace.</h1>
-        <p class="lede">Notes, tasks, calendar, files, and conversations stay connected without making the cloud a requirement.</p>
-        <div class="actions"><a class="primary" href="download.html">Alpha status</a><a class="secondary" href="changelog.html">What is included</a></div>
+        <img class="hero-logo" src="assets/norfold-logo-animated.svg" alt="Norfold logo" width="72" height="72">
+        <p class="eyebrow">A private, local-first workspace</p>
+        <h1>Everything folds into <span class="crest">one</span> calm place.</h1>
+        <p class="lede">Notes, documents, tasks, conversations, and files — arranged the way your mind already works, and held on your device. Norfold stays private because it stays put.</p>
+        <div class="actions">
+          <a class="button primary" href="changelog.html">See what's inside</a>
+          <a class="button ghost" href="#privacy">How privacy works</a>
+        </div>
       </div>
-      <div class="workspace-preview" aria-label="Norfold workspace preview">
-        <aside><b><img class="mini-mark" src="assets/norfold-icon.svg" alt=""> Norfold</b><span class="active">Home</span><span>Notes</span><span>Tasks</span><span>Calendar</span><span>Chat</span><span>Files</span></aside>
-        <section><div class="search">Search everything</div><div class="metrics"><article><b>12</b><span>Notes</span></article><article><b>8</b><span>Tasks</span></article><article><b>5</b><span>Events</span></article></div><div class="task-panel"><b>Today's tasks</b><p>○ Draft project roadmap <em>In progress</em></p><p>○ Polish Android workspace <em>Done</em></p></div><div class="two-panels"><article><b>Upcoming events</b><p>Team sync</p><p>Design review</p></article><article><b>Recent notes</b><p>Welcome to Norfold</p><p>Meeting notes</p></article></div></section>
+      <div class="fold-card" aria-label="Norfold workspace preview">
+        <div class="dot" aria-hidden="true"></div>
+        <div class="corner" aria-hidden="true"></div>
+        <p class="fold-label">The workspace, folded open</p>
+        <div class="fold-views">
+          <div class="fold-view g1"><span class="g" aria-hidden="true">N</span><div><b>Notes &amp; documents</b><span>Structured blocks, your own words</span></div></div>
+          <div class="fold-view g2"><span class="g" aria-hidden="true">✓</span><div><b>Tasks &amp; reminders</b><span>Views that fit the work</span></div></div>
+          <div class="fold-view g3"><span class="g" aria-hidden="true">◐</span><div><b>Chat &amp; calendar</b><span>Together, when you choose</span></div></div>
+        </div>
+        <p class="fold-note">Local-first by design. Sync only when you decide.</p>
       </div>
     </section>
-    <section id="workspace" class="feature-band"><div><p class="eyebrow">ONE WORKSPACE</p><h2>Work in the view that fits.</h2><p>Move the same task data through an adaptive table, BoardPointer Kanban, list, calendar, timeline, chart, gallery, feed, and matrix.</p></div><div class="feature-grid"><article><b>Docs</b><p>Native structured blocks shared by notes, task Docs, and calendar-event Docs.</p></article><article><b>Tasks</b><p>Properties, checklists, files, comments, date ranges, and custom statuses.</p></article><article><b>Private storage</b><p>Room is the immediate source of truth. Sync remains optional and encrypted.</p></article><article><b>Adaptive UI</b><p>Compact phone, landscape, tablet, and expanded workspace layouts.</p></article></div></section>
-    <section class="privacy-callout"><span class="lock">⌁</span><div><h2>Private by default</h2><p>Your workspace stays on your device unless you explicitly configure backup or synchronization.</p></div></section>
+
+    <section id="workspace" class="band">
+      <div class="wrap">
+        <div class="band-head">
+          <h2>One workspace, many ways to see it.</h2>
+          <p>Norfold adapts to the work instead of forcing the work into a grid. The same task flows through lists, boards, calendars, and timelines — and your place in it is kept exactly as you left it.</p>
+        </div>
+        <div class="feature-grid">
+          <a class="feature" href="changelog.html">
+            <span class="k">Document</span>
+            <h3>Notes &amp; documents</h3>
+            <p>Structured blocks shared by notes, task docs, and calendar-event docs — with history and recovery held on the device.</p>
+          </a>
+          <a class="feature" href="changelog.html">
+            <span class="k">Task</span>
+            <h3>Tasks, your way</h3>
+            <p>Properties, checklists, files, comments, date ranges, and custom statuses — in table, board, feed, calendar, timeline, and matrix views.</p>
+          </a>
+          <a class="feature" href="changelog.html">
+            <span class="k">Storage</span>
+            <h3>Private storage</h3>
+            <p>Room is the immediate source of truth. Backup and sync stay optional, encrypted, and entirely under your control.</p>
+          </a>
+          <a class="feature" href="changelog.html">
+            <span class="k">Chat</span>
+            <h3>Conversations</h3>
+            <p>Encrypted messages and media, personal groups, workspace channels, disappearing messages, and privacy-safe reporting.</p>
+          </a>
+          <a class="feature" href="changelog.html">
+            <span class="k">Adaptive</span>
+            <h3>Fits the screen</h3>
+            <p>Compact phone, landscape, tablet, and expanded workspace layouts — the same data, in the view that fits.</p>
+          </a>
+          <a class="feature" href="changelog.html">
+            <span class="k">Accessible</span>
+            <h3>Built to be reached</h3>
+            <p>Keyboard-focusable chrome, screen-reader announcements, AA contrast, and directional icons that mirror in RTL.</p>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section id="privacy" class="band">
+      <div class="wrap">
+        <div class="privacy-callout">
+          <div class="fold-dot" aria-hidden="true"></div>
+          <p class="eyebrow">Private by default</p>
+          <h2>Your work stays yours — until you say otherwise.</h2>
+          <p>Norfold keeps your notes, tasks, and conversations on your device. Backup and synchronization are things you choose, not things that happen to you. The cloud is an option you turn on, never the floor the app is built on.</p>
+          <div class="privacy-points">
+            <div class="privacy-point"><b>On-device</b><span>Room is the immediate source of truth for your workspace.</span></div>
+            <div class="privacy-point"><b>Optional sync</b><span>Encrypted sync and backup run only when you enable them.</span></div>
+            <div class="privacy-point"><b>No analytics</b><span>No advertising identifiers, no behavioural tracking, by default.</span></div>
+          </div>
+          <div class="actions" style="margin-top:30px">
+            <a class="button primary" href="privacy.html">Read the privacy policy</a>
+            <a class="button ghost" href="terms.html">Terms of service</a>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
-  <footer><span>© 2026 Norfold</span><nav><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a href="support.html">Support</a></nav></footer>
+
+  <footer>
+    <div class="wrap footer-inner">
+      <div class="foot-brand">
+        <img class="mark" src="assets/norfold-icon.svg" alt="">
+        <span>© 2026 Norfold</span>
+      </div>
+      <nav class="foot-nav" aria-label="Legal">
+        <a href="privacy.html">Privacy</a>
+        <a href="terms.html">Terms</a>
+        <a href="license.html">License</a>
+        <a href="support.html">Support</a>
+        <a href="changelog.html">Changelog</a>
+      </nav>
+      <p class="foot-meta">Pre-beta software · source-available · local-first</p>
+    </div>
+  </footer>
 </body>
 </html>
