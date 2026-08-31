@@ -40,6 +40,8 @@ object KlipyClient {
 
     suspend fun search(query: String, page: Int = 1, perPage: Int = 24): List<KlipyGif> {
         check(configured) { "KLIPY isn't configured for this build." }
+        require(page in 1..1_000) { "KLIPY page is out of range." }
+        require(perPage in 1..50) { "KLIPY result count is out of range." }
         val action = if (query.isBlank()) "trending" else "search"
         val q = if (query.isBlank()) "" else "&q=${encode(query.trim())}"
         val url = "https://api.klipy.com/api/v1/${encode(BuildConfig.KLIPY_API_KEY)}/gifs/$action?page=$page&per_page=$perPage$q"
@@ -52,6 +54,14 @@ object KlipyClient {
             val file = item["file"]?.jsonObject ?: return@mapNotNull null
             val preview = rendition(file, "sm") ?: rendition(file, "xs") ?: return@mapNotNull null
             val original = rendition(file, "md") ?: rendition(file, "hd") ?: preview
+            val previewReference = ExternalMediaReference.validate(
+                provider = ExternalMediaReference.KLIPY_PROVIDER,
+                kind = ExternalMediaReference.GIF_KIND,
+                url = preview.first,
+                width = preview.second,
+                height = preview.third,
+            )
+            if (previewReference !is ExternalMediaReference.Result.Valid) return@mapNotNull null
             val reference = ExternalMediaReference.validate(
                 provider = ExternalMediaReference.KLIPY_PROVIDER,
                 kind = ExternalMediaReference.GIF_KIND,
@@ -65,7 +75,7 @@ object KlipyClient {
             KlipyGif(
                 slug = item["slug"]?.jsonPrimitive?.contentOrNull ?: original.first,
                 title = item["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                previewUrl = preview.first,
+                previewUrl = previewReference.reference.url,
                 originalUrl = original.first,
                 width = original.second,
                 height = original.third,

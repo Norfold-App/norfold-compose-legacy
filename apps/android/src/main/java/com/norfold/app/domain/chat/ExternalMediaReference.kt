@@ -44,8 +44,13 @@ object ExternalMediaReference {
     )
 
     private val allowedExtensionsByKind = mapOf(
-        GIF_KIND to setOf("gif", "webp", "mp4"),
+        GIF_KIND to setOf("gif", "webp"),
     )
+
+    private const val MaxUrlLength = 4_096
+    private const val MaxMetadataLength = 240
+    private const val MaxEncodedLength = 8_192
+    private const val MaxDimension = 16_384
 
     sealed interface Result {
         data class Valid(val reference: ExternalMediaReferenceV1) : Result
@@ -64,13 +69,18 @@ object ExternalMediaReference {
         val hosts = allowedHostsByProvider[provider] ?: return Result.Rejected("Unknown provider \"$provider\".")
         val extensions = allowedExtensionsByKind[kind] ?: return Result.Rejected("Unknown kind \"$kind\".")
         if (url.isBlank()) return Result.Rejected("Media URL is empty.")
+        if (url.length > MaxUrlLength) return Result.Rejected("Media URL is too long.")
+        if (title.length > MaxMetadataLength) return Result.Rejected("Media title is too long.")
+        if ((slug?.length ?: 0) > MaxMetadataLength) return Result.Rejected("Media slug is too long.")
+        if (width != null && width !in 1..MaxDimension) return Result.Rejected("Media width is invalid.")
+        if (height != null && height !in 1..MaxDimension) return Result.Rejected("Media height is invalid.")
         if (url.any { it.isWhitespace() || it.code < 0x20 }) return Result.Rejected("Media URL contains control characters.")
         val parsed = runCatching { URI(url) }.getOrNull() ?: return Result.Rejected("Malformed URL.")
         if (!parsed.scheme.equals("https", ignoreCase = true)) return Result.Rejected("Provider media must be HTTPS.")
         if (parsed.rawUserInfo != null) return Result.Rejected("Userinfo is not allowed in a provider URL.")
+        if (parsed.rawFragment != null) return Result.Rejected("Fragments are not allowed in a provider URL.")
         val host = parsed.host ?: return Result.Rejected("Provider URL has no host.")
-        val port = parsed.port
-        if (port != -1 && port != 443) return Result.Rejected("Only the default HTTPS port is allowed.")
+        if (parsed.port != -1) return Result.Rejected("Explicit ports are not allowed in a provider URL.")
         val rawAuthority = parsed.rawAuthority ?: ""
         if (rawAuthority.contains('%')) return Result.Rejected("Encoded hosts are not allowed.")
         if (rawAuthority.any { it.code > 0x7E }) return Result.Rejected("Non-ASCII hosts are not allowed.")
@@ -97,14 +107,45 @@ object ExternalMediaReference {
 
     /** Encodes a reference into the `norfold-ext-media:` URI form stored in an existing attachment field. */
     fun toUri(reference: ExternalMediaReferenceV1): String =
-        UriPrefix + b64(json.encodeToString(reference).encodeToByteArray())
+        UriPrefix + b64(json.encodeToString(requireValid(reference)).encodeToByteArray())
 
-    /** Decodes a `norfold-ext-media:` URI. Returns null for any other value (legacy messages). */
+    /**
+     * Decodes and revalidates a `norfold-ext-media:` URI. Remote, restored, and encrypted payloads
+     * are untrusted input; successfully decoding JSON never bypasses the provider boundary.
+     */
     fun fromUri(value: String): ExternalMediaReferenceV1? {
         if (!value.startsWith(UriPrefix)) return null
+        val encoded = value.removePrefix(UriPrefix)
+        if (encoded.isBlank() || encoded.length > MaxEncodedLength) return null
         return runCatching {
-            json.decodeFromString<ExternalMediaReferenceV1>(unb64(value.removePrefix(UriPrefix)).decodeToString())
+            val decoded = json.decodeFromString<ExternalMediaReferenceV1>(unb64(encoded).decodeToString())
+            if (decoded.version != 1) return null
+            val validated = validate(
+                provider = decoded.provider,
+                kind = decoded.kind,
+                url = decoded.url,
+                title = decoded.title,
+                slug = decoded.slug,
+                width = decoded.width,
+                height = decoded.height,
+            ) as? Result.Valid ?: return null
+            validated.reference.takeIf { it == decoded }
         }.getOrNull()
+    }
+
+    fun requireValid(reference: ExternalMediaReferenceV1): ExternalMediaReferenceV1 {
+        require(reference.version == 1) { "Unsupported external media reference version." }
+        val validated = validate(
+            provider = reference.provider,
+            kind = reference.kind,
+            url = reference.url,
+            title = reference.title,
+            slug = reference.slug,
+            width = reference.width,
+            height = reference.height,
+        ) as? Result.Valid ?: error("External media reference is not allowed.")
+        require(validated.reference == reference) { "External media reference is not canonical." }
+        return validated.reference
     }
 
     private fun b64(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)

@@ -3,8 +3,11 @@ package com.norfold.app.cloud
 import android.content.Context
 import android.os.Build
 import com.norfold.app.data.chat.ChatDeviceIdentityStore
+import com.norfold.app.domain.chat.DeviceCryptoMaterial
 import com.norfold.app.domain.chat.DevicePublicMaterial
 import com.norfold.app.domain.chat.E2eeMessageMetadata
+import com.norfold.app.domain.chat.ExternalMediaReference
+import com.norfold.app.domain.chat.ExternalMediaReferenceV1
 import com.norfold.app.domain.chat.NorfoldE2eeEnvelopeV1
 import com.norfold.app.domain.chat.SecureChatPayloadV1
 import com.norfold.app.domain.chat.SecureChatAttachmentV1
@@ -29,6 +32,9 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import java.util.UUID
+
+class InvalidSecureChatPayloadException(message: String, cause: Throwable? = null) :
+    IllegalArgumentException(message, cause)
 
 /**
  * Supabase control/relay adapter for opaque account-chat payloads. The backend
@@ -187,6 +193,24 @@ class SecureChatBackend(context: Context) {
         ),
     )
 
+    suspend fun sendProviderMedia(
+        conversationId: String,
+        clientSyncId: String,
+        reference: ExternalMediaReferenceV1,
+        createdAt: Long,
+        expiresAt: Long? = null,
+    ): SentPayload = sendPayload(
+        conversationId = conversationId,
+        clientSyncId = clientSyncId,
+        payload = SecureChatPayloadV1(
+            type = "provider_media",
+            body = "",
+            createdAt = createdAt,
+            expiresAt = expiresAt,
+            externalMedia = ExternalMediaReference.requireValid(reference),
+        ),
+    )
+
     suspend fun prepareAccountSecurityEpoch(conversationId: String): String =
         ensureAccountEpoch(conversationId)
 
@@ -256,6 +280,26 @@ class SecureChatBackend(context: Context) {
             createdAt = createdAt,
             replyPreview = replyPreview,
             expiresAt = expiresAt,
+        ),
+    )
+
+    suspend fun sendWorkspaceProviderMedia(
+        workspaceId: String,
+        channelId: String?,
+        clientSyncId: String,
+        reference: ExternalMediaReferenceV1,
+        createdAt: Long,
+        expiresAt: Long? = null,
+    ): SentPayload = sendWorkspacePayload(
+        workspaceId = workspaceId,
+        channelId = channelId,
+        clientSyncId = clientSyncId,
+        payload = SecureChatPayloadV1(
+            type = "provider_media",
+            body = "",
+            createdAt = createdAt,
+            expiresAt = expiresAt,
+            externalMedia = ExternalMediaReference.requireValid(reference),
         ),
     )
 
@@ -451,10 +495,62 @@ class SecureChatBackend(context: Context) {
             hpkePublicKeyset = remote.senderHpkePublicKeyset,
             signingPublicKeyset = remote.senderSigningPublicKeyset,
         )
+        return try {
+            decryptValidated(remote, recipient, sender)
+        } catch (rejected: InvalidSecureChatPayloadException) {
+            throw rejected
+        } catch (failure: Exception) {
+            throw InvalidSecureChatPayloadException(
+                "Secure relay envelope or payload failed authenticated validation.",
+                failure,
+            )
+        }
+    }
+
+    private fun decryptValidated(
+        remote: PendingRelay,
+        recipient: DeviceCryptoMaterial,
+        sender: DevicePublicMaterial,
+    ): DecryptedRelay {
         val envelope = json.decodeFromJsonElement<NorfoldE2eeEnvelopeV1>(remote.envelope)
         val plaintext = crypto.open(envelope, recipient, sender).decodeToString()
-        val payload = json.decodeFromString<SecureChatPayloadV1>(plaintext)
-        require(payload.version == 1) { "Unsupported secure payload version." }
+        val payload = try {
+            json.decodeFromString<SecureChatPayloadV1>(plaintext)
+        } catch (failure: Exception) {
+            throw InvalidSecureChatPayloadException("Secure payload could not be decoded.", failure)
+        }
+        if (payload.version != 1) {
+            throw InvalidSecureChatPayloadException("Unsupported secure payload version.")
+        }
+        if (payload.type == "provider_media") {
+            if (payload.body.isNotEmpty()) {
+                throw InvalidSecureChatPayloadException("Provider media payloads cannot carry hidden text.")
+            }
+            if (payload.attachment != null) {
+                throw InvalidSecureChatPayloadException("Provider media cannot also carry a Norfold attachment.")
+            }
+            val reference = payload.externalMedia
+                ?: throw InvalidSecureChatPayloadException("Provider media payload is missing its reference.")
+            val validated = ExternalMediaReference.validate(
+                provider = reference.provider,
+                kind = reference.kind,
+                url = reference.url,
+                title = reference.title,
+                slug = reference.slug,
+                width = reference.width,
+                height = reference.height,
+            )
+            if (reference.version != 1 ||
+                validated !is ExternalMediaReference.Result.Valid ||
+                validated.reference != reference
+            ) {
+                throw InvalidSecureChatPayloadException("Provider media reference is not allowed.")
+            }
+        } else {
+            if (payload.externalMedia != null) {
+                throw InvalidSecureChatPayloadException("External media is only valid on provider-media payloads.")
+            }
+        }
         if (remote.recoveryRequestId == null) {
             require(payload.createdAt == envelope.metadata.createdAt) { "Secure payload timestamp mismatch." }
         }

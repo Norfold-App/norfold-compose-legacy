@@ -124,6 +124,7 @@ import com.norfold.app.cloud.NorfoldSocial
 import com.norfold.app.cloud.NorfoldSupabase
 import com.norfold.app.cloud.PushRegistrationClient
 import com.norfold.app.cloud.KlipyClient
+import com.norfold.app.cloud.InvalidSecureChatPayloadException
 import com.norfold.app.cloud.KlipyGif
 import com.norfold.app.data.ChatDrafts
 import com.norfold.app.data.ChatReadMarkers
@@ -134,6 +135,7 @@ import com.norfold.app.cloud.ChatBackend
 import com.norfold.app.cloud.ChatMediaBackend
 import com.norfold.app.cloud.SecureChatBackend
 import com.norfold.app.domain.chat.ChatMediaCrypto
+import com.norfold.app.domain.chat.ExternalMediaReference
 import com.norfold.app.cloud.toWorkspaceMember
 import com.norfold.app.ui.feedback.UiFeedback
 import com.norfold.app.ui.feedback.UiFeedbackAction
@@ -2610,7 +2612,19 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         while (kotlinx.coroutines.currentCoroutineContext().isActive) {
             val page = secureChatBackend.pending(after = cursor, limit = pageSize)
             if (page.isEmpty()) break
-            page.forEach { remote -> importSecureMessage(remote) }
+            page.forEach { remote ->
+                try {
+                    importSecureMessage(remote)
+                } catch (rejected: InvalidSecureChatPayloadException) {
+                    Log.w(
+                        "NorfoldSecureChat",
+                        "Discarding an authenticated relay with an invalid secure payload.",
+                        rejected,
+                    )
+                    secureChatBackend.acknowledge(remote.relayId, read = false)
+                    recordSecureRelayCheckpoint(remote)
+                }
+            }
             total += page.size
             val newest = page.last().createdAt
             // Stop when the page did not fill (backlog drained) or the cursor
@@ -2628,7 +2642,9 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         val pending = repository.pendingSecureChatOperations()
         for (operation in pending) {
             try {
-                if (operation.operation == "text" && operation.expiresAt?.let { it <= System.currentTimeMillis() } == true) {
+                if (operation.operation in setOf("text", "provider_media") &&
+                    operation.expiresAt?.let { it <= System.currentTimeMillis() } == true
+                ) {
                     repository.recordSecureChatTombstone(
                         messageSyncId = operation.id,
                         conversationId = operation.conversationId,
@@ -2648,6 +2664,26 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                         body = operation.body,
                         createdAt = operation.createdAt,
                         replyPreview = operation.replyPreview,
+                        expiresAt = operation.expiresAt,
+                    )
+                    repository.localChatMessageIdBySyncId(operation.workspaceId, operation.id)?.let { localId ->
+                        repository.bindAccountDirectMessage(localId, operation.id)
+                        repository.setChatMessageReceiptStatus(localId, ChatReceiptStatus.Sent)
+                        repository.setChatMessageSecurity(
+                            localId,
+                            ChatSecurityMode.EndToEndEncrypted,
+                            sent.securityEpochId,
+                        )
+                        repository.setChatMessageOriginPayload(localId, sent.originPayloadJson)
+                    }
+                } else if (operation.operation == "provider_media") {
+                    val reference = ExternalMediaReference.fromUri(operation.body)
+                        ?: error("Provider media outbox reference is invalid.")
+                    val sent = secureChatBackend.sendProviderMedia(
+                        conversationId = operation.conversationId,
+                        clientSyncId = operation.id,
+                        reference = reference,
+                        createdAt = operation.createdAt,
                         expiresAt = operation.expiresAt,
                     )
                     repository.localChatMessageIdBySyncId(operation.workspaceId, operation.id)?.let { localId ->
@@ -2813,6 +2849,64 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        if (operation.operation == "provider_media") {
+            val message = requireNotNull(localMessage) { "Local provider-media message is missing." }
+            val reference = ExternalMediaReference.fromUri(operation.body)
+                ?: error("Provider media outbox reference is invalid.")
+            when (security.securityMode) {
+                ChatSecurityMode.EndToEndEncrypted -> {
+                    val sent = secureChatBackend.sendWorkspaceProviderMedia(
+                        workspaceId = remoteWorkspaceId,
+                        channelId = operation.channelSyncId,
+                        clientSyncId = operation.id,
+                        reference = reference,
+                        createdAt = operation.createdAt,
+                        expiresAt = operation.expiresAt,
+                    )
+                    repository.setChatMessageSecurity(
+                        message.id,
+                        security.securityMode,
+                        requireNotNull(security.securityEpochId),
+                    )
+                    repository.bindSecureChatMessage(
+                        localWorkspaceId = operation.workspaceId,
+                        localMessageId = message.id,
+                        clientSyncId = operation.id,
+                        relayId = sent.relayId,
+                    )
+                    repository.setChatMessageOriginPayload(message.id, sent.originPayloadJson)
+                }
+                ChatSecurityMode.Managed -> {
+                    val remote = ChatBackend.sendManagedWorkspaceMessage(
+                        remoteWorkspaceId = remoteWorkspaceId,
+                        deviceId = state.value.settings.settingsDeviceId,
+                        username = message.authorUsername,
+                        displayName = message.authorDisplayName,
+                        body = "",
+                        color = message.color,
+                        createdAt = operation.createdAt,
+                        syncId = operation.id,
+                        idempotencyKey = operation.id,
+                        security = security,
+                        channelSyncId = operation.channelSyncId,
+                        attachmentName = message.attachmentName,
+                        attachmentMimeType = "image/gif",
+                        attachmentSizeBytes = 0,
+                        attachmentExternalUrl = operation.body,
+                        expiresAt = operation.expiresAt,
+                    )
+                    repository.bindRemoteChatMessage(operation.workspaceId, message.id, remote)
+                    repository.setChatMessageSecurity(
+                        message.id,
+                        security.securityMode,
+                        requireNotNull(security.securityEpochId),
+                    )
+                }
+            }
+            repository.setChatMessageReceiptStatus(message.id, ChatReceiptStatus.Sent)
+            return
+        }
+
         val targetSyncId = requireNotNull(operation.targetMessageSyncId) {
             "Workspace mutation is missing its target message."
         }
@@ -2906,7 +3000,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             localWorkspaceId ?: return
         }
         val accountId = NorfoldSupabase.currentAccountId()
-        if (decrypted.payload.type !in setOf("text", "media")) {
+        if (decrypted.payload.type !in setOf("text", "media", "provider_media")) {
             val target = decrypted.payload.targetMessageId ?: return
             if (accountId != null && repository.hasSecureChatUserHidden(accountId, target)) {
                 secureChatBackend.acknowledge(decrypted.relayId, read = false)
@@ -2966,6 +3060,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 originPayloadJson = decrypted.originPayloadJson,
                 expiresAt = decrypted.payload.expiresAt,
                 attachment = decrypted.payload.attachment,
+                externalMedia = decrypted.payload.externalMedia,
             )
         } else {
             repository.importSecureWorkspaceMessage(
@@ -2983,6 +3078,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 originPayloadJson = decrypted.originPayloadJson,
                 expiresAt = decrypted.payload.expiresAt,
                 attachment = decrypted.payload.attachment,
+                externalMedia = decrypted.payload.externalMedia,
             )
         }
         val viewed = chatConversationOpen.value && activeChatChannelId.value == resolvedChannelId
@@ -5180,30 +5276,66 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             emitError("This GIF can't be sent — its media URL isn't from the approved provider host.")
             return
         }
+        val encodedReference = runCatching { ExternalMediaReference.toUri(reference) }.getOrElse {
+            emitError("This GIF can't be sent — its provider reference is invalid.")
+            return
+        }
         viewModelScope.launch {
             val settings = state.value.settings
             val channelId = activeChatChannelId.value
-            val securityResult = runCatching { validateAttachmentDestination(channelId) }
-            if (securityResult.isFailure) {
-                emitError(
-                    securityResult.exceptionOrNull()?.message
-                        ?: "GIFs are unavailable for this conversation.",
-                )
+            val channel = channelId?.let { id -> state.value.chatChannels.firstOrNull { it.id == id } }
+            val remoteWorkspaceId = if (channel?.scope == ChatScope.Account) {
+                null
+            } else {
+                repository.remoteWorkspaceId(settings.activeWorkspaceId)
+            }
+            val conversationId = if (channel?.scope == ChatScope.Account) {
+                channel.accountConversationId ?: run {
+                    emitError("This personal chat is missing its secure route.")
+                    return@launch
+                }
+            } else if (remoteWorkspaceId == null) {
+                null
+            } else {
+                channel?.syncId ?: remoteWorkspaceId
+            }
+            val createdAt = System.currentTimeMillis()
+            val expiresAt = channel?.defaultLifespanSeconds?.let { createdAt + it * 1_000L }
+            val name = "${gif.title.ifBlank { "KLIPY GIF" }.sanitizeFileName()}.gif"
+            val localId = repository.sendChat(
+                username = settings.syncUserName.ifBlank { "you" },
+                displayName = settings.syncPublicName.ifBlank { settings.syncUserName.ifBlank { "You" } },
+                body = "",
+                color = settings.accentColor,
+                attachmentName = name,
+                attachmentMimeType = "image/gif",
+                attachmentUri = encodedReference,
+                attachmentSizeBytes = 0,
+                createdAt = createdAt,
+                channelId = channelId,
+                expiresAt = expiresAt,
+            )
+            if (conversationId == null) return@launch
+            val syncId = UUID.randomUUID().toString()
+            repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
+            repository.enqueueSecureChatOperation(
+                SecureChatOutboxEntity(
+                    id = syncId,
+                    workspaceId = settings.activeWorkspaceId,
+                    conversationId = conversationId,
+                    remoteWorkspaceId = remoteWorkspaceId,
+                    channelSyncId = channel?.takeIf { it.scope == ChatScope.Workspace }?.syncId,
+                    operation = "provider_media",
+                    body = encodedReference,
+                    createdAt = createdAt,
+                    expiresAt = expiresAt,
+                ),
+            )
+            if (!NorfoldSupabase.isSignedIn()) {
+                notifySignedOutChatSend()
                 return@launch
             }
-            securityResult.getOrThrow()
-            val createdAt = System.currentTimeMillis()
-            val name = "${gif.title.ifBlank { "KLIPY GIF" }.sanitizeFileName()}.gif"
-            enqueueChatUpload(
-                settings = settings,
-                uriString = gif.originalUrl,
-                name = name,
-                mime = "image/gif",
-                size = 0,
-                body = "",
-                createdAtOverride = createdAt,
-            )
-            drainChatUploads()
+            drainSecureChatOutbox()
         }
     }
 
@@ -5785,6 +5917,8 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Local uris play/open directly; norfold-cloud:// storage paths need a signed URL. */
     private suspend fun resolveChatAttachmentSource(uriString: String): String? = when {
+        uriString.startsWith(ExternalMediaReference.UriPrefix) ->
+            ExternalMediaReference.fromUri(uriString)?.url
         uriString.startsWith(ChatMediaCrypto.UriPrefix) -> ChatMediaCrypto.fromUri(uriString)?.let { descriptor ->
             runCatching { Uri.fromFile(materializeSecureChatMedia(descriptor)).toString() }.getOrNull()
         }

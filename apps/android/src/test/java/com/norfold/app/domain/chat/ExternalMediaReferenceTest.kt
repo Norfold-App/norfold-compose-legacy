@@ -15,9 +15,7 @@ class ExternalMediaReferenceTest {
             "https://static.klipy.com/media/abc/sm.gif",
             "https://static1.klipy.com/media/abc/hd.gif?token=x",
             "https://static2.klipy.com/abc.webp",
-            "https://static.klipy.com/abc.mp4",
-            "https://static1.klipy.com/a/b/c/sm.gif?t=1&u=2#frag",
-            "https://static.klipy.com:443/abc.gif",
+            "https://static1.klipy.com/a/b/c/sm.gif?t=1&u=2",
         )
         accepted.forEach { url ->
             val result = ExternalMediaReference.validate(
@@ -54,12 +52,14 @@ class ExternalMediaReferenceTest {
             "https://static.klipy.com.evil.example/abc.gif",
             "https://evil-static.klipy.com/abc.gif",
             "https://static.klipy.com./abc.gif",
+            "https://static.klipy.com:443/abc.gif",
             "https://static.klipy.com:444/abc.gif",
             "https://static.klipy.com:8443/abc.gif",
             "https://notklipy.com/abc.gif",
             "https://static.klipy.org/abc.gif",
             "https://static.klipy.com/abc.png",
             "https://static.klipy.com/abc.jpg",
+            "https://static.klipy.com/abc.mp4",
             "https://static.klipy.com/abc.html",
             "https://static.klipy.com/abc",
             "https://static.klipy.com/",
@@ -68,6 +68,7 @@ class ExternalMediaReferenceTest {
             "javascript:alert(1)",
             "https://[::1]/abc.gif",
             "https://static.klipy.com/abc.gif\n",
+            "https://static.klipy.com/abc.gif#fragment",
             "https://static.klipy.com/ab c.gif",
             "not a url",
             "",
@@ -137,6 +138,43 @@ class ExternalMediaReferenceTest {
         ).forEach { value ->
             assertNull(value, ExternalMediaReference.fromUri(value))
         }
+    }
+
+    @Test
+    fun `decoded references are revalidated instead of trusting serialized fields`() {
+        val valid = ExternalMediaReferenceV1(
+            provider = ExternalMediaReference.KLIPY_PROVIDER,
+            kind = ExternalMediaReference.GIF_KIND,
+            url = "https://static.klipy.com/abc.gif",
+        )
+        val encoded = ExternalMediaReference.toUri(valid)
+        assertEquals(valid, ExternalMediaReference.fromUri(encoded))
+
+        val payload = encoded.removePrefix(ExternalMediaReference.UriPrefix)
+        val decodedJson = String(java.util.Base64.getUrlDecoder().decode(payload))
+        val tamperedJson = decodedJson.replace("static.klipy.com", "static.klipy.com.evil.example")
+        val tampered = ExternalMediaReference.UriPrefix +
+            java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(tamperedJson.encodeToByteArray())
+        assertNull(ExternalMediaReference.fromUri(tampered))
+    }
+
+    @Test
+    fun `unsupported versions and invalid dimensions are rejected`() {
+        val invalidVersion = ExternalMediaReferenceV1(
+            version = 2,
+            provider = ExternalMediaReference.KLIPY_PROVIDER,
+            kind = ExternalMediaReference.GIF_KIND,
+            url = "https://static.klipy.com/abc.gif",
+        )
+        assertTrue(runCatching { ExternalMediaReference.toUri(invalidVersion) }.isFailure)
+        assertTrue(
+            ExternalMediaReference.validate(
+                provider = ExternalMediaReference.KLIPY_PROVIDER,
+                kind = ExternalMediaReference.GIF_KIND,
+                url = "https://static.klipy.com/abc.gif",
+                width = 0,
+            ) is ExternalMediaReference.Result.Rejected,
+        )
     }
 
     @Test

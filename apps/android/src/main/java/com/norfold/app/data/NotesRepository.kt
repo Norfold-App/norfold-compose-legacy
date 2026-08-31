@@ -92,6 +92,8 @@ import com.norfold.app.domain.WorkspaceObjectLink
 import com.norfold.app.domain.WorkspaceObjectType
 import com.norfold.app.domain.findById
 import com.norfold.app.domain.chat.ChatMediaCrypto
+import com.norfold.app.domain.chat.ExternalMediaReference
+import com.norfold.app.domain.chat.ExternalMediaReferenceV1
 import com.norfold.app.domain.chat.SecureChatAttachmentV1
 import com.norfold.app.domain.toDeviceSettingsProfile
 import androidx.room.withTransaction
@@ -1881,6 +1883,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
         replyPreview: String? = null,
         expiresAt: Long? = null,
     ): Long {
+        val externalMedia = attachmentUri?.let(ExternalMediaReference::fromUri)
+        val cataloguedAttachment = attachmentName != null && externalMedia == null
         val id = dao.insertChatMessage(
             ChatMessageEntity(
                 authorUsername = username.ifBlank { "you" },
@@ -1903,10 +1907,10 @@ class DocsRepository(private val database: NorfoldDatabase) {
         // stay scoped to their channel so private side conversations don't surface as workspace objects.
         if (channelId == null) {
             val chatObjectId = upsertWorkspaceObject(WorkspaceObjectType.ChatMessage, id, displayName.ifBlank { username.ifBlank { "Message" } }, body.take(160), "", "chat", color)
-            recordActivity(if (attachmentName != null) WorkspaceActivityType.Uploaded else WorkspaceActivityType.Commented, displayName.ifBlank { username.ifBlank { "You" } }, if (attachmentName != null) "Shared file in chat" else "Sent chat message", body.take(80).ifBlank { attachmentName.orEmpty() }, objectType = WorkspaceObjectType.ChatMessage, sourceId = id)
+            recordActivity(if (cataloguedAttachment) WorkspaceActivityType.Uploaded else WorkspaceActivityType.Commented, displayName.ifBlank { username.ifBlank { "You" } }, if (cataloguedAttachment) "Shared file in chat" else "Sent chat message", body.take(80).ifBlank { attachmentName.orEmpty() }, objectType = WorkspaceObjectType.ChatMessage, sourceId = id)
             recordHistory(WorkspaceHistoryType.Comment, chatObjectId, displayName.ifBlank { username.ifBlank { "You" } }, "Sent chat message", afterValue = body.take(500).ifBlank { attachmentName.orEmpty() })
         }
-        if (!attachmentUri.isNullOrBlank() && !attachmentName.isNullOrBlank()) {
+        if (!attachmentUri.isNullOrBlank() && !attachmentName.isNullOrBlank() && externalMedia == null) {
             val objectId = upsertWorkspaceObject(WorkspaceObjectType.File, null, attachmentName, attachmentMimeType.orEmpty(), "", "file", 0xFF4AADFF)
             dao.insertWorkspaceFile(WorkspaceFileEntity(objectId = objectId, displayName = attachmentName, mimeType = attachmentMimeType.orEmpty(), uri = attachmentUri, sizeBytes = attachmentSizeBytes ?: 0, createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis(), workspaceId = activeWs()))
             recordHistory(WorkspaceHistoryType.Attachment, objectId, displayName.ifBlank { username.ifBlank { "You" } }, "Shared chat file", afterValue = "$attachmentName\n${attachmentMimeType.orEmpty()}\n$attachmentUri")
@@ -2167,6 +2171,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         originPayloadJson: String? = null,
         expiresAt: Long? = null,
         attachment: SecureChatAttachmentV1? = null,
+        externalMedia: ExternalMediaReferenceV1? = null,
     ): Boolean = database.withTransaction {
         val ws = activeWs()
         // Own messages already have a local row + binding (keyed by the same
@@ -2188,10 +2193,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 securityEpochId = securityEpochId,
                 originPayloadJson = originPayloadJson,
                 expiresAt = expiresAt,
-                attachmentName = attachment?.displayName,
-                attachmentMimeType = attachment?.mimeType,
-                attachmentSizeBytes = attachment?.plaintextSize,
-                attachmentUri = attachment?.let(ChatMediaCrypto::toUri),
+                attachmentName = attachment?.displayName ?: externalMedia?.title?.ifBlank { "KLIPY GIF" }?.let { "$it.gif" },
+                attachmentMimeType = attachment?.mimeType ?: externalMedia?.let { "image/gif" },
+                attachmentSizeBytes = attachment?.plaintextSize ?: externalMedia?.let { 0L },
+                attachmentUri = attachment?.let(ChatMediaCrypto::toUri)
+                    ?: externalMedia?.let(ExternalMediaReference::toUri),
             ),
         )
         dao.insertRemoteBinding(
@@ -2224,6 +2230,7 @@ class DocsRepository(private val database: NorfoldDatabase) {
         originPayloadJson: String? = null,
         expiresAt: Long? = null,
         attachment: SecureChatAttachmentV1? = null,
+        externalMedia: ExternalMediaReferenceV1? = null,
     ): Boolean = database.withTransaction {
         val existing = dao.remoteBindingBySyncId(
             localWorkspaceId,
@@ -2245,10 +2252,11 @@ class DocsRepository(private val database: NorfoldDatabase) {
                 securityEpochId = securityEpochId,
                 originPayloadJson = originPayloadJson,
                 expiresAt = expiresAt,
-                attachmentName = attachment?.displayName,
-                attachmentMimeType = attachment?.mimeType,
-                attachmentSizeBytes = attachment?.plaintextSize,
-                attachmentUri = attachment?.let(ChatMediaCrypto::toUri),
+                attachmentName = attachment?.displayName ?: externalMedia?.title?.ifBlank { "KLIPY GIF" }?.let { "$it.gif" },
+                attachmentMimeType = attachment?.mimeType ?: externalMedia?.let { "image/gif" },
+                attachmentSizeBytes = attachment?.plaintextSize ?: externalMedia?.let { 0L },
+                attachmentUri = attachment?.let(ChatMediaCrypto::toUri)
+                    ?: externalMedia?.let(ExternalMediaReference::toUri),
             ),
         )
         dao.insertRemoteBinding(

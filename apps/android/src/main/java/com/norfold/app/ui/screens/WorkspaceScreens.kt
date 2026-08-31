@@ -211,6 +211,7 @@ import com.norfold.app.domain.ChatSecurityMode
 import com.norfold.app.domain.ChatScope
 import com.norfold.app.domain.ChatChannelVisibility
 import com.norfold.app.domain.ChatMessageItem
+import com.norfold.app.domain.chat.ExternalMediaReference
 import com.norfold.app.domain.ConflictSideSummary
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.style.ChromeGeometry
@@ -275,6 +276,7 @@ import com.norfold.app.ui.components.NorfoldFullscreenDialog
 import com.norfold.app.ui.components.NorfoldBottomSheet
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.request.CachePolicy
 import coil.request.videoFrameMillis
 
 /**
@@ -4701,7 +4703,15 @@ private fun MosaicTile(
     onOpenAttachment: (ChatMessageItem) -> Unit,
     onResolveAttachment: suspend (ChatMessageItem) -> String?,
 ) {
-    val source by produceState<String?>(initialValue = null, chat.attachmentUri) { value = onResolveAttachment(chat) }
+    val providerReference = remember(chat.attachmentUri) {
+        chat.attachmentUri?.let(ExternalMediaReference::fromUri)
+    }
+    val providerNeedsTap = providerReference != null &&
+        chat.securityMode == ChatSecurityMode.EndToEndEncrypted &&
+        chat.receiptStatus == null
+    val source by produceState<String?>(initialValue = null, chat.attachmentUri, providerNeedsTap) {
+        value = if (providerNeedsTap) null else onResolveAttachment(chat)
+    }
     val isVideo = chat.attachmentMimeType?.startsWith("video/") == true
     val fill = if (isVideo) Color.Black else MaterialTheme.colorScheme.surfaceVariant
     val focus = rememberChromeFocus()
@@ -4718,18 +4728,30 @@ private fun MosaicTile(
             .then(focus.ringOnShape(4f, fill)),
         contentAlignment = Alignment.Center,
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(source)
-                .apply { if (isVideo) videoFrameMillis(750) }
-                .memoryCacheKey("chat-${chat.id}")
-                .diskCacheKey("chat-${chat.id}")
-                .crossfade(true)
-                .build(),
-            contentDescription = chat.attachmentName,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-        )
+        if (providerNeedsTap) {
+            Text(
+                "Powered by KLIPY\nTap to load",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center,
+            )
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(source)
+                    .apply {
+                        if (isVideo) videoFrameMillis(750)
+                        if (providerReference != null) diskCachePolicy(CachePolicy.DISABLED)
+                    }
+                    .memoryCacheKey("chat-${chat.id}")
+                    .apply { if (providerReference == null) diskCacheKey("chat-${chat.id}") }
+                    .crossfade(true)
+                    .build(),
+                contentDescription = chat.attachmentName,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
         if (isVideo) {
             Icon(Icons.Outlined.PlayArrow, "Play video", tint = Color.White,
                 modifier = Modifier.size(38.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)).padding(8.dp))
@@ -4826,8 +4848,14 @@ private fun ChatAttachmentCard(
             }
         }
     } else {
-        val source by produceState<String?>(initialValue = null, chat.attachmentUri) {
-            value = onResolveAttachment(chat)
+        val providerReference = remember(chat.attachmentUri) {
+            chat.attachmentUri?.let(ExternalMediaReference::fromUri)
+        }
+        val providerNeedsTap = providerReference != null &&
+            chat.securityMode == ChatSecurityMode.EndToEndEncrypted &&
+            !mine
+        val source by produceState<String?>(initialValue = null, chat.attachmentUri, providerNeedsTap) {
+            value = if (providerNeedsTap) null else onResolveAttachment(chat)
         }
         val isImage = chat.attachmentMimeType?.startsWith("image/") == true
         val isVideo = chat.attachmentMimeType?.startsWith("video/") == true
@@ -4864,7 +4892,21 @@ private fun ChatAttachmentCard(
             ) { onOpenAttachment(chat) },
         ) {
             Column(Modifier.widthIn(min = 148.dp, max = 286.dp).padding(if (visualMedia) 3.dp else 0.dp)) {
-                if ((isImage || isVideo) && source != null) {
+                if ((isImage || isVideo) && providerNeedsTap) {
+                    Box(
+                        Modifier.fillMaxWidth().heightIn(min = 112.dp, max = 260.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "Powered by KLIPY\nTap to load",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                } else if ((isImage || isVideo) && source != null) {
                     Box(
                         Modifier.fillMaxWidth().heightIn(min = 112.dp, max = 260.dp).clip(RoundedCornerShape(16.dp))
                             .background(if (isVideo) Color.Black else MaterialTheme.colorScheme.surfaceVariant),
@@ -4873,9 +4915,12 @@ private fun ChatAttachmentCard(
                         AsyncImage(
                             model = ImageRequest.Builder(LocalContext.current)
                                 .data(source)
-                                .apply { if (isVideo) videoFrameMillis(750) }
+                                .apply {
+                                    if (isVideo) videoFrameMillis(750)
+                                    if (providerReference != null) diskCachePolicy(CachePolicy.DISABLED)
+                                }
                                 .memoryCacheKey("chat-${chat.id}")
-                                .diskCacheKey("chat-${chat.id}")
+                                .apply { if (providerReference == null) diskCacheKey("chat-${chat.id}") }
                                 .crossfade(!chat.attachmentMimeType.equals("image/gif", ignoreCase = true))
                                 .build(),
                             contentDescription = chat.attachmentName,
@@ -4888,6 +4933,19 @@ private fun ChatAttachmentCard(
                                 "Play video",
                                 tint = Color.White,
                                 modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)).padding(10.dp),
+                            )
+                        }
+                        if (providerReference != null) {
+                            Text(
+                                "KLIPY",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.align(Alignment.BottomEnd)
+                                    .padding(7.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color.Black.copy(alpha = 0.62f))
+                                    .padding(horizontal = 6.dp, vertical = 3.dp),
                             )
                         }
                     }
@@ -5010,7 +5068,8 @@ private fun ChatAttachmentViewer(
 ) {
     val mime = preview.message.attachmentMimeType.orEmpty()
     val context = LocalContext.current
-    val providerOwnedGif = mime == "image/gif" && preview.source?.contains("klipy", ignoreCase = true) == true
+    val providerOwnedGif = mime == "image/gif" &&
+        preview.message.attachmentUri?.let(ExternalMediaReference::fromUri) != null
     NorfoldFullscreenDialog(onDismissRequest = onDismiss) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -5052,6 +5111,7 @@ private fun ChatAttachmentViewer(
                         mime.startsWith("image/") -> AsyncImage(
                             model = ImageRequest.Builder(context)
                                 .data(preview.source)
+                                .apply { if (providerOwnedGif) diskCachePolicy(CachePolicy.DISABLED) }
                                 .crossfade(!mime.equals("image/gif", ignoreCase = true))
                                 .build(),
                             contentDescription = preview.message.attachmentName,
