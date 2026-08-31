@@ -103,10 +103,12 @@ android {
         //                                 exist yet on either side.
         // The published site moved with the repository to the Norfold-App organisation. The old
         // user-site host serves 404 for every one of these paths, so anything still pointing there
-        // sends a reader looking for the privacy policy to a GitHub error page instead.
-        buildConfigField("String", "HOMEPAGE_URL", buildConfigString("https://norfold-app.github.io/Norfold/"))
-        buildConfigField("String", "PRIVACY_URL", buildConfigString("https://norfold-app.github.io/Norfold/privacy.html"))
-        buildConfigField("String", "TERMS_URL", buildConfigString("https://norfold-app.github.io/Norfold/terms.html"))
+        // Keep these on the public Pages deployment; the product repository itself is private.
+        buildConfigField("String", "HOMEPAGE_URL", buildConfigString("https://norfold.pages.dev/"))
+        buildConfigField("String", "PRIVACY_URL", buildConfigString("https://norfold.pages.dev/privacy.html"))
+        buildConfigField("String", "TERMS_URL", buildConfigString("https://norfold.pages.dev/terms.html"))
+        buildConfigField("String", "SUPPORT_URL", buildConfigString("https://norfold.pages.dev/support.html"))
+        buildConfigField("String", "LICENSE_URL", buildConfigString("https://norfold.pages.dev/license.html"))
     }
 
     buildFeatures {

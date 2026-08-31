@@ -21,7 +21,7 @@ CHAT
 
 NOTIFICATIONS
 
-• A new Notifications section in Settings: task reminders, quiet hours, and in-app and email delivery.
+• A new Notifications section in Settings covers task reminders and quiet hours. In-app tips and email delivery remain unavailable in this build, so those saved preferences do not change behaviour yet.
 • Quiet hours hold a reminder until the window ends rather than dropping it. A message somebody sent always arrives; the most any preference does is take away its sound.
 
 ACCESSIBILITY

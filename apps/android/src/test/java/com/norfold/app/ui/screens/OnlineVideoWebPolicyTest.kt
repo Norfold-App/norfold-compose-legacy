@@ -100,7 +100,7 @@ class OnlineVideoWebPolicyTest {
             "settings.setSupportMultipleWindows(false)",
             "override fun shouldInterceptRequest(",
             "override fun onPageStarted(",
-            "mapOf(\"Referer\" to \"https://norfold-app.github.io/Norfold/\")",
+            "mapOf(\"Referer\" to \"https://norfold.pages.dev/\")",
         ).forEach { setting -> assertTrue(setting, source.contains(setting)) }
     }
 

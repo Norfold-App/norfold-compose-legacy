@@ -3020,15 +3020,15 @@ private fun AppInfoSettings() {
         SettingsGroup {
             SettingsRow("Changelog", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { showChangelog = true })
             RowDivider()
-            SettingsRow("Help & Support", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/Norfold-App/Norfold/issues") })
+            SettingsRow("Help & Support", icon = Icons.Outlined.Security, trailing = { RowChevron() }, onClick = { uriHandler.openUri(BuildConfig.SUPPORT_URL) })
             RowDivider()
             SettingsRow("Privacy policy", icon = Icons.Outlined.Lock, trailing = { RowChevron() }, onClick = { uriHandler.openUri(BuildConfig.PRIVACY_URL) })
             RowDivider()
             SettingsRow("Terms of service", icon = Icons.Outlined.Difference, trailing = { RowChevron() }, onClick = { uriHandler.openUri(BuildConfig.TERMS_URL) })
             RowDivider()
-            SettingsRow("Open source licenses", icon = Icons.Outlined.Code, trailing = { RowChevron() }, onClick = { uriHandler.openUri("https://github.com/Norfold-App/Norfold") })
+            SettingsRow("Source & third-party licenses", icon = Icons.Outlined.Code, trailing = { RowChevron() }, onClick = { uriHandler.openUri(BuildConfig.LICENSE_URL) })
         }
-        Text("Application ID com.norfold.app · Open-source, Android-first.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+        Text("Application ID com.norfold.app · Source-available, Android-first.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
     }
 }
 

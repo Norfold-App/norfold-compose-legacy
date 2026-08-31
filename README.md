@@ -1,8 +1,9 @@
 # Norfold
 
 Norfold is an Android-first private workspace. Notes, documents, tasks, calendar events,
-files, and chat are stored as one local-first object model, with an encrypted vault,
-encrypted backups, and optional folder-provider or cloud sync.
+files, and chat are stored as one local-first object model, with encrypted exports and
+backups plus optional folder-provider or cloud sync. The live Room database itself is not
+encrypted at rest in this pre-beta build.
 
 **Release stage: pre-beta.** The current version is `0.1.0-alpha.3`. This is development
 software: it is not distributed through a store, its cloud and device behaviour is not yet
@@ -77,11 +78,11 @@ What that gate does **not** cover, and what therefore remains uncertified:
 - Backup and restore round trips are tested against the current schema only. Earlier
   development schemas were allowed to reset destructively.
 
-## Legal
+## Site and legal
 
-The project site in `docs/` is not currently published, so read the legal documents from
-the repository directly: [privacy policy](docs/privacy.html), [terms of
-service](docs/terms.html), [support](docs/support.html).
+The public project and legal site is [norfold.pages.dev](https://norfold.pages.dev/).
+Its source lives in `docs/`: [privacy policy](docs/privacy.html), [terms of
+service](docs/terms.html), and [support](docs/support.html).
 
 ## License
 

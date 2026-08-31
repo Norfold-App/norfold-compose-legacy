@@ -4065,7 +4065,7 @@ private fun ChatOnlineVideoViewer(videoId: String, onDismiss: () -> Unit) {
             }
             loadUrl(
                 "https://www.youtube-nocookie.com/embed/$videoId?autoplay=1&playsinline=1",
-                mapOf("Referer" to "https://norfold-app.github.io/Norfold/"),
+                mapOf("Referer" to "https://norfold.pages.dev/"),
             )
         }
     }

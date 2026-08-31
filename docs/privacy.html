@@ -21,9 +21,9 @@
     <p>A crash report contains the error, the stack trace and the place in the app's code where it happened, the app identifier and version, whether the app was in the background, and information about the device: model, operating system version, CPU architecture, available memory and disk space, screen rotation, and whether the device is rooted. It also carries randomly generated identifiers Crashlytics uses to group crashes and to count how many devices a defect affects. It does not contain your note text, titles, task names, chat messages, workspace or profile names, file names, attachment contents, Google account identity, or the contents of a vault or backup. Norfold attaches no custom keys and no user identifier of its own, so a report is not tied to your account or to anything you have written.</p>
     <p>Reporting is off until you turn it on. A newly installed build collects nothing before the setting has been read, and turning the setting off stops sending immediately and discards any report already recorded but not yet sent. No advertising identifiers and no usage or behavioural analytics are collected in either state, and nothing else in the app uploads diagnostics on its own. Google states that crash data is retained for 90 days; its handling of what it receives is described in the <a href="https://firebase.google.com/support/privacy">Firebase privacy documentation</a>.</p>
     <h2>Security</h2>
-    <p>Vault and backup encryption are designed to protect local and exported data, but this alpha build is not yet independently audited. Keep independent backups of important information.</p>
+    <p>Vault exports and backup containers are encrypted, but the live Room database is not encrypted at rest in this pre-beta build. The encryption design has not been independently audited. Keep independent backups of important information and use the device lock and storage protections supplied by Android.</p>
     <h2>Contact</h2>
-    <p>For testing feedback, use the project repository issue tracker or the support channel linked from the app build you installed.</p>
+    <p>If you received an alpha build directly, use the same private testing channel that supplied it. Norfold has no public support intake while public distribution is closed.</p>
     <p class="updated">Last updated: August 24, 2026</p>
   </main>
 </body>
