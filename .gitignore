@@ -61,3 +61,7 @@ apps/android/google-services.json
 # any file fetched through a browser on the Windows side of WSL.
 *:Zone.Identifier
 .wrangler/
+
+# Agent safety archive: untracked backup of files touched during agent work.
+# Another model may read it to restore state; it is never committed or pushed.
+.agent-archive/

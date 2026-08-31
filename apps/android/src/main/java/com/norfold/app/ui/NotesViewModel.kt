@@ -124,6 +124,7 @@ import com.norfold.app.cloud.NorfoldSocial
 import com.norfold.app.cloud.NorfoldSupabase
 import com.norfold.app.cloud.PushRegistrationClient
 import com.norfold.app.cloud.KlipyClient
+import com.norfold.app.cloud.KlipyCustomerIdentityStore
 import com.norfold.app.cloud.InvalidSecureChatPayloadException
 import com.norfold.app.cloud.KlipyGif
 import com.norfold.app.data.ChatDrafts
@@ -479,6 +480,7 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
     private val syncSecretStore = SyncSecretStore(application)
     private val pushRegistrationClient = PushRegistrationClient(application)
     private val secureChatBackend = SecureChatBackend(application)
+    private val klipyCustomerIdentity = KlipyCustomerIdentityStore(application)
     private val _privateChatArchiveState = MutableStateFlow(PrivateChatArchiveUiState())
     val privateChatArchiveState: StateFlow<PrivateChatArchiveUiState> =
         _privateChatArchiveState.asStateFlow()
@@ -5255,7 +5257,12 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
         _gifPicker.value = _gifPicker.value.copy(query = query, loading = true, error = null)
         gifSearchJob = viewModelScope.launch {
             delay(if (query.isBlank()) 0 else 300)
-            runCatching { KlipyClient.search(query) }
+            runCatching {
+                KlipyClient.search(
+                    query = query,
+                    customerId = klipyCustomerId(),
+                )
+            }
                 .onSuccess { _gifPicker.value = GifPickerState(query = query, results = it) }
                 .onFailure {
                     if (it is CancellationException) throw it
@@ -5315,6 +5322,18 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
                 channelId = channelId,
                 expiresAt = expiresAt,
             )
+            viewModelScope.launch {
+                runCatching {
+                    KlipyClient.registerShare(
+                        slug = gif.slug,
+                        customerId = klipyCustomerId(),
+                        query = gif.shareQuery,
+                    )
+                }.onFailure {
+                    // Ktor exceptions may include the key-bearing request URL; never attach the throwable.
+                    Log.w("NorfoldKlipy", "KLIPY share trigger failed; the message remains sendable.")
+                }
+            }
             if (conversationId == null) return@launch
             val syncId = UUID.randomUUID().toString()
             repository.markChatMessagePendingRemote(settings.activeWorkspaceId, localId, syncId)
@@ -5337,6 +5356,10 @@ class DocsViewModel(application: Application) : AndroidViewModel(application) {
             }
             drainSecureChatOutbox()
         }
+    }
+
+    private suspend fun klipyCustomerId(): String = withContext(Dispatchers.IO) {
+        klipyCustomerIdentity.getOrCreate()
     }
 
     /** Saves the local chat message for an attachment and queues its team delivery. */

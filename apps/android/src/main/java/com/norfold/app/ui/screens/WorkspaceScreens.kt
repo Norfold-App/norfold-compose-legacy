@@ -4712,6 +4712,7 @@ private fun MosaicTile(
     val source by produceState<String?>(initialValue = null, chat.attachmentUri, providerNeedsTap) {
         value = if (providerNeedsTap) null else onResolveAttachment(chat)
     }
+    var providerLoadFailed by remember(chat.id, source) { mutableStateOf(false) }
     val isVideo = chat.attachmentMimeType?.startsWith("video/") == true
     val fill = if (isVideo) Color.Black else MaterialTheme.colorScheme.surfaceVariant
     val focus = rememberChromeFocus()
@@ -4735,6 +4736,13 @@ private fun MosaicTile(
                 fontSize = 11.sp,
                 textAlign = TextAlign.Center,
             )
+        } else if (providerReference != null && source == null) {
+            Text(
+                "Powered by KLIPY\nMedia unavailable",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center,
+            )
         } else {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
@@ -4750,7 +4758,21 @@ private fun MosaicTile(
                 contentDescription = chat.attachmentName,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+                onError = { providerLoadFailed = providerReference != null },
             )
+            if (providerReference != null) {
+                Text(
+                    if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
+                    color = Color.White,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(5.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(Color.Black.copy(alpha = 0.66f))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                )
+            }
         }
         if (isVideo) {
             Icon(Icons.Outlined.PlayArrow, "Play video", tint = Color.White,
@@ -4857,6 +4879,7 @@ private fun ChatAttachmentCard(
         val source by produceState<String?>(initialValue = null, chat.attachmentUri, providerNeedsTap) {
             value = if (providerNeedsTap) null else onResolveAttachment(chat)
         }
+        var providerLoadFailed by remember(chat.id, source) { mutableStateOf(false) }
         val isImage = chat.attachmentMimeType?.startsWith("image/") == true
         val isVideo = chat.attachmentMimeType?.startsWith("video/") == true
         val visualMedia = isImage || isVideo
@@ -4906,6 +4929,20 @@ private fun ChatAttachmentCard(
                             textAlign = TextAlign.Center,
                         )
                     }
+                } else if ((isImage || isVideo) && providerReference != null && source == null) {
+                    Box(
+                        Modifier.fillMaxWidth().heightIn(min = 112.dp, max = 260.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "Powered by KLIPY\nMedia unavailable",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 } else if ((isImage || isVideo) && source != null) {
                     Box(
                         Modifier.fillMaxWidth().heightIn(min = 112.dp, max = 260.dp).clip(RoundedCornerShape(16.dp))
@@ -4926,6 +4963,7 @@ private fun ChatAttachmentCard(
                             contentDescription = chat.attachmentName,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp, max = 260.dp),
                             contentScale = ContentScale.Fit,
+                            onError = { providerLoadFailed = providerReference != null },
                         )
                         if (isVideo) {
                             Icon(
@@ -4937,7 +4975,7 @@ private fun ChatAttachmentCard(
                         }
                         if (providerReference != null) {
                             Text(
-                                "KLIPY",
+                                if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
                                 color = Color.White,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -5070,6 +5108,7 @@ private fun ChatAttachmentViewer(
     val context = LocalContext.current
     val providerOwnedGif = mime == "image/gif" &&
         preview.message.attachmentUri?.let(ExternalMediaReference::fromUri) != null
+    var providerLoadFailed by remember(preview.message.id, preview.source) { mutableStateOf(false) }
     NorfoldFullscreenDialog(onDismissRequest = onDismiss) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -5102,22 +5141,42 @@ private fun ChatAttachmentViewer(
                     TextButton(
                         onClick = onSave,
                         enabled = preview.source != null && preview.downloadProgress == null && !providerOwnedGif,
-                    ) { Text(if (providerOwnedGif) "KLIPY" else "Save") }
+                    ) { Text(if (providerOwnedGif) "Powered by KLIPY" else "Save") }
                 }
                 Box(Modifier.weight(1f).fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
                     when {
                         preview.loading -> CircularProgressIndicator()
-                        preview.error != null && preview.source == null -> Text(preview.error, color = MaterialTheme.colorScheme.error)
-                        mime.startsWith("image/") -> AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(preview.source)
-                                .apply { if (providerOwnedGif) diskCachePolicy(CachePolicy.DISABLED) }
-                                .crossfade(!mime.equals("image/gif", ignoreCase = true))
-                                .build(),
-                            contentDescription = preview.message.attachmentName,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit,
+                        preview.error != null && preview.source == null -> Text(
+                            if (providerOwnedGif) "Powered by KLIPY\nMedia unavailable" else preview.error,
+                            color = if (providerOwnedGif) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
                         )
+                        mime.startsWith("image/") -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(preview.source)
+                                    .apply { if (providerOwnedGif) diskCachePolicy(CachePolicy.DISABLED) }
+                                    .crossfade(!mime.equals("image/gif", ignoreCase = true))
+                                    .build(),
+                                contentDescription = preview.message.attachmentName,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit,
+                                onError = { providerLoadFailed = providerOwnedGif },
+                            )
+                            if (providerOwnedGif) {
+                                Text(
+                                    if (providerLoadFailed) "Powered by KLIPY · Unavailable" else "Powered by KLIPY",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.align(Alignment.BottomEnd)
+                                        .padding(10.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color.Black.copy(alpha = 0.66f))
+                                        .padding(horizontal = 7.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
                         mime.startsWith("video/") -> ChatVideoPlayer(preview.source, onSave)
                         mime == "application/pdf" && preview.pdfPageCount > 0 -> LazyColumn(
                             Modifier.fillMaxSize(),
