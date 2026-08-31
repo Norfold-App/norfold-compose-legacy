@@ -34,7 +34,6 @@ data class KlipyGif(
  */
 object KlipyClient {
     private val http = HttpClient(OkHttp)
-    private val json = Json { ignoreUnknownKeys = true }
 
     val configured: Boolean get() = BuildConfig.KLIPY_API_KEY.isNotBlank()
 
@@ -47,10 +46,22 @@ object KlipyClient {
         val url = "https://api.klipy.com/api/v1/${encode(BuildConfig.KLIPY_API_KEY)}/gifs/$action?page=$page&per_page=$perPage$q"
         val response = http.get(url)
         check(response.status.isSuccess()) { "KLIPY returned ${response.status.value}." }
-        val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
+        return KlipyResponseParser.parse(response.bodyAsText())
+    }
+
+    private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
+}
+
+internal object KlipyResponseParser {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    fun parse(body: String): List<KlipyGif> {
+        val root = json.parseToJsonElement(body).jsonObject
         return root["data"]?.jsonObject?.get("data")?.jsonArray.orEmpty().mapNotNull { element ->
             val item = element.jsonObject
-            if (item["type"]?.jsonPrimitive?.contentOrNull == "ad") return@mapNotNull null
+            check(item["type"]?.jsonPrimitive?.contentOrNull != "ad") {
+                "KLIPY returned an unexpected ad result."
+            }
             val file = item["file"]?.jsonObject ?: return@mapNotNull null
             val preview = rendition(file, "sm") ?: rendition(file, "xs") ?: return@mapNotNull null
             val original = rendition(file, "md") ?: rendition(file, "hd") ?: preview
@@ -96,6 +107,4 @@ object KlipyClient {
             media["height"]?.jsonPrimitive?.intOrNull ?: 1,
         )
     }
-
-    private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
 }
