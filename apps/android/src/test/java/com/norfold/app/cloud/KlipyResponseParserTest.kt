@@ -1,5 +1,7 @@
 package com.norfold.app.cloud
 
+import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -8,6 +10,31 @@ import org.junit.Test
 import java.io.File
 
 class KlipyResponseParserTest {
+    @Test
+    fun `provider response reader accepts the exact byte limit`() = runBlocking {
+        val body = "{\"result\":true,\"label\":\"KLIPY ✓\"}"
+        val bytes = body.toByteArray(Charsets.UTF_8)
+
+        assertEquals(
+            body,
+            KlipyResponseBody.read(ByteReadChannel(bytes), bytes.size),
+        )
+    }
+
+    @Test
+    fun `provider response reader rejects limit plus one before parsing`() {
+        val body = "{\"result\":true}"
+        val bytes = body.toByteArray(Charsets.UTF_8)
+
+        val failure = assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                KlipyResponseBody.read(ByteReadChannel(bytes), bytes.size - 1)
+            }
+        }
+
+        assertTrue(failure.message.orEmpty().contains("byte limit"))
+    }
+
     @Test
     fun `unexpected ad result fails the response closed`() {
         val response = """
@@ -173,6 +200,8 @@ class KlipyResponseParserTest {
 
         assertTrue(client.contains("context.noBackupFilesDir"))
         assertTrue(client.contains("&content_filter=high"))
+        assertFalse(client.contains("bodyAsText()"))
+        assertEquals(2, client.split("KlipyResponseBody.read(response").size - 1)
         assertTrue(sendGif.contains("KlipyClient.registerShare("))
         assertTrue(sendGif.contains("operation = \"provider_media\""))
         assertFalse(sendGif.contains("enqueueChatUpload("))

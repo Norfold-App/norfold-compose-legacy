@@ -9,12 +9,18 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
+import io.ktor.http.charset
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.URLEncoder
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
@@ -46,6 +52,8 @@ data class KlipyGif(
  * Gradle properties, or the environment; the public demo key is intentionally never embedded.
  */
 object KlipyClient {
+    private const val SearchResponseLimitBytes = 2 * 1024 * 1024
+    private const val ShareResponseLimitBytes = 64 * 1024
     private val http = HttpClient(OkHttp)
 
     val configured: Boolean get() = BuildConfig.KLIPY_API_KEY.isNotBlank()
@@ -69,7 +77,9 @@ object KlipyClient {
         )
         val response = http.get(url)
         check(response.status.isSuccess()) { "KLIPY returned ${response.status.value}." }
-        return KlipyResponseParser.parse(response.bodyAsText()).map { it.copy(shareQuery = cleanQuery) }
+        return KlipyResponseParser.parse(
+            KlipyResponseBody.read(response, SearchResponseLimitBytes),
+        ).map { it.copy(shareQuery = cleanQuery) }
     }
 
     suspend fun registerShare(slug: String, customerId: String, query: String) {
@@ -81,7 +91,48 @@ object KlipyClient {
             setBody(KlipyRequestBuilder.shareBody(customerId, query))
         }
         check(response.status.isSuccess()) { "KLIPY share trigger returned ${response.status.value}." }
-        KlipyResponseParser.requireActionSuccess(response.bodyAsText())
+        KlipyResponseParser.requireActionSuccess(
+            KlipyResponseBody.read(response, ShareResponseLimitBytes),
+        )
+    }
+}
+
+/** Reads provider JSON without allowing a malformed response to exhaust the app process. */
+internal object KlipyResponseBody {
+    suspend fun read(response: HttpResponse, maxBytes: Int): String = read(
+        channel = response.bodyAsChannel(),
+        maxBytes = maxBytes,
+        charset = response.charset() ?: Charsets.UTF_8,
+    )
+
+    suspend fun read(
+        channel: ByteReadChannel,
+        maxBytes: Int,
+        charset: Charset = Charsets.UTF_8,
+    ): String {
+        require(maxBytes > 0) { "KLIPY response limit must be positive." }
+        val output = ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
+        val buffer = ByteArray(8 * 1024)
+        var total = 0
+        while (true) {
+            val count = channel.readAvailable(
+                buffer,
+                0,
+                minOf(buffer.size, maxBytes - total + 1),
+            )
+            if (count < 0) break
+            if (count == 0) continue
+            total += count
+            if (total > maxBytes) {
+                val failure = IllegalStateException(
+                    "KLIPY response exceeded the $maxBytes-byte limit.",
+                )
+                channel.cancel(failure)
+                throw failure
+            }
+            output.write(buffer, 0, count)
+        }
+        return output.toString(charset.name())
     }
 }
 
