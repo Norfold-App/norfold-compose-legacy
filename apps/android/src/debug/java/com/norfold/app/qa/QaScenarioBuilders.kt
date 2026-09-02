@@ -631,6 +631,18 @@ internal object QaScenarioBuilders {
     }
 
     private fun place(runtime: DocumentHostRuntime, field: GeometryInspector.Field, value: Float) {
+        val selected = runtime.scope.primaryObject()
+            ?: error("QA scenario: ${field.label} has no selected object")
+        val parsed = GeometryInspector.parse(field, value.toString())
+            ?: error("QA scenario: ${field.label} could not parse $value")
+
+        // Insert commands deliberately choose sensible geometry. When a fixture asks for one of those
+        // exact defaults, the inspector correctly reports that there is no edit to commit. That is already
+        // the requested end state, not a refused command; only a different requested geometry must create
+        // a transaction. Compare through the inspector itself so clamping/rotation normalization stays on
+        // the same route as an actual field submission.
+        if (GeometryInspector.apply(selected.geometry, field, parsed) == selected.geometry) return
+
         check(runtime.applyGeometryField(field, value.toString())) {
             "QA scenario: ${field.label} refused $value (${runtime.lastFailure ?: "unchanged"})"
         }
@@ -798,4 +810,3 @@ internal object QaScenarioBuilders {
         repository.addWorkspaceComment(objectId, "Appendix rewritten — take another look.", Owner.stableId, Owner.displayName)
     }
 }
-
