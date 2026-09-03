@@ -99,8 +99,18 @@ internal object QaScenarioBuilders {
      * because the corpus inserted that row itself; now the id belongs to production setup and is reported
      * back rather than assumed.
      */
-    suspend fun prepare(context: Context, scenario: QaScenario): Long =
-        prepare(NorfoldDatabase.get(context), scenario)
+    suspend fun prepare(context: Context, scenario: QaScenario): Long {
+        val workspaceId = prepare(NorfoldDatabase.get(context), scenario)
+        // The fixture deliberately owns this synthetic profile name. Without the migration marker, a clean
+        // app-data launch lets repairLegacyCallingName replace "QA Owner" with the handle "qa.owner" while
+        // the capture is opening, so two runs of the same scenario do not render the same identity.
+        context.getSharedPreferences("norfold_identity_migrations", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("calling_name_v1_complete", true)
+            .putBoolean("profile_name_explicitly_edited", true)
+            .apply()
+        return workspaceId
+    }
 
     /**
      * The same scenario against an explicit database.

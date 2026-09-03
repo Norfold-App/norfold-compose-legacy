@@ -168,7 +168,13 @@ private enum class QaEntry(
     val noteTitle: String? = null,
     val route: String? = null,
 ) {
-    Demo("Enter Demo Workspace", "Command-authored local corpus; no account, cloud, or network", QaScenario.Demo, QaSurface.Workspace),
+    Demo(
+        "Enter Demo Workspace",
+        "Command-authored local corpus; no account, cloud, or network",
+        QaScenario.Demo,
+        QaSurface.Workspace,
+        route = "workspace-demo",
+    ),
     Empty("Fresh / Empty Workspace", "A completed setup with no user content", QaScenario.Empty, QaSurface.Workspace),
     Onboarding("Test Onboarding", "First-run setup from a deterministic blank database", QaScenario.Onboarding, QaSurface.Onboarding),
     Offline("Offline Workspace", "Local content with sync disabled and explicit offline status", QaScenario.Offline, QaSurface.Workspace),
