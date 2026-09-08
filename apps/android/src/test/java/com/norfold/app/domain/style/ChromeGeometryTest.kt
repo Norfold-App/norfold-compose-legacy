@@ -1879,7 +1879,7 @@ class ChromeGeometryTest {
      * Asserted because the honest scope of a fix is part of the fix. Each lifted primary already clears 3:1
      * against both the dark page and the tinted dark surface, so [ContrastAnalysis.legibleChrome] returns its
      * input unchanged in both cases and the mis-solve costs nothing — identical colour, identical ratio, floor
-     * 3.74:1 at the deepest elevation either way. Without this test the sibling tests above would read as though
+     * 3.29:1 at the deepest elevation either way. Without this test the sibling tests above would read as though
      * the defect spanned both themes.
      *
      * The stronger reason to pin it: it means dark mode is passing by *margin*, not by construction. If a future
@@ -1905,7 +1905,7 @@ class ChromeGeometryTest {
         }
 
         assertEquals("ten lifted accents at four elevations, all unmoved by either backdrop", 40, identical)
-        assertEquals("dark floors at 3.79:1 at 6 dp, well clear of the bar", 3.7946, floor, 0.0001)
+        assertEquals("dark floors at 3.29:1 at 6 dp, well clear of the bar", 3.2936, floor, 0.0001)
     }
 
     /**
@@ -3504,36 +3504,34 @@ class ChromeGeometryTest {
      * **These are measured outputs, not a formula, because the formula is not the one it looks like.**
      * `NorfoldTheme.mix` is `androidx.compose.ui.graphics.lerp`, which converts both endpoints to **Oklab**,
      * interpolates there, and converts back. It is not a per-channel sRGB mix, and the difference is not
-     * academic: writing `red + (255 - red) * 0.35f` by hand puts Graphite at `#7A7D89` and claims a **4.53:1**
-     * floor, where the shipped colour is `#747785` and the real floor is **4.21:1**. That wrong figure reached a
-     * KDoc before this table replaced it. Oklab also leaves the sRGB gamut and clips on the way back — Sunset's
+     * academic: writing `red + (255 - red) * 0.35f` by hand puts Graphite at `#757575`, a lighter grey than the
+     * shipped colour `#6D6D6D`, whose real floor is **3.62:1**. Oklab also leaves the sRGB gamut and clips on the way back — Sunset's
      * red channel saturates at `FF` — which no channel-wise mix reproduces at all.
      *
-     * Hard-coded for the reason [shippedAccents] is: this source set has no Compose harness, so `lerp` is not
-     * callable from here. The values were taken from `androidx.compose.ui.graphics.lerp` itself, read back
-     * through `Color.toArgb`, against the `ui-graphics` build the app resolves. The cost is that a change to
-     * either the palette or the 0.35f lift does not automatically reach this test; the benefit is that the test
-     * runs at all, and it is the same trade the rest of this file already makes.
+     * Hard-coded, but re-derivable here: `androidx.compose.ui.graphics.lerp` resolves on this unit-test
+     * classpath (it rides in on `ui-graphics`), so a throwaway probe that lerps each entry toward `White` at
+     * `0.35f` and reads it back through `Color.toArgb` regenerates this table exactly. Do that — do not
+     * hand-compute an sRGB mix, which lands on the wrong grey (see above). The cost of hard-coding is that a
+     * change to either the palette or the 0.35f lift does not *automatically* reach this test; the entry for
+     * Graphite already went stale once when the accent moved to `#2A2A2A` and had to be re-probed to `#6D6D6D`.
      */
     private val liftedAccents = listOf(
         0x81A983, 0xC08FD5, 0xFF9AA7, 0x7AABF1, 0x7EC0A9,
-        0xF4897A, 0xCD9ECE, 0x85B5C1, 0xEDB47A, 0x747785,
+        0xF4897A, 0xCD9ECE, 0x85B5C1, 0xEDB47A, 0x6D6D6D,
     )
 
     /**
      * A dark-mode measurement must lift the accent the way the theme does, or it manufactures failures.
      *
-     * This is pinned because feeding the raw accent into a dark measurement produced a *false* failure during
-     * this work: `SettingsRow` on the dark card measured **2.88:1** where the shipped ring is **4.17:1**. That
-     * 2.88 needed both mistakes at once — the raw accent *and* the page as the backdrop — which is why it is
-     * worth keeping as a figure rather than paraphrasing. A false failure is more expensive than a missed one,
-     * because someone fixes it.
+     * This is pinned because feeding the raw accent into a dark measurement — the raw palette entry *and* the
+     * page as the backdrop, both mistakes at once — manufactures a false failure, and a false failure is more
+     * expensive than a missed one because someone fixes it.
      *
      * Both directions are asserted: the lift must change the answer (or it would not be worth stating) and the
      * lifted figure must be the passing one. Note that the raw accent *also* clears 3:1 once it is at least
-     * measured against the right backdrop — floor 3.11:1 — because the solver searches until it does. The claim
-     * here is not that one input fails and the other passes; it is that the two are not interchangeable, and
-     * 1.06 of ratio separates them.
+     * measured against the right backdrop — because the solver searches until it does. The claim here is not
+     * that one input fails and the other passes; it is that the two are not interchangeable. The raw accent
+     * floors at Graphite 3.07:1 and the lifted primary at 3.62:1, so 0.55 of ratio separates them.
      */
     @Test
     fun `a dark mode ring must be solved from the lifted primary, not the raw accent`() {
@@ -3566,9 +3564,9 @@ class ChromeGeometryTest {
         assertEquals("solving from the raw accent still clears the bar arithmetically", 0, rawFailures)
         assertEquals("the raw accent floors at Graphite 3.07:1", 3.07, worstRaw, 0.01)
         assertEquals(
-            "the lifted primary floors at Graphite 4.21:1 — the Oklab figure, not the 4.53:1 a per-channel " +
-                "mix would predict",
-            4.21,
+            "the lifted primary floors at Graphite 3.62:1 — the Oklab figure for #6D6D6D, not what a per-channel " +
+                "mix to #757575 would predict",
+            3.62,
             worstLifted,
             0.01,
         )
