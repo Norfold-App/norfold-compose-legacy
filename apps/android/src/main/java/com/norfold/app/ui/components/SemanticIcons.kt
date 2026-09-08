@@ -92,7 +92,7 @@ fun SemanticEditorIcon(
     val app = LocalAppIconFamily.current
     val editor = LocalEditorIconFamily.current
     val family = if (editor == EditorIconFamily.UseApp) app else AppIconFamily.entries.firstOrNull { it.name == editor.name }
-        ?: AppIconFamily.MaterialSymbolsRounded
+        ?: AppIconFamily.Lucide
     SemanticFamilyIcon(family, action, contentDescription, modifier, tint, customNamespace = "editor")
 }
 
@@ -147,7 +147,7 @@ fun resolvedEditorIcon(action: SemanticActionId): ImageVector {
     val app = LocalAppIconFamily.current
     val editor = LocalEditorIconFamily.current
     val family = if (editor == EditorIconFamily.UseApp) app else AppIconFamily.entries.firstOrNull { it.name == editor.name }
-        ?: AppIconFamily.MaterialSymbolsRounded
+        ?: AppIconFamily.Lucide
     return prebuiltIcon(family, action)
 }
 

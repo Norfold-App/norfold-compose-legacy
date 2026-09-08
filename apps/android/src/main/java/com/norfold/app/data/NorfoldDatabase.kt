@@ -637,7 +637,7 @@ abstract class NorfoldDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE settings ADD COLUMN fontScale REAL NOT NULL DEFAULT 1.0")
                 db.execSQL("ALTER TABLE settings ADD COLUMN appLabelMode TEXT NOT NULL DEFAULT 'Adaptive'")
-                db.execSQL("ALTER TABLE settings ADD COLUMN appIconFamily TEXT NOT NULL DEFAULT 'MaterialSymbolsRounded'")
+                db.execSQL("ALTER TABLE settings ADD COLUMN appIconFamily TEXT NOT NULL DEFAULT 'Lucide'")
                 db.execSQL("ALTER TABLE settings ADD COLUMN editorToolbarScale REAL NOT NULL DEFAULT 1.0")
                 db.execSQL("ALTER TABLE settings ADD COLUMN editorIconFamily TEXT NOT NULL DEFAULT 'UseApp'")
                 db.execSQL("ALTER TABLE settings ADD COLUMN settingsDeviceId TEXT NOT NULL DEFAULT ''")

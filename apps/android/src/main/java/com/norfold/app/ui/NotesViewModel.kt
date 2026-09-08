@@ -200,7 +200,7 @@ data class OnboardingSetupPreferences(
     val useRecommendedDefaults: Boolean = true,
     val themeMode: ThemeMode = ThemeMode.System,
     val appLabelMode: ControlLabelMode = ControlLabelMode.Adaptive,
-    val appIconFamily: AppIconFamily = AppIconFamily.MaterialSymbolsRounded,
+    val appIconFamily: AppIconFamily = AppIconFamily.Lucide,
     val editorIconFamily: EditorIconFamily = EditorIconFamily.UseApp,
     val fontScale: Float = 1f,
     val uiScale: Float = 1f,

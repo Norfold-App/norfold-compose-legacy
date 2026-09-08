@@ -12,7 +12,7 @@ data class DeviceSettingsProfile(
     val fontScale: Float = 1f,
     val uiScale: Float = 1f,
     val appLabelMode: ControlLabelMode = ControlLabelMode.Adaptive,
-    val appIconFamily: AppIconFamily = AppIconFamily.MaterialSymbolsRounded,
+    val appIconFamily: AppIconFamily = AppIconFamily.Lucide,
     val appFont: String = "Inter",
     val uiDensityCompact: Boolean = false,
     val editorToolbarScale: Float = 1f,

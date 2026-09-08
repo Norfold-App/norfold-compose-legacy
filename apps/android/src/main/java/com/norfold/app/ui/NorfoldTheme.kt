@@ -51,7 +51,7 @@ private val LightInk = Color(0xFF1B1B1B)
 private val DarkInk = Color(0xFFF5F5F5)
 
 val LocalControlLabelMode = staticCompositionLocalOf { ControlLabelMode.Adaptive }
-val LocalAppIconFamily = staticCompositionLocalOf { AppIconFamily.MaterialSymbolsRounded }
+val LocalAppIconFamily = staticCompositionLocalOf { AppIconFamily.Lucide }
 val LocalEditorIconFamily = staticCompositionLocalOf { EditorIconFamily.UseApp }
 val LocalEditorToolbarScale = staticCompositionLocalOf { 1f }
 

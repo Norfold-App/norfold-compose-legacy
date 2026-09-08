@@ -152,7 +152,7 @@ fun NorfoldOnboardingScreen(
     var isFinishing by remember { mutableStateOf(false) }
     var setupTheme by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_theme", null), ThemeMode.System)) }
     var setupLabels by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_labels", null), ControlLabelMode.Adaptive)) }
-    var setupAppIcons by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_app_icons", null), AppIconFamily.MaterialSymbolsRounded)) }
+    var setupAppIcons by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_app_icons", null), AppIconFamily.Lucide)) }
     var setupEditorIcons by rememberSaveable { mutableStateOf(enumValueOrDefault(preferences.getString("setup_editor_icons", null), EditorIconFamily.UseApp)) }
     var setupFontScale by rememberSaveable { mutableStateOf(preferences.getFloat("setup_font_scale", 1f).coerceIn(0.5f, 2f)) }
     var setupUiScale by rememberSaveable { mutableStateOf(preferences.getFloat("setup_ui_scale", 1f).coerceIn(0.5f, 2f)) }

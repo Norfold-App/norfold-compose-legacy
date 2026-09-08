@@ -368,7 +368,7 @@ object BackupCodec {
                     fontScale = cells.getOrElse(7) { "1" }.toFloat().coerceIn(0.5f, 2f),
                     uiScale = cells.getOrElse(8) { "1" }.toFloat().coerceIn(0.5f, 2f),
                     appLabelMode = ControlLabelMode.entries.firstOrNull { it.name == cells.getOrElse(9) { "" } } ?: ControlLabelMode.Adaptive,
-                    appIconFamily = AppIconFamily.entries.firstOrNull { it.name == cells.getOrElse(10) { "" } } ?: AppIconFamily.MaterialSymbolsRounded,
+                    appIconFamily = AppIconFamily.entries.firstOrNull { it.name == cells.getOrElse(10) { "" } } ?: AppIconFamily.Lucide,
                     appFont = unb64(cells.getOrElse(11) { "" }).ifBlank { "Inter" },
                     uiDensityCompact = cells.getOrElse(12) { "false" }.toBoolean(),
                     editorToolbarScale = cells.getOrElse(13) { "1" }.toFloat().coerceIn(0.5f, 2f),

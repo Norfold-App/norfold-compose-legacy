@@ -560,7 +560,7 @@ data class AppSettings(
     val fontScale: Float = 1f,
     val uiScale: Float = 1f,
     val appLabelMode: ControlLabelMode = ControlLabelMode.Adaptive,
-    val appIconFamily: AppIconFamily = AppIconFamily.MaterialSymbolsRounded,
+    val appIconFamily: AppIconFamily = AppIconFamily.Lucide,
     val editorToolbarScale: Float = 1f,
     val editorIconFamily: EditorIconFamily = EditorIconFamily.UseApp,
     val editorLineWidth: EditorLineWidth = EditorLineWidth.Comfortable,
