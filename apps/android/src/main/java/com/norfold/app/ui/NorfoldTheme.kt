@@ -41,10 +41,14 @@ import com.norfold.app.ui.components.LocalReduceMotion
 import com.norfold.app.ui.components.PopupStyle
 import com.norfold.app.ui.fonts.NorfoldFontFamilies
 
-// Neutral surface/ink tokens shared by both schemes. These are intentionally hue-free so the
-// only brand color in the app is the user-selected [AppSettings.accentColor].
-private val LightInk = Color(0xFF171725)
-private val DarkInk = Color(0xFFF6F7FB)
+// Neutral surface/ink tokens shared by both schemes. These are intentionally hue-free — pure
+// greyscale, r==g==b — so the only colour in the app shell is the user-selected
+// [AppSettings.accentColor]. Per the binding monochrome contract (light starts at #FFFFFF, dark at
+// #000000; neutral tiers may carry hierarchy but must not be hue-tinted), the earlier blue-grey
+// cast was removed. Authored content (documents, thumbnails, semantic error/warning colours) keeps
+// its own colour and is not governed by these tokens.
+private val LightInk = Color(0xFF1B1B1B)
+private val DarkInk = Color(0xFFF5F5F5)
 
 val LocalControlLabelMode = staticCompositionLocalOf { ControlLabelMode.Adaptive }
 val LocalAppIconFamily = staticCompositionLocalOf { AppIconFamily.MaterialSymbolsRounded }
@@ -71,57 +75,37 @@ private fun onColorFor(bg: Color): Color = if (bg.luminance() > 0.5f) LightInk e
 /**
  * Why both schemes set the five container tokens, `surfaceBright` and `surfaceDim` explicitly.
  *
- * A `ColorScheme` these were left out of does not go without them — it inherits Material's baseline, and
- * Material's baseline is lavender. Light `surfaceContainer` `#F3EDF7` reads hue 276°; Norfold's own light
- * surfaces sit at 228-230°. Dark `surfaceContainerHigh` `#2B2930` reads 257° at 7.9% saturation against a
- * `surface` of 222° at 37.8%. That is not a near-miss, it is a different palette showing through, and it
- * shows through in the two places it is least escapable: [androidx.compose.material3.AlertDialogDefaults]
- * resolves `DialogTokens.ContainerColor` to `surfaceContainerHigh` and
- * [androidx.compose.material3.BottomSheetDefaults] resolves `SheetBottomTokens.DockedContainerColor` to
- * `surfaceContainerLow`, so every dialog and every modal sheet in the app stood on a colour the theme never
- * chose — and published it to its content as `LocalChromeContainer`.
+ * A `ColorScheme` these were left out of does not go without them — it inherits Material's baseline,
+ * and Material's baseline is lavender (light `surfaceContainer` `#F3EDF7` reads hue 276°). That hue
+ * shows through in the two least-escapable places: [androidx.compose.material3.AlertDialogDefaults]
+ * resolves `DialogTokens.ContainerColor` to `surfaceContainerHigh`, and
+ * [androidx.compose.material3.BottomSheetDefaults] resolves the docked sheet to `surfaceContainerLow`,
+ * so every dialog and every modal sheet would otherwise stand on a colour the theme never chose.
+ * Setting the whole ramp here keeps the shell strictly neutral.
  *
- * **The light ramp is short, and that is a constraint rather than a preference.** `onSurfaceVariant` is
- * `#6C6D84`, which needs a container at luminance ≥ 0.8856 to hold 4.5:1. `surfaceVariant` is at 0.8892 —
- * already the darkest light surface in the scheme that clears AA for secondary text. So the usable light band
- * is white down to `surfaceVariant` and no further: a span of 1.119:1 where Material spans 1.296:1. Material
- * has the room because its own `onSurfaceVariant` is `#49454F`, which measures 9.34:1 on white against this
- * palette's 5.05:1; a darker secondary ink buys a longer ramp, and Norfold's ink is the lighter one.
+ * **The ramp is pure greyscale (`r == g == b`) and each stop is luminance-matched to the value the
+ * previous blue-grey ramp was hand-tuned to**, so the AA contrast guarantees carry over unchanged while
+ * the hue is gone. This is the monochrome contract: light starts at `#FFFFFF`, dark at `#000000`, and
+ * the neutral tiers give hierarchy without a tint.
  *
- * This is also the defect the ramp fixes rather than merely a hue correction. `DialogTokens` pairs
- * `ContainerColor = SurfaceContainerHigh` with `SupportingTextColor = OnSurfaceVariant`, and baseline
- * `#ECE6F0` sits *below* that 0.8856 bound: a light dialog's supporting text measured **4.12:1** — a real
- * AA failure on the most-used container in the app. On the value below it measures 4.64:1. Every one of the
- * ten stops clears 4.5:1 on its scheme's secondary ink, the two terminals deliberately by the smallest
- * margin the 8-bit grid allows (light 4.5143, dark 4.5014).
+ * **`onSurfaceVariant` is the binding contrast constraint.** Light `#6B6B6B` needs a container no darker
+ * than `surfaceVariant` / `surfaceContainerHighest` `#F1F1F1` to hold 4.5:1 (it measures 4.72:1 there,
+ * and ≥ 5.3:1 on the whiter stops), so the usable light band is white down to `#F1F1F1` and no further.
+ * Dark `#9A9A9A` clears 4.5:1 on every stop up to `surfaceContainerHighest` `#2E2E2E` (4.83:1). Both
+ * terminals were checked against WCAG AA with the project contrast guardrail.
  *
- * **Spacing is even in contrast, not in luminance.** Each neighbouring pair differs by a constant ratio —
- * 1.026-1.034 light, 1.123 dark — because a ramp spaced evenly in luminance bunches its light end into
- * steps of one or two bits per channel, which is banding rather than hierarchy.
+ * **`surfaceContainerLow` must never equal `surface`.** [com.norfold.app.ui.NorfoldChrome]'s
+ * `resolvedBackdrop` treats a backdrop equal to `surface` as the tonal-elevation case, so a container
+ * stop colliding with `surface` would trip that branch. Light keeps `surfaceContainerLow` `#FBFBFB`
+ * below white `surface`; dark keeps `surfaceContainerLowest` `#0E0E0E` below `surface` `#121212`, and
+ * `surfaceContainerLow` `#161616` distinct from it, exactly as the previous ramp did.
  *
- * **Hue is held by channel signature, not by an interpolation.** Norfold's light surfaces are all
- * `(r, r+1, r+5..6)`; the dark ones hold `g/r ≈ 1.29-1.43` and `b/r ≈ 1.9-2.6`. The stops were chosen from
- * the set of colours matching those signatures, because a colour picked purely by luminance along a line can
- * land on `r == g` and read as hue 240° — a violet-blue, which is the thing this replaces.
+ * `surfaceBright` and `surfaceDim` are the band's own extremes rather than a step beyond it; neither has
+ * a consumer in this app today, and they are set so a future one inherits this palette, not the baseline.
  *
- * `surfaceBright` and `surfaceDim` are the band's own extremes rather than a step beyond it: the light end is
- * already pure white and the dark end is already at the AA ceiling, so there is nothing outside the ramp to
- * extend into. Neither token has a consumer in this app or in Material's own components; they are set so a
- * future one inherits this palette instead of the baseline.
- *
- * The Flow canvas overrides all five container stops in
- * [com.norfold.app.ui.editor.flow.FlowVisualTheme] with a deliberate greyscale, on its own secondary ink, and
- * that ramp clears AA on every stop too. It is a documented exception, not a straggler — and because that
- * wrapper encloses the whole canvas from `FlowHostScreen`, the two `surfaceContainer` reads in
- * `FlowBlockContent` resolve to Flow's grey `#F7F7F5`, never to the value below.
- *
- * **One near-collision, deliberately kept.** `surfaceContainer` `#F7F8FD` sits one bit of blue from
- * `background` `#F7F8FC` — 1.0006:1, which no eye resolves. Nothing in the app draws them adjacently: outside
- * Flow the token has three readers, all in `ImageFocusSheet`, and that sheet stands on a modal scrim rather
- * than on the page. Pulling the stop further from the page would have to come out of the band above it, and the
- * band is the constrained resource here — the alternative is a `surfaceContainerLow` that collides with
- * `surface` instead, which is worse, because that one *would* trip the tonal-elevation branch in
- * `resolvedBackdrop`.
+ * The Flow canvas still overrides all five container stops in
+ * [com.norfold.app.ui.editor.flow.FlowVisualTheme] with its own greyscale on its own secondary ink; that
+ * is a documented content surface, and it clears AA on every stop too.
  */
 private fun lightScheme(accent: Color) = lightColorScheme(
     primary = accent,
@@ -129,26 +113,24 @@ private fun lightScheme(accent: Color) = lightColorScheme(
     secondary = accent,
     onSecondary = onColorFor(accent),
     tertiary = accent,
-    background = Color(0xFFF7F8FC),
+    background = Color(0xFFFFFFFF),
     onBackground = LightInk,
     surface = Color.White,
     onSurface = LightInk,
-    surfaceVariant = Color(0xFFF1F2F7),
-    // Secondary ink has to clear AA on all three light surfaces, not just the whitest one. The previous
-    // 0xFF72738A is 4.63:1 on `surface` but 4.36:1 on `background` — which is the colour most screens
-    // actually stand on — and 4.14:1 on `surfaceVariant`. This value clears 4.5:1 on all three (5.05 /
-    // 4.76 / 4.52) with the same blue-grey cast, so nothing about the palette's character changes.
-    onSurfaceVariant = Color(0xFF6C6D84),
-    outline = Color(0xFFE4E6EF),
-    outlineVariant = Color(0xFFEEF0F5),
-    // The container ramp. Derived above — including why the light band stops at `surfaceVariant`.
+    surfaceVariant = Color(0xFFF1F1F1),
+    // Secondary ink, pure grey. Clears AA on every light surface it can land on: 5.33:1 on white
+    // `surface`/`background`, and 4.72:1 on the darkest stop it is paired with, `#F1F1F1`.
+    onSurfaceVariant = Color(0xFF6B6B6B),
+    outline = Color(0xFFE6E6E6),
+    outlineVariant = Color(0xFFF0F0F0),
+    // The container ramp. Pure greyscale, luminance-matched to the previous ramp; band stops at `#F1F1F1`.
     surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFFBFCFF),
-    surfaceContainer = Color(0xFFF7F8FD),
-    surfaceContainerHigh = Color(0xFFF4F5FA),
-    surfaceContainerHighest = Color(0xFFF1F2F6),
+    surfaceContainerLow = Color(0xFFFBFBFB),
+    surfaceContainer = Color(0xFFF7F7F7),
+    surfaceContainerHigh = Color(0xFFF4F4F4),
+    surfaceContainerHighest = Color(0xFFF1F1F1),
     surfaceBright = Color(0xFFFFFFFF),
-    surfaceDim = Color(0xFFF1F2F6),
+    surfaceDim = Color(0xFFF1F1F1),
     primaryContainer = accent.mix(Color.White, 0.88f),
     onPrimaryContainer = accent.mix(LightInk, 0.30f),
     error = Color(0xFFEF4D5D),
@@ -156,7 +138,7 @@ private fun lightScheme(accent: Color) = lightColorScheme(
 
 private fun darkScheme(accent: Color): androidx.compose.material3.ColorScheme {
     // A dark/graphite accent would vanish on the near-black background, so lift it toward white.
-    val surface = Color(0xFF0E131F)
+    val surface = Color(0xFF121212)
     val brand = accent.mix(Color.White, 0.35f)
     return darkColorScheme(
         primary = brand,
@@ -164,25 +146,26 @@ private fun darkScheme(accent: Color): androidx.compose.material3.ColorScheme {
         secondary = brand,
         onSecondary = onColorFor(brand),
         tertiary = brand,
-        background = Color(0xFF070A12),
+        background = Color(0xFF000000),
         onBackground = DarkInk,
         surface = surface,
         onSurface = DarkInk,
-        surfaceVariant = Color(0xFF151B28),
-        onSurfaceVariant = Color(0xFF999DB0),
-        outline = Color(0xFF252C3A),
-        outlineVariant = Color(0xFF1B2230),
-        // The container ramp, derived in the note on [lightScheme]. `Lowest` sits *below* `surface` here at
-        // Material's own 1.039 surface:Lowest ratio — the light scheme cannot do that, because nothing is
-        // lighter than white, and a stop equal to `surface` would trip the tonal-elevation branch in
-        // `resolvedBackdrop`.
-        surfaceContainerLowest = Color(0xFF0B0E17),
-        surfaceContainerLow = Color(0xFF151B2B),
-        surfaceContainer = Color(0xFF1B253B),
-        surfaceContainerHigh = Color(0xFF232E43),
-        surfaceContainerHighest = Color(0xFF283650),
-        surfaceBright = Color(0xFF283650),
-        surfaceDim = Color(0xFF070A12),
+        surfaceVariant = Color(0xFF1E1E1E),
+        onSurfaceVariant = Color(0xFF9A9A9A),
+        // `#2B2B2B` (not `#2C2C2C`): on the pure-black background this scheme now ships, `#2C2C2C` measured
+        // 1.5037:1 — a hair over the 1.5:1 ceiling the substrate relies on for `outline` to never read as a
+        // visible boundary. One grey step down lands at 1.483:1 and restores the invariant.
+        outline = Color(0xFF2B2B2B),
+        outlineVariant = Color(0xFF222222),
+        // The container ramp, pure greyscale. `Lowest` sits *below* `surface`, and no stop equals
+        // `surface`, so the tonal-elevation branch in `resolvedBackdrop` is not tripped.
+        surfaceContainerLowest = Color(0xFF0E0E0E),
+        surfaceContainerLow = Color(0xFF161616),
+        surfaceContainer = Color(0xFF1E1E1E),
+        surfaceContainerHigh = Color(0xFF262626),
+        surfaceContainerHighest = Color(0xFF2E2E2E),
+        surfaceBright = Color(0xFF2E2E2E),
+        surfaceDim = Color(0xFF000000),
         primaryContainer = accent.mix(surface, 0.72f),
         onPrimaryContainer = accent.mix(Color.White, 0.62f),
         error = Color(0xFFFF6471),

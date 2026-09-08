@@ -3758,8 +3758,8 @@ class DocsRepository(private val database: NorfoldDatabase) {
 
         val defaultSettings = AppSettings(
             themeMode = ThemeMode.System,
-            themeProfile = ThemeProfile.Norfold,
-            accentColor = 0xFF3D7C45,
+            themeProfile = ThemeProfile.Graphite,
+            accentColor = 0xFF2A2A2A,
             activeWorkspaceId = 1,
             backupFolderUri = null,
             vaultLockEnabled = false,

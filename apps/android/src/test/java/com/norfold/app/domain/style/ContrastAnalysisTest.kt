@@ -293,27 +293,27 @@ class ContrastAnalysisTest {
      */
     @Test
     fun `a floor cannot express a quiet target and settledChrome can`() {
-        val lightInk = hex(0x171725)
+        val lightInk = hex(0x1B1B1B)
         val white = ColorValue.WHITE
 
-        // What the floor does with a 1.6 request on a colour that already measures 17.71.
+        // What the floor does with a 1.6 request on a colour that already measures 17.22.
         val floored = ContrastAnalysis.legibleChrome(lightInk, white, GRID)
         assertEquals("legibleChrome returns the input untouched", lightInk, floored)
-        assertEquals(17.7110, ratio(floored, white), 0.0001)
+        assertEquals(17.2244, ratio(floored, white), 0.0001)
 
         // What a target does with the same request.
         val settled = ContrastAnalysis.settledChrome(lightInk, white, GRID)
-        assertEquals(1.6301, ratio(settled, white), 0.0001)
-        assertEquals("#C9C9DD", settled.toHexRgb())
+        assertEquals(1.6224, ratio(settled, white), 0.0001)
+        assertEquals("#CBCBCB", settled.toHexRgb())
 
         // Dark mode is the mirror image: dark ink on a near-black page measures 15.04 and asks for 1.6.
-        val darkInk = hex(0xF6F7FB)
+        val darkInk = hex(0xF5F5F5)
         val nearBlack = hex(0x202124)
         assertEquals(darkInk, ContrastAnalysis.legibleChrome(darkInk, nearBlack, GRID))
-        assertEquals(15.0379, ratio(darkInk, nearBlack), 0.0001)
+        assertEquals(14.7666, ratio(darkInk, nearBlack), 0.0001)
         val settledDark = ContrastAnalysis.settledChrome(darkInk, nearBlack, GRID)
-        assertEquals(1.6265, ratio(settledDark, nearBlack), 0.0001)
-        assertEquals("#334073", settledDark.toHexRgb())
+        assertEquals(1.6272, ratio(settledDark, nearBlack), 0.0001)
+        assertEquals("#434343", settledDark.toHexRgb())
     }
 
     /**
@@ -418,7 +418,7 @@ class ContrastAnalysisTest {
         }
         assertEquals("cases where the two agree", 11, identical)
         assertEquals("cases where they do not", 59, differing)
-        assertEquals("of those, ones the floor still had to search", 13, differingOnFailingInput)
+        assertEquals("of those, ones the floor still had to search", 12, differingOnFailingInput)
     }
 
     /**
@@ -433,8 +433,8 @@ class ContrastAnalysisTest {
      */
     @Test
     fun `the document structure aids land where their constants say`() {
-        val lightInk = hex(0x171725)
-        val darkInk = hex(0xF6F7FB)
+        val lightInk = hex(0x1B1B1B)
+        val darkInk = hex(0xF5F5F5)
         val pages = listOf(0xFFFFFF, 0xFFF8E1, 0x546E7A, 0x202124).map(::hex)
 
         var tightest = Double.MAX_VALUE
@@ -458,10 +458,10 @@ class ContrastAnalysisTest {
         }
         assertEquals("four page paints in each mode", 8, pairs)
         // Tight on both sides: nothing below target, nothing meaningfully above it.
-        assertEquals("the closest any aid lands to its target", 0.0028, tightest, 0.0001)
-        assertEquals("the furthest any aid lands from its target", 0.0755, loosest, 0.0001)
+        assertEquals("the closest any aid lands to its target", 0.004178, tightest, 0.0001)
+        assertEquals("the furthest any aid lands from its target", 0.0701, loosest, 0.0001)
         // And the separation is the target difference itself, not an accident of the search.
-        assertEquals("the narrowest guide-over-grid separation", 0.5624, narrowest, 0.0001)
+        assertEquals("the narrowest guide-over-grid separation", 0.5876, narrowest, 0.0001)
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────────
@@ -475,7 +475,7 @@ class ContrastAnalysisTest {
     /** The ten accents `BrandPalettes` actually ships. */
     private val ACCENTS = listOf(
         0x3D7C45, 0x9D50BB, 0xF75C7A, 0x2E7BE4, 0x1F9E7E,
-        0xE23A2E, 0xB06AB3, 0x3E8EA0, 0xE08A12, 0x33374A,
+        0xE23A2E, 0xB06AB3, 0x3E8EA0, 0xE08A12, 0x2A2A2A,
     ).map(::hex)
 
     /** Page colours spanning what a user can set a sheet to, white through black. */

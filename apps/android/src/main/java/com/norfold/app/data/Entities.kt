@@ -640,8 +640,8 @@ data class DeviceSettingsProfileEntity(
 data class AppSettingsEntity(
     @PrimaryKey val id: Int = 1,
     val themeMode: String = ThemeMode.System.name,
-    val themeProfile: String = ThemeProfile.Norfold.name,
-    val accentColor: Long = 0xFF3D7C45,
+    val themeProfile: String = ThemeProfile.Graphite.name,
+    val accentColor: Long = 0xFF2A2A2A,
     val activeWorkspaceId: Long = 1,
     val backupFolderUri: String? = null,
     val vaultLockEnabled: Boolean = false,

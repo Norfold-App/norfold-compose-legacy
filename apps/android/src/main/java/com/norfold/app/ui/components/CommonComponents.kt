@@ -77,8 +77,9 @@ import com.norfold.app.ui.rememberChromeFocus
 fun ComposeLoadingScreen(palette: BrandPalette = ThemeProfile.Norfold.palette(), reduceMotion: Boolean = false) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     // Mirrors NorfoldTheme background tokens AND @color/splash_bg; keep all three in sync
-    // so the native splash hands off to this screen without a visible seam.
-    val bgColors = if (dark) listOf(Color(0xFF070A12), Color(0xFF12151F)) else listOf(Color(0xFFF7F8FC), Color(0xFFEEF0F5))
+    // so the native splash hands off to this screen without a visible seam. Neutral greyscale:
+    // the radial centre matches the flat splash background, fading one neutral step at the edge.
+    val bgColors = if (dark) listOf(Color(0xFF000000), Color(0xFF121212)) else listOf(Color(0xFFFFFFFF), Color(0xFFF1F1F1))
     val ink = if (dark) NorfoldInkOnDark else NorfoldInk
     val pulse = if (reduceMotion) {
         0.68f

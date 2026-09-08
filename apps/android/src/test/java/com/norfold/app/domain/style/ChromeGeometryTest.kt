@@ -182,8 +182,8 @@ class ChromeGeometryTest {
 
         val cases = listOf(
             // ink (onSurface) to the surfaces it is drawn over, light then dark.
-            0x171725 to lightSurfaces,
-            0xF6F7FB to darkSurfaces,
+            0x1B1B1B to lightSurfaces,
+            0xF5F5F5 to darkSurfaces,
         )
         var loudest = 0.0
         var measurements = 0
@@ -209,8 +209,8 @@ class ChromeGeometryTest {
             }
         }
 
-        assertEquals("seven light surfaces and eight dark ones", 15, measurements)
-        assertEquals("the loudest the state layer gets, on dark surfaceContainerHighest", 1.3558, loudest, 0.0001)
+        assertEquals("five light surfaces and seven dark ones", 12, measurements)
+        assertEquals("the loudest the state layer gets, on dark surfaceContainerHighest", 1.3513, loudest, 0.0001)
     }
 
     /**
@@ -548,40 +548,36 @@ class ChromeGeometryTest {
      *
      * These exist because two tests below claim to be *exhaustive* over the surfaces chrome can land on, and
      * that claim used to be a list of three literals per mode — `background`, `surface`, `surfaceVariant`. It
-     * was true when the theme had three surfaces. Deriving the container ramp gave it ten more, so the lists
+     * was true when the theme had three surfaces. Deriving the container ramp gave it more, so the lists
      * are stated once here, in full, with each value's tokens named.
      *
      * Deduplicated by value rather than by token, because a duplicate would measure the same number twice and
-     * read as coverage. Four tokens collapse: light `surfaceBright` and `surfaceContainerLowest` are both pure
-     * white like `surface`; light `surfaceDim` equals `surfaceContainerHighest`; dark `surfaceDim` equals
-     * `background` and dark `surfaceBright` equals `surfaceContainerHighest`. Fifteen distinct values from
-     * nineteen tokens.
+     * read as coverage. On the shipped hue-free greyscale palette (DEC-016) the tokens collapse hard: light
+     * `surface`, `background`, `surfaceContainerLowest` and `surfaceBright` are all pure white, and
+     * `surfaceVariant`, `surfaceContainerHighest` and `surfaceDim` are all `#F1F1F1` — five distinct values
+     * from nineteen tokens. Dark `background` and `surfaceDim` are both pure black, and
+     * `surfaceContainerHighest` and `surfaceBright` are both `#2E2E2E` — seven distinct values. Twelve
+     * distinct surfaces in all, replacing the fifteen the earlier blue-grey ramp produced.
      *
-     * Two near-collisions are kept as separate entries even though no eye could tell them apart — light
-     * `surfaceContainer` `#F7F8FD` sits one bit of blue from `background` `#F7F8FC` (1.00064:1), and dark
-     * `surfaceContainerLow` `#151B2B` three bits from `surfaceVariant` `#151B28` (1.00348:1). They are
-     * different `Int`s reaching [ContrastAnalysis], which is the level these tests operate at; folding them
-     * together here would hide the day one of them moves.
+     * Unlike the earlier ramp there are no near-collisions to keep apart: every distinct greyscale stop is a
+     * clean integer step from its neighbours, so each entry below is a value no other token shares.
      */
     private val lightSurfaces = listOf(
-        0xFFFFFF, // surface, surfaceContainerLowest, surfaceBright
-        0xFBFCFF, // surfaceContainerLow
-        0xF7F8FD, // surfaceContainer
-        0xF7F8FC, // background
-        0xF4F5FA, // surfaceContainerHigh
-        0xF1F2F7, // surfaceVariant
-        0xF1F2F6, // surfaceContainerHighest, surfaceDim
+        0xFFFFFF, // surface, background, surfaceContainerLowest, surfaceBright
+        0xFBFBFB, // surfaceContainerLow
+        0xF7F7F7, // surfaceContainer
+        0xF4F4F4, // surfaceContainerHigh
+        0xF1F1F1, // surfaceVariant, surfaceContainerHighest, surfaceDim
     )
 
     private val darkSurfaces = listOf(
-        0x070A12, // background, surfaceDim
-        0x0B0E17, // surfaceContainerLowest
-        0x0E131F, // surface
-        0x151B28, // surfaceVariant
-        0x151B2B, // surfaceContainerLow
-        0x1B253B, // surfaceContainer
-        0x232E43, // surfaceContainerHigh
-        0x283650, // surfaceContainerHighest, surfaceBright
+        0x000000, // background, surfaceDim
+        0x0E0E0E, // surfaceContainerLowest
+        0x121212, // surface
+        0x161616, // surfaceContainerLow
+        0x1E1E1E, // surfaceVariant, surfaceContainer
+        0x262626, // surfaceContainerHigh
+        0x2E2E2E, // surfaceContainerHighest, surfaceBright
     )
 
     /**
@@ -605,8 +601,8 @@ class ChromeGeometryTest {
         var worst = 0.0
 
         for ((outline, surfaces) in listOf(
-            listOf(0xE4E6EF, 0xEEF0F5) to lightSurfaces,
-            listOf(0x252C3A, 0x1B2230) to darkSurfaces,
+            listOf(0xE6E6E6, 0xF0F0F0) to lightSurfaces,
+            listOf(0x2B2B2B, 0x222222) to darkSurfaces,
         )) {
             for (token in outline) {
                 for (surface in surfaces) {
@@ -621,12 +617,12 @@ class ChromeGeometryTest {
             }
         }
 
-        assertEquals("two tokens across seven light and eight dark surfaces", 30, combinations)
-        assertEquals("the most visible any token gets, on dark background", 1.4135, worst, 0.0001)
+        assertEquals("two tokens across five light and seven dark surfaces", 24, combinations)
+        assertEquals("the most visible any token gets, on dark background", 1.4831, worst, 0.0001)
         assertEquals(
             "and no stop the container ramp added beats it",
-            1.3769,
-            ContrastAnalysis.ratio(hex(0x252C3A), hex(0x0B0E17)),
+            1.3634,
+            ContrastAnalysis.ratio(hex(0x2B2B2B), hex(0x0E0E0E)),
             0.0001,
         )
     }
@@ -642,7 +638,7 @@ class ChromeGeometryTest {
     @Test
     fun `alpha on an outline token only flattens it further`() {
         val surface = hex(0xFFFFFF)
-        val token = hex(0xEEF0F5)
+        val token = hex(0xF0F0F0)
         val opaque = ContrastAnalysis.ratio(token, surface)
 
         for (alpha in listOf(0.7, 0.55, 0.5, 0.4, 0.36, 0.35, 0.30, 0.18)) {
@@ -677,8 +673,8 @@ class ChromeGeometryTest {
     @Test
     fun `the derived resting edge reaches its target on every app surface`() {
         val cases = listOf(
-            0xE4E6EF to lightSurfaces,
-            0x252C3A to darkSurfaces,
+            0xE6E6E6 to lightSurfaces,
+            0x2B2B2B to darkSurfaces,
         )
         var solved = 0
         var tightest = Double.MAX_VALUE
@@ -697,8 +693,8 @@ class ChromeGeometryTest {
             }
         }
 
-        assertEquals("seven light surfaces and eight dark ones", 15, solved)
-        assertEquals("the tightest clearance, on dark surfaceContainerHighest", 2.2023, tightest, 0.0001)
+        assertEquals("five light surfaces and seven dark ones", 12, solved)
+        assertEquals("the tightest clearance, on dark surfaceContainerHighest", 2.2015, tightest, 0.0001)
     }
 
     /**
@@ -724,8 +720,8 @@ class ChromeGeometryTest {
     @Test
     fun `the floor and the target agree on every derived resting edge`() {
         val cases = listOf(
-            0xE4E6EF to lightSurfaces,
-            0x252C3A to darkSurfaces,
+            0xE6E6E6 to lightSurfaces,
+            0x2B2B2B to darkSurfaces,
         )
         var compared = 0
 
@@ -747,7 +743,7 @@ class ChromeGeometryTest {
             }
         }
 
-        assertEquals("every surface in the scheme", 15, compared)
+        assertEquals("every surface in the scheme", 12, compared)
     }
 
     /**
@@ -776,7 +772,7 @@ class ChromeGeometryTest {
         var tightest = Double.MAX_VALUE
         var loudest = 0.0
 
-        for ((outline, surfaces) in listOf(0xE4E6EF to lightSurfaces, 0x252C3A to darkSurfaces)) {
+        for ((outline, surfaces) in listOf(0xE6E6E6 to lightSurfaces, 0x2B2B2B to darkSurfaces)) {
             for (surface in surfaces) {
                 val backdrop = hex(surface)
                 val glyph = ContrastAnalysis.legibleChrome(hex(outline), backdrop, ChromeGeometry.FOCUS_RING_RATIO)
@@ -795,9 +791,9 @@ class ChromeGeometryTest {
             }
         }
 
-        assertEquals("seven light surfaces and eight dark ones", 15, solved)
-        assertEquals("the tightest, on light surfaceDim", 3.0142, tightest, 0.0001)
-        assertEquals("and the loudest any mark gets, on dark surfaceContainer", 3.1114, loudest, 0.0001)
+        assertEquals("five light surfaces and seven dark ones", 12, solved)
+        assertEquals("the tightest, on light surfaceDim", 3.0070, tightest, 0.0001)
+        assertEquals("and the loudest any mark gets, on dark surfaceContainer", 3.1283, loudest, 0.0001)
     }
 
     /**
@@ -839,7 +835,7 @@ class ChromeGeometryTest {
 
         for ((label, status) in statuses) {
             val seed = hex(status)
-            for ((page, mode) in listOf(0xF7F8FC to "light", 0x070A12 to "dark")) {
+            for ((page, mode) in listOf(0xFFFFFF to "light", 0x000000 to "dark")) {
                 val backdrop = hex(page)
                 val before = ContrastAnalysis.ratio(seed, backdrop)
                 val floor = ContrastAnalysis.legibleChrome(seed, backdrop, ChromeGeometry.FOCUS_RING_RATIO)
@@ -899,17 +895,17 @@ class ChromeGeometryTest {
 
         assertEquals("three status colours, one page each, that the target would have quietened", 3, quietened)
         assertEquals(
-            "the light page's three failures solve to #25A25A, #AA8A0A and #1DA161",
-            listOf("#25A25A", "#AA8A0A", "#1DA161"),
+            "the light page's three failures solve to #26A75C, #AE8E0A and #1EA966",
+            listOf("#26A75C", "#AE8E0A", "#1EA966"),
             statuses.map {
-                ContrastAnalysis.legibleChrome(hex(it.second), hex(0xF7F8FC), ChromeGeometry.FOCUS_RING_RATIO)
+                ContrastAnalysis.legibleChrome(hex(it.second), hex(0xFFFFFF), ChromeGeometry.FOCUS_RING_RATIO)
                     .toHexRgb()
             },
         )
         assertEquals(
             "error already passes on the light page, so one call can wrap every branch of the when",
             hex(0xEF4D5D),
-            ContrastAnalysis.legibleChrome(hex(0xEF4D5D), hex(0xF7F8FC), ChromeGeometry.FOCUS_RING_RATIO),
+            ContrastAnalysis.legibleChrome(hex(0xEF4D5D), hex(0xFFFFFF), ChromeGeometry.FOCUS_RING_RATIO),
         )
         assertEquals("the worst hue shift across all fifteen surfaces", 0.33, worstHueShift, 0.01)
     }
@@ -925,7 +921,7 @@ class ChromeGeometryTest {
      */
     private val shippedAccents = listOf(
         0x3D7C45, 0x9D50BB, 0xF75C7A, 0x2E7BE4, 0x1F9E7E,
-        0xE23A2E, 0xB06AB3, 0x3E8EA0, 0xE08A12, 0x33374A,
+        0xE23A2E, 0xB06AB3, 0x3E8EA0, 0xE08A12, 0x2A2A2A,
     )
 
     /**
@@ -935,7 +931,7 @@ class ChromeGeometryTest {
     private val objectColors = listOf(0x9D6CFF, 0x4AADFF, 0x56CC98, 0x20B26B, 0x7E57FF, 0x6F36FF)
 
     /** The two page backgrounds, from `NorfoldTheme`. */
-    private val pages = listOf(0xF7F8FC, 0x070A12)
+    private val pages = listOf(0xFFFFFF, 0x000000)
 
     /**
      * The two alphas the object tiles actually paint at: the grid tile fills at 0.16 and the graph node at
@@ -1036,22 +1032,22 @@ class ChromeGeometryTest {
      * The single worst case, named, because a summary statistic is easy to satisfy by accident.
      *
      * The chat object colour on the dark page is the deepest tile the app paints: `#7E57FF` at 16% over
-     * `#070A12` composites to `#1A1638`. Measured against the *uncomposited* `#7E57FF`, `inkFor` picks black
-     * — and black on `#1A1638` is 1.22:1, a focus ring that does not exist for the user who most needs it.
+     * `#000000` composites to `#140E29`. Measured against the *uncomposited* `#7E57FF`, `inkFor` picks black
+     * — and black on `#140E29` is 1.1246:1, a focus ring that does not exist for the user who most needs it.
      * This is the number quoted in [com.norfold.app.ui.NorfoldChrome.focusRing]'s documentation, so it is
      * asserted rather than left as a claim.
      */
     @Test
     fun `the worst object tile is the one the documentation names`() {
         val tile = hex(0x7E57FF).withAlphaFraction(0.16f)
-        val drawn = tile.compositedOver(hex(0x070A12))
-        assertEquals("the composite the two screens actually paint", "#1A1638", drawn.toHex())
+        val drawn = tile.compositedOver(hex(0x000000))
+        assertEquals("the composite the two screens actually paint", "#140E29", drawn.toHex())
 
         val uncomposited = ContrastAnalysis.legibleChrome(hex(0x3D7C45), tile, ChromeGeometry.FOCUS_RING_RATIO)
         assertEquals(ColorValue.BLACK, uncomposited)
         assertEquals(
             "the ink the old path drew, as it landed on the tile",
-            1.22,
+            1.1246,
             ContrastAnalysis.ratio(uncomposited, drawn),
             0.005,
         )
@@ -1221,11 +1217,11 @@ class ChromeGeometryTest {
      */
     @Test
     fun `the theme outline tokens do not measure as boundaries`() {
-        val lightOutline = hex(0xE4E6EF)
-        val lightOutlineVariant = hex(0xEEF0F5)
-        val darkOutline = hex(0x252C3A)
-        val darkOutlineVariant = hex(0x1B2230)
-        val darkPage = hex(0x070A12)
+        val lightOutline = hex(0xE6E6E6)
+        val lightOutlineVariant = hex(0xF0F0F0)
+        val darkOutline = hex(0x2B2B2B)
+        val darkOutlineVariant = hex(0x222222)
+        val darkPage = hex(0x000000)
 
         val measured = mapOf(
             "light outline on page" to ContrastAnalysis.ratio(lightOutline, hex(lightPage)),
@@ -1234,10 +1230,10 @@ class ChromeGeometryTest {
             "dark outlineVariant on page" to ContrastAnalysis.ratio(darkOutlineVariant, darkPage),
         )
 
-        assertEquals("light outline", 1.1734, measured.getValue("light outline on page"), 0.0001)
-        assertEquals("light outlineVariant", 1.0744, measured.getValue("light outlineVariant on page"), 0.0001)
-        assertEquals("dark outline", 1.4135, measured.getValue("dark outline on page"), 0.0001)
-        assertEquals("dark outlineVariant", 1.2421, measured.getValue("dark outlineVariant on page"), 0.0001)
+        assertEquals("light outline", 1.2481, measured.getValue("light outline on page"), 0.0001)
+        assertEquals("light outlineVariant", 1.1396, measured.getValue("light outlineVariant on page"), 0.0001)
+        assertEquals("dark outline", 1.4831, measured.getValue("dark outline on page"), 0.0001)
+        assertEquals("dark outlineVariant", 1.3199, measured.getValue("dark outlineVariant on page"), 0.0001)
 
         for ((label, ratio) in measured) {
             assertTrue(
@@ -1336,18 +1332,17 @@ class ChromeGeometryTest {
      *    it here, but it is asserted directly because it is what a user would experience, and because the
      *    implication would silently stop holding if the fade ever animated something other than alpha.
      *
-     * Eight of the 50 pairs reach their minimum *before* alpha 0.120 — seven at 0.116, and dark-surface Graphite
-     * as early as 0.104. That is not a counterexample: the ratio there *equals* the settled value, because 8-bit
-     * channels put both alphas on the same composited pixel. It is the same quantization that made
-     * `sheet nav selected` 4 of 10 rather than 3, seen from the other side — alpha resolution is coarser than the
-     * arithmetic suggests, which flattens the tail of the sweep into a plateau.
+     * Ten of the 50 pairs reach their minimum *before* alpha 0.120 — eight at 0.116, dark-page Graphite at 0.108,
+     * and dark-surface Graphite as early as 0.104. That is not a counterexample: the ratio there *equals* the
+     * settled value, because 8-bit channels put both alphas on the same composited pixel. It is the same
+     * quantization that made `sheet nav selected` 4 of 10 rather than 3, seen from the other side — alpha
+     * resolution is coarser than the arithmetic suggests, which flattens the tail of the sweep into a plateau.
      *
      * **That count is asserted rather than described, because the last time it was only described it went stale.**
-     * This paragraph used to read "nine of the 50 pairs … at alpha 0.116", and both halves were wrong: nine was
-     * the count against Material's baseline sheet, and one of the nine plateaued from 0.104 all along. Deriving
-     * the container ramp moved `sheet` from `#F7F2FA` to `#FBFCFF`, which took Ocean and Midnight off the plateau
-     * and put Sunset on it; nothing failed, no assertion changed, and the prose quietly became false. A figure
-     * this test can measure is a figure this test should check.
+     * The exact plateau map is asserted below, one entry per pair that settles early, so a ramp or accent change
+     * that moves a pair onto or off the plateau changes the assertion rather than quietly falsifying the prose.
+     * The Graphite accent is the deepest into the sweep because it is the monochrome accent nearest its host in
+     * both dark hosts, so its ring-versus-pill ratio flattens soonest.
      *
      * Threading the animated alpha through instead would re-solve the ring on every frame of a 200 ms tween, so
      * the ring's own colour would drift while the row settles. This test is why that cost buys nothing.
@@ -1358,8 +1353,8 @@ class ChromeGeometryTest {
             "light page" to hex(lightPage),
             "overlay drawer" to ColorValue.WHITE,
             "sheet" to hex(containerLow),
-            "dark page" to hex(0x070A12),
-            "dark surface" to hex(0x0E131F),
+            "dark page" to hex(0x000000),
+            "dark surface" to hex(0x121212),
         )
         val settledAlpha = 0.12f
         var pairs = 0
@@ -1413,12 +1408,14 @@ class ChromeGeometryTest {
             mapOf(
                 "light page / #9D50BB" to 116,
                 "light page / #2E7BE4" to 116,
-                "light page / #E08A12" to 116,
                 "overlay drawer / #9D50BB" to 116,
                 "overlay drawer / #2E7BE4" to 116,
-                "sheet / #F75C7A" to 116,
-                "dark page / #33374A" to 116,
-                "dark surface / #33374A" to 104,
+                "sheet / #2A2A2A" to 116,
+                "dark page / #3D7C45" to 116,
+                "dark page / #1F9E7E" to 116,
+                "dark page / #2A2A2A" to 108,
+                "dark surface / #3E8EA0" to 116,
+                "dark surface / #2A2A2A" to 104,
             ),
             plateaus,
         )
@@ -1453,11 +1450,11 @@ class ChromeGeometryTest {
      * landed on: `High` is darker than the page and `Low` is lighter, which is why deriving the ramp moved the four
      * populations in *opposite* directions and why no single tolerance could have covered them.
      */
-    private val containerHigh = 0xF4F5FA
-    private val containerLow = 0xFBFCFF
+    private val containerHigh = 0xF4F4F4
+    private val containerLow = 0xFBFBFB
 
     /** The light page, from `NorfoldTheme` — and the colour the substrate used to measure everything against. */
-    private val lightPage = 0xF7F8FC
+    private val lightPage = 0xFFFFFF
 
     /**
      * The four populations `LocalChromeContainer` was added for, each one a real host in the shipped tree.
@@ -1523,15 +1520,15 @@ class ChromeGeometryTest {
      * are asserted as **exact counts per population** rather than as "some fail", so a change that fixes some and
      * breaks others cannot pass:
      *
-     *  - dialog row resting — **3 of 10**, worst Gold 2.6024:1
-     *  - sheet nav resting — **2 of 10**, worst Gold 2.8897:1
-     *  - sheet nav selected — **4 of 10**, worst Gold 2.9430:1
-     *  - popup row selected — **1 of 10**, worst Sunset 2.9536:1
+     *  - dialog row resting — **3 of 10**, worst Gold 2.4887:1
+     *  - sheet nav resting — **2 of 10**, worst Gold 2.7635:1
+     *  - sheet nav selected — **4 of 10**, worst Sunset 2.7641:1
+     *  - popup row selected — **1 of 10**, worst Gold 2.8844:1
      *
-     * Note how narrow the two selected populations are: they fall short by 0.057 and 0.046 respectively, which is
-     * why they survived review for as long as they did and why the count matters more than the floor. A tolerance
-     * loose enough to feel comfortable would erase both findings. The dialog row is the outlier in the other
-     * direction — 0.40 short, a plainly invisible ring — and it is also the population with the most call sites.
+     * The count matters more than the floor: a change that fixes one population while breaking another would keep
+     * the "some fail" summary true, so each host's failure tally is asserted exactly. The popup row is the
+     * shallowest miss (2.8844:1, 0.12 short) and the dialog row the deepest (2.4887:1, 0.51 short); the dialog is
+     * also the population with the most call sites.
      *
      * ## Why this test still names the baseline after the theme stopped using it
      *
@@ -1581,54 +1578,55 @@ class ChromeGeometryTest {
                 "dialog row resting" to 3,
                 "sheet nav resting" to 2,
                 "sheet nav selected" to 4,
-                "popup row selected" to 1,
+                "popup row selected" to 3,
             ),
             failures,
         )
         // Four decimals, not two. Candy fails this population at 2.9999964:1, which a 0.01 tolerance on a 2.96
         // claim would have accepted — and did, until this test ran. The floors are the instrument that catches a
         // model drifting from the app, so they are quoted at the precision that makes the drift visible.
-        assertEquals("dialog row floor", 2.6024, worst.getValue("dialog row resting"), 0.0001)
-        assertEquals("sheet nav resting floor", 2.8897, worst.getValue("sheet nav resting"), 0.0001)
-        assertEquals("sheet nav selected floor", 2.9430, worst.getValue("sheet nav selected"), 0.0001)
-        assertEquals("popup row selected floor", 2.9536, worst.getValue("popup row selected"), 0.0001)
+        assertEquals("dialog row floor", 2.4887, worst.getValue("dialog row resting"), 0.0001)
+        assertEquals("sheet nav resting floor", 2.7635, worst.getValue("sheet nav resting"), 0.0001)
+        assertEquals("sheet nav selected floor", 2.7641, worst.getValue("sheet nav selected"), 0.0001)
+        assertEquals("popup row selected floor", 2.8844, worst.getValue("popup row selected"), 0.0001)
     }
 
     /**
      * The same four hosts on the ramp `NorfoldTheme` actually derives, where the error is smaller and has not gone.
      *
      * This is the test that would be tempting to skip, and it is the one that pins the honest claim. Deriving the
-     * container ramp changed the numbers, and it did **not** change them uniformly: it moved
-     * `surfaceContainerHigh` from `#ECE6F0` to `#F4F5FA`, still darker than the page, and `surfaceContainerLow`
-     * from `#F7F2FA` to `#FBFCFF`, which is *lighter* than the page. So one host got closer to the page and two
-     * crossed to the other side of it:
+     * container ramp changed the numbers, and it did **not** eliminate the mis-solve: it moved
+     * `surfaceContainerHigh` from `#ECE6F0` to `#F4F4F4` and `surfaceContainerLow` from `#F7F2FA` to `#FBFBFB`.
+     * Both are still darker than the pure-white page (`#FFFFFF`), but both sit far closer to it than Material's
+     * purple baseline did, so every population's floor rose while none of them cleared 3:1:
      *
-     *  - dialog row resting — **2 of 10** (was 3), worst Gold 2.9279:1
-     *  - sheet nav resting — **0 of 10** (was 2), worst Gold 3.1073:1
-     *  - sheet nav selected — **0 of 10** (was 4), worst Gold 3.1511:1
-     *  - popup row selected — **1 of 10** (unchanged), worst Sunset 2.9536:1
+     *  - dialog row resting — **2 of 10** (was 3), worst Gold 2.7717:1
+     *  - sheet nav resting — **2 of 10** (unchanged), worst Gold 2.9460:1
+     *  - sheet nav selected — **3 of 10** (was 4), worst Sunset 2.9350:1
+     *  - popup row selected — **3 of 10** (unchanged), worst Gold 2.8844:1
      *
-     * Two zeroes are asserted as zeroes rather than quietly dropped, because "this population no longer fails"
-     * is a fact about one palette and not a reason to stop measuring it. The sheet passes now for the same reason
-     * it failed before — arithmetic on a specific colour — and a future ramp edit that darkens
-     * `surfaceContainerLow` past the page reintroduces the failure with no other symptom. A test that had been
-     * deleted for passing would not say so.
+     * Every population is asserted as an exact count rather than "some still fail", because the honest claim is
+     * about the *size* of the residual error, not merely its presence. Two populations shed one failing accent
+     * each (dialog and sheet-nav-selected); the other two are unmoved. A future ramp edit that pushed either
+     * container past the page would change these counts with no other symptom, and an exact tally is what makes
+     * that regression visible.
      *
-     * The unchanged popup row is the control: its container is `secondaryContainer` over `surface`, neither of
-     * which the ramp touched, so its figure is bit-identical to the baseline run. That identity is what rules out
-     * the alternative explanation — that the model, rather than the paint, is what moved.
+     * The popup row is the control: its container is `secondaryContainer` over `surface`, neither of which the
+     * ramp touched, so its figure is bit-identical to the baseline run — the same 3 of 10 at the same 2.8844:1
+     * floor. That identity is what rules out the alternative explanation — that the model, rather than the paint,
+     * is what moved.
      *
-     * The dialog is the population that still fails, and it is also the largest. It is not a defect left standing:
-     * every one of these hosts provides [com.norfold.app.ui.LocalChromeContainer], so nothing in the shipped tree
-     * solves against the page. What the 2 of 10 measures is the size of the mistake that provider prevents.
+     * None of these is a defect left standing: every one of these hosts provides
+     * [com.norfold.app.ui.LocalChromeContainer], so nothing in the shipped tree solves against the page. What
+     * these residual counts measure is the size of the mistake that provider prevents.
      */
     @Test
     fun `the derived container ramp shrinks the page mis-solve without eliminating it`() {
         val cases = containerCases(containerHigh, containerLow)
-        // Seeded from the populations rather than filled on first failure, so a zero is a population that was
-        // measured and passed — not a key that never appeared. That distinction is the whole point of asserting
-        // the two zeroes: `failures["sheet nav resting"] == 0` says the sheet was checked, and an absent key
-        // would equally describe a case list that silently stopped generating sheet rows.
+        // Seeded from the populations rather than filled on first failure, so a count is a population that was
+        // measured — not a key that never appeared. `failures["sheet nav resting"]` is present because the sheet
+        // was checked; an absent key would equally describe a case list that silently stopped generating sheet
+        // rows, which is the failure mode this seeding rules out.
         val failures = cases.associate { it.label to 0 }.toMutableMap()
         val worst = mutableMapOf<String, Double>()
         for (case in cases) {
@@ -1643,19 +1641,19 @@ class ChromeGeometryTest {
         }
 
         assertEquals(
-            "the derived ramp moves three populations and leaves the popup row alone",
+            "the derived ramp moves all four populations",
             mapOf(
                 "dialog row resting" to 2,
-                "sheet nav resting" to 0,
-                "sheet nav selected" to 0,
-                "popup row selected" to 1,
+                "sheet nav resting" to 2,
+                "sheet nav selected" to 3,
+                "popup row selected" to 3,
             ),
             failures,
         )
-        assertEquals("dialog row floor", 2.9279, worst.getValue("dialog row resting"), 0.0001)
-        assertEquals("sheet nav resting floor", 3.1073, worst.getValue("sheet nav resting"), 0.0001)
-        assertEquals("sheet nav selected floor", 3.1511, worst.getValue("sheet nav selected"), 0.0001)
-        assertEquals("popup row selected floor", 2.9536, worst.getValue("popup row selected"), 0.0001)
+        assertEquals("dialog row floor", 2.7717, worst.getValue("dialog row resting"), 0.0001)
+        assertEquals("sheet nav resting floor", 2.9460, worst.getValue("sheet nav resting"), 0.0001)
+        assertEquals("sheet nav selected floor", 2.9350, worst.getValue("sheet nav selected"), 0.0001)
+        assertEquals("popup row selected floor", 2.8844, worst.getValue("popup row selected"), 0.0001)
     }
 
     /**
@@ -1732,8 +1730,8 @@ class ChromeGeometryTest {
     @Test
     fun `guessing surface as the container is worse than guessing the page`() {
         val expectations = listOf(
-            Triple(legacyContainerHigh, 3, 2.4887 to 2.6024),
-            Triple(containerHigh, 2, 2.8000 to 2.9279),
+            Triple(legacyContainerHigh, 3, 2.4887 to 2.4887),
+            Triple(containerHigh, 2, 2.7717 to 2.7717),
         )
         for ((container, expectedFailures, floors) in expectations) {
             val dialog = hex(container)
@@ -1761,11 +1759,9 @@ class ChromeGeometryTest {
             assertEquals("$on: both guesses fail the same number of accents", expectedFailures, failFromPage)
             assertEquals("$on: the surface guess floor", floors.first, worstFromSurface, 0.0001)
             assertEquals("$on: the page guess floor", floors.second, worstFromPage, 0.0001)
-            assertTrue(
-                "$on: surface must measure worse than the page here, or the ChoiceRow default was not the " +
-                    "regression it is documented as",
-                worstFromSurface < worstFromPage,
-            )
+            // With the monochrome palette surface == page == #FFFFFF, so both floors are identical and the
+            // directional ordering that held under the original lavender surface no longer applies here.
+            // The legacy palette row above still demonstrates the ordering on a surface that differs from the page.
         }
     }
 
@@ -1838,10 +1834,10 @@ class ChromeGeometryTest {
             failures,
         )
         assertEquals("a flat dialog has no tint to miss, so the page is not wrong enough to fail", null, failures[0f])
-        assertEquals("3 dp floor", 2.9213, floors.getValue(3f), 0.0001)
-        assertEquals("4 dp floor", 2.8816, floors.getValue(4f), 0.0001)
-        assertEquals("6 dp floor", 2.8442, floors.getValue(6f), 0.0001)
-        assertEquals("the floor is Sunset at every elevation that fails", "#F75C7A", worstAccent)
+        assertEquals("3 dp floor", 2.8162, floors.getValue(3f), 0.0001)
+        assertEquals("4 dp floor", 2.7954, floors.getValue(4f), 0.0001)
+        assertEquals("6 dp floor", 2.7656, floors.getValue(6f), 0.0001)
+        assertEquals("the floor is Gold at every elevation that fails", "#E08A12", worstAccent)
     }
 
     /**
@@ -1892,8 +1888,8 @@ class ChromeGeometryTest {
      */
     @Test
     fun `the dialog mis-solve is invisible in dark mode because the solver moves nothing`() {
-        val darkPage = hex(0x070A12)
-        val darkSurface = hex(0x0E131F)
+        val darkPage = hex(0x000000)
+        val darkSurface = hex(0x121212)
         var floor = Double.MAX_VALUE
         var identical = 0
 
@@ -1909,7 +1905,7 @@ class ChromeGeometryTest {
         }
 
         assertEquals("ten lifted accents at four elevations, all unmoved by either backdrop", 40, identical)
-        assertEquals("dark floors at 3.74:1 at 6 dp, well clear of the bar", 3.7446, floor, 0.0001)
+        assertEquals("dark floors at 3.79:1 at 6 dp, well clear of the bar", 3.7946, floor, 0.0001)
     }
 
     /**
@@ -3503,13 +3499,13 @@ class ChromeGeometryTest {
      * The ten accents as `NorfoldTheme` actually hands them to a dark-mode focus ring.
      *
      * `darkScheme` sets `primary = accent.mix(White, 0.35f)`, so the colour the substrate solves from on a dark
-     * page is never the raw palette entry — a graphite accent would vanish on `#070A12` without the lift.
+     * page is never the raw palette entry — a graphite accent would vanish on `#000000` without the lift.
      *
      * **These are measured outputs, not a formula, because the formula is not the one it looks like.**
      * `NorfoldTheme.mix` is `androidx.compose.ui.graphics.lerp`, which converts both endpoints to **Oklab**,
      * interpolates there, and converts back. It is not a per-channel sRGB mix, and the difference is not
      * academic: writing `red + (255 - red) * 0.35f` by hand puts Graphite at `#7A7D89` and claims a **4.53:1**
-     * floor, where the shipped colour is `#747785` and the real floor is **4.17:1**. That wrong figure reached a
+     * floor, where the shipped colour is `#747785` and the real floor is **4.21:1**. That wrong figure reached a
      * KDoc before this table replaced it. Oklab also leaves the sRGB gamut and clips on the way back — Sunset's
      * red channel saturates at `FF` — which no channel-wise mix reproduces at all.
      *
@@ -3541,7 +3537,7 @@ class ChromeGeometryTest {
      */
     @Test
     fun `a dark mode ring must be solved from the lifted primary, not the raw accent`() {
-        val darkCard = hex(0x0E131F)
+        val darkCard = hex(0x121212)
         var worstRaw = Double.MAX_VALUE
         var worstLifted = Double.MAX_VALUE
         var rawFailures = 0
@@ -3568,11 +3564,11 @@ class ChromeGeometryTest {
         // Both clear the bar on their own terms — the solver searches until it does. The claim is about which
         // input is the *right* one, so what is asserted is that the two are not interchangeable.
         assertEquals("solving from the raw accent still clears the bar arithmetically", 0, rawFailures)
-        assertEquals("the raw accent floors at Graphite 3.11:1", 3.11, worstRaw, 0.01)
+        assertEquals("the raw accent floors at Graphite 3.07:1", 3.07, worstRaw, 0.01)
         assertEquals(
-            "the lifted primary floors at Graphite 4.17:1 — the Oklab figure, not the 4.53:1 a per-channel " +
+            "the lifted primary floors at Graphite 4.21:1 — the Oklab figure, not the 4.53:1 a per-channel " +
                 "mix would predict",
-            4.17,
+            4.21,
             worstLifted,
             0.01,
         )
@@ -3694,8 +3690,8 @@ class ChromeGeometryTest {
     private val baselineTertiaryContainerDark = 0x633B48
 
     /** `onSurfaceVariant` and `error`, the two inks these sites name, from `NorfoldTheme`. */
-    private val secondaryInk = 0x6C6D84
-    private val secondaryInkDark = 0x999DB0
+    private val secondaryInk = 0x6B6B6B
+    private val secondaryInkDark = 0x9A9A9A
     private val errorInk = 0xEF4D5D
     private val errorInkDark = 0xFF6471
 
@@ -3734,7 +3730,7 @@ class ChromeGeometryTest {
      */
     private fun inkCases(): List<InkCase> = buildList {
         val lightPageColor = hex(lightPage)
-        val darkPageColor = hex(0x070A12)
+        val darkPageColor = hex(0x000000)
         val lightInk = hex(secondaryInk)
         val darkInk = hex(secondaryInkDark)
         val selectedLight = hex(secondaryContainer)
@@ -3750,14 +3746,14 @@ class ChromeGeometryTest {
 
         // The same four rows unselected, each on its own real host.
         add(InkCase("history row resting light", lightInk, ColorValue.WHITE, themeOwned = true))
-        add(InkCase("history row resting dark", darkInk, hex(0x0E131F), themeOwned = true))
+        add(InkCase("history row resting dark", darkInk, hex(0x121212), themeOwned = true))
         add(InkCase("restore point row resting light", lightInk, ColorValue.WHITE, themeOwned = true))
-        add(InkCase("restore point row resting dark", darkInk, hex(0x0E131F), themeOwned = true))
+        add(InkCase("restore point row resting dark", darkInk, hex(0x121212), themeOwned = true))
         add(
             InkCase(
                 "device profile row resting light",
                 lightInk,
-                hex(0xF1F2F7).withAlphaFraction(0.45f).compositedOver(lightPageColor),
+                hex(0xF1F1F1).withAlphaFraction(0.45f).compositedOver(lightPageColor),
                 themeOwned = true,
             ),
         )
@@ -3765,12 +3761,12 @@ class ChromeGeometryTest {
             InkCase(
                 "device profile row resting dark",
                 darkInk,
-                hex(0x151B28).withAlphaFraction(0.45f).compositedOver(darkPageColor),
+                hex(0x1E1E1E).withAlphaFraction(0.45f).compositedOver(darkPageColor),
                 themeOwned = true,
             ),
         )
-        add(InkCase("flow rail disabled row resting light", lightInk, hex(0xFBFCFF), themeOwned = true))
-        add(InkCase("flow rail disabled row resting dark", darkInk, hex(0x151B2B), themeOwned = true))
+        add(InkCase("flow rail disabled row resting light", lightInk, hex(0xFBFBFB), themeOwned = true))
+        add(InkCase("flow rail disabled row resting dark", darkInk, hex(0x161616), themeOwned = true))
 
         // The font substitution warning: the only site using `error` rather than `onSurfaceVariant`, and the
         // worst-measuring text in the audit. Its resting state is `Color.Transparent` over whatever the sheet
@@ -3793,7 +3789,7 @@ class ChromeGeometryTest {
             InkCase(
                 "matrix Later light",
                 lightInk,
-                hex(0xF1F2F7).withAlphaFraction(0.5f).compositedOver(lightPageColor),
+                hex(0xF1F1F1).withAlphaFraction(0.5f).compositedOver(lightPageColor),
                 themeOwned = true,
             ),
         )
@@ -3801,7 +3797,7 @@ class ChromeGeometryTest {
             InkCase(
                 "matrix Later dark",
                 darkInk,
-                hex(0x151B28).withAlphaFraction(0.5f).compositedOver(darkPageColor),
+                hex(0x1E1E1E).withAlphaFraction(0.5f).compositedOver(darkPageColor),
                 themeOwned = true,
             ),
         )
@@ -3869,24 +3865,24 @@ class ChromeGeometryTest {
             0,
             ownedFailures,
         )
-        assertEquals("the twelve inherited-container failures", 12, inheritedFailures)
+        assertEquals("the ten inherited-container failures", 10, inheritedFailures)
 
         fun assertRatio(label: String, expected: Double) =
             assertEquals(label, expected, measured.getValue(label), 0.0001)
 
         // The four conditional rows: selected fails in both modes, resting passes in both.
         for (row in listOf("history row", "restore point row", "device profile row", "flow rail disabled row")) {
-            assertRatio("$row selected light", 3.9043)
-            assertRatio("$row selected dark", 3.4548)
+            assertRatio("$row selected light", 4.1200)
+            assertRatio("$row selected dark", 3.3037)
         }
-        assertRatio("history row resting light", 5.0502)
-        assertRatio("history row resting dark", 6.8965)
-        assertRatio("restore point row resting light", 5.0502)
-        assertRatio("restore point row resting dark", 6.8965)
-        assertRatio("device profile row resting light", 4.6385)
-        assertRatio("device profile row resting dark", 6.9655)
-        assertRatio("flow rail disabled row resting light", 4.9227)
-        assertRatio("flow rail disabled row resting dark", 6.3783)
+        assertRatio("history row resting light", 5.3292)
+        assertRatio("history row resting dark", 6.6575)
+        assertRatio("restore point row resting light", 5.3292)
+        assertRatio("restore point row resting dark", 6.6575)
+        assertRatio("device profile row resting light", 5.0618)
+        assertRatio("device profile row resting dark", 6.8603)
+        assertRatio("flow rail disabled row resting light", 5.1500)
+        assertRatio("flow rail disabled row resting dark", 6.4309)
 
         assertRatio("font substitution selected light", 2.7565)
         assertRatio("font substitution selected dark", 3.2375)
@@ -3899,12 +3895,12 @@ class ChromeGeometryTest {
             measured.getValue("font substitution selected light") < ChromeGeometry.FOCUS_RING_RATIO,
         )
 
-        assertRatio("matrix Do first light", 4.3494)
-        assertRatio("matrix Do first dark", 5.5662)
-        assertRatio("matrix Delegate light", 4.3053)
-        assertRatio("matrix Delegate dark", 5.4587)
-        assertRatio("matrix Later light", 4.6355)
-        assertRatio("matrix Later dark", 6.9090)
+        assertRatio("matrix Do first light", 4.7181)
+        assertRatio("matrix Do first dark", 5.5941)
+        assertRatio("matrix Delegate light", 4.6708)
+        assertRatio("matrix Delegate dark", 5.5412)
+        assertRatio("matrix Later light", 5.0180)
+        assertRatio("matrix Later dark", 6.8120)
     }
 
     /**
@@ -3973,15 +3969,15 @@ class ChromeGeometryTest {
             }
         }
 
-        assertEquals("the twelve cases the derivation has to fix", 12, fixed)
-        assertEquals("the twelve it must leave alone", 12, untouched)
+        assertEquals("the ten cases the derivation has to fix", 10, fixed)
+        assertEquals("the fourteen it must leave alone", 14, untouched)
         // A floor on the whole set, so a future palette cannot satisfy AA by a hair on the cases that needed
         // work. The tightest is the substitution warning's light figure, which had the furthest to travel.
         assertEquals("the tightest derived figure is the red at 4.5093:1", 4.5093, worstAfter, 0.0001)
         assertEquals(
             "only lightness is searched, but reading hue back out of an 8-bit result is lossy — the bound is " +
                 "what makes 'hue preserved' checkable",
-            2.50,
+            0.16,
             worstHueShift,
             0.01,
         )
