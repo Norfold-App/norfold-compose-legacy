@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -31,7 +30,6 @@ import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EditNote
-import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.GridView
@@ -41,11 +39,11 @@ import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedButton
-import com.norfold.app.ui.components.WorkspaceIconBadge
 import com.norfold.app.ui.components.SemanticAppIcon
 import com.norfold.app.domain.SemanticActionId
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -69,7 +67,6 @@ import androidx.compose.ui.unit.sp
 import com.norfold.app.domain.Destination
 import com.norfold.app.domain.DocumentArtifactKind
 import com.norfold.app.domain.TaskStatus
-import com.norfold.app.domain.WorkspaceActivity
 import com.norfold.app.domain.WorkspaceFileItem
 import com.norfold.app.domain.WorkspaceObject
 import com.norfold.app.domain.WorkspaceObjectType
@@ -95,25 +92,10 @@ fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: 
     LazyColumn(
         Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 18.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 118.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        item {
-            HubSearchBar(viewModel)
-        }
-        item {
-            WorkspaceHero(state, viewModel, inboxMode)
-        }
-        item {
-            HubStats(state, viewModel)
-        }
-        if (!inboxMode) {
-            item {
-                PlanningOverview(state, viewModel)
-            }
-        }
-        item {
-            QuickCaptureRow(viewModel)
-        }
+        item { HubGreeting(state, inboxMode) }
+        item { HubSearchAndNewRow(viewModel) }
         if (inboxMode) {
             item {
                 HubSection("Inbox", "Capture now, process later.") {
@@ -126,213 +108,202 @@ fun WorkspaceHubScreen(state: DocsUiState, viewModel: DocsViewModel, inboxMode: 
                 }
             }
         } else {
-            item {
-                HubSection("Today's tasks", "${state.tasks.count { it.status != TaskStatus.Done }} open") {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        state.tasks.filter { it.status != TaskStatus.Done }.take(4).forEach { task ->
-                            CompactHubRow(task.title, task.description.ifBlank { task.assignee.ifBlank { "@owner" } }, Icons.Outlined.Check) {
-                                viewModel.go(Destination.Tasks)
-                            }
-                        }
-                        if (state.tasks.none { it.status != TaskStatus.Done }) {
-                            EmptyActionCard("No open tasks", "Plan the next thing from the task board.", "Add task", Icons.Outlined.TaskAlt, viewModel::createTaskAndOpen)
-                        }
-                    }
-                }
-            }
-            item {
-                HubSection("Continue writing", "Recent notes and documents") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(state.notes.take(8)) { note ->
-                            Surface(
-                                Modifier.width(154.dp).height(126.dp).focusableChrome(
-                                    radiusDp = 18f,
-                                    surface = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
-                                    onClick = { viewModel.select(note) },
-                                ),
-                                shape = RoundedCornerShape(18.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
-                            ) {
-                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                                    Text(note.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(note.document.plainText().trim(), fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(relative(note.updatedAt), fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                HubSection("Workspace activity", "Latest changes") {
-                    ActivityList(state.workspaceActivities.take(5), state, viewModel)
-                }
-            }
+            item { ContinueWorkingSection(state, viewModel) }
+            item { PinnedSection(state, viewModel) }
         }
     }
 }
 
+/**
+ * Small time-of-day greeting with the member's name and the active workspace label. Replaces
+ * the old oversized hero: monochrome text, no surface card, no home glyph. Long names
+ * ellipsize on one line rather than reflowing the greeting into a block.
+ */
 @Composable
-private fun WorkspaceHero(state: DocsUiState, viewModel: DocsViewModel, inboxMode: Boolean) {
+private fun HubGreeting(state: DocsUiState, inboxMode: Boolean) {
+    val greeting = remember { timeOfDayGreeting() }
+    val name = state.settings.syncPublicName
+        .ifBlank { state.settings.syncUserName }
+        .ifBlank { "there" }
     val active = state.workspaces.firstOrNull { it.id == state.settings.activeWorkspaceId }
-    Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f), tonalElevation = 2.dp) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                WorkspaceIconBadge(
-                    icon = active?.icon ?: state.settings.workspaceIcon,
-                    iconKind = active?.iconKind ?: state.settings.workspaceIconKind,
-                    iconUri = active?.iconUri ?: state.settings.workspaceIconUri,
-                    size = 52.dp,
-                    corner = 16.dp,
-                    fontSize = 20.sp,
-                )
-                Column(Modifier.weight(1f)) {
-                    Text(if (inboxMode) "Inbox" else "Good day, ${state.settings.syncPublicName.ifBlank { state.settings.syncUserName.ifBlank { "there" } }}", fontWeight = FontWeight.Black, fontSize = 22.sp)
-                    Text(active?.name ?: state.settings.workspaceName, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                }
-                Icon(Icons.Outlined.Home, null, tint = MaterialTheme.colorScheme.primary)
-            }
-        }
-    }
-}
-
-@Composable
-private fun HubSearchBar(viewModel: DocsViewModel) {
-    GlobalSearchBar(onOpen = { viewModel.go(Destination.Search) }, onNavigationClick = viewModel::toggleSidebar)
-}
-
-@Composable
-private fun HubStats(state: DocsUiState, viewModel: DocsViewModel) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        StatCard("Notes", state.notes.count { it.artifactKind == DocumentArtifactKind.Flow }.toString(), SemanticActionId.AppNotes, Modifier.weight(1f)) { viewModel.openNotesLibrary() }
-        StatCard("Documents", state.notes.count { it.artifactKind == DocumentArtifactKind.Document }.toString(), SemanticActionId.AppDocuments, Modifier.weight(1f)) { viewModel.openDocumentsLibrary() }
-        StatCard("Tasks", state.tasks.size.toString(), SemanticActionId.AppTasks, Modifier.weight(1f)) { viewModel.go(Destination.Tasks) }
-    }
-}
-
-@Composable
-private fun PlanningOverview(state: DocsUiState, viewModel: DocsViewModel) {
-    val openTasks = state.tasks.count { it.status != TaskStatus.Done }
-    val completedTasks = state.tasks.size - openTasks
-    val taskProgress = if (state.tasks.isEmpty()) 0f else completedTasks.toFloat() / state.tasks.size
-    PlanningProgressCard(
-            title = "Task progress",
-            detail = "$completedTasks complete · $openTasks open",
-            progress = taskProgress,
-            action = "Open tasks",
-            onClick = { viewModel.go(Destination.Tasks) },
-            modifier = Modifier.fillMaxWidth(),
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            if (inboxMode) "Inbox" else "$greeting, $name",
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
+        Text(
+            active?.name ?: state.settings.workspaceName,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun timeOfDayGreeting(now: java.time.LocalTime = java.time.LocalTime.now()): String = when (now.hour) {
+    in 5..11 -> "Good morning"
+    in 12..16 -> "Good afternoon"
+    in 17..21 -> "Good evening"
+    else -> "Good night"
+}
+
+/**
+ * One Search capsule spanning the row with the single New control as a separate `+` button
+ * beside it, per the settled Home contract (phone `+` is separate beside the capsule). New
+ * opens the one create menu instead of a quick-capture chip strip.
+ */
+@Composable
+private fun HubSearchAndNewRow(viewModel: DocsViewModel) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        GlobalSearchBar(
+            onOpen = { viewModel.go(Destination.Search) },
+            modifier = Modifier.weight(1f),
+            onNavigationClick = viewModel::toggleSidebar,
+        )
+        HubNewButton(viewModel)
+    }
 }
 
 @Composable
-private fun PlanningProgressCard(
-    title: String,
-    detail: String,
-    progress: Float,
-    action: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.widthIn(min = 248.dp).focusableChrome(
-            radiusDp = 12f,
-            surface = MaterialTheme.colorScheme.surface,
-            onClick = onClick,
-        ),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = with(NorfoldChrome) { restingStroke(MaterialTheme.colorScheme.surface) },
-    ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(detail, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text("${(progress * 100).toInt()}%", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+private fun HubNewButton(viewModel: DocsViewModel) {
+    var expanded by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    Box {
+        Surface(
+            modifier = Modifier
+                // 52 dp keeps the tap target above the 48 dp minimum beside the search capsule.
+                .size(52.dp)
+                .pressScale(interaction)
+                // The one hoisted source keeps the press scale and the focus ring on the same stream.
+                .chromeFocusRing(interaction, radiusDp = 16f, surface = MaterialTheme.colorScheme.primary)
+                .clickable(
+                    interactionSource = interaction,
+                    indication = androidx.compose.material3.ripple(),
+                    onClick = { expanded = true },
+                ),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.primary,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                SemanticAppIcon(SemanticActionId.Insert, "New", tint = MaterialTheme.colorScheme.onPrimary)
             }
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("New note") },
+                leadingIcon = { SemanticAppIcon(SemanticActionId.AppNotes, null) },
+                onClick = { expanded = false; viewModel.createNote() },
             )
-            Text(action, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            DropdownMenuItem(
+                text = { Text("New document") },
+                leadingIcon = { SemanticAppIcon(SemanticActionId.AppDocuments, null) },
+                onClick = { expanded = false; viewModel.createDocument() },
+            )
+            DropdownMenuItem(
+                text = { Text("New task") },
+                leadingIcon = { SemanticAppIcon(SemanticActionId.AppTasks, null) },
+                onClick = { expanded = false; viewModel.createTaskAndOpen() },
+            )
         }
     }
 }
 
+/**
+ * Continue working: up to four real recent notes/documents ordered by last edit. No
+ * fabricated rows — an empty library shows one create affordance rather than filler.
+ */
 @Composable
-private fun StatCard(label: String, value: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    StatCard(label, value, modifier, onClick) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary) }
-}
-
-@Composable
-private fun StatCard(label: String, value: String, icon: SemanticActionId, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    StatCard(label, value, modifier, onClick) { SemanticAppIcon(icon, null, tint = MaterialTheme.colorScheme.primary) }
-}
-
-@Composable
-private fun StatCard(label: String, value: String, modifier: Modifier, onClick: () -> Unit, iconContent: @Composable () -> Unit) {
-    Surface(
-        modifier.focusableChrome(
-            radiusDp = 18f,
-            surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
-            onClick = onClick,
-        ),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
-    ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            iconContent()
-            Text(value, fontWeight = FontWeight.Black, fontSize = 20.sp)
-            Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun ContinueWorkingSection(state: DocsUiState, viewModel: DocsViewModel) {
+    val recent = state.notes
+        .filter { !it.archived }
+        .sortedByDescending { it.updatedAt }
+        .take(4)
+    HubSection("Continue working", "Where you left off") {
+        if (recent.isEmpty()) {
+            EmptyActionCard(
+                title = "Nothing to continue yet",
+                detail = "Your recent notes and documents show up here as you work.",
+                action = "New note",
+                icon = Icons.Outlined.EditNote,
+                onAction = viewModel::createNote,
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                recent.forEach { note ->
+                    val preview = note.document.plainText().trim()
+                    HubItemRow(
+                        title = note.title.ifBlank { "Untitled" },
+                        detail = if (preview.isBlank()) relative(note.updatedAt)
+                        else "${relative(note.updatedAt)} · $preview",
+                        action = if (note.artifactKind == DocumentArtifactKind.Document)
+                            SemanticActionId.AppDocuments else SemanticActionId.AppNotes,
+                    ) { viewModel.select(note) }
+                }
+            }
         }
     }
 }
 
+/**
+ * Pinned is the Home-local label and reads `note.pinned` only — no automatic merge with the
+ * global Favorites/star set. Nothing appears until the member pins something.
+ */
 @Composable
-private fun QuickCaptureRow(viewModel: DocsViewModel) {
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        QuickChip("Note", SemanticActionId.AppNotes, viewModel::createNote)
-        QuickChip("Document", SemanticActionId.AppDocuments, viewModel::createDocument)
-        QuickChip("Task", SemanticActionId.AppTasks, viewModel::createTaskAndOpen)
-        QuickChip("Calendar", SemanticActionId.AppToday) { viewModel.openTaskCalendar() }
-        QuickChip("Chat", SemanticActionId.AppChat) { viewModel.openChatInbox() }
-    }
-}
-
-@Composable
-private fun QuickChip(label: String, icon: ImageVector, onClick: () -> Unit) {
-    Surface(
-        Modifier.focusablePill(
-            surface = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-            onClick = onClick,
-        ),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-    ) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-            Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+private fun PinnedSection(state: DocsUiState, viewModel: DocsViewModel) {
+    val pinned = state.notes
+        .filter { it.pinned && !it.archived }
+        .sortedByDescending { it.updatedAt }
+    HubSection("Pinned", if (pinned.isEmpty()) "Nothing pinned yet" else "${pinned.size} pinned") {
+        if (pinned.isEmpty()) {
+            EmptyActionCard(
+                title = "No pinned items",
+                detail = "Pin a note or document to keep it one tap away here.",
+                action = "New note",
+                icon = Icons.Outlined.EditNote,
+                onAction = viewModel::createNote,
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                pinned.take(6).forEach { note ->
+                    HubItemRow(
+                        title = note.title.ifBlank { "Untitled" },
+                        detail = relative(note.updatedAt),
+                        action = if (note.artifactKind == DocumentArtifactKind.Document)
+                            SemanticActionId.AppDocuments else SemanticActionId.AppNotes,
+                    ) { viewModel.select(note) }
+                }
+            }
         }
     }
 }
 
+/** Home list row whose leading glyph renders through the semantic icon system (Lucide by default). */
 @Composable
-private fun QuickChip(label: String, icon: SemanticActionId, onClick: () -> Unit) {
+private fun HubItemRow(title: String, detail: String, action: SemanticActionId, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
     Surface(
-        Modifier.focusablePill(
-            surface = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-            onClick = onClick,
-        ),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+        Modifier
+            .fillMaxWidth()
+            .pressScale(interaction)
+            .clickable(interactionSource = interaction, indication = androidx.compose.material3.ripple(), onClick = onClick)
+            .chromeFocusRing(interaction, radiusDp = 16f, surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f)),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f),
     ) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            SemanticAppIcon(icon, null, Modifier.size(16.dp), MaterialTheme.colorScheme.primary)
-            Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SemanticAppIcon(action, null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(detail, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
@@ -380,34 +351,6 @@ private fun EmptyActionCard(title: String, detail: String, action: String, icon:
         detail = detail,
         action = { Button(onClick = onAction) { Text(action) } },
     )
-}
-
-@Composable
-private fun ActivityList(items: List<WorkspaceActivity>, state: DocsUiState, viewModel: DocsViewModel) {
-    if (items.isEmpty()) {
-        EmptyActionCard(
-            "No activity yet",
-            "Changes across the workspace will appear here.",
-            "Rebuild index",
-            Icons.Outlined.Star,
-            viewModel::rebuildWorkspaceIndex,
-        )
-    } else {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items.forEach { activity ->
-                CompactHubRow(
-                    activity.title,
-                    "${activity.actor} · ${relative(activity.createdAt)} · ${activity.detail}",
-                    Icons.Outlined.Star,
-                ) {
-                    val obj = activity.objectId?.let { objectId ->
-                        state.workspaceObjects.firstOrNull { it.id == objectId }
-                    }
-                    if (obj != null) viewModel.openWorkspaceObject(obj) else viewModel.go(Destination.Activity)
-                }
-            }
-        }
-    }
 }
 
 @Composable
