@@ -2,6 +2,9 @@ package com.norfold.app.ui.editor.document
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -241,6 +244,11 @@ fun DocumentHostScreen(
             }
         }
     }
+    // Editor Lab experiment (default off): a floating layers panel over the active page's objects, front-to-
+    // back. It reads the live scene and drives the shared selection plus the existing bring-forward /
+    // send-backward commands, so ordering here can never diverge from the canvas or the keyboard chords.
+    val layersPanelEnabled = EditorLab.isEnabled(EditorLabFlag.DOCUMENT_LAYERS_PANEL)
+    var layersPanelOpen by remember { mutableStateOf(false) }
     val guideContext = GuideContext(
         host = GuideHost.DOCUMENT,
         capabilities = presenter.runtime.scope.commandContext(CommandSurface.DOCK).offeredCapabilities,
@@ -435,6 +443,35 @@ fun DocumentHostScreen(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().padding(16.dp),
             )
         }
+        // Editor Lab experiment (default off): a live X/Y, size and angle readout while an object is being
+        // dragged, resized or rotated. It reads the in-flight preview geometry the canvas is already drawing.
+        if (EditorLab.isEnabled(EditorLabFlag.DOCUMENT_LIVE_TRANSFORM_READOUT)) {
+            DocumentTransformReadout(
+                manipulation = state.manipulation,
+                primaryObjectId = state.primaryObjectId,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp, start = 12.dp, end = 12.dp),
+            )
+        }
+        if (layersPanelEnabled) {
+            val activePage = state.pages.firstOrNull { it.id == state.activePageId } ?: state.pages.firstOrNull()
+            val layers = activePage?.objectsFrontToBack().orEmpty()
+            if (layersPanelOpen) {
+                DocumentLayersPanel(
+                    layers = layers,
+                    selectedIds = state.selectedObjectIds.toSet(),
+                    onSelect = { id -> presenter.act { selectObjects(listOf(id)) } },
+                    onReorder = { commandId -> presenter.act { invoke(commandId, CommandSurface.DOCK) } },
+                    onClose = { layersPanelOpen = false },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 64.dp, end = 12.dp),
+                )
+            } else {
+                DocumentLayersLauncher(
+                    count = layers.size,
+                    onOpen = { layersPanelOpen = true },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 64.dp, end = 12.dp),
+                )
+            }
+        }
     }
 
     when (state.activeSurfaceId) {
@@ -572,6 +609,201 @@ fun DocumentHostScreen(
     }
     HistoryHostLayer(history)
     RecoveryHostLayer(recovery)
+}
+
+/**
+ * Editor Lab experiment (default off): the live transform readout.
+ *
+ * It reads the in-flight [ActiveManipulation.preview] — the same uncommitted [SceneGeometry] the canvas is
+ * drawing this frame — so the numbers are exactly what the object becomes when the gesture ends, never a
+ * second computation that could disagree with the render. Values are in points, matching [SceneGeometry]'s
+ * own unit; the field the active gesture is changing is emphasised. Purely additive: it observes manipulation
+ * state and draws nothing when no gesture is in flight.
+ */
+@Composable
+private fun DocumentTransformReadout(
+    manipulation: ActiveManipulation?,
+    primaryObjectId: String?,
+    modifier: Modifier = Modifier,
+) {
+    val geometry = manipulation?.let { m ->
+        primaryObjectId?.let { m.previewFor(it) } ?: m.preview.values.firstOrNull()
+    } ?: return
+    val kind = manipulation.kind
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.inverseSurface,
+        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DocumentReadoutField("X", geometry.x.roundToInt().toString(), kind == ActiveManipulation.Kind.MOVE)
+            DocumentReadoutField("Y", geometry.y.roundToInt().toString(), kind == ActiveManipulation.Kind.MOVE)
+            DocumentReadoutField("W", geometry.width.roundToInt().toString(), kind == ActiveManipulation.Kind.RESIZE)
+            DocumentReadoutField("H", geometry.height.roundToInt().toString(), kind == ActiveManipulation.Kind.RESIZE)
+            DocumentReadoutField("∠", "${geometry.rotation.roundToInt()}°", kind == ActiveManipulation.Kind.ROTATE)
+        }
+    }
+}
+
+@Composable
+private fun DocumentReadoutField(label: String, value: String, emphasised: Boolean) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = LocalContentColor.current.copy(alpha = 0.6f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Medium,
+        )
+    }
+}
+
+/**
+ * Editor Lab experiment (default off): the collapsed launcher for the layers panel — a small pill showing the
+ * object count on the active page. Tapping it opens [DocumentLayersPanel].
+ */
+@Composable
+private fun DocumentLayersLauncher(count: Int, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp,
+        onClick = onOpen,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Layers", style = MaterialTheme.typography.labelLarge)
+            Text(
+                count.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                color = LocalContentColor.current.copy(alpha = 0.6f),
+            )
+        }
+    }
+}
+
+/**
+ * Editor Lab experiment (default off): the layers panel.
+ *
+ * The list is the active page's objects front-to-back — the same order hit-testing uses — and a row tap routes
+ * through the shared [DocumentHostRuntime.selectObjects], so the panel's idea of "selected" is the canvas's.
+ * The reorder buttons invoke the existing `document.object.*` z-order commands on that selection, meaning the
+ * panel adds no ordering logic of its own; it is one more presentation of commands the keyboard already has.
+ */
+@Composable
+private fun DocumentLayersPanel(
+    layers: List<SceneObject>,
+    selectedIds: Set<String>,
+    onSelect: (String) -> Unit,
+    onReorder: (String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.width(268.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 3.dp,
+        shadowElevation = 8.dp,
+    ) {
+        Column(Modifier.padding(vertical = 6.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Layers", style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = onClose) { Text("Done") }
+            }
+            HorizontalDivider()
+            if (layers.isEmpty()) {
+                Text(
+                    "No objects on this page yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalContentColor.current.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(16.dp),
+                )
+            } else {
+                Column(
+                    Modifier
+                        .heightIn(max = 280.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    layers.forEach { obj ->
+                        val selected = obj.id in selectedIds
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(obj.id) }
+                                .then(if (selected) Modifier.background(MaterialTheme.colorScheme.secondaryContainer) else Modifier)
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                obj.kind.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = LocalContentColor.current.copy(alpha = 0.55f),
+                                maxLines = 1,
+                                modifier = Modifier.width(58.dp),
+                            )
+                            Text(
+                                obj.displayName(),
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (obj.lock != SceneLock.None) {
+                                Text(
+                                    "locked",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LocalContentColor.current.copy(alpha = 0.55f),
+                                )
+                            } else if (!obj.visible) {
+                                Text(
+                                    "hidden",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LocalContentColor.current.copy(alpha = 0.55f),
+                                )
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider()
+                val hasSelection = selectedIds.isNotEmpty()
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { onReorder(DocumentIds.BRING_TO_FRONT) }, enabled = hasSelection, modifier = Modifier.weight(1f)) { Text("Front") }
+                    TextButton(onClick = { onReorder(DocumentIds.BRING_FORWARD) }, enabled = hasSelection, modifier = Modifier.weight(1f)) { Text("Up") }
+                    TextButton(onClick = { onReorder(DocumentIds.SEND_BACKWARD) }, enabled = hasSelection, modifier = Modifier.weight(1f)) { Text("Down") }
+                    TextButton(onClick = { onReorder(DocumentIds.SEND_TO_BACK) }, enabled = hasSelection, modifier = Modifier.weight(1f)) { Text("Back") }
+                }
+            }
+        }
+    }
 }
 
 // ── Page stack: virtualized composition from real geometry ──────────────────────────────────────────
