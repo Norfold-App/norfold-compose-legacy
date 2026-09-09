@@ -244,7 +244,10 @@ object NorfoldChrome {
      * only**: two quadrants paint `errorContainer` and `tertiaryContainer` at 50% and their subtitles land at
      * **4.3494:1** and **4.3053:1**, while the one quadrant filled with a theme-owned `surfaceVariant` passes
      * at 4.6355:1 — which is the tell. The ink is correctly paired with the surfaces Norfold chose and fails
-     * only on the containers it inherited.
+     * only on the containers it had inherited at the time. The monochrome pass has since de-hued
+     * `secondaryContainer` and `tertiaryContainer` to luminance-matched neutral greys: every opaque-fill ratio
+     * quoted here is unchanged (contrast tracks luminance), and `legibleInk` re-pairs the ink to whatever the
+     * container paints regardless.
      *
      * [ChromeGeometry.BODY_TEXT_RATIO] rather than the chrome ratios, because this is text: 1.4.3 asks 4.5:1
      * of anything under 18 pt, and every one of the six sites is 11–13 sp. Only lightness moves, so the ink

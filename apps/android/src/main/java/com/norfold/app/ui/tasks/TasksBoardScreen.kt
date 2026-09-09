@@ -2221,7 +2221,9 @@ private fun MatrixQuadrant(
     // line — so they share one derived ink rather than three identical calls.
     //
     // Two of the four quadrants needed it, and **only in light mode**. "Do first" paints `errorContainer` and
-    // "Delegate" `tertiaryContainer`, both Material baseline colours the theme never set, and at 50% alpha
+    // "Delegate" `tertiaryContainer` — Material baselines at the time this was measured (the monochrome pass has
+    // since de-hued `tertiaryContainer` to a luminance-matched grey; `errorContainer` stays the baseline semantic
+    // hue, and `legibleInk` re-pairs the ink either way). At 50% alpha
     // over the light page `onSurfaceVariant` lands on them at 4.3494:1 and 4.3053:1 — while the dark baseline
     // containers are dark enough that the same ink clears at 5.5662 and 5.4587. "Later" fills itself with the
     // theme's own `surfaceVariant` and passes in both, 4.6355:1 light — which is the tell: the ink is

@@ -73,7 +73,8 @@ private fun Color.mix(other: Color, t: Float): Color = lerp(this, other, t)
 private fun onColorFor(bg: Color): Color = if (bg.luminance() > 0.5f) LightInk else Color.White
 
 /**
- * Why both schemes set the five container tokens, `surfaceBright` and `surfaceDim` explicitly.
+ * Why both schemes set the five container tokens, `surfaceBright`/`surfaceDim`, the selection/emphasis
+ * containers (`secondaryContainer`, `tertiaryContainer`) and the inverse roles explicitly.
  *
  * A `ColorScheme` these were left out of does not go without them — it inherits Material's baseline,
  * and Material's baseline is lavender (light `surfaceContainer` `#F3EDF7` reads hue 276°). That hue
@@ -133,6 +134,19 @@ private fun lightScheme(accent: Color) = lightColorScheme(
     surfaceDim = Color(0xFFF1F1F1),
     primaryContainer = accent.mix(Color.White, 0.88f),
     onPrimaryContainer = accent.mix(LightInk, 0.30f),
+    // Selection/emphasis containers (`secondaryContainer`, `tertiaryContainer`) and the inverse
+    // (snackbar) roles: de-hued to the luminance-matched grey of Material's baseline, so every contrast
+    // ratio these carried is preserved exactly while the lavender/pink tint is gone. `secondaryContainer`
+    // `#E2E2E2` == baseline `#E8DEF8`'s luminance (0.762); `tertiaryContainer` == baseline `#FFD8E4`'s
+    // (0.760). The accessibility proof in ChromeGeometryTest that pins the popup-row selection to this
+    // value stays valid verbatim, because WCAG contrast depends only on luminance.
+    secondaryContainer = Color(0xFFE2E2E2),
+    onSecondaryContainer = Color(0xFF1C1C1C),
+    tertiaryContainer = Color(0xFFE2E2E2),
+    onTertiaryContainer = Color(0xFF1C1C1C),
+    inverseSurface = Color(0xFF303030),
+    inverseOnSurface = Color(0xFFF1F1F1),
+    inversePrimary = Color(0xFFC6C6C6),
     error = Color(0xFFEF4D5D),
 )
 
@@ -168,6 +182,16 @@ private fun darkScheme(accent: Color): androidx.compose.material3.ColorScheme {
         surfaceDim = Color(0xFF000000),
         primaryContainer = accent.mix(surface, 0.72f),
         onPrimaryContainer = accent.mix(Color.White, 0.62f),
+        // See the light scheme: de-hued selection/emphasis + inverse roles, luminance-matched to
+        // Material's dark baseline. `secondaryContainer` `#474747` == baseline `#4A4458`'s luminance
+        // (0.063); this is the value the dark editor status ribbon and every selected row now paint.
+        secondaryContainer = Color(0xFF474747),
+        onSecondaryContainer = Color(0xFFE2E2E2),
+        tertiaryContainer = Color(0xFF474747),
+        onTertiaryContainer = Color(0xFFE2E2E2),
+        inverseSurface = Color(0xFFE2E2E2),
+        inverseOnSurface = Color(0xFF303030),
+        inversePrimary = Color(0xFF5E5E5E),
         error = Color(0xFFFF6471),
     )
 }

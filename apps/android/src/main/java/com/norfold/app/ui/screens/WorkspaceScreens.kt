@@ -3728,7 +3728,8 @@ private fun ChatBubble(
                             // muted single tick = sent, muted double tick = delivered, and a bright
                             // blue double tick = read. The read colour is a fixed, high-contrast
                             // value (not a theme token) so it stays visible on any accent bubble —
-                            // the old inversePrimary tint was undefined in our scheme and vanished.
+                            // the inversePrimary tint this once used is now a neutral grey in our
+                            // scheme, which is deliberately not the read-blue this needs.
                             val muted = textColor.copy(alpha = 0.65f)
                             when (chat.receiptStatus) {
                                 null -> Icon(

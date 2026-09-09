@@ -1434,10 +1434,14 @@ class ChromeGeometryTest {
      * make the finding un-reviewable — a reader could no longer check the figures in
      * [com.norfold.app.ui.LocalChromeContainer]'s documentation against anything.
      *
-     * `secondaryContainer` is still live: the theme derived the five `surfaceContainer*` tokens and left this one
-     * on Material's baseline, so the popup row genuinely paints `#E8DEF8` today. It sits here rather than beside
-     * the shipped values because it is the odd one out, and because pairing it with the historical two is what the
-     * `popup row selected` population needs.
+     * `secondaryContainer` `#E8DEF8` is the Material baseline the popup row inherited when this finding was
+     * discovered — the theme had derived the five `surfaceContainer*` tokens but not yet this role. The monochrome
+     * de-hue has since set `secondaryContainer` explicitly to the **luminance-matched** neutral grey `#E2E2E2`
+     * (see [com.norfold.app.ui.NorfoldTheme]), so the popup row paints that today. The constant is retained here at
+     * its discovered value for the same reason as `legacyContainerHigh`/`legacyContainerLow` — so the arithmetic
+     * finding stays reviewable against the numbers it was written up on. Because the de-hue is luminance-matched,
+     * the opaque-fill ratios in `inkCases` are unchanged; only the 55%-composited chrome figure would move, and it
+     * is deliberately held here on the discovered palette.
      */
     private val legacyContainerHigh = 0xECE6F0
     private val legacyContainerLow = 0xF7F2FA
@@ -1491,10 +1495,12 @@ class ChromeGeometryTest {
             //    NorfoldTheme never sets surfaceTint. Two corrections stacked, which is why the popup card
             //    resolves its container through EditorChromeColors.elevated rather than naming a token.
             //
-            //    This population is identical in both ramps: `secondaryContainer` is still Material's baseline and
-            //    the card underneath is `surface`, so nothing the ramp changed reaches it. Keeping it in both runs
-            //    rather than hoisting it out is deliberate — it is the control that shows the other three moved
-            //    because their container moved, and not because the model changed.
+            //    This population is identical in both ramps: it is measured on the discovered-on baseline
+            //    `secondaryContainer` (the theme has since de-hued the live role to a luminance-matched grey; the
+            //    constant is held fixed here as the reference), and the card underneath is `surface`, so nothing
+            //    the container ramp changed reaches it. Keeping it in both runs rather than hoisting it out is
+            //    deliberate — it is the control that shows the other three moved because their container moved,
+            //    and not because the model changed.
             val card = tint.withAlphaFraction(ChromeGeometry.tonalTintAlpha(3f)).compositedOver(ColorValue.WHITE)
             val fillOnCard = hex(secondaryContainer).withAlphaFraction(0.55f).compositedOver(card)
             val fillOnPage = hex(secondaryContainer).withAlphaFraction(0.55f).compositedOver(page)
@@ -1611,10 +1617,12 @@ class ChromeGeometryTest {
      * container past the page would change these counts with no other symptom, and an exact tally is what makes
      * that regression visible.
      *
-     * The popup row is the control: its container is `secondaryContainer` over `surface`, neither of which the
-     * ramp touched, so its figure is bit-identical to the baseline run — the same 3 of 10 at the same 2.8844:1
-     * floor. That identity is what rules out the alternative explanation — that the model, rather than the paint,
-     * is what moved.
+     * The popup row is the control: it is measured on the discovered-on baseline `secondaryContainer` over
+     * `surface`, neither of which the *container* ramp touched (the monochrome de-hue changed the live
+     * `secondaryContainer` role separately, to a luminance-matched grey; this test holds the baseline value fixed
+     * as the reference), so its figure is bit-identical to the baseline run — the same 3 of 10 at the same
+     * 2.8844:1 floor. That identity is what rules out the alternative explanation — that the model, rather than
+     * the paint, is what moved.
      *
      * None of these is a defect left standing: every one of these hosts provides
      * [com.norfold.app.ui.LocalChromeContainer], so nothing in the shipped tree solves against the page. What
@@ -3665,10 +3673,10 @@ class ChromeGeometryTest {
         return (candidates.firstOrNull(File::isFile) ?: error("NorfoldChrome.kt not found")).readText()
     }
 
-    // ── Text on a fill the theme does not own ────────────────────────────────────────────────────────
+    // ── Text on the Material baselines these fills were measured on ────────────────────────────────────
 
     /**
-     * The five Material container tokens `NorfoldTheme` never sets, recovered from the shipped artifact.
+     * The five Material container tokens these fills were measured on, recovered from the shipped artifact.
      *
      * Read out of `material3` 1.4.0's `PaletteTokens` bytecode rather than transcribed from a specification,
      * because the specification's swatch names and the compiled constants are two different things and only one
@@ -3676,10 +3684,14 @@ class ChromeGeometryTest {
      * asymmetry the tests below turn on: the light containers are pale enough to fail against Norfold's own ink
      * and the dark ones are dark enough to clear it.
      *
-     * These sit apart from [lightSurfaces] and [darkSurfaces] because those are Norfold's, derived by the theme,
-     * and these are inherited. Task #67 derived the `surfaceContainer*` ramp and stopped there; every value here
-     * is one the theme still leaves on Material's baseline, which is why text drawn on them is measured against
-     * a hue the palette never chose.
+     * These sit apart from [lightSurfaces] and [darkSurfaces] because those are Norfold's own. Task #67 derived
+     * the `surfaceContainer*` ramp and stopped there; the monochrome pass has since also de-hued
+     * `secondaryContainer` and `tertiaryContainer` (light and dark) to luminance-matched neutral greys, so those
+     * roles are now theme-owned — `errorContainer` alone still rests on Material's baseline. The values here are
+     * retained at their discovered baseline hues so the figures below stay reviewable against what the finding was
+     * written up on; because the de-hue is luminance-matched, the opaque selected-row ratios are unchanged, while
+     * the 50%-composited matrix quadrant's shipped figure shifts slightly and `legibleInk` re-pairs its ink at
+     * runtime.
      */
     private val baselineSecondaryContainerDark = 0x4A4458
     private val baselineErrorContainer = 0xF9DEDC
@@ -3734,9 +3746,11 @@ class ChromeGeometryTest {
         val selectedLight = hex(secondaryContainer)
         val selectedDark = hex(baselineSecondaryContainerDark)
 
-        // The four conditional rows, selected. All four paint the same baseline `secondaryContainer`, so they
-        // measure identically — listed separately anyway because they are four independent call sites and a fix
-        // to one is not a fix to the others.
+        // The four conditional rows, selected. All four paint the same `secondaryContainer`, so they measure
+        // identically — listed separately anyway because they are four independent call sites and a fix to one is
+        // not a fix to the others. (The theme has since de-hued this role to a luminance-matched grey; because the
+        // swap is luminance-matched and the fill is opaque, these ratios are unchanged, so the discovered-on
+        // constant is kept.)
         for (row in listOf("history row", "restore point row", "device profile row", "flow rail disabled row")) {
             add(InkCase("$row selected light", lightInk, selectedLight, themeOwned = false))
             add(InkCase("$row selected dark", darkInk, selectedDark, themeOwned = false))
