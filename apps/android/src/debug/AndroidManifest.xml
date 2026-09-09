@@ -11,5 +11,10 @@
             android:exported="true"
             android:label="Norfold Crashlytics Test"
             android:theme="@style/Theme.Norfold" />
+        <activity
+            android:name=".qa.EditorLabActivity"
+            android:exported="true"
+            android:label="Norfold Editor Lab"
+            android:theme="@style/Theme.Norfold" />
     </application>
 </manifest>
