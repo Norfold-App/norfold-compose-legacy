@@ -34,6 +34,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -89,6 +94,9 @@ import com.norfold.app.domain.SceneLock
 import com.norfold.app.domain.SceneObject
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.document.ActiveManipulation
+import com.norfold.app.editor.document.DocumentIds
+import com.norfold.app.editor.lab.EditorLabFlag
+import com.norfold.app.ui.editor.lab.EditorLab
 import com.norfold.app.editor.document.DocumentBackResult
 import com.norfold.app.editor.document.DocumentCommandItem
 import com.norfold.app.editor.document.DocumentHostUiState
@@ -144,6 +152,7 @@ import com.norfold.app.ui.editor.history.rememberHistoryUiController
 import com.norfold.app.ui.editor.recovery.RecoveryEntryButton
 import com.norfold.app.ui.editor.recovery.RecoveryHostLayer
 import com.norfold.app.ui.editor.recovery.rememberRecoveryUiController
+import kotlinx.coroutines.launch
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 
@@ -212,6 +221,26 @@ fun DocumentHostScreen(
     val guide = rememberGuideUiController(presenter.runtime.guide)
     val history = rememberHistoryUiController(presenter.runtime.history)
     val recovery = rememberRecoveryUiController(presenter.runtime.recoveryBrowser) { presenter.act { } }
+    // Editor Lab experiment (default off): a transient "deleted — Undo" toast after a destructive command,
+    // mirroring the Tasks board's swipe pattern. The Undo action reuses the exact reversal the top bar exposes,
+    // so it can never diverge from it. When the flag is off, nothing below observes the snackbar state.
+    val undoToastEnabled = EditorLab.isEnabled(EditorLabFlag.EDITOR_UNDO_TOAST)
+    val undoSnackbar = remember { SnackbarHostState() }
+    val undoScope = rememberCoroutineScope()
+    fun raiseUndoToast(commandId: String, result: com.norfold.app.editor.command.CommandResult) {
+        val label = when (commandId) {
+            DocumentIds.DELETE -> "Object deleted"
+            DocumentIds.PAGE_DELETE -> "Page deleted"
+            else -> return
+        }
+        if (result !is com.norfold.app.editor.command.CommandResult.Success) return
+        undoScope.launch {
+            val outcome = undoSnackbar.showSnackbar(label, actionLabel = "Undo", duration = SnackbarDuration.Short)
+            if (outcome == SnackbarResult.ActionPerformed) {
+                if (history.runtime != null) presenter.act { history.undo() } else presenter.act { undo() }
+            }
+        }
+    }
     val guideContext = GuideContext(
         host = GuideHost.DOCUMENT,
         capabilities = presenter.runtime.scope.commandContext(CommandSurface.DOCK).offeredCapabilities,
@@ -268,8 +297,9 @@ fun DocumentHostScreen(
     var chromeTextFocus by remember { mutableStateOf(false) }
     val textEntryActive = chromeTextFocus || state.editingObjectId != null
 
+    Box(modifier.fillMaxSize()) {
     Column(
-        modifier
+        Modifier
             .fillMaxSize()
             // The root Scaffold passes WindowInsets(0,0,0,0) and only pads the status bar, so every screen
             // owns its own bottom edge. Without this the keyboard covers the docks and the inspector — the
@@ -369,7 +399,8 @@ fun DocumentHostScreen(
             if (!item.enabled) {
                 notice = item.disabledReason ?: "'${item.label}' is not available here"
             } else {
-                presenter.act { invoke(item.id, CommandSurface.DOCK) }
+                val result = presenter.act { invoke(item.id, CommandSurface.DOCK) }
+                if (undoToastEnabled) raiseUndoToast(item.id, result)
             }
         }
         val invokeStyleItem: (String) -> Unit = { id ->
@@ -398,6 +429,13 @@ fun DocumentHostScreen(
             }
         }
     }
+        if (undoToastEnabled) {
+            SnackbarHost(
+                undoSnackbar,
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().padding(16.dp),
+            )
+        }
+    }
 
     when (state.activeSurfaceId) {
         DocumentSurfaces.OBJECT_INSPECTOR -> DocumentObjectInspectorSheet(
@@ -413,9 +451,15 @@ fun DocumentHostScreen(
             // and does not make it clickable, so an unavailable action explains itself in place rather than
             // through a notice the user has to trigger.
             onInvoke = { item ->
-                presenter.act {
-                    invoke(item.id, CommandSurface.DOCK)
-                    dismiss(DismissTrigger.COMMAND_EXECUTED)
+                if (undoToastEnabled) {
+                    val result = presenter.act { invoke(item.id, CommandSurface.DOCK) }
+                    presenter.act { dismiss(DismissTrigger.COMMAND_EXECUTED) }
+                    raiseUndoToast(item.id, result)
+                } else {
+                    presenter.act {
+                        invoke(item.id, CommandSurface.DOCK)
+                        dismiss(DismissTrigger.COMMAND_EXECUTED)
+                    }
                 }
             },
         )

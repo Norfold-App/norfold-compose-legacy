@@ -69,6 +69,10 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -82,6 +86,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -119,6 +124,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import com.norfold.app.domain.DocumentBlock
 import com.norfold.app.domain.ChartBlock
 import com.norfold.app.domain.ImageBlock
@@ -126,6 +132,8 @@ import com.norfold.app.domain.ShapeBlock
 import com.norfold.app.domain.DropTarget
 import com.norfold.app.domain.deriveFlowObject
 import com.norfold.app.editor.command.CommandSurface
+import com.norfold.app.editor.lab.EditorLabFlag
+import com.norfold.app.ui.editor.lab.EditorLab
 import com.norfold.app.editor.flow.FlowCommandItem
 import com.norfold.app.editor.flow.FlowDragGeometry
 import com.norfold.app.editor.flow.FlowDropPlacement
@@ -313,6 +321,22 @@ fun FlowHostScreen(
     val guide = rememberGuideUiController(presenter.runtime.guide)
     val history = rememberHistoryUiController(presenter.runtime.history)
     val recovery = rememberRecoveryUiController(presenter.runtime.recoveryBrowser) { presenter.act { } }
+    // Editor Lab experiment (default off): a transient "block deleted — Undo" toast after a destructive
+    // command, mirroring the Tasks board's swipe pattern. The Undo action reuses the exact reversal the top
+    // bar exposes, so it can never diverge from it. When the flag is off, nothing below observes the state.
+    val undoToastEnabled = EditorLab.isEnabled(EditorLabFlag.EDITOR_UNDO_TOAST)
+    val undoSnackbar = remember { SnackbarHostState() }
+    val undoScope = rememberCoroutineScope()
+    fun raiseUndoToast(commandId: String, result: com.norfold.app.editor.command.CommandResult) {
+        if (commandId != FlowIds.DELETE) return
+        if (result !is com.norfold.app.editor.command.CommandResult.Success) return
+        undoScope.launch {
+            val outcome = undoSnackbar.showSnackbar("Block deleted", actionLabel = "Undo", duration = SnackbarDuration.Short)
+            if (outcome == SnackbarResult.ActionPerformed) {
+                if (history.runtime != null) presenter.act { history.undo() } else presenter.act { undo() }
+            }
+        }
+    }
     val guideContext = GuideContext(
         host = GuideHost.FLOW,
         capabilities = presenter.runtime.scope.commandContext(CommandSurface.DOCK).offeredCapabilities,
@@ -564,6 +588,9 @@ fun FlowHostScreen(
                 .onSizeChanged { lowerSurfaceHeight = it.height },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            if (undoToastEnabled) {
+                SnackbarHost(undoSnackbar, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+            }
             state.relationshipReview.connectMode?.let {
                 FlowNotice("Connect mode · choose an eligible block target") {
                     presenter.act { relationshipReview.exitConnectMode() }
@@ -595,7 +622,15 @@ fun FlowHostScreen(
             if (state.interactionMode != com.norfold.app.editor.flow.FlowInteractionMode.READING || state.formFactor.keyboardOpen) {
                 FlowContextDock(
                     state = state,
-                    onCommand = { item -> presenter.invokeItem(item, CommandSurface.DOCK) { notice = it } },
+                    onCommand = { item ->
+                        if (!item.enabled) {
+                            notice = item.disabledReason ?: "'${item.label}' is not available here"
+                        } else {
+                            val result = presenter.act { invoke(item.id, CommandSurface.DOCK) }
+                            if (result is com.norfold.app.editor.command.CommandResult.Failure) notice = result.reason
+                            if (undoToastEnabled) raiseUndoToast(item.id, result)
+                        }
+                    },
                     onOpenInsert = { presenter.act { openInsertPalette(state.primaryId) } },
                     onOpenConvert = {
                         presenter.act { openSurface(FlowSurfaces.CONVERT_MENU, SurfaceClass.COMMAND_MENU) }

@@ -10,6 +10,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider
 import com.norfold.app.ui.NorfoldRoot
 import com.norfold.app.ui.DocsViewModel
+import com.norfold.app.ui.editor.lab.EditorLab
 import com.norfold.app.cloud.NorfoldSupabase
 import io.github.jan.supabase.auth.handleDeeplinks
 
@@ -26,6 +27,10 @@ class MainActivity : FragmentActivity() {
         docsViewModel.handleTelegramReturn(intent)
         docsViewModel.handleCalendarReturn(intent)
         docsViewModel.handleNotificationIntent(intent)
+        // Debug-only Editor Lab overrides start all-off; a release build never writes any, so this resolves to
+        // the shipped configuration. Hydrating before setContent means every editor composition sees the same
+        // values for the whole session.
+        EditorLab.ensureHydrated(this)
         setContent { NorfoldRoot(docsViewModel) }
     }
 
