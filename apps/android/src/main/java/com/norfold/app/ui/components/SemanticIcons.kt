@@ -2,14 +2,23 @@ package com.norfold.app.ui.components
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.CallSplit
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentDecrease
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentIncrease
 import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.automirrored.outlined.Redo
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.CallSplit
+import androidx.compose.material.icons.automirrored.rounded.FormatIndentDecrease
+import androidx.compose.material.icons.automirrored.rounded.FormatIndentIncrease
 import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.automirrored.sharp.ArrowBack
+import androidx.compose.material.icons.automirrored.sharp.CallSplit
+import androidx.compose.material.icons.automirrored.sharp.FormatIndentDecrease
+import androidx.compose.material.icons.automirrored.sharp.FormatIndentIncrease
 import androidx.compose.material.icons.automirrored.sharp.Label
 import androidx.compose.material.icons.automirrored.sharp.Redo
 import androidx.compose.material.icons.automirrored.sharp.Undo
@@ -206,6 +215,24 @@ private fun roundedVector(action: SemanticActionId): ImageVector = when (action)
     SemanticActionId.Shapes -> Icons.Rounded.Category
     SemanticActionId.Arrange -> Icons.Rounded.Layers
     SemanticActionId.Review -> Icons.Rounded.RateReview
+    SemanticActionId.Strikethrough -> Icons.Rounded.StrikethroughS
+    SemanticActionId.Code -> Icons.Rounded.Code
+    SemanticActionId.Link -> Icons.Rounded.Link
+    SemanticActionId.Color -> Icons.Rounded.FormatColorText
+    SemanticActionId.Style -> Icons.Rounded.Palette
+    SemanticActionId.Edit -> Icons.Rounded.Edit
+    SemanticActionId.Move -> Icons.Rounded.OpenWith
+    SemanticActionId.MoveUp -> Icons.Rounded.ArrowUpward
+    SemanticActionId.MoveDown -> Icons.Rounded.ArrowDownward
+    SemanticActionId.NestIn -> Icons.AutoMirrored.Rounded.FormatIndentIncrease
+    SemanticActionId.NestOut -> Icons.AutoMirrored.Rounded.FormatIndentDecrease
+    SemanticActionId.Split -> Icons.AutoMirrored.Rounded.CallSplit
+    SemanticActionId.Merge -> Icons.Rounded.Merge
+    SemanticActionId.WrapColumns -> Icons.Rounded.ViewColumn
+    SemanticActionId.Unwrap -> Icons.Rounded.ViewStream
+    SemanticActionId.Duplicate -> Icons.Rounded.ContentCopy
+    SemanticActionId.Delete -> Icons.Rounded.Delete
+    SemanticActionId.Cancel -> Icons.Rounded.Close
     SemanticActionId.More -> Icons.Rounded.MoreHoriz
 }
 
@@ -250,6 +277,24 @@ private fun materialVector(action: SemanticActionId): ImageVector = when (action
     SemanticActionId.Shapes -> Icons.Outlined.Category
     SemanticActionId.Arrange -> Icons.Outlined.Layers
     SemanticActionId.Review -> Icons.Outlined.RateReview
+    SemanticActionId.Strikethrough -> Icons.Outlined.StrikethroughS
+    SemanticActionId.Code -> Icons.Outlined.Code
+    SemanticActionId.Link -> Icons.Outlined.Link
+    SemanticActionId.Color -> Icons.Outlined.FormatColorText
+    SemanticActionId.Style -> Icons.Outlined.Palette
+    SemanticActionId.Edit -> Icons.Outlined.Edit
+    SemanticActionId.Move -> Icons.Outlined.OpenWith
+    SemanticActionId.MoveUp -> Icons.Outlined.ArrowUpward
+    SemanticActionId.MoveDown -> Icons.Outlined.ArrowDownward
+    SemanticActionId.NestIn -> Icons.AutoMirrored.Outlined.FormatIndentIncrease
+    SemanticActionId.NestOut -> Icons.AutoMirrored.Outlined.FormatIndentDecrease
+    SemanticActionId.Split -> Icons.AutoMirrored.Outlined.CallSplit
+    SemanticActionId.Merge -> Icons.Outlined.Merge
+    SemanticActionId.WrapColumns -> Icons.Outlined.ViewColumn
+    SemanticActionId.Unwrap -> Icons.Outlined.ViewStream
+    SemanticActionId.Duplicate -> Icons.Outlined.ContentCopy
+    SemanticActionId.Delete -> Icons.Outlined.Delete
+    SemanticActionId.Cancel -> Icons.Outlined.Close
     SemanticActionId.More -> Icons.Outlined.MoreHoriz
 }
 
@@ -294,6 +339,24 @@ private fun sharpVector(action: SemanticActionId): ImageVector = when (action) {
     SemanticActionId.Shapes -> Icons.Sharp.Category
     SemanticActionId.Arrange -> Icons.Sharp.Layers
     SemanticActionId.Review -> Icons.Sharp.RateReview
+    SemanticActionId.Strikethrough -> Icons.Sharp.StrikethroughS
+    SemanticActionId.Code -> Icons.Sharp.Code
+    SemanticActionId.Link -> Icons.Sharp.Link
+    SemanticActionId.Color -> Icons.Sharp.FormatColorText
+    SemanticActionId.Style -> Icons.Sharp.Palette
+    SemanticActionId.Edit -> Icons.Sharp.Edit
+    SemanticActionId.Move -> Icons.Sharp.OpenWith
+    SemanticActionId.MoveUp -> Icons.Sharp.ArrowUpward
+    SemanticActionId.MoveDown -> Icons.Sharp.ArrowDownward
+    SemanticActionId.NestIn -> Icons.AutoMirrored.Sharp.FormatIndentIncrease
+    SemanticActionId.NestOut -> Icons.AutoMirrored.Sharp.FormatIndentDecrease
+    SemanticActionId.Split -> Icons.AutoMirrored.Sharp.CallSplit
+    SemanticActionId.Merge -> Icons.Sharp.Merge
+    SemanticActionId.WrapColumns -> Icons.Sharp.ViewColumn
+    SemanticActionId.Unwrap -> Icons.Sharp.ViewStream
+    SemanticActionId.Duplicate -> Icons.Sharp.ContentCopy
+    SemanticActionId.Delete -> Icons.Sharp.Delete
+    SemanticActionId.Cancel -> Icons.Sharp.Close
     SemanticActionId.More -> Icons.Sharp.MoreHoriz
 }
 
@@ -311,7 +374,15 @@ private fun lucideVector(a: SemanticActionId): ImageVector = when (a) {
     SemanticActionId.Insert -> Lucide.Plus; SemanticActionId.Toolsets -> Lucide.LayoutDashboard; SemanticActionId.Paragraph -> Lucide.Heading
     SemanticActionId.Checklist -> Lucide.ListChecks; SemanticActionId.Table -> Lucide.Table; SemanticActionId.Image -> Lucide.Image
     SemanticActionId.Attachment -> Lucide.Paperclip; SemanticActionId.Shapes -> Lucide.Shapes; SemanticActionId.Arrange -> Lucide.Layers
-    SemanticActionId.Review -> Lucide.MessageSquare; SemanticActionId.More -> Lucide.Ellipsis
+    SemanticActionId.Review -> Lucide.MessageSquare
+    SemanticActionId.Strikethrough -> Lucide.Strikethrough; SemanticActionId.Code -> Lucide.Code; SemanticActionId.Link -> Lucide.Link
+    SemanticActionId.Color -> Lucide.PaintBucket; SemanticActionId.Style -> Lucide.Palette; SemanticActionId.Edit -> Lucide.Pencil
+    SemanticActionId.Move -> Lucide.Move; SemanticActionId.Duplicate -> Lucide.Copy; SemanticActionId.Delete -> Lucide.Trash2; SemanticActionId.Cancel -> Lucide.X
+    SemanticActionId.MoveUp -> Lucide.ArrowUp; SemanticActionId.MoveDown -> Lucide.ArrowDown
+    SemanticActionId.NestIn -> Lucide.ListIndentIncrease; SemanticActionId.NestOut -> Lucide.ListIndentDecrease
+    SemanticActionId.Split -> Lucide.Split; SemanticActionId.Merge -> Lucide.Merge
+    SemanticActionId.WrapColumns -> Lucide.Columns2; SemanticActionId.Unwrap -> Lucide.Rows2
+    SemanticActionId.More -> Lucide.Ellipsis
 }
 
 private fun tablerVector(a: SemanticActionId): ImageVector = when (a) {
