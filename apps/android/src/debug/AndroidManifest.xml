@@ -16,5 +16,10 @@
             android:exported="true"
             android:label="Norfold Editor Lab"
             android:theme="@style/Theme.Norfold" />
+        <activity
+            android:name=".experiments.c4.C4HybridActivity"
+            android:exported="true"
+            android:label="C4 Hybrid"
+            android:theme="@style/Theme.Norfold" />
     </application>
 </manifest>
