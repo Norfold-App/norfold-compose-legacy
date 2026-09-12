@@ -26,10 +26,19 @@
   <button onclick="C3.cutInternal()">Internal cut</button>
   <button onclick="C3.systemCopy()">System copy</button>
   <button onclick="C3.selectAll()">Select all</button>
+  <hr style="margin:2px 0;width:100%">
+  <button onclick="doRoundTrip()">Gate 1: Round-trip</button>
+  <button onclick="doAtomIds()">Gate 2: Atom IDs</button>
+  <button onclick="C3.undo();append('undo ok')">Gate 3: Undo</button>
+  <button onclick="C3.redo();append('redo ok')">Gate 3: Redo</button>
+  <button onclick="C3.selectRange(0,20);append('range 0-20')">Gate 4: Select range</button>
+  <button onclick="doSelectAndDelete()">Gate 5: Select+Delete</button>
+  <button onclick="C3._updateA11y();append('a11y updated')">Gate 8: Update A11y</button>
 </div>
 <div id="editor"></div>
 <pre id="status">c3-status</pre>
 <script src="c3-editor.js"></script>
+<script src="c3-stage2a.js"></script>
 <script>
   var statusEl = document.getElementById('status');
   function append(s) { statusEl.textContent = s + '\n' + statusEl.textContent; }
@@ -37,6 +46,28 @@
   window.doReport = function () {
     var info = C3.report();
     append(JSON.stringify(info, null, 1));
+  };
+  window.doRoundTrip = function () {
+    var json = C3.toJSON();
+    if (json.error) { append('ERROR: ' + json.error); return; }
+    append('toJSON ok, size=' + JSON.stringify(json).length);
+    var result = C3.fromJSON(json);
+    if (result.error) { append('fromJSON ERROR: ' + result.error); return; }
+    append('round-trip ok, nodeSize=' + result.nodeSize);
+  };
+  window.doAtomIds = function () {
+    var ids = C3.getAtomIds();
+    append('atomIds: ' + JSON.stringify(ids));
+  };
+  window.doSelectAndDelete = function () {
+    var ids = C3.getAtomIds();
+    if (ids.length === 0) { append('no atoms to delete'); return; }
+    var last = ids[ids.length - 1];
+    var v = C3._view.view;
+    var nodeSize = v.state.schema.nodes[last.type]
+      ? v.state.doc.resolve(last.pos).node().nodeSize : 2;
+    var result = C3.selectAndDelete(last.pos, last.pos + nodeSize);
+    append('selectAndDelete: ' + JSON.stringify(result));
   };
   C3.mount(document.getElementById('editor'));
 </script>
