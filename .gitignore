@@ -7,6 +7,9 @@ sample_vault/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# FLOW-03 C3 experiment: generated esbuild bundle copied into Android assets
+apps/android/src/debug/assets/flow-c3/c3-editor.js
 apps/web/node_modules/
 apps/web/dist/
 infra/collaboration/cloudflare/node_modules/

@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body { margin: 0; font-family: sans-serif; font-size: 15px; }
+  #bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; background: #eee; }
+  #bar button { font-size: 12px; padding: 6px 8px; }
+  #editor { padding: 10px; min-height: 240px; outline: none; }
+  .ProseMirror { outline: none; }
+  .c3-atom { border: 1px solid #e65100; background: #ffe0b2; padding: 6px; margin: 4px 0; border-radius: 4px; }
+  .c3-tag { background: #ede7f6; color: #6a1b9a; }
+  .c3-mention { background: #e0f2f1; color: #00695c; }
+  #status { margin: 0; padding: 8px; font-size: 11px; background: #111; color: #0f0;
+            max-height: 220px; overflow: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button onclick="doReport()">Report</button>
+  <button onclick="C3.selectAcrossAtom('img1')">B0.2 across img1</button>
+  <button onclick="C3.selectNode('img1')">Select node img1</button>
+  <button onclick="C3.copyInternal()">Internal copy</button>
+  <button onclick="C3.pasteInternal()">Internal paste</button>
+  <button onclick="C3.cutInternal()">Internal cut</button>
+  <button onclick="C3.systemCopy()">System copy</button>
+  <button onclick="C3.selectAll()">Select all</button>
+</div>
+<div id="editor"></div>
+<pre id="status">c3-status</pre>
+<script src="c3-editor.js"></script>
+<script>
+  var statusEl = document.getElementById('status');
+  function append(s) { statusEl.textContent = s + '\n' + statusEl.textContent; }
+  window.__uiLog = append;
+  window.doReport = function () {
+    var info = C3.report();
+    append(JSON.stringify(info, null, 1));
+  };
+  C3.mount(document.getElementById('editor'));
+</script>
+</body>
+</html>
