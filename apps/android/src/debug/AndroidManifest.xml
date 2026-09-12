@@ -21,5 +21,10 @@
             android:exported="true"
             android:label="C2 Spannable"
             android:theme="@style/Theme.Norfold" />
+        <activity
+            android:name=".experiments.c2.C2Stage2Activity"
+            android:exported="true"
+            android:label="C2 Stage 2"
+            android:theme="@style/Theme.Norfold" />
     </application>
 </manifest>
