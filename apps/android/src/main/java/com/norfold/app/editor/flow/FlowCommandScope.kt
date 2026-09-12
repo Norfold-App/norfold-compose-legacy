@@ -121,7 +121,28 @@ class FlowCommandScope(
     }
 
     /** Applies the §4.14 post-command selection rule and returns the resulting selection. */
-    fun applyOutcome(outcome: PostCommandOutcome): List<SelectionTarget> = selection.selectionAfter(outcome)
+    fun applyOutcome(outcome: PostCommandOutcome): List<SelectionTarget> {
+        lastAppliedOutcome = outcome
+        return selection.selectionAfter(outcome)
+    }
+
+    /**
+     * The outcome the most recent [applyOutcome] applied, or null when none has since [clearLastOutcome].
+     *
+     * The runtime reads this to recover a command's *intent* after `execute` has returned — a `CaretInside`
+     * outcome means the command placed the caret inside a thing it just made, which is a writing continuation
+     * (insert or split), whereas `SelectResult`/`SelectNearestSibling` are structural and do not continue an
+     * editing session. Without this the runtime would have to re-derive intent from the command id, which is
+     * the per-command list every new command can forget to update.
+     */
+    fun lastOutcome(): PostCommandOutcome? = lastAppliedOutcome
+
+    /** Clears the recorded outcome so a command that applies none cannot be read as having applied a stale one. */
+    fun clearLastOutcome() {
+        lastAppliedOutcome = null
+    }
+
+    private var lastAppliedOutcome: PostCommandOutcome? = null
 
     /** Post-command outcome that selects [ids] (Duplicate / Convert / Group / Paste, §4.14). */
     fun selectResult(ids: List<String>): PostCommandOutcome =

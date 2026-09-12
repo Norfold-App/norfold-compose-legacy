@@ -22,6 +22,8 @@ import com.norfold.app.editor.command.CommandState
 import com.norfold.app.editor.command.CommandSurface
 import com.norfold.app.editor.history.EditTarget
 import com.norfold.app.editor.presentation.FormFactor
+import com.norfold.app.editor.relationship.RelationshipAnchor
+import com.norfold.app.editor.relationship.RelationshipEndpoint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -330,6 +332,167 @@ class FlowHostCorrectionTest {
         assertEquals(
             viaDock.controller.document().blocks.map { it.plainText() },
             viaKey.controller.document().blocks.map { it.plainText() },
+        )
+    }
+
+    // ── Item 2b: the active editor follows a writing-continuation caret ───────────────────────────────
+
+    /**
+     * The runtime's caret and its *active editor* are two pieces of state, and a structural command moves
+     * only the first unless it says otherwise. A block the runtime is addressing while the surface still
+     * renders it as read-only has no field, so its published caret request has nothing to focus — the caret
+     * looks like it never moved. Every case below is that defect from a different route.
+     */
+    @Test
+    fun newLine_movesTheActiveEditorToTheNewBlock() {
+        val runtime = runtimeOf(paragraphs("hello world"))
+        runtime.enterTextEditing("p0")
+        runtime.setCaret("p0", 5)
+
+        assertTrue(runtime.newLine())
+
+        val blocks = runtime.controller.document().blocks
+        assertEquals(blocks[1].id, runtime.uiState().caretRequest?.blockId)
+        assertEquals(
+            "The editor must follow the caret into the new block, or its field cannot take focus",
+            blocks[1].id,
+            runtime.uiState().editingBlockId,
+        )
+    }
+
+    /** The split item is new, but it lives in the same list block, so the active editor is unchanged. */
+    @Test
+    fun newLine_listSplitKeepsTheActiveEditorOnTheList() {
+        val runtime = runtimeOf(bullets("alpha"))
+        runtime.enterTextEditing("b0")
+        runtime.setCaret("b0", 2, itemId = "i0")
+
+        assertTrue(runtime.newLine())
+
+        val items = (runtime.controller.document().findById("b0") as BulletListBlock).items
+        assertEquals(items[1].id, runtime.uiState().caretRequest?.itemId)
+        assertEquals("b0", runtime.uiState().editingBlockId)
+    }
+
+    /** Leaving an empty list lands in a brand-new paragraph block, so the editor has to move with the caret. */
+    @Test
+    fun newLine_emptyListExitMovesTheActiveEditorToTheParagraph() {
+        val runtime = runtimeOf(
+            BlockDocument(
+                listOf(
+                    BulletListBlock(
+                        id = "b0",
+                        items = listOf(
+                            ListItem(id = "i0", content = listOf(InlineText("alpha"))),
+                            ListItem(id = "i1"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        runtime.enterTextEditing("b0")
+        runtime.setCaret("b0", 0, itemId = "i1")
+
+        assertTrue(runtime.newLine())
+
+        val blocks = runtime.controller.document().blocks
+        assertTrue(blocks[1] is ParagraphBlock)
+        assertEquals(blocks[1].id, runtime.uiState().editingBlockId)
+    }
+
+    /** Backspace-at-start joins p1 into p0; the writing session continues in the surviving block. */
+    @Test
+    fun backspaceAtStart_movesTheActiveEditorToTheMergedBlock() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.enterTextEditing("p1")
+        runtime.setCaret("p1", 0)
+
+        assertTrue(runtime.backspaceAtStart())
+
+        assertEquals("p0", runtime.uiState().caretRequest?.blockId)
+        assertEquals("p0", runtime.uiState().editingBlockId)
+    }
+
+    /** Inserting a text block is a writing flow: the caret lands inside it, so the editor follows. */
+    @Test
+    fun insert_ofATextBlockContinuesEditingInIt() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        runtime.enterTextEditing("p0")
+        runtime.setCaret("p0", 0)
+
+        runtime.invoke(FlowIds.insert(FlowBlockKind.PARAGRAPH), CommandSurface.DOCK)
+
+        val inserted = runtime.scope.caret()!!.targetId
+        assertEquals(inserted, runtime.uiState().editingBlockId)
+    }
+
+    /**
+     * Inserting a non-text block moves the caret to it but must not start a text session on it: the surface
+     * renders a divider with no field at all, so "editing" there would be a state nothing can show.
+     */
+    @Test
+    fun insert_ofANonTextBlockDoesNotEnterEditing() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        runtime.setCaret("p0", 0)
+
+        runtime.invoke(FlowIds.insert(FlowBlockKind.DIVIDER), CommandSurface.DOCK)
+
+        val inserted = runtime.scope.caret()!!.targetId
+        assertEquals(inserted, runtime.uiState().caretRequest?.blockId)
+        assertNull(runtime.uiState().editingBlockId)
+    }
+
+    /**
+     * A history step that removes the block being edited must retarget the editor to wherever the caret
+     * lands, not leave it naming a block that no longer exists.
+     */
+    @Test
+    fun undo_retargetsTheActiveEditorWhenItsBlockDisappears() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        runtime.enterTextEditing("p0")
+        runtime.setCaret("p0", 0)
+        runtime.invoke(FlowIds.insert(FlowBlockKind.PARAGRAPH), CommandSurface.DOCK)
+        val inserted = runtime.scope.caret()!!.targetId
+        assertEquals(inserted, runtime.uiState().editingBlockId)
+
+        assertTrue(runtime.undo())
+
+        assertNull(runtime.controller.document().findById(inserted))
+        assertEquals(runtime.scope.caret()!!.targetId, runtime.uiState().editingBlockId)
+    }
+
+    /** Redo, like undo, lands the caret in a live field when a writing session is already open. */
+    @Test
+    fun redo_keepsAnActiveWritingSessionInEditing() {
+        val runtime = runtimeOf(paragraphs("alpha"))
+        runtime.enterTextEditing("p0")
+        runtime.setCaret("p0", 5)
+        runtime.editText("p0", "alpha", "alpha beta")
+        runtime.setCaret("p0", 10)
+
+        assertTrue(runtime.undo())
+        assertTrue(runtime.redo())
+
+        assertEquals(runtime.scope.caret()?.targetId, runtime.uiState().editingBlockId)
+    }
+
+    /**
+     * A relationship jump is navigation, not writing. It may move the caret into a text block, but it must
+     * not open a text session there — otherwise clicking a backlink would drop the user into editing.
+     */
+    @Test
+    fun navigationToATextBlockDoesNotEnterTextEditing() {
+        val runtime = runtimeOf(paragraphs("alpha", "beta"))
+        runtime.setCaret("p0", 5)
+
+        assertTrue(
+            runtime.navigateTo(RelationshipEndpoint(RelationshipAnchor.Block("note:flow", "p1"))),
+        )
+
+        assertEquals("p1", runtime.uiState().caretRequest?.blockId)
+        assertNull(
+            "A relationship jump must not start a text-editing session",
+            runtime.uiState().editingBlockId,
         )
     }
 

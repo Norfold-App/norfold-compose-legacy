@@ -43,6 +43,7 @@ import com.norfold.app.editor.presentation.FormFactor
 import com.norfold.app.editor.presentation.PresentationMode
 import com.norfold.app.editor.presentation.PresentedTool
 import com.norfold.app.editor.presentation.ToolPresentationState
+import com.norfold.app.editor.selection.PostCommandOutcome
 import com.norfold.app.editor.selection.TextCaret
 import com.norfold.app.editor.selection.TextRange
 import com.norfold.app.domain.ChartBlock
@@ -677,6 +678,7 @@ class FlowHostRuntime(
     fun invoke(commandId: String, surface: CommandSurface): CommandResult {
         val context = scope.commandContext(surface)
         val caretBefore = scope.caret()
+        scope.clearLastOutcome()
         val result = registry.execute(commandId, context)
         when (result) {
             is CommandResult.Success -> {
@@ -685,7 +687,15 @@ class FlowHostRuntime(
                 // A command that moved the caret (§4.14) has to move real focus too, or the field the user is
                 // looking at keeps its own stale cursor and the next keystroke lands in the wrong place. This
                 // is the single place every route passes through, so no surface can forget to do it.
-                publishCaretRequest(caretBefore)
+                //
+                // A `CaretInside` outcome is also a *writing continuation*: the command placed the caret inside
+                // something it just made (an inserted or split block), so the surface must open that block's
+                // field, not merely place a caret it cannot draw. A structural outcome (select, delete) never
+                // continues a text session.
+                publishCaretRequest(
+                    caretBefore,
+                    continueEditing = scope.lastOutcome() is PostCommandOutcome.CaretInside,
+                )
                 if (commandId.startsWith(FlowIds.INSERT_PREFIX)) {
                     // Which block kind this author reaches for is a preference *for this context*, not a
                     // device-wide setting and not transient interaction state.
@@ -808,11 +818,14 @@ class FlowHostRuntime(
 
     private fun afterHistoryStep() {
         syncSelectionToDocument()
+        // A history step taken while a field is open is still that field's session: the caret should land in
+        // the restored text with the editor still active. Taken from quiet reading, undo stays quiet reading.
+        val continueEditing = editingBlockId != null
         scope.caret()?.let { caret ->
             val length = textLengthOf(caret.targetId, scope.caretItemId)
             // The document the caret pointed into may now be shorter; an offset past the end would make the
             // field clamp silently and disagree with the engine about where the caret is.
-            requestCaret(caret.targetId, scope.caretItemId, caret.offset.coerceIn(0, length))
+            requestCaret(caret.targetId, scope.caretItemId, caret.offset.coerceIn(0, length), continueEditing)
         }
         revision++
     }
@@ -1008,7 +1021,7 @@ class FlowHostRuntime(
             // request for a move that never happened would yank focus for nothing, so the document is the
             // arbiter of whether this keystroke did something.
             if (controller.document() == before) return false
-            requestCaret(cursor.blockId, cursor.itemId, cursor.offset)
+            requestCaret(cursor.blockId, cursor.itemId, cursor.offset, continueEditing = true)
             revision++
             return true
         }
@@ -1050,7 +1063,7 @@ class FlowHostRuntime(
             // cursor. Falling through unhandled is right there: the keystroke did nothing, so it should not
             // consume the key or move focus.
             if (controller.document() == before) return false
-            requestCaret(cursor.blockId, cursor.itemId, cursor.offset)
+            requestCaret(cursor.blockId, cursor.itemId, cursor.offset, continueEditing = true)
             revision++
             return true
         }
@@ -1184,10 +1197,15 @@ class FlowHostRuntime(
      * Called by commands that move the caret programmatically — split, merge, insert, undo, redo — so the
      * field the user is looking at actually follows. The stamp advances on every call so the surface can
      * apply the request exactly once and ignore echoes of its own caret reports.
+     *
+     * [continueEditing] carries intent the caret offset cannot: a writing continuation (Enter split, merge,
+     * a list split, an undo taken mid-session) also transfers the active editor, so the destination block
+     * opens its field. Navigation and field-reported caret moves leave it false and never start a session.
      */
-    private fun requestCaret(blockId: String, itemId: String?, offset: Int) {
+    private fun requestCaret(blockId: String, itemId: String?, offset: Int, continueEditing: Boolean = false) {
         caretRequest = FlowCaretRequest(blockId, itemId, offset, ++caretStamp)
         setCaret(blockId, offset, itemId)
+        if (continueEditing) continueEditingAt(blockId)
     }
 
     /**
@@ -1197,10 +1215,24 @@ class FlowHostRuntime(
      * (move up, nest, duplicate) leaves the caret where it was, and asking the surface to re-seed focus there
      * would steal it back from wherever the user had put it. Only a genuine move is published.
      */
-    private fun publishCaretRequest(before: TextCaret?) {
+    private fun publishCaretRequest(before: TextCaret?, continueEditing: Boolean = false) {
         val after = scope.caret() ?: return
         if (after == before) return
         caretRequest = FlowCaretRequest(after.targetId, scope.caretItemId, after.offset, ++caretStamp)
+        if (continueEditing) continueEditingAt(after.targetId)
+    }
+
+    /**
+     * Opens the text field for [blockId], when it has one, as the continuation of an active writing session.
+     *
+     * A block with no inline line (divider, table, object) is left selected-but-not-editing: entering edit
+     * mode there would be a state the surface cannot render, and the caret request it already received is the
+     * honest instruction. This is the one place the runtime maps the surface's "renders a single editable
+     * line" rule, so the two cannot drift apart.
+     */
+    private fun continueEditingAt(blockId: String) {
+        val block = controller.document().findById(blockId) ?: return
+        if (FlowInlineText.isEditableLine(block)) enterTextEditing(blockId)
     }
 
     /** Addresses a table cell so the directional row/column commands become eligible (§4.15). */

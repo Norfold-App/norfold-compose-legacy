@@ -101,6 +101,16 @@ object FlowInlineText {
     }
 
     /**
+     * Whether [block] is edited as a single inline line — the paragraph, heading, quote and list blocks the
+     * surface renders through one text field.
+     *
+     * Used by the runtime to decide whether a caret that lands in [block] should carry an active editing
+     * session with it. A block with no inline line (divider, table, code, object) has no such field, so
+     * "editing" it would be a state the surface cannot show.
+     */
+    fun isEditableLine(block: DocumentBlock): Boolean = nodesOf(block) != null || itemsOf(block) != null
+
+    /**
      * The styled runs of [nodes], flattened to plain-text offsets.
      *
      * Offsets index the same string the surface renders and the caret arithmetic uses, so a run can be turned
