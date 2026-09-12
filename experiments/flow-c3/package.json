@@ -1,0 +1,18 @@
+{
+  "name": "flow-c3",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "FLOW-03 C3 experiment: self-contained Tiptap/ProseMirror bundle. MIT-only, offline, no CDN, no Cloud/Pro.",
+  "scripts": {
+    "bundle": "esbuild src/editor.js --bundle --format=iife --global-name=FlowC3 --minify --outfile=dist/editor.js"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.31.3",
+    "@tiptap/pm": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
