@@ -8,6 +8,7 @@ import ParagraphNode from '@tiptap/extension-paragraph'
 import { NodeSelection } from '@tiptap/pm/state'
 import { blockDocToPM as projectBlockDocToPM, blockToPM, pmToBlockDoc as projectPMToBlockDoc } from './block-document-projection.js'
 import { uniqueBlockIdPlugin } from './block-ids.js'
+import { ListKeyBehavior, LIST_KEYMAP_OPTIONS } from './list-key-behavior.js'
 import { createCanonicalHistory } from './canonical-history.js'
 import { chartValues, resizedHeight } from './owner-review-model.js'
 
@@ -971,6 +972,7 @@ function attach() {
           bulletList: false,
           orderedList: false,
           listItem: false,
+          listKeymap: LIST_KEYMAP_OPTIONS,
           blockquote: false,
           codeBlock: false,
           horizontalRule: false,
@@ -984,6 +986,7 @@ function attach() {
         BulletList,
         OrderedList,
         ListItem,
+        ListKeyBehavior,
         TodoList,
         TodoItem,
         Blockquote,
