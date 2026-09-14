@@ -13,18 +13,23 @@ export function createCanonicalHistory({
   debounceMs = HISTORY_DEBOUNCE_MS,
   maxEntries = HISTORY_STACK_CAP,
 }) {
-  const base = { blockDocJson: getSnapshot(), selection: copy(getSelection()) }
+  let base = { blockDocJson: getSnapshot(), selection: copy(getSelection()) }
   let entries = []
   let pointer = -1
   let timer = null
+  let disposed = false
 
   function capture() {
     timer = null
+    if (disposed) return
     const blockDocJson = getSnapshot()
     if (blockDocJson === (pointer < 0 ? base.blockDocJson : entries[pointer].blockDocJson)) return
     entries = entries.slice(0, pointer + 1)
     entries.push({ blockDocJson, selection: copy(getSelection()), timestamp: now() })
-    if (entries.length > maxEntries) entries.shift()
+    if (entries.length > maxEntries) {
+      const dropped = entries.shift()
+      base = { blockDocJson: dropped.blockDocJson, selection: copy(dropped.selection) }
+    }
     pointer = entries.length - 1
   }
 
@@ -39,8 +44,17 @@ export function createCanonicalHistory({
     else entries[pointer].selection = selection
   }
 
+  function reset() {
+    clearTimeout(timer)
+    timer = null
+    base = { blockDocJson: getSnapshot(), selection: copy(getSelection()) }
+    entries = []
+    pointer = -1
+  }
+
   return {
     onTransaction(transaction) {
+      if (disposed) return
       if (transaction.getMeta('canonicalHistoryRestore')) return
       if (!transaction.docChanged) {
         if (transaction.selectionSet && !timer) updateCurrentSelection()
@@ -50,6 +64,12 @@ export function createCanonicalHistory({
       timer = setTimeout(capture, debounceMs)
     },
     flush,
+    reset,
+    dispose() {
+      clearTimeout(timer)
+      timer = null
+      disposed = true
+    },
     undo() {
       flush()
       if (pointer < 0) return { ok: false, reason: 'stack-empty' }

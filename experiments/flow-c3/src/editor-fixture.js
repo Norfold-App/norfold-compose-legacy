@@ -11,6 +11,8 @@ import { uniqueBlockIdPlugin } from './block-ids.js'
 import { ListKeyBehavior, LIST_KEYMAP_OPTIONS } from './list-key-behavior.js'
 import { createCanonicalHistory } from './canonical-history.js'
 import { chartValues, resizedHeight } from './owner-review-model.js'
+import { createScaleFixture, fixtureStats } from './stage2c-fixtures.js'
+import { decodeSession, encodeSession, sessionByteLength } from './stage2c-session.js'
 
 const Atom = (name, label) =>
   Node.create({
@@ -873,6 +875,8 @@ function fixtureDoc() {
 let editor = null
 let internalClipboard = null
 let canonicalHistory = null
+let fixtureTier = 'hostile'
+let mountMetrics = null
 
 function evt(o) {
   try {
@@ -929,6 +933,13 @@ function restoreSelection(selection) {
   editor.commands.setTextSelection({ from, to })
 }
 
+function restoreBlockDoc(blockDocJson, selection) {
+  const pmJson = projectBlockDocToPM(blockDocJson, editor.state.schema)
+  const doc = editor.state.schema.nodeFromJSON(pmJson)
+  editor.view.dispatch(editor.state.tr.replaceWith(0, editor.state.doc.content.size, doc).setMeta('canonicalHistoryRestore', true))
+  restoreSelection(selection)
+}
+
 function outline() {
   const lines = []
   editor.state.doc.descendants((node, pos) => {
@@ -960,8 +971,10 @@ function attach() {
   })
 }
 
-    window.C3 = {
+window.C3 = {
   mount(el) {
+    if (editor) window.C3.destroy()
+    mountMetrics = { start: performance.now(), editorCreated: null, mounted: null }
     editor = new Editor({
       element: el,
       extensions: [
@@ -1017,21 +1030,45 @@ function attach() {
         UniqueIds,
       ],
       content: fixtureDoc(),
-      onCreate: () => log('editor-created'),
+      onCreate: () => {
+        mountMetrics.editorCreated = performance.now()
+        log('editor-created')
+      },
     })
     window.C3._view = editor
+    fixtureTier = 'hostile'
     canonicalHistory = createCanonicalHistory({
       getSnapshot: () => JSON.stringify(projectPMToBlockDoc(editor.state.doc, editor.state.schema)),
       getSelection: selectionInfo,
-      restore: (blockDocJson, selection) => {
-        const pmJson = projectBlockDocToPM(blockDocJson, editor.state.schema)
-        const doc = editor.state.schema.nodeFromJSON(pmJson)
-        editor.view.dispatch(editor.state.tr.replaceWith(0, editor.state.doc.content.size, doc).setMeta('canonicalHistoryRestore', true))
-        restoreSelection(selection)
-      },
+      restore: restoreBlockDoc,
     })
     attach()
+    mountMetrics.mounted = performance.now()
     log('mounted')
+    if (window.Norfold?.shouldRestoreSession?.()) {
+      const snapshot = window.Norfold.getSessionSnapshot?.()
+      if (snapshot) {
+        try {
+          window.C3.importSession(snapshot)
+        } catch (error) {
+          log('session-restore-failed ' + error.message)
+        }
+      }
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const ready = {
+        t: 'stage2c-ready',
+        generation: window.Norfold?.getGeneration?.() || null,
+        fixtureTier,
+        bundleInitMs: Number.isFinite(window.__C3_BUNDLE_END__) && Number.isFinite(window.__C3_BUNDLE_START__)
+          ? window.__C3_BUNDLE_END__ - window.__C3_BUNDLE_START__ : null,
+        mountMs: mountMetrics.mounted - mountMetrics.start,
+        editorCreateMs: mountMetrics.editorCreated - mountMetrics.start,
+        firstEditableFrameMs: performance.now() - mountMetrics.start,
+        pmNodeSize: editor.state.doc.nodeSize,
+      }
+      evt(ready)
+    }))
   },
   _canonicalHistory: () => canonicalHistory,
   blockDocToPM(blockDocJson) {
@@ -1054,6 +1091,67 @@ function attach() {
     const pmDoc = this.blockDocToPM(blockDocJson)
     if (pmDoc.error) return pmDoc
     return this.pmToBlockDoc(pmDoc)
+  },
+  loadScaleFixture(tier) {
+    if (!editor) return { error: 'no-editor' }
+    const totalStart = performance.now()
+    const fixture = createScaleFixture(tier)
+    const stats = fixtureStats(fixture)
+    const projectionStart = performance.now()
+    const pmJson = projectBlockDocToPM(fixture, editor.state.schema)
+    const projectionMs = performance.now() - projectionStart
+    const setContentStart = performance.now()
+    editor.commands.setContent(pmJson, false)
+    const setContentMs = performance.now() - setContentStart
+    fixtureTier = tier
+    canonicalHistory.reset()
+    return {
+      tier,
+      stats,
+      projectionMs,
+      setContentMs,
+      totalMs: performance.now() - totalStart,
+      pmNodeSize: editor.state.doc.nodeSize,
+    }
+  },
+  exportSession() {
+    if (!editor) return { error: 'no-editor' }
+    return encodeSession({
+      fixtureTier,
+      blockDoc: projectPMToBlockDoc(editor.state.doc, editor.state.schema),
+      selection: selectionInfo(),
+    })
+  },
+  importSession(json) {
+    if (!editor) return { error: 'no-editor' }
+    try {
+      const session = decodeSession(json)
+      restoreBlockDoc(session.blockDoc, session.selection)
+      canonicalHistory.reset()
+      fixtureTier = session.fixtureTier
+      return { ok: true, tier: fixtureTier, stats: fixtureStats(session.blockDoc), pmNodeSize: editor.state.doc.nodeSize }
+    } catch (error) {
+      return { error: String(error?.message || error || 'session-import-failed').slice(0, 200) }
+    }
+  },
+  saveSession() {
+    const json = this.exportSession()
+    if (json.error) return json
+    const accepted = !!window.Norfold?.onSessionSnapshot?.(json)
+    return { bytes: sessionByteLength(json), accepted }
+  },
+  clearSavedSession() {
+    window.Norfold?.clearSessionSnapshot?.()
+    return { ok: true }
+  },
+  destroy() {
+    canonicalHistory?.dispose()
+    if (editor) editor.destroy()
+    editor = null
+    internalClipboard = null
+    canonicalHistory = null
+    mountMetrics = null
+    window.C3._view = null
   },
   focus() {
     editor.commands.focus()

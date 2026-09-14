@@ -58,4 +58,16 @@ assert.deepEqual(restoredSelection, { kind: 'cursor', from: 3, to: 3, empty: tru
 assert.equal(history.info().entries, 1)
 assert.equal(history.info().source, 'canonical-block-document')
 
+// A restored session becomes the new baseline; stale pre-recreation history is not replayed.
+history.reset()
+assert.equal(history.info().entries, 0)
+assert.equal(history.info().pointer, -1)
+const restoredBaseline = pmToBlockDoc(state.doc, schema)
+const postRestoreTransaction = state.tr.insertText('C', 3)
+state = state.apply(postRestoreTransaction)
+history.onTransaction(postRestoreTransaction)
+history.flush()
+assert.deepEqual(history.undo(), { ok: true })
+assert.deepEqual(pmToBlockDoc(state.doc, schema), restoredBaseline)
+
 console.log('PASS canonical history seam: one snapshot stack, undo/redo, selection, no Tiptap undoRedo')

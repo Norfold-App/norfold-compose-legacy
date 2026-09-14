@@ -11,7 +11,13 @@ import java.util.UUID
 class C3FileProvider : FileProvider()
 
 class C3ClipboardManager(private val context: Context) {
-    data class Payload(val json: String?, val plainText: String?)
+    data class Payload(
+        val json: String?,
+        val plainText: String?,
+        val source: String,
+        val privateMimeAdvertised: Boolean,
+        val privateMimeRead: Boolean,
+    )
 
     fun copy(json: String, plainText: String) {
         val file = File(context.cacheDir, "norfold-clipboard-${UUID.randomUUID()}.json")
@@ -27,13 +33,16 @@ class C3ClipboardManager(private val context: Context) {
 
     fun paste(): Payload {
         val clip = context.getSystemService(ClipboardManager::class.java).primaryClip
-            ?: return Payload(null, null)
+            ?: return Payload(null, null, "plain-text", false, false)
         var json: String? = null
         var plainText: String? = null
+        val privateMimeAdvertised = clip.description.hasMimeType(PRIVATE_MIME)
+        var privateMimeRead = false
         for (index in 0 until clip.itemCount) {
             val item = clip.getItemAt(index)
-            if (json == null && clip.description.hasMimeType(PRIVATE_MIME)) {
+            if (json == null && privateMimeAdvertised) {
                 json = item.uri?.let(::readUri)
+                privateMimeRead = json != null
             }
             if (plainText == null) {
                 plainText = item.text?.toString()
@@ -42,7 +51,12 @@ class C3ClipboardManager(private val context: Context) {
         if (json == null && plainText?.looksLikePayload() == true) {
             json = plainText
         }
-        return Payload(json, plainText)
+        val source = when {
+            privateMimeRead -> "private-uri"
+            json != null -> "json-text-fallback"
+            else -> "plain-text"
+        }
+        return Payload(json, plainText, source, privateMimeAdvertised, privateMimeRead)
     }
 
     private fun readUri(uri: android.net.Uri): String? = runCatching {
