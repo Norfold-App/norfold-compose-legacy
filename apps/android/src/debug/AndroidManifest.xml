@@ -21,5 +21,14 @@
             android:exported="true"
             android:label="Flow C3 WebView"
             android:theme="@style/Theme.Norfold" />
+        <provider
+            android:name=".experiments.c3.C3FileProvider"
+            android:authorities="${applicationId}.c3.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/c3_file_paths" />
+        </provider>
     </application>
 </manifest>

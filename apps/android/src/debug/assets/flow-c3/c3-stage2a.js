@@ -76,25 +76,26 @@
   // ── Gate 3: Canonical history / undo / redo ──────────────────────────────
 
   C3.undo = function () {
-    var e = ed();
-    if (!e) return { error: "no-editor" };
-    var ok = e.commands.undo();
-    return { ok: !!ok };
+    var history = C3._canonicalHistory && C3._canonicalHistory();
+    if (!history) return { error: "no-editor" };
+    return history.undo();
   };
 
   C3.redo = function () {
-    var e = ed();
-    if (!e) return { error: "no-editor" };
-    var ok = e.commands.redo();
-    return { ok: !!ok };
+    var history = C3._canonicalHistory && C3._canonicalHistory();
+    if (!history) return { error: "no-editor" };
+    return history.redo();
   };
 
   C3.historyInfo = function () {
     var v = pm();
     if (!v) return { error: "no-editor" };
+    var history = C3._canonicalHistory && C3._canonicalHistory();
+    if (!history) return { error: "history-unavailable" };
     return {
       docSize: v.state.doc.nodeSize,
-      selection: C3._sel()
+      selection: C3._sel(),
+      history: history.info()
     };
   };
 
@@ -232,7 +233,7 @@
         de("paste-from-clipboard structured ok");
         return { ok: true, via: "structured" };
       } catch (ex) {
-        // Fall through to plain text
+        de("paste-from-clipboard structured failed: " + ex.message);
       }
     }
     if (plainText) {
@@ -263,101 +264,6 @@
         el.setAttribute("aria-roledescription", "atomic object");
       }
     });
-  };
-
-  // ── Gate 9: Real image/table/chart NodeViews ────────────────────────────
-
-  C3.createImageNodeView = function () {
-    return {
-      stopEvent: function () { return true; },
-      ignoreMutation: function () { return true; },
-      renderDOM: function () {
-        var dom = document.createElement("div");
-        dom.className = "c3-atom c3-image-node";
-        dom.setAttribute("data-atom-type", "image_atom");
-        dom.setAttribute("contenteditable", "false");
-        var img = document.createElement("img");
-        img.src = "data:image/svg+xml," + encodeURIComponent(
-          '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" viewBox="0 0 200 120">' +
-          '<rect fill="#e3f2fd" width="200" height="120" rx="4"/>' +
-          '<text x="100" y="55" text-anchor="middle" fill="#1565c0" font-family="sans-serif" font-size="14">Image Placeholder</text>' +
-          '<text x="100" y="75" text-anchor="middle" fill="#1565c0" font-family="sans-serif" font-size="11">(Stage-2A fixture)</text></svg>'
-        );
-        img.style.maxWidth = "100%";
-        img.style.display = "block";
-        dom.appendChild(img);
-        var label = document.createElement("div");
-        label.className = "c3-atom-label";
-        label.textContent = "Image";
-        label.style.cssText = "font-size:11px;color:#666;padding:2px 4px;";
-        dom.appendChild(label);
-        return { dom: dom };
-      }
-    };
-  };
-
-  C3.createTableNodeView = function () {
-    return {
-      stopEvent: function () { return true; },
-      ignoreMutation: function () { return true; },
-      renderDOM: function () {
-        var dom = document.createElement("div");
-        dom.className = "c3-atom c3-table-node";
-        dom.setAttribute("data-atom-type", "table_atom");
-        dom.setAttribute("contenteditable", "false");
-        var table = document.createElement("table");
-        table.style.cssText = "border-collapse:collapse;width:100%;font-size:13px;";
-        for (var r = 0; r < 2; r++) {
-          var tr = document.createElement("tr");
-          for (var c = 0; c < 2; c++) {
-            var td = document.createElement("td");
-            td.style.cssText = "border:1px solid #999;padding:6px 8px;text-align:center;";
-            td.textContent = "R" + (r + 1) + "C" + (c + 1);
-            tr.appendChild(td);
-          }
-          table.appendChild(tr);
-        }
-        dom.appendChild(table);
-        return { dom: dom };
-      }
-    };
-  };
-
-  C3.createChartNodeView = function () {
-    return {
-      stopEvent: function () { return true; },
-      ignoreMutation: function () { return true; },
-      renderDOM: function () {
-        var dom = document.createElement("div");
-        dom.className = "c3-atom c3-chart-node";
-        dom.setAttribute("data-atom-type", "chart_atom");
-        dom.setAttribute("contenteditable", "false");
-        var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.setAttribute("viewBox", "0 0 200 100");
-        svg.setAttribute("width", "200");
-        svg.setAttribute("height", "100");
-        svg.style.cssText = "display:block;max-width:100%;";
-        var bars = [30, 50, 40, 70, 55];
-        var colors = ["#42a5f5", "#66bb6a", "#ffa726", "#ef5350", "#ab47bc"];
-        for (var i = 0; i < bars.length; i++) {
-          var rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-          rect.setAttribute("x", 10 + i * 38);
-          rect.setAttribute("y", 100 - bars[i]);
-          rect.setAttribute("width", 28);
-          rect.setAttribute("height", bars[i]);
-          rect.setAttribute("fill", colors[i]);
-          rect.setAttribute("rx", "3");
-          svg.appendChild(rect);
-        }
-        dom.appendChild(svg);
-        var label = document.createElement("div");
-        label.className = "c3-atom-label";
-        label.textContent = "Bar Chart";
-        label.style.cssText = "font-size:11px;color:#666;padding:2px 4px;";
-        dom.appendChild(label);
-        return { dom: dom };
-      }
-    };
   };
 
   // ── Internal helpers ─────────────────────────────────────────────────────

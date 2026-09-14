@@ -2,8 +2,6 @@ package com.norfold.app.experiments.c3
 
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -17,8 +15,10 @@ import android.webkit.WebView
 import androidx.activity.ComponentActivity
 
 /**
- * FLOW-03 C3 Stage-2A host. Loads the bundled ProseMirror/Tiptap fixture editor
- * (real atomic nodes) into ONE persistent WebView. No reload on edits. Kotlin is
+ * FLOW-03 C3 experiment host. Loads the owner-review document by default or the
+ * engineering harness when [EXTRA_DEBUG_HARNESS] is true. Both use the same
+ * bundled ProseMirror/Tiptap editor with real atomic nodes in one persistent WebView.
+ * No reload on edits. Kotlin is
  * driven through a broadcast so adb can call model commands without tapping the
  * page: `am broadcast -a com.norfold.app.C3_EVAL --es js "C3.report()"`.
  *
@@ -30,7 +30,7 @@ import androidx.activity.ComponentActivity
 class C3WebViewActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
-    private var lastClipJson: String? = null
+    private lateinit var clipboardManager: C3ClipboardManager
 
     private val evalReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -46,6 +46,7 @@ class C3WebViewActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        clipboardManager = C3ClipboardManager(this)
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -68,7 +69,8 @@ class C3WebViewActivity : ComponentActivity() {
             registerReceiver(evalReceiver, filter)
         }
 
-        webView.loadUrl("file:///android_asset/flow-c3/index.html")
+        val page = if (intent.getBooleanExtra(EXTRA_DEBUG_HARNESS, false)) "index.html" else "review.html"
+        webView.loadUrl("file:///android_asset/flow-c3/$page")
     }
 
     override fun onDestroy() {
@@ -93,16 +95,7 @@ class C3WebViewActivity : ComponentActivity() {
          */
         @JavascriptInterface
         fun onClipboardCopy(jsonStr: String, plainText: String) {
-            lastClipJson = jsonStr
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            // Primary: structured MIME with JSON payload
-            val structuredItem = ClipData.Item(plainText)
-            val clip = ClipData.newPlainText("norfold-structured", plainText)
-            // Add the JSON as an additional HTML item if available
-            if (jsonStr.isNotEmpty()) {
-                clip.addItem(structuredItem)
-            }
-            cm.setPrimaryClip(clip)
+            clipboardManager.copy(jsonStr, plainText)
             Log.i(TAG, "clipboard-copy: textLen=${plainText.length} jsonLen=${jsonStr.length}")
         }
 
@@ -112,29 +105,19 @@ class C3WebViewActivity : ComponentActivity() {
          */
         @JavascriptInterface
         fun onClipboardPaste() {
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = cm.primaryClip
-            if (clip == null || clip.itemCount == 0) {
-                webView.post {
-                    webView.evaluateJavascript("C3.receiveClipboardData(null, null)", null)
-                }
-                return
-            }
-            val item = clip.getItemAt(0)
-            val text = item.text?.toString() ?: ""
-            // Try to recover structured data from lastClipJson if available
-            val json = lastClipJson
+            val payload = clipboardManager.paste()
             webView.post {
-                val js = "C3.receiveClipboardData(${escapeJs(json)}, ${escapeJs(text)})"
+                val js = "C3.receiveClipboardData(${escapeJs(payload.json)}, ${escapeJs(payload.plainText)})"
                 webView.evaluateJavascript(js, null)
             }
-            Log.i(TAG, "clipboard-paste: textLen=${text.length} hasJson=${json != null}")
+            Log.i(TAG, "clipboard-paste: textLen=${payload.plainText?.length ?: 0} hasJson=${payload.json != null}")
         }
     }
 
     companion object {
         const val TAG = "C3BRIDGE"
         const val ACTION_EVAL = "com.norfold.app.C3_EVAL"
+        const val EXTRA_DEBUG_HARNESS = "debug_harness"
 
         private fun escapeJs(s: String?): String {
             if (s == null) return "null"
