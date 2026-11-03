@@ -1,5 +1,8 @@
 # Norfold
 
+> **Archived as of November 3, 2026.** Development has ended. This repository is kept for
+> historical reference only and is no longer maintained.
+
 Norfold is an Android-first private workspace. Notes, documents, tasks, calendar events,
 files, and chat are stored as one local-first object model, with encrypted exports and
 backups plus optional folder-provider or cloud sync. The live Room database itself is not
